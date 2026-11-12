@@ -137,7 +137,7 @@ setInterval(()=>{
   renderPick();
 },8000);
 function showResults(query) {
-  currentSearch=query; $('#directory').hidden=true; $('#results').hidden=false;
+  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=true; $('#results').hidden=false;
   const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
   $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
 }

@@ -196,3 +196,7 @@ html[data-theme="dark"] .history-square { background: #6fc6da; }
 .external-icon { width: 20px; height: 20px; fill: currentColor; vertical-align: middle; }
 #external-toggle[aria-pressed="true"] { opacity: 1; text-decoration: none; }
 #external-toggle[aria-pressed="true"]::after { content: ''; position: absolute; right: 1px; bottom: 1px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.search-row input[type="search"] { background: rgba(255, 255, 255, .68); }
+html[data-theme="dark"] .search-row input[type="search"] { background: rgba(18, 44, 55, .74); }
+html[data-theme="dark"] .search-icon { color: #82ddea; }
+[data-i18n="concept"] { user-select: none; -webkit-user-select: none; }

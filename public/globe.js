@@ -37,19 +37,21 @@ try {
   fetch('./land-110m.geojson').then(response => { if (!response.ok) throw new Error('Map unavailable'); return response.json(); }).then(drawLand).catch(error => console.warn('海岸線を読み込めませんでした', error));
   const earth = new THREE.Mesh(new THREE.SphereGeometry(1.6, 64, 32), new THREE.MeshPhongMaterial({map: texture, shininess: 10}));
   scene.add(earth);
-  // Approximate ocean anchors: Atlantic (55°N, 30°W) and Pacific (55°N, 160°W).
-  // Anchor points and the narrowed base are ocean in Natural Earth 1:110m.
+  // Approximate ocean anchors: Atlantic (52°N, 30°W) and Pacific (52°N, 155°W).
+  // Base intervals were sampled against Natural Earth 1:110m and lie over ocean.
   const earMaterial = new THREE.MeshBasicMaterial({color: 0x59dce4, side: THREE.DoubleSide});
   const earOutlineMaterial = new THREE.LineBasicMaterial({color: 0x007e90});
   function globePoint(lon, lat, radius) {
     const u = (lon + 180) / 360, phi = u * Math.PI * 2, a = THREE.MathUtils.degToRad(lat);
     return [-radius * Math.cos(a) * Math.cos(phi), radius * Math.sin(a), radius * Math.cos(a) * Math.sin(phi)];
   }
-  for (const lon of [-30, -160]) {
+  for (const lon of [-30, -155]) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute([
-      ...globePoint(lon - 8, 55, 1.61), ...globePoint(lon + 8, 55, 1.61), ...globePoint(lon, 65, 1.95)
+      ...globePoint(lon - 16, 52, 1.61), ...globePoint(lon + 16, 52, 1.61),
+      ...globePoint(lon + 1.8, 64, 1.93), ...globePoint(lon - 1.8, 64, 1.93)
     ], 3));
+    geometry.setIndex([0, 1, 2, 0, 2, 3]);
     geometry.computeVertexNormals();
     earth.add(new THREE.Mesh(geometry, earMaterial), new THREE.LineSegments(new THREE.EdgesGeometry(geometry), earOutlineMaterial));
   }
