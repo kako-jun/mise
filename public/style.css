@@ -200,3 +200,4 @@ html[data-theme="dark"] .history-square { background: #6fc6da; }
 html[data-theme="dark"] .search-row input[type="search"] { background: rgba(18, 44, 55, .74); }
 html[data-theme="dark"] .search-icon { color: #82ddea; }
 [data-i18n="concept"] { user-select: none; -webkit-user-select: none; }
+.site-icon { width: 30px; height: 30px; flex-basis: 30px; border: 0; border-radius: 0; background: transparent; }
