@@ -137,4 +137,19 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 .heat-cell[data-level="3"] { background: #237456; }
 .heat-cell[data-level="4"] { background: #10543a; }
 .new-tag { margin-left: 6px; }
-.logo span { color: transparent !important; background: linear-gradient(135deg, #222b31 0 30%, #df7f3e 31% 54%, #fff8ea 55% 70%, #252c30 71%); background-clip: text; -webkit-background-clip: text; -webkit-text-stroke: .5px #786359; }
+.logo span { color: transparent !important; background: linear-gradient(135deg, #222b31 0 30%, #df7f3e 31% 54%, #fff8ea 55% 70%, #252c30 71%); background-clip: text; -webkit-background-clip: text; -webkit-text-stroke: 0; }
+
+.github-icon { width: 22px; height: 22px; fill: currentColor; vertical-align: middle; }
+.search-icon { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; }
+.search-row input[type="search"] { padding-left: 40px; }
+.preferences button, html[data-theme="dark"] .preferences button { border: 0; background: transparent; color: inherit; }
+.preferences button:hover, html[data-theme="dark"] .preferences button:hover { background: transparent; opacity: .7; }
+@media (min-width: 1200px) { .author-links { padding: 4px 12px; } .picks { bottom: 40px; } }
+@media (max-width: 700px) { .search-row { flex-wrap: wrap; gap: 6px 10px; } }
+
+.search-row { margin-bottom: 3px; }
+.recommend-row { margin: 0 0 18px; font-size: 12px; }
+.logo span:first-child { transform: scaleX(1.5); margin-left: 8px; margin-right: 12px; }
+.logo span { background-image: linear-gradient(135deg, #202831 0 30%, #b9460e 31% 57%, #8a5a37 58% 72%, #202831 73%); }
+html[data-theme="dark"] .logo span { background-image: linear-gradient(135deg, #e6e2da 0 30%, #ff9a55 31% 57%, #aa8067 58% 72%, #e6e2da 73%); }
+.logo-caption { font-weight: 400; }

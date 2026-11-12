@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MISE</title>
+<title>MISE — 今だからこそ、ディレクトリ型検索エンジン。</title>
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <link rel="stylesheet" href="style.css?v=22">
 <script src="app.js?v=21" defer></script>
@@ -20,13 +20,13 @@
     <div class="logo-row"><a href="./" id="home-link" class="logo" aria-label="MISE Home"><span>M</span><span>I</span><span>S</span><span>E</span></a></div>
     <p class="logo-caption" data-i18n="tagline">今だからこそ、ディレクトリ型検索エンジン。</p>
     <div class="preferences"><button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
-    <div class="search-row"><form id="search-form" role="search"><label class="visually-hidden" for="query" data-i18n="searchLabel">サイトを検索</label><span class="search-icon" aria-hidden="true">⌕</span><input id="query" type="search" size="25" autocomplete="off"></form><a href="#recommend" id="recommend-link" aria-expanded="false" aria-controls="recommend" data-i18n="recommend">このサイトを推薦</a></div>
+    <div class="search-row"><form id="search-form" role="search"><label class="visually-hidden" for="query" data-i18n="searchLabel">サイトを検索</label><svg class="search-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><input id="query" type="search" size="25" autocomplete="off"></form></div><p class="recommend-row"><span data-i18n="recommendIntro">サイトが見つからない場合は？</span> <a href="#recommend" id="recommend-link" aria-expanded="false" aria-controls="recommend" data-i18n="recommend">推薦</a></p>
     <p id="recommend" class="recommend" hidden role="status" data-i18n="preparing">推薦機能は準備中です。</p>
   </header>
-  <section id="directory" aria-label="カテゴリ一覧"><p id="breadcrumbs" class="breadcrumbs" aria-label="現在の階層"></p><div id="categories" class="categories"></div><section id="picks" class="picks" hidden><h2 data-i18n="picks">ピックアップ</h2><ul id="pick-list"></ul></section><p id="sample-label" class="directory-empty" hidden data-i18n="sample">掲載サイト（サンプル）</p><ul id="directory-sites" class="directory-sites"></ul><p id="directory-empty" class="directory-empty" hidden data-i18n="noSites">このカテゴリにサンプルサイトはありません。</p></section>
-  <section id="results" class="results" hidden aria-live="polite"><hr><h2 id="result-title"></h2><p><a href="#directory" id="clear" data-i18n="back">カテゴリ一覧に戻る</a></p><ul id="result-list"></ul><p id="empty" hidden data-i18n="noResults">該当するサンプルサイトはありません。</p></section>
+  <section id="directory" aria-label="カテゴリ一覧"><p id="breadcrumbs" class="breadcrumbs" aria-label="現在の階層"></p><div id="categories" class="categories"></div><section id="picks" class="picks" hidden><h2 data-i18n="picks">ピックアップ</h2><ul id="pick-list"></ul></section><p id="sample-label" class="directory-empty" hidden data-i18n="sample">掲載サイト</p><ul id="directory-sites" class="directory-sites"></ul><p id="directory-empty" class="directory-empty" hidden data-i18n="noSites">このカテゴリにサイトはありません。</p></section>
+  <section id="results" class="results" hidden aria-live="polite"><hr><h2 id="result-title"></h2><p><a href="#directory" id="clear" data-i18n="back">カテゴリ一覧に戻る</a></p><ul id="result-list"></ul><p id="empty" hidden data-i18n="noResults">該当するサイトはありません。</p></section>
   <hr>
-  <footer id="about"><p data-i18n="concept">広告や大手サイトばかりの検索に疲れた人へ。<br>まだ知らない独立したサイトを見つける場所を目指しています。</p></footer><nav class="author-links" aria-label="Author"><a href="https://llll-ll.com/" aria-label="Creator website" title="Creator website">⌂</a><a href="https://github.com/kako-jun" aria-label="Creator GitHub" title="Creator GitHub">⌘</a></nav>
+  <footer id="about"><p data-i18n="concept">広告や大手サイトばかりの検索に疲れた人へ。<br>まだ知らない独立したサイトを見つける場所を目指しています。</p></footer><nav class="author-links" aria-label="Author"><a href="https://llll-ll.com/" aria-label="Creator website" title="Creator website">⌂</a><a href="https://github.com/kako-jun" aria-label="Creator GitHub" title="Creator GitHub"><svg aria-hidden="true" class="github-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg></a></nav>
 </main>
 </body>
 </html>

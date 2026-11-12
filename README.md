@@ -22,3 +22,5 @@ npm run dev
 - [サイトレコードの設計案](docs/site-schema.md)
 - 3D表示には同梱の Three.js を使用（[MIT License](public/THREE-LICENSE.txt)）
 - 参考: [1996年当時のYahoo! JAPANトップページ](https://internet.watch.impress.co.jp/docs/news/755478.html)
+
+- GitHubアイコン: [GitHub Octicons](https://github.com/primer/octicons)（[MIT License](public/licenses/octicons-MIT.txt)）。
