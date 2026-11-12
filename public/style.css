@@ -191,3 +191,8 @@ html[data-theme="dark"] .author-links a, html[data-theme="dark"] .author-links a
 .history-day { align-items: center; }
 .history-square { background: #168aa6; }
 html[data-theme="dark"] .history-square { background: #6fc6da; }
+
+#external-toggle { position: relative; opacity: .55; }
+.external-icon { width: 20px; height: 20px; fill: currentColor; vertical-align: middle; }
+#external-toggle[aria-pressed="true"] { opacity: 1; text-decoration: none; }
+#external-toggle[aria-pressed="true"]::after { content: ''; position: absolute; right: 1px; bottom: 1px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
