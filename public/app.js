@@ -32,11 +32,14 @@ function renderStats() {
   const bars=$('#history-bars'); bars.replaceChildren();
   if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
-  const max=Math.max(1,...days.values());
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
-    const row=document.createElement('div'); row.textContent=`${day.slice(5)} ${'▰'.repeat(Math.ceil(count/max*8)) || '·'} ${count}`; row.setAttribute('aria-label',`${day}: ${count}`); bars.append(row);
+    const item=document.createElement('div'); item.className='history-day'; item.setAttribute('aria-label',`${day}: ${count}`);
+    const label=document.createElement('span'); label.textContent=day.slice(5);
+    const square=document.createElement('span'); square.className='heat-cell'; square.dataset.level=String(Math.min(4,count)); square.setAttribute('aria-hidden','true');
+    const number=document.createElement('span'); number.textContent=String(count);
+    item.append(label,square,number); bars.append(item);
   }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }

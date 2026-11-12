@@ -170,3 +170,10 @@ html[data-theme="dark"] .author-links a, html[data-theme="dark"] .author-links a
 @media (max-width: 1199px) { .corner-panel { position: static; width: min(560px, calc(100% - 24px)); margin: 20px auto; } }
 
 #history-bars { display: block; white-space: pre; }
+
+#history-bars { display: grid; grid-template-columns: repeat(7, 28px); gap: 2px; margin: 4px 0; }
+.history-day { display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.1; }
+.history-day .heat-cell { width: 11px; height: 11px; }
+#history-bars { grid-template-columns: repeat(7, 34px); }
+
+@media (min-width: 1200px) { .corner-panel { width: min(340px, calc((100vw - 640px) / 2 - 16px)); } }
