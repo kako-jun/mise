@@ -36,10 +36,11 @@ function renderStats() {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
     const item=document.createElement('div'); item.className='history-day'; item.setAttribute('aria-label',`${day}: ${count}`);
-    const label=document.createElement('span'); label.textContent=day.slice(5);
-    const square=document.createElement('span'); square.className='heat-cell'; square.dataset.level=String(Math.min(4,count)); square.setAttribute('aria-hidden','true');
-    const number=document.createElement('span'); number.textContent=String(count);
-    item.append(label,square,number); bars.append(item);
+    const label=document.createElement('span'); label.className='history-date'; label.textContent=date.toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'});
+    const squares=document.createElement('span'); squares.className='history-squares'; squares.setAttribute('aria-hidden','true');
+    for(let n=0;n<count;n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
+    const number=document.createElement('span'); number.className='history-count'; number.textContent=String(count);
+    item.append(label,squares,number); bars.append(item);
   }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
