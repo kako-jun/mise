@@ -1,0 +1,20 @@
+[
+  {
+    "url": "https://www.hyuki.com/",
+    "checked_at": "2026-11-12T08:21:16+00:00",
+    "robots_url": "https://www.hyuki.com/robots.txt",
+    "robots_http_status": 200,
+    "page_http_status": 200,
+    "title": "結城浩 / Hiroshi Yuki",
+    "meta_description": "書籍『数学ガール』作者、結城浩の個人サイト。数学、プログラミング、文章書きに関する情報と、気軽な読み物。"
+  },
+  {
+    "url": "https://www.kmonos.net/",
+    "checked_at": "2026-11-12T08:21:19+00:00",
+    "robots_url": "https://www.kmonos.net/robots.txt",
+    "robots_http_status": 404,
+    "page_http_status": 200,
+    "title": "Kazuhiro Inaba",
+    "meta_description": null
+  }
+]

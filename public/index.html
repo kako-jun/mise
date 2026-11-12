@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MISE</title>
+<script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
+<link rel="stylesheet" href="style.css?v=22">
+<script src="app.js?v=21" defer></script>
+<script type="module" src="globe.js?v=4"></script>
+<script src="cat.js?v=5" defer></script>
+</head>
+<body>
+<div id="globe-background" aria-hidden="true"></div>
+<div class="hud top-left" id="activity-summary"><strong data-i18n="summaryTitle">SITE INDEX</strong><br><span id="site-total"></span><br><span id="unknown-dates"></span><br><span data-i18n="crawlUnknown">CRAWL HISTORY: NOT RECORDED</span><br><br><strong data-i18n="historyTitle">KNOWN REGISTRATIONS / UTC</strong><div id="history-bars" class="hud-bars"></div><div data-i18n="historyCaveat">EXCLUDES UNKNOWN DATES</div></div>
+<div class="hud bottom-left" id="activity-log" aria-live="polite"><strong>ACTIVITY</strong><div id="activity-entries">No activity yet</div></div>
+<svg id="walking-cat" hidden aria-hidden="true" viewBox="0 0 16 16" shape-rendering="crispEdges"><path fill="#fff8e9" d="M2 1h3v2h6V1h3v8h-1v2h-2v2h-1v2H8v-2H6v2H4v-3H3V9H2z"/><path fill="#e48641" d="M2 1h3v2h2v2H2z M9 8h4v3H9z"/><path fill="#333a42" d="M11 1h3v4h-3z M3 8h3v4H3z M13 10h2v3h-2z"/><path fill="#111b20" d="M4 5h1v1H4zm6 0h1v1h-1z"/></svg>
+<main>
+  <header>
+    <div class="logo-row"><a href="./" id="home-link" class="logo" aria-label="MISE Home"><span>M</span><span>I</span><span>S</span><span>E</span></a></div>
+    <p class="logo-caption" data-i18n="tagline">今だからこそ、ディレクトリ型検索エンジン。</p>
+    <div class="preferences"><button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
+    <div class="search-row"><form id="search-form" role="search"><label class="visually-hidden" for="query" data-i18n="searchLabel">サイトを検索</label><span class="search-icon" aria-hidden="true">⌕</span><input id="query" type="search" size="25" autocomplete="off"></form><a href="#recommend" id="recommend-link" aria-expanded="false" aria-controls="recommend" data-i18n="recommend">このサイトを推薦</a></div>
+    <p id="recommend" class="recommend" hidden role="status" data-i18n="preparing">推薦機能は準備中です。</p>
+  </header>
+  <section id="directory" aria-label="カテゴリ一覧"><p id="breadcrumbs" class="breadcrumbs" aria-label="現在の階層"></p><div id="categories" class="categories"></div><section id="picks" class="picks" hidden><h2 data-i18n="picks">ピックアップ</h2><ul id="pick-list"></ul></section><p id="sample-label" class="directory-empty" hidden data-i18n="sample">掲載サイト（サンプル）</p><ul id="directory-sites" class="directory-sites"></ul><p id="directory-empty" class="directory-empty" hidden data-i18n="noSites">このカテゴリにサンプルサイトはありません。</p></section>
+  <section id="results" class="results" hidden aria-live="polite"><hr><h2 id="result-title"></h2><p><a href="#directory" id="clear" data-i18n="back">カテゴリ一覧に戻る</a></p><ul id="result-list"></ul><p id="empty" hidden data-i18n="noResults">該当するサンプルサイトはありません。</p></section>
+  <hr>
+  <footer id="about"><p data-i18n="concept">広告や大手サイトばかりの検索に疲れた人へ。<br>まだ知らない独立したサイトを見つける場所を目指しています。</p></footer><nav class="author-links" aria-label="Author"><a href="https://llll-ll.com/" aria-label="Creator website" title="Creator website">⌂</a><a href="https://github.com/kako-jun" aria-label="Creator GitHub" title="Creator GitHub">⌘</a></nav>
+</main>
+</body>
+</html>

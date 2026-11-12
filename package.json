@@ -1,0 +1,33 @@
+{
+  "name": "mise",
+  "version": "1.0.0",
+  "description": "個人・企業のサイトを発見するディレクトリの構想。名前は「見せる」「店」と *mise en place* をかけています。",
+  "main": "app.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "db:migrate": "wrangler d1 migrations apply mise --local",
+    "check": "node --check src/index.js && node --check public/app.js && node --check public/globe.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kako-jun/mise.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/kako-jun/mise/issues"
+  },
+  "homepage": "https://github.com/kako-jun/mise#readme",
+  "dependencies": {
+    "hono": "^4.13.18"
+  },
+  "devDependencies": {
+    "wrangler": "^4.160.1"
+  },
+  "private": true
+}
