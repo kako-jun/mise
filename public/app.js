@@ -2,9 +2,10 @@ const $ = selector => document.querySelector(selector);
 let categories = [], sites = [], currentPath = [], currentSearch = null, pickedIds = [], pickIndex = 0, picksVisible = false, picksHovered = false, activityStats = null;
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
 let language = storage.get('mise-language') === 'en' ? 'en' : 'ja';
+let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイトばかりの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', summaryTitle:'SITE INDEX', historyTitle:'REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' },
-  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイトばかりの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' },
+  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' }
 };
 const t = key => words[language][key];
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
@@ -16,11 +17,30 @@ function applyLanguage() {
   document.title = `MISE — ${t('tagline')}`;
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
+  updateExternalToggle();
   $('#language-toggle').title=t('lang'); $('#language-toggle').setAttribute('aria-label',t('lang'));
   renderLog();
   renderStats();
   if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false);
 }
+function configureExternalLink(a) {
+  const url=new URL(a.href,location.href);
+  if(!['http:','https:'].includes(url.protocol) || url.origin===location.origin) return;
+  if(openExternalInNewTab) { a.target='_blank'; a.rel='noopener noreferrer'; }
+  else { a.removeAttribute('target'); a.removeAttribute('rel'); }
+}
+function updateExternalToggle() {
+  const button=$('#external-toggle');
+  button.setAttribute('aria-pressed',String(openExternalInNewTab));
+  button.setAttribute('aria-label',t(openExternalInNewTab?'externalOn':'externalOff'));
+  button.title=button.getAttribute('aria-label');
+  document.querySelectorAll('a[href]').forEach(configureExternalLink);
+}
+$('#external-toggle').addEventListener('click',()=>{
+  openExternalInNewTab=!openExternalInNewTab;
+  storage.set('mise-external-new-tab',String(openExternalInNewTab));
+  updateExternalToggle();
+});
 $('#language-toggle').addEventListener('click', () => { language=language==='ja'?'en':'ja'; storage.set('mise-language',language); applyLanguage(); });
 $('#theme-toggle').addEventListener('click', () => { const theme=document.documentElement.dataset.theme==='dark'?'light':'dark'; document.documentElement.dataset.theme=theme; storage.set('mise-theme',theme); });
 window.addEventListener('mise-fly-japan',()=>logActivity('fly japan'));
@@ -32,6 +52,7 @@ function renderStats() {
   const bars=$('#history-bars'); bars.replaceChildren();
   if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
+  bars.style.setProperty('--count-digits', String(Math.max(1,...Array.from(days.values(),n=>String(n).length))));
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
@@ -40,7 +61,7 @@ function renderStats() {
     const squares=document.createElement('span'); squares.className='history-squares'; squares.setAttribute('aria-hidden','true');
     for(let n=0;n<count;n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
     const number=document.createElement('span'); number.className='history-count'; number.textContent=String(count);
-    item.append(label,squares,number); bars.append(item);
+    item.append(label,number,squares); bars.append(item);
   }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
@@ -56,7 +77,7 @@ function categoryPath(id) {
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
-  a.href=site.url; a.textContent=site.name; p.textContent=site.description_ja+t('fallback');
+  a.href=site.url; configureExternalLink(a); a.textContent=site.name; p.textContent=site.description_ja+t('fallback');
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
   // Only serve previously collected icons from this origin; never probe third-party sites on page load.
   if(site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path)) {

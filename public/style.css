@@ -184,3 +184,10 @@ html[data-theme="dark"] .author-links a, html[data-theme="dark"] .author-links a
 .history-squares { display: flex; flex-wrap: wrap; gap: 2px; max-width: 150px; }
 .history-square { display: block; width: 8px; height: 8px; background: #3f9f7c; flex: 0 0 8px; }
 .history-count { flex: 0 0 auto; }
+
+#external-toggle[aria-pressed="true"] { font-weight: 700; text-decoration: underline; text-underline-offset: 4px; }
+
+.history-count { flex: 0 0 calc(var(--count-digits, 1) * 1ch); text-align: right; }
+.history-day { align-items: center; }
+.history-square { background: #168aa6; }
+html[data-theme="dark"] .history-square { background: #6fc6da; }
