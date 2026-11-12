@@ -30,12 +30,13 @@ function renderStats() {
   $('#site-total').textContent = `${t('totalLabel')}: ${activityStats ? activityStats.total : t('unavailable')}`;
   $('#unknown-dates').textContent = `${t('unknownLabel')}: ${activityStats ? activityStats.unknown_dates : t('unavailable')}`;
   const bars=$('#history-bars'); bars.replaceChildren();
-  if(!activityStats) return;
+  if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
+  const max=Math.max(1,...days.values());
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
-    const cell=document.createElement('span'); cell.className='heat-cell'; cell.dataset.level=String(Math.min(4,count)); cell.title=`${day}: ${count}`; cell.setAttribute('aria-label',`${day}: ${count}`); bars.append(cell);
+    const row=document.createElement('div'); row.textContent=`${day.slice(5)} ${'▰'.repeat(Math.ceil(count/max*8)) || '·'} ${count}`; row.setAttribute('aria-label',`${day}: ${count}`); bars.append(row);
   }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
@@ -64,10 +65,10 @@ function renderSite(target, site, showCategories=false) {
   content.append(p);
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
-  meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : t('uncrawled');
+  meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
   let tags=[]; try { tags=JSON.parse(site.tags_json || '[]'); } catch (_) { tags=[]; }
   for(const tag of tags) { const span=document.createElement('span'); span.className='site-tag'; span.textContent=(language==='en' && tag.en) ? tag.en : tag.ja; meta.append(' ',span); }
-  content.append(meta); li.append(icon,content);
+  if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
     const ids=[...new Set(sites.filter(s=>s.id===site.id).map(s=>s.category_id))];

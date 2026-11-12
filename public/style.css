@@ -168,3 +168,5 @@ html[data-theme="dark"] .author-links a, html[data-theme="dark"] .author-links a
 .corner-panel .author-links { position: static; padding: 4px 0; }
 @media (min-width: 1200px) { .corner-panel { position: fixed; z-index: 2; right: 12px; bottom: 12px; width: 260px; } }
 @media (max-width: 1199px) { .corner-panel { position: static; width: min(560px, calc(100% - 24px)); margin: 20px auto; } }
+
+#history-bars { display: block; white-space: pre; }
