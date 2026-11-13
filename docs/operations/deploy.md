@@ -72,6 +72,7 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 ## 未整備
 
-- Workers Builds による GitHub 連携の自動デプロイは、2026-11-13 時点で未設定（Cloudflare ダッシュボードの OAuth が必要）。自動化するなら「マイグレーション適用に成功した場合だけデプロイ」の順序、トークンの最小権限、失敗時に旧 Worker が動き続ける条件を先に決める（Issue #7）。
+- Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ただし Build / Deploy コマンドの正確な設定値はダッシュボードで未確認。
+- migration は自動適用されない。新しい migration を含む PR を main にマージすると、スキーマが旧いまま新 Worker が本番に出る恐れがある。マージ前後の手動適用の順序に注意する（後方互換の形にする。上の「マイグレーション」参照）。
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。

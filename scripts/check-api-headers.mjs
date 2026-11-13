@@ -2,7 +2,9 @@
 // 自己検査（外部アクセスなし）: /api/* の Cache-Control が成功時だけ max-age、エラー時は no-store であること。
 // 実行: node scripts/check-api-headers.mjs
 import app from '../src/index.js';
-const okDb = { prepare: () => ({ all: async () => ({ results: [] }), first: async () => ({ total: 0 }) }) };
+const stmt = { all: async () => ({ results: [] }), first: async () => ({ total: 0 }) };
+stmt.bind = () => stmt;
+const okDb = { prepare: () => stmt };
 const badDb = { prepare: () => { throw new Error('D1 down'); } };
 const cases = [
   ['成功 /api/activity', '/api/activity', okDb, 200, 'public, max-age=30'],
