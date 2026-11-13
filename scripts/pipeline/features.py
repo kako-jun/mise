@@ -6,7 +6,7 @@ import urllib.parse
 
 from hostnames import adult_host_hint, blocklist, suffix_match
 
-# 判定の閾値（誤判定の傾向を見て調整する。docs/independent-sites-pipeline.md 参照）
+# 判定の閾値（誤判定の傾向を見て調整する。docs/collection/pipeline.md 参照）
 MIN_TEXT_LEN = 200          # 可視テキストの最小文字数
 MIN_KANA = 20               # 日本語らしさ: かな文字数
 # 広告中心: 広告つき個人ブログは通す。広告が本文より多い(本文 AD_CHARS 字あたり広告1つ以上)か、広告・アフィリエイトの数が量産テンプレ級の時だけ落とす

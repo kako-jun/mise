@@ -8,7 +8,7 @@
 （例: KR は ISO 17件のうち KR-29・KR-46 が Wikidata 側で解散扱いのため除外され15件。該当区画のサイトは国旗のみ表示になる）。
 ラベルは en が無ければ mul（Wikidata の多言語ラベル）を使う。座標または en/mul ラベルが無い項目は出力せず、ヘッダに欠損として列挙する。
 TLS: Python 3.13 の VERIFY_X509_STRICT だけを無効にする（施設内プロキシのCAが strict で弾かれるため）。証明書・ホスト名の検証は有効のまま。
-出典: Wikidata (CC0)。取得日・件数・欠損は public/regions.js の先頭コメントと docs/architecture.md に残る。
+出典: Wikidata (CC0)。取得日・件数・欠損は public/regions.js の先頭コメントと docs/collection/trials.md に残る。
 """
 import json, re, ssl, sys, time, urllib.parse, urllib.request, datetime, pathlib
 

@@ -1,4 +1,4 @@
-// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/architecture.md).
+// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/design/ui.md).
 export const SITE_ORDER = `ORDER BY (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
