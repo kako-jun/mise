@@ -1,0 +1,708 @@
+{
+ "fetched_at_utc": "2026-11-13T06:44:34Z",
+ "ua": "MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)",
+ "mise_origin": "https://mise.llll-ll.com",
+ "sites": [
+  {
+   "id": "sample-1",
+   "url": "https://llll-ll.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://llll-ll.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://llll-ll.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=utf-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "sample-2",
+   "url": "https://hn.llll-ll.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://hn.llll-ll.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://hn.llll-ll.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "sample-3",
+   "url": "https://3min.llll-ll.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://3min.llll-ll.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://3min.llll-ll.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=utf-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "sample-4",
+   "url": "https://agasteer.llll-ll.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://agasteer.llll-ll.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://agasteer.llll-ll.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=utf-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "sample-5",
+   "url": "https://www.aozora.gr.jp/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.aozora.gr.jp/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.aozora.gr.jp/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "sample-6",
+   "url": "https://www.ndl.go.jp/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.ndl.go.jp/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.ndl.go.jp/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "x-frame-options": [
+     "SAMEORIGIN"
+    ],
+    "content-security-policy": [
+     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://www.datadoghq-browser-agent.com https://jpsearch.go.jp https://*.awswaf.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://jpsearch.go.jp https://*.awswaf.com https://cdn.jsdelivr.net; img-src * blob: data:; connect-src 'self' https://browser-intake-datadoghq.com https://*.browser-intake-datadoghq.com https://9v7tjveeei.execute-api.ap-northeast-1.amazonaws.com https://www.google-analytics.com https://jpsearch.go.jp https://*.awswaf.com; font-src 'self' https://fonts.gstatic.com https://jpsearch.go.jp https://*.awswaf.com https://cdn.jsdelivr.net; form-action 'self' https://warp.ndl.go.jp; media-src 'self' blob: data:; frame-ancestors 'self'; worker-src blob:; frame-src https://www.youtube.com https://jpsearch.go.jp;"
+    ],
+    "content-type": [
+     "text/html;charset=utf-8"
+    ]
+   },
+   "embeddable": false,
+   "reasons": [
+    "csp-frame-ancestors",
+    "xfo-sameorigin"
+   ],
+   "notes": []
+  },
+  {
+   "id": "sample-7",
+   "url": "https://www.nao.ac.jp/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.nao.ac.jp/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.nao.ac.jp/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-hyuki",
+   "url": "https://www.hyuki.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.hyuki.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.hyuki.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=UTF-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-kmonos",
+   "url": "https://www.kmonos.net/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.kmonos.net/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.kmonos.net/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-elm-chan",
+   "url": "https://elm-chan.org/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://elm-chan.org/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://elm-chan.org/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-genbu",
+   "url": "https://www.genbu.net/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.genbu.net/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.genbu.net/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=Shift-JIS"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-kofun-map",
+   "url": "https://kofun.info/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://kofun.info/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://kofun.info/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=UTF-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-zukan-bouz",
+   "url": "https://www.zukan-bouz.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.zukan-bouz.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.zukan-bouz.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "x-frame-options": [
+     "SAMEORIGIN"
+    ],
+    "content-security-policy": [
+     "upgrade-insecure-requests"
+    ],
+    "content-type": [
+     "text/html; charset=UTF-8"
+    ]
+   },
+   "embeddable": false,
+   "reasons": [
+    "xfo-sameorigin"
+   ],
+   "notes": []
+  },
+  {
+   "id": "collected-stellarscenes",
+   "url": "https://stellarscenes.net/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://stellarscenes.net/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://stellarscenes.net/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-sora-can",
+   "url": "https://sora-can.com/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://sora-can.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://sora-can.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-hoshi-izanai",
+   "url": "https://www.asahi-net.or.jp/~dy7s-ynym/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.asahi-net.or.jp/~dy7s-ynym/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.asahi-net.or.jp/~dy7s-ynym/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-elecroom-avr",
+   "url": "https://www.ne.jp/asahi/shared/o-family/ElecRoom/ElecMAIN.htm",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.ne.jp/asahi/shared/o-family/ElecRoom/ElecMAIN.htm",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.ne.jp/asahi/shared/o-family/ElecRoom/ElecMAIN.htm",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-denshi-muscat",
+   "url": "https://www.zea.jp/audio/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.zea.jp/audio/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.zea.jp/audio/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-kyotani-hobby",
+   "url": "http://www.kyotani-hobby.com/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "http://www.kyotani-hobby.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "http://www.kyotani-hobby.com/",
+   "final_scheme": "http",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": false,
+   "reasons": [
+    "http-only"
+   ],
+   "notes": []
+  },
+  {
+   "id": "collected-susutawari",
+   "url": "https://susutawari.org/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://susutawari.org/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://susutawari.org/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html; charset=utf-8"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-mlum-factory",
+   "url": "https://www.mlum-factory.com/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.mlum-factory.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.mlum-factory.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-naruken",
+   "url": "http://naruken.cweb.tk/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "http://naruken.cweb.tk/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "http://naruken.cweb.tk/",
+   "final_scheme": "http",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": false,
+   "reasons": [
+    "http-only"
+   ],
+   "notes": []
+  },
+  {
+   "id": "collected-hana300",
+   "url": "https://www.hana300.com/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://www.hana300.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://www.hana300.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-tanken-com",
+   "url": "https://tanken.com/",
+   "requests": 2,
+   "robots": {
+    "status": 404,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://tanken.com/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://tanken.com/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "content-type": [
+     "text/html"
+    ]
+   },
+   "embeddable": true,
+   "reasons": [],
+   "notes": []
+  },
+  {
+   "id": "collected-arch-hiroshima",
+   "url": "https://arch-hiroshima.net/",
+   "requests": 2,
+   "robots": {
+    "status": 200,
+    "allowed": true
+   },
+   "chain": [
+    {
+     "url": "https://arch-hiroshima.net/",
+     "status": 200,
+     "location": null
+    }
+   ],
+   "final_url": "https://arch-hiroshima.net/",
+   "final_scheme": "https",
+   "status": 200,
+   "headers": {
+    "x-frame-options": [
+     "SAMEORIGIN"
+    ],
+    "content-type": [
+     "text/html; charset=UTF-8"
+    ]
+   },
+   "embeddable": false,
+   "reasons": [
+    "xfo-sameorigin"
+   ],
+   "notes": []
+  }
+ ]
+}
