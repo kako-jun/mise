@@ -19,7 +19,7 @@
 
 ## 再巡回
 
-掲載サイトの到達不能は削除でなく状態遷移で扱う方針（Issue #2・#53）。実装は未着手で、構想は [ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)。
+掲載サイトの到達不能は削除でなく状態遷移で扱う方針（Issue #2・#53）。第1段（手元スクリプトの再巡回・状態遷移・候補リスト）は [recrawl.md](recrawl.md) に実装済み。構想は [ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)。
 
 ## 定期処理
 

@@ -20,6 +20,8 @@ MAX_REDIRECTS = 3
 MAX_CRAWL_DELAY = 10
 HOST_WAIT = 1.5              # 同一ホストへのリクエスト間隔（秒）
 TIMEOUT = 20
+ALLOWED_PORTS = (None, 80, 443)   # テストだけが偽サーバー用に差し替える
+ALLOW_PRIVATE = False             # 同上(本番では常に False)
 
 
 class FetchError(Exception):
@@ -36,6 +38,8 @@ def check_public_host(host):
     ips = sorted({i[4][0] for i in infos})
     if not ips:
         raise FetchError('dns', 'no address')
+    if ALLOW_PRIVATE:
+        return ips
     for ip in ips:
         if not ipaddress.ip_address(ip).is_global:
             raise FetchError('ssrf_blocked', f'{host} -> non-public address')
@@ -51,7 +55,7 @@ def http_get(url, max_body=MAX_BODY):
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         raise FetchError('bad_url', url)
-    if parts.port not in (None, 80, 443):
+    if parts.port not in ALLOWED_PORTS:
         raise FetchError('bad_port', str(parts.port))
     ips = check_public_host(parts.hostname)
     cmd = ['curl', '--silent', '--show-error', '--include', '--max-time', str(TIMEOUT), '--connect-timeout', '10',

@@ -27,6 +27,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | **collection/** 収集 | |
 | [collection/discovery-policy.md](collection/discovery-policy.md) | 発見・確認の方針（robots、レビュー、定期処理の考え方） |
 | [collection/pipeline.md](collection/pipeline.md) | 独立サイトの発見パイプライン（frontier 台帳・決定論フィルタ） |
+| [collection/recrawl.md](collection/recrawl.md) | 登録済みサイトの再巡回（状態遷移・変更検出・要確認の候補リスト） |
 | [collection/public-bodies.md](collection/public-bodies.md) | 官公庁・自治体の名簿（公式サイト台帳） |
 | [collection/procedures.md](collection/procedures.md) | 恒常的な収集手順（スクリプトの再実行方法・書式） |
 | [collection/thumbnails.md](collection/thumbnails.md) | サムネイル撮影の試験（設計・作法・結果。試験用スクリプトのみ実装済み） |
