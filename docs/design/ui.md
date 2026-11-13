@@ -52,7 +52,7 @@
 
 ## 言語
 
-既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語になる。ブラウザ言語での自動判定はしない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
+初期言語は、`localStorage` の `mise-language`（`ja` / `en`）があればそれを最優先し、無ければ `navigator.languages`（なければ `navigator.language`）の先頭が `ja` で始まるときだけ日本語、それ以外は英語（`app.js` の `initialLanguage`）。言語を切り替えると `mise-language` に保存される。サーバー側（SSR・`<html lang>`）は Accept-Language で出し分けず常に英語のまま（同一 URL で言語を変えると SEO 設計（`seo.md` の hreflang・canonical）と CDN キャッシュ（Vary）を壊すため）。そのため日本語ブラウザの初回表示は、英語の SSR を描画した直後に JS が日本語へ切り替える。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
 
 ## ロゴ
 
