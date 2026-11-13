@@ -38,7 +38,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 ## プレビュービルド（ブランチごと）
 
-Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ビルドログ由来の情報で、現在の Build / Deploy コマンドの設定値は未確認）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
+Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ダッシュボードで確認済み、2026-11-14: プレビューブランチのビルドも Build コマンドは「なし」、プレビューコマンドは `npx wrangler preview`、ルートディレクトリ `/`。プレビュー URL は現在「無効」で、ビルドは実行されるが URL は有効化するまで作られない）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
 
 - `previews.d1_databases` で、プレビューの `DB` バインディングを**プレビュー専用の D1 `mise-preview`**（`database_id` は `wrangler.jsonc` 参照）に向ける。**本番 DB `mise` をプレビューから触らせない**ため（ブランチの未レビューのコードが本番データを読み書き・破壊しないように）。静的ファイル（`assets`）はトップレベルの設定が使われる。
 - `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）:
@@ -73,7 +73,7 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 ## 未整備
 
-- Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ただし Build / Deploy コマンドの正確な設定値はダッシュボードで未確認。
+- Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ダッシュボードで確認済み（2026-11-14）: Git リポジトリ `kako-jun/mise`、プロダクションブランチ `main`、ルートディレクトリ `/`。本番ビルドの Build コマンドは「なし」、Deploy コマンドは `npx wrangler deploy`。したがって main へのマージは migration を適用せず Worker だけをデプロイする（migration は事前に手動適用）。プレビュー（ブランチ）側は Build コマンドなし・プレビューコマンド `npx wrangler preview`・ルート `/` で、プレビュー URL は無効（上の「プレビュービルド」参照）。
 - migration は自動適用されない。新しい migration を含む PR を main にマージすると、スキーマが旧いまま新 Worker が本番に出る恐れがある。**先に本番へ migration を適用してから、その後マージする**（後方互換の形にする。上の「本番へのデプロイ」参照）。
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。
