@@ -79,6 +79,7 @@ def http_get(url, max_body=MAX_BODY):
             proc.kill()
         err = proc.stderr.read().decode('utf-8', 'replace').strip()
         proc.wait()
+        proc.stdout.close(); proc.stderr.close()
     if not buf:
         raise FetchError('connect', err[:200] or 'empty response')
     return _parse_response(buf, max_body)

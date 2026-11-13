@@ -33,7 +33,14 @@ HASH_TEXT_CHARS = 20000
 
 # 失敗として数える種別 / 数えない(サイトの生死を判断できない)種別
 FAIL_KINDS = {'http_404', 'http_410', 'http_4xx', 'http_5xx', 'dns', 'timeout', 'connect', 'tls', 'too_many_redirects'}
-NEUTRAL_KINDS = {'robots_disallowed', 'robots_unavailable', 'http_denied', 'ssrf_blocked', 'error'}
+NEUTRAL_KINDS = {'robots_disallowed', 'robots_unavailable', 'http_denied', 'error'}
+FLAG_KINDS = {'redirect_offsite': '別ドメインへ転送(移転・乗っ取り・売却の疑い)', 'ssrf_blocked': '内部アドレスへ解決(失効後の乗っ取り・設定ミスの疑い)'}
+NETWORK_KINDS = {'dns', 'timeout', 'connect', 'tls'}
+# 実行機のネットワーク障害の検出用。全件失敗の回を失敗に数えないため、先にここへ到達できるか確かめる
+HEALTH_URLS = ('https://www.w3.org/', 'https://www.mext.go.jp/')
+# 共有ホスティング(サブドメインごとに別の持ち主)。ここに属するホストは完全一致で同一サイトとみなす
+EXTRA_SHARED = {'github.io', 'blogspot.com', 'netlify.app', 'pages.dev', 'workers.dev', 'vercel.app', 'wordpress.com', 'herokuapp.com',
+                'web.app', 'firebaseapp.com', 'appspot.com', 'tumblr.com', 'wixsite.com', 'weebly.com', 'gitlab.io', 'sakura.ne.jp', 'lolipop.jp'}
 # ok / redirect_offsite はそれぞれ成功 / 要確認(転送先が別ドメイン=乗っ取り・移転の疑い)
 
 SCHEMA = """
@@ -41,6 +48,7 @@ CREATE TABLE IF NOT EXISTS sites (
   site_id TEXT PRIMARY KEY, url TEXT NOT NULL, name TEXT,
   state TEXT NOT NULL DEFAULT 'listed',            -- listed | needs_review | hide_candidate
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  flag TEXT,                                       -- 人の確認まで needs_review を保つ理由(offsite | ssrf)
   first_failure_at TEXT, last_checked_at TEXT, last_ok_at TEXT,
   last_kind TEXT, last_http_status INTEGER, last_error TEXT, last_final_url TEXT,
   title TEXT, content_hash TEXT, next_check_at TEXT, note TEXT);
@@ -85,8 +93,24 @@ def _strip(h):
     return h[4:] if h.startswith('www.') else h
 
 
+def _shared_suffixes():
+    out = set(EXTRA_SHARED)
+    for entries in hostnames.blocklist('platforms.txt').values():
+        out.update(entries)
+    return out
+
+
+def _site_key(host):
+    """同一サイト判定のキー。共有ホスティング配下は完全なホスト名、それ以外は登録ドメイン。"""
+    h = _strip(host.lower())
+    for suf in _shared_suffixes():
+        if h == suf or h.endswith('.' + suf):
+            return h
+    return hostnames.registrable(h)
+
+
 def _same_domain(a, b):
-    return hostnames.registrable(_strip(a)) == hostnames.registrable(_strip(b))
+    return _site_key(a) == _site_key(b)
 
 
 def classify_error(e):
@@ -131,23 +155,65 @@ def text_hash(html):
     return hashlib.sha256(t.encode('utf-8')).hexdigest()[:16]
 
 
+class Robots(fetcher.RobotsCache):
+    """robots.txt の取得。5xx・接続失敗でも例外にせず 'unavailable' を返す(本体の死活判定を止めないため)。
+    別ドメインへの転送は 'offsite'(第2要素=転送先)。"""
+    def _fetch(self, origin):
+        url = origin + '/robots.txt'
+        host = urllib.parse.urlsplit(origin).hostname
+        try:
+            for _ in range(fetcher.MAX_REDIRECTS + 1):
+                self.sleep(host)
+                status, headers, body = fetcher.http_get(url, fetcher.MAX_ROBOTS)
+                if 300 <= status < 400 and headers.get('location'):
+                    nxt = urllib.parse.urljoin(url, headers['location'])
+                    nh = urllib.parse.urlsplit(nxt).hostname or ''
+                    if not _same_domain(nh, host):
+                        return 'offsite', nxt
+                    url = nxt; host = nh; continue
+                break
+        except fetcher.FetchError:
+            return 'unavailable', None
+        return self._interpret(status, headers, body)
+
+    def _interpret(self, status, headers, body):
+        import urllib.robotparser
+        if status == 200:
+            p = urllib.robotparser.RobotFileParser(); p.parse(fetcher.decode_body(body, headers).splitlines())
+            return 'allowed', p
+        if status in (404, 410):
+            return 'allowed_no_robots', None
+        if status in (401, 403):
+            return 'disallowed', None
+        return 'unavailable', None
+
+    def check(self, origin, path):
+        if origin not in self.rules:
+            self.rules[origin] = self._fetch(origin)
+        st, p = self.rules[origin]
+        if st == 'offsite':
+            return st, False, p
+        return super().check(origin, path)
+
+
 def check_url(url, robots, sleep=time.sleep, host_wait=HOST_WAIT):
-    """1サイトのトップを robots 確認の上で取得し分類する。戻り dict: kind, http_status, final_url, error, title, hash"""
+    """1サイトのトップを robots 確認の上で取得し分類する。戻り dict: kind, http_status, final_url, error, title, hash
+
+    robots.txt が取れない(5xx・タイムアウト・接続失敗)ときは、サイトの死活を見るため本体を 1 回だけ取得して
+    HTTP 結果で判定する(リダイレクトは追わない)。robots.txt が別ドメインへ転送されたら redirect_offsite。"""
     out = {'kind': 'error', 'http_status': None, 'final_url': url, 'error': None, 'title': None, 'hash': None}
     first_host = urllib.parse.urlsplit(url).hostname or ''
     cur = url
     for _ in range(fetcher.MAX_REDIRECTS + 1):
         parts = urllib.parse.urlsplit(cur)
         origin = f'{parts.scheme}://{parts.netloc}'
-        try:
-            st, ok, delay = robots.check(origin, parts.path or '/')
-        except fetcher.FetchError as e:
-            out.update(kind=classify_error(e), error=e.detail[:200]); return out
-        if st == 'unavailable':
-            out['kind'] = 'robots_unavailable'; return out
-        if not ok:
+        st, ok, delay = robots.check(origin, parts.path or '/')
+        if st == 'offsite':
+            out.update(kind='redirect_offsite', final_url=delay); return out
+        unconfirmed = st == 'unavailable'
+        if not unconfirmed and not ok:
             out['kind'] = 'robots_disallowed'; return out
-        sleep(max(host_wait, delay))
+        sleep(max(host_wait, delay if not unconfirmed else 0))
         try:
             status, headers, body = fetcher.http_get(cur)
         except fetcher.FetchError as e:
@@ -160,7 +226,9 @@ def check_url(url, robots, sleep=time.sleep, host_wait=HOST_WAIT):
                 out['kind'] = 'error'; out['error'] = 'bad redirect'; return out
             if not _same_domain(np_.hostname, first_host):
                 out.update(kind='redirect_offsite', final_url=nxt); return out
-            cur = nxt; continue
+            if unconfirmed:                    # robots 未確認では転送先へ進まない
+                out['kind'] = 'robots_unavailable'; return out
+            cur = nxt; out['final_url'] = nxt; continue
         out['kind'] = classify_status(status)
         if out['kind'] == 'ok':
             html = fetcher.decode_body(body, headers)
@@ -176,20 +244,22 @@ def parse_iso(s):
     return datetime.datetime.strptime(s, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=datetime.timezone.utc)
 
 
-def next_state(kind, failures, first_failure_at, now):
-    """(新しい連続失敗回数, 状態, 理由) を返す。自動削除はない。"""
+def next_state(kind, failures, first_failure_at, now, flag=None, state='listed'):
+    """(連続失敗回数, 状態, 理由, flag) を返す。自動削除はない。
+
+    flag(offsite/ssrf)が付いた needs_review は、同一ドメインでの成功(kind=ok)になるまで維持する。"""
     if kind == 'ok':
-        return 0, 'listed', None
-    if kind == 'redirect_offsite':
-        return failures, 'needs_review', '別ドメインへ転送(移転・乗っ取り・売却の疑い)'
+        return 0, 'listed', None, None
+    if kind in FLAG_KINDS:
+        return failures, 'needs_review', FLAG_KINDS[kind], 'offsite' if kind == 'redirect_offsite' else 'ssrf'
     if kind in NEUTRAL_KINDS:
-        return failures, None, None            # 状態は据え置き
+        return failures, None, None, flag
     failures += 1
     if failures >= HIDE_AFTER and first_failure_at and (now - parse_iso(first_failure_at)).days >= HIDE_MIN_DAYS:
-        return failures, 'hide_candidate', f'連続失敗{failures}回・{HIDE_MIN_DAYS}日以上'
-    if failures >= REVIEW_AFTER:
-        return failures, 'needs_review', f'連続失敗{failures}回'
-    return failures, 'listed', None
+        return failures, 'hide_candidate', f'連続失敗{failures}回・{HIDE_MIN_DAYS}日以上', flag
+    if failures >= REVIEW_AFTER or flag:
+        return failures, 'needs_review', (None if flag else f'連続失敗{failures}回'), flag
+    return failures, 'listed', None, flag
 
 
 def next_check(kind, failures, now):
@@ -197,7 +267,7 @@ def next_check(kind, failures, now):
         days = OK_INTERVAL_DAYS
     elif kind in NEUTRAL_KINDS:
         days = 7
-    elif kind == 'redirect_offsite':
+    elif kind in FLAG_KINDS:
         days = 3
     else:
         days = min(2 ** max(failures - 1, 0), MAX_BACKOFF_DAYS)
@@ -215,7 +285,7 @@ def due_sites(db, now, limit=None):
 def apply_result(db, site, res, now):
     """結果を台帳に記録する(状態遷移・変更検出)。"""
     ts = now_iso(now); kind = res['kind']
-    failures, state, reason = next_state(kind, site['consecutive_failures'], site['first_failure_at'], now)
+    failures, state, reason, flag = next_state(kind, site['consecutive_failures'], site['first_failure_at'], now, site['flag'], site['state'])
     state = state or site['state']
     first_fail = site['first_failure_at']
     if kind == 'ok':
@@ -231,26 +301,43 @@ def apply_result(db, site, res, now):
     note = reason or ('復旧(自動で listed に戻った。人の確認推奨)' if recovered else (site['note'] if state != 'listed' else None))
     db.execute("INSERT INTO checks(site_id,checked_at,kind,http_status,final_url,error,state_after) VALUES(?,?,?,?,?,?,?)",
                (site['site_id'], ts, kind, res['http_status'], res['final_url'], res['error'], state))
-    db.execute("""UPDATE sites SET state=?, consecutive_failures=?, first_failure_at=?, last_checked_at=?,
+    db.execute("""UPDATE sites SET flag=?, state=?, consecutive_failures=?, first_failure_at=?, last_checked_at=?,
                   last_ok_at=CASE WHEN ? THEN ? ELSE last_ok_at END, last_kind=?, last_http_status=?, last_error=?, last_final_url=?,
                   title=CASE WHEN ? THEN ? ELSE title END, content_hash=CASE WHEN ? THEN ? ELSE content_hash END,
                   next_check_at=?, note=? WHERE site_id=?""",
-               (state, failures, first_fail, ts, kind == 'ok', ts, kind, res['http_status'], res['error'], res['final_url'],
+               (flag, state, failures, first_fail, ts, kind == 'ok', ts, kind, res['http_status'], res['error'], res['final_url'],
                 kind == 'ok', res['title'], kind == 'ok', res['hash'], next_check(kind, failures, now), note, site['site_id']))
     db.commit()
 
 
 # ---- 実行 ----
 
-def run(db, limit=None, workers=3, host_wait=HOST_WAIT, now=None, log=print):
+class NetworkUnhealthy(Exception):
+    """実行機のネットワーク障害の疑い。この回の結果は台帳に反映しない。"""
+
+
+def network_healthy(probes, host_wait=HOST_WAIT):
+    """既知の健全なホストのうち 1 つでも到達できれば健全。probes が空なら確認しない。"""
+    if not probes:
+        return True
+    robots = Robots(lambda h: time.sleep(host_wait))
+    for u in probes:
+        if check_url(u, robots, host_wait=host_wait)['kind'] not in NETWORK_KINDS:
+            return True
+    return False
+
+
+def run(db, limit=None, workers=3, host_wait=HOST_WAIT, now=None, log=print, probes=HEALTH_URLS):
     now = now or datetime.datetime.now(datetime.timezone.utc)
+    if not network_healthy(probes, host_wait):
+        raise NetworkUnhealthy('到達確認先にも届かない。実行機のネットワーク障害とみなし、失敗に数えず中止')
     sites = due_sites(db, now, limit)
     groups = defaultdict(list)       # ホスト単位で直列(同一ホストへの同時アクセスはしない)。順序=優先度
     for s in sites:
         groups[_strip(urllib.parse.urlsplit(s['url']).hostname or '')].append(s)
 
     def work(items):
-        robots = fetcher.RobotsCache(lambda h: time.sleep(host_wait))
+        robots = Robots(lambda h: time.sleep(host_wait))
         out = []
         for s in items:
             try:
@@ -306,7 +393,10 @@ def main(argv=None):
         files = a.files or sorted(glob.glob(str(ROOT / 'data' / 'collection-*.json')))
         print(f'{import_sites(db, files)} 件を取り込み')
     elif a.cmd == 'run':
-        print(f'{run(db, a.limit, a.workers, a.host_wait)} 件を確認')
+        try:
+            print(f'{run(db, a.limit, a.workers, a.host_wait)} 件を確認')
+        except NetworkUnhealthy as e:
+            print(f'警告: {e}', file=sys.stderr); sys.exit(2)
     elif a.cmd == 'candidates':
         rows = candidates(db)
         if a.json:

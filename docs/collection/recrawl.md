@@ -18,6 +18,9 @@ uv run python3 scripts/recrawl/recrawl.py sql --out var/site_checks.sql   # site
 - 登録 URL のトップだけを取る。同一登録ドメイン内のリダイレクトのみ追従し、**別ドメインへの転送は追従せず `redirect_offsite`**。
 - 同一ホストへのリクエスト間隔は既定 5 秒（`--host-wait`）。同一ホストのサイトは直列、全体の並列は `--workers`（既定 3）。
 - robots.txt で拒否されたページは取得しない（`robots_disallowed`）。
+- robots.txt が取れない（5xx・タイムアウト・接続失敗）ときは、サイトの死活を見るため登録 URL を**1 回だけ**取得して HTTP 結果で判定する（リダイレクトは追わない）。全パスが 503 の落ちたサーバーは `http_5xx`（失敗）になる。robots.txt（または本体）が**別ドメインへ転送**されたら `redirect_offsite`。
+- 「同一ドメイン」は登録ドメインで比べるが、共有ホスティング（github.io・blogspot.com・netlify.app・pages.dev・sakura.ne.jp など。`blocklist/platforms.txt` と `recrawl.py` の `EXTRA_SHARED`）配下は完全なホスト名一致で比べる。
+- 実行の最初に健全なホスト（`HEALTH_URLS`）へ到達できるか確かめ、どれにも届かなければ実行機のネットワーク障害とみなして**何も記録せず**警告して終了する（終了コード 2）。
 
 ## 結果の種別と状態遷移
 
@@ -25,10 +28,10 @@ uv run python3 scripts/recrawl/recrawl.py sql --out var/site_checks.sql   # site
 |---|---|
 | `ok`（2xx） | 成功。連続失敗を 0 に戻す |
 | `http_404` `http_410` `http_4xx` `http_5xx` `dns` `timeout` `connect` `tls` `too_many_redirects` | 失敗（連続失敗 +1） |
-| `robots_disallowed` `robots_unavailable` `http_denied`（401/403/429）`ssrf_blocked` `error` | 中立。サイトの生死が分からないので失敗に数えず、状態も据え置き |
-| `redirect_offsite` | 即 `needs_review`（移転・売却・乗っ取りの疑い） |
+| `robots_disallowed` `robots_unavailable`（robots 未確認でリダイレクトされた場合）`http_denied`（401/403/429）`error` | 中立。サイトの生死が分からないので失敗に数えず、状態も据え置き |
+| `redirect_offsite` `ssrf_blocked`（内部アドレスへ解決） | 即 `needs_review`（移転・売却・乗っ取りの疑い）。flag が付き、**人の確認まで維持**する |
 
-状態は `listed` → `needs_review`（連続失敗 3 回以上）→ `hide_candidate`（連続失敗 6 回以上、かつ最初の失敗から 14 日以上）。**自動削除はしない**。`candidates` が人の確認用の一覧で、非表示・削除の判断は人が行う。成功すると `listed` に戻り、その旨を `note` に残す（本番側での復帰は人が確認）。閾値は `recrawl.py` 冒頭の定数。
+状態は `listed` → `needs_review`（連続失敗 3 回以上）→ `hide_candidate`（連続失敗 6 回以上、かつ最初の失敗から 14 日以上）。**自動削除はしない**。`candidates` が人の確認用の一覧で、非表示・削除の判断は人が行う。flag 付きの `needs_review` は、その後に失敗や中立の結果が来ても `listed` に戻らず注記も消えない。戻るのは同一ドメインで `ok` になったときだけ（その旨を `note` に残す。本番側での復帰は人が確認）。閾値は `recrawl.py` 冒頭の定数。
 
 ## 優先度と間隔
 
