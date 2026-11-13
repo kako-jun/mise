@@ -221,7 +221,6 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 
 /* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。現在の範囲は下線と濃さで示し、色の塊（ピル）は使わない。 */
 .scope-nav { display: flex; justify-content: center; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 10px auto 2px; max-width: 100%; font: 11px/1.5 monospace; color: #087b90; }
-.scope-key { letter-spacing: .18em; font-size: 9px; opacity: .6; }
 .scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; margin: 0; padding: 0; list-style: none; }
 .scope-list[hidden], .scope-list li[hidden] { display: none; }
 .scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-more { display: inline-flex; align-items: center; gap: 6px; padding: 3px 1px 2px; min-height: 18px; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; opacity: .66; transition: opacity .15s, border-color .15s; }
@@ -236,7 +235,7 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
 html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
-@media (max-width: 700px) { .scope-key { display: none; } .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
+@media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-more { transition: none; } }
 /* 範囲内に 1 件も無いカテゴリは隠さず薄く表示する（国ごとに同じ構造に見える）。 */
 .category.is-empty { opacity: .6; }
