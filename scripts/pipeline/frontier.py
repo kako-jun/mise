@@ -17,6 +17,8 @@ def connect(path=None):
     db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row
     db.executescript((Path(__file__).parent / 'schema.sql').read_text(encoding='utf-8'))
+    if 'site_kind' not in [r[1] for r in db.execute('PRAGMA table_info(frontier)')]:
+        db.execute('ALTER TABLE frontier ADD COLUMN site_kind TEXT')  # 旧台帳の追従
     return db
 
 

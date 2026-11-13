@@ -56,6 +56,18 @@ class Judge(unittest.TestCase):
         self.assertEqual(self.judged(self.PAGE.replace('</body>', ads + '</body>')), ('rejected', 'ad_heavy'))
 
 
+class Kind(unittest.TestCase):
+    def test_site_kind(self):
+        self.assertEqual(features.site_kind('x.or.jp', '', ''), '団体')
+        self.assertEqual(features.site_kind('x.jp', 'NPO法人あいう', ''), '団体')
+        self.assertEqual(features.site_kind('x.jp', '株式会社あいう', ''), '企業')
+        self.assertEqual(features.site_kind('x.jp', '私のページ', ''), '不明')
+
+    def test_small_business_not_rejected(self):
+        f = features.extract('x.jp', '<html lang=ja><title>株式会社あいう 工務店</title>' + 'ご相談はお気軽に。' * 40, {})
+        self.assertEqual(features.judge(f), ('candidate', None))
+
+
 class Robots(unittest.TestCase):
     def test_token(self):
         import urllib.robotparser

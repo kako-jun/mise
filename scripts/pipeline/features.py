@@ -78,6 +78,18 @@ def extract(host, text, headers):
     }
 
 
+def site_kind(host, title, description):
+    """決定論で分かる範囲の種別(個人|事業|団体|企業|不明)。属性のみで拒否には使わない。個人/事業の区別は LLM 工程(#48)。"""
+    text = (title or '') + (description or '')
+    marks = blocklist('site_kind_markers.txt')
+    labels = host.split('.')
+    if any(m.lower() in text.lower() for m in marks['団体']) or (len(labels) >= 2 and labels[-2] in ('or', 'gr')):
+        return '団体'
+    if any(m in text for m in marks['企業']) or (len(labels) >= 2 and labels[-2] == 'co'):
+        return '企業'
+    return '不明'
+
+
 def judge_http(status):
     """HTTP状態のみでの判定。None=続行 / (state, reason)"""
     if status is None: return ('failed', 'no_response')

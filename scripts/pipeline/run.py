@@ -95,7 +95,7 @@ def judge(db):
     n = collections.Counter()
     for r in db.execute("SELECT * FROM frontier WHERE state IN ('fetched','candidate') OR (state='rejected' AND title IS NOT NULL AND last_http_status=200)").fetchall():
         st, reason = features.judge(r)
-        db.execute('UPDATE frontier SET state=?, reject_reason=? WHERE key=?', (st, reason, r['key']))
+        db.execute('UPDATE frontier SET state=?, reject_reason=?, site_kind=? WHERE key=?', (st, reason, features.site_kind(r['host'], r['title'], r['description']), r['key']))
         n[reason or 'candidate'] += 1
     db.commit()
     return n
@@ -113,10 +113,11 @@ def reject(db, hosts, reason):
 def report(db, sample):
     print('== state'); [print(f'{r[0]:20} {r[1]}') for r in db.execute('SELECT state, count(*) FROM frontier GROUP BY 1 ORDER BY 2 DESC')]
     print('== state / reason'); [print(f'{r[0]:20} {r[1] or "-":28} {r[2]}') for r in db.execute('SELECT state, reject_reason, count(*) FROM frontier GROUP BY 1,2 ORDER BY 3 DESC')]
+    print('== site_kind (candidate)'); [print(f'{r[0] or "-":8} {r[1]}') for r in db.execute("SELECT site_kind, count(*) FROM frontier WHERE state='candidate' GROUP BY 1 ORDER BY 2 DESC")]
     print('== source'); [print(f'{r[0]:24} {r[1]}') for r in db.execute('SELECT source, count(*) FROM frontier GROUP BY 1')]
     print(f'== candidate sample (personal_score desc, {sample})')
-    for r in db.execute("SELECT host, title, description, personal_score, ad_hits, text_len FROM frontier WHERE state='candidate' ORDER BY personal_score DESC, key LIMIT ?", (sample,)):
-        print(f'{r["host"]} | {r["title"][:50]} | {(r["description"] or "")[:60]} | score={r["personal_score"]} ads={r["ad_hits"]} len={r["text_len"]}')
+    for r in db.execute("SELECT host, title, description, personal_score, site_kind, ad_hits, text_len FROM frontier WHERE state='candidate' ORDER BY personal_score DESC, key LIMIT ?", (sample,)):
+        print(f'{r["host"]} | {r["title"][:50]} | {(r["description"] or "")[:60]} | kind={r["site_kind"]} score={r["personal_score"]} ads={r["ad_hits"]} len={r["text_len"]}')
 
 
 def main():
