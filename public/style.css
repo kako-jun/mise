@@ -244,3 +244,5 @@ html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 .category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }
+/* スマホ: 検索バーは行いっぱい (#79)。16px 未満だと iOS Safari が focus でズームする */
+@media (max-width: 700px) { .search-row form { flex: 1 1 auto; max-width: 480px; } .search-row input[type="search"] { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 16px; } }
