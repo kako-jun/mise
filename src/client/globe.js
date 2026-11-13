@@ -91,16 +91,9 @@ try {
   earth.rotation.y = 0;
   let targetRotation = 0, targetTilt = 0, targetDistance = 6.6;
   let flying = false;
-  // 日本（経度138・緯度36）を国連動と同じ aimAt で求める。距離1.94まで寄る。
-  function fly() {
-    const aim = aimAt(138, 36), TAU = Math.PI * 2;
-    targetRotation = aim.rotation + TAU * Math.round((earth.rotation.y - aim.rotation) / TAU);
-    targetTilt = aim.tilt; targetDistance = 1.94; flying = true; peek = false; peekHeld = false;
-  }
-  function reset() { targetRotation = 0; targetTilt = 0; targetDistance = 6.6; flying = false; peek = false; peekHeld = false; }
   // 国への向き移動（旗のホバー/タップ）。flying は立てない: 無操作 IDLE_RESUME_MS 後に既定の向き・距離へ戻り自動回転が再開する。
   // peekHeld=true の間（ホバー/フォーカス中）は戻らない。mise-fly-release か、ホールドなしのイベントで解除。
-  // 区画（県・州）は国より近く、「地球から日本へ」(1.94) よりは遠い。定数は docs/design/architecture.md と対応。
+  // 区画（県・州）は国より近い。定数は docs/design/architecture.md と対応。
   const COUNTRY_DISTANCE = 4.2, REGION_DISTANCE = 3.2;
   let peek = false, peekHeld = false;
   // 緯度経度の点が画面正面(+z)へ最も向く自転角 y と傾き x を探す（粗い格子探索のあと細かく詰める）。
@@ -153,13 +146,8 @@ try {
   const endDrag = event => { if (drag && event.pointerId === drag.id) { if (drag.moved) lastActiveAt = performance.now(); drag = null; } };
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
-  window.addEventListener('mise-fly-japan', fly);
   window.addEventListener('mise-fly-country', flyToCountry);
   window.addEventListener('mise-fly-release', releasePeek);
-  document.querySelector('#fly-japan')?.addEventListener('click', fly);
-  document.querySelector('#reset-globe')?.addEventListener('click', reset);
-  // globe.js の読込前に押されたボタンを再生する。
-  if (window.__misePendingGlobe === 'fly-japan') fly(); else if (window.__misePendingGlobe === 'reset-globe') reset();
   function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
   window.addEventListener('resize', resize); resize();
   // タブが非表示の間はレンダを止める（復帰時に再開）。
@@ -187,6 +175,5 @@ try {
   if (!document.hidden) animate();
 } catch (error) {
   host.hidden = true;
-  document.querySelector('.globe-control')?.setAttribute('hidden', '');
   console.warn('3D地球を表示できませんでした', error);
 }

@@ -35,8 +35,29 @@ npx wrangler deploy
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
 
+## CSP を含むデプロイ後の確認手順
+
+CSP（[architecture.md](../design/architecture.md#セキュリティヘッダ)）は、Worker が返す HTML のインライン script のハッシュで許可している。Cloudflare が配信途中で HTML を書き換えると（Rocket Loader、Web Analytics の自動注入、Auto Minify、メールアドレス難読化など）、ハッシュが合わず script が止まる、または余計な script が違反になる。ローカルでは再現しないので、**デプロイのたびに本番で確認する**。
+
+```sh
+# 実サイトへ 3 ページだけ。違反が 1 件でもあれば終了コード 1
+PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行ファイル> \
+  bwrap --dev-bind / / --tmpfs /dev/dri node scripts/check-prod-csp.mjs https://mise.llll-ll.com
+```
+
+`bwrap` は GPU デバイス（`/dev/dri`）を隠してヘッドレス chromium の固まりを避けるためのもの（不要な環境では外してよい）。出力は各ページの CSP ヘッダの有無・ロゴ描画・地球の canvas・インライン script 数・`securitypolicyviolation` とコンソールの違反。ローカルは URL を `http://localhost:8787` などに変えれば同じ確認ができる。
+
+問題があるとき:
+
+1. 利用者への影響が大きければ、先に `npx wrangler rollback` で直前の版に戻す。
+2. 原因の切り分けには `src/security.js` の `CSP_REPORT_ONLY` を `true` にして再デプロイする（強制せず、違反をコンソールに出すだけになる）。
+3. Cloudflare ダッシュボード（`mise.llll-ll.com` のゾーン）で、次を確認して無効にする: Speed の Rocket Loader、Auto Minify（HTML）、Web Analytics の自動注入（Web Analytics 側の Automatic setup）、Scrape Shield のメールアドレス難読化。
+4. 直ったら `CSP_REPORT_ONLY` を `false` に戻して再デプロイし、もう一度スクリプトで違反 0 を確認する。
+
+`/api/*` の `Cache-Control` は成功応答（400 未満）だけ `public, max-age=30`。エラー応答は `no-store`。自己検査は `node scripts/check-api-headers.mjs`。
+
 ## 未整備
 
 - Workers Builds による GitHub 連携の自動デプロイは、2026-11-13 時点で未設定（Cloudflare ダッシュボードの OAuth が必要）。自動化するなら「マイグレーション適用に成功した場合だけデプロイ」の順序、トークンの最小権限、失敗時に旧 Worker が動き続ける条件を先に決める（Issue #7）。
-- 失敗時の通知・ロールバック手順は未確認。
-- セキュリティヘッダ（CSP など）やアクセシビリティの指摘は Issue #13 を参照。
+- 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
+- アクセシビリティの指摘は Issue #13 を参照。

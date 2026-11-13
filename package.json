@@ -1,15 +1,15 @@
 {
   "name": "mise",
   "version": "1.0.0",
-  "description": "個人・企業のサイトを発見するディレクトリの構想。名前は「見せる」「店」と *mise en place* をかけています。",
-  "main": "app.js",
+  "description": "個人・企業のサイトを発見するディレクトリ型の検索エンジン MISE（Cloudflare Workers + D1）。",
+  "main": "src/index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
     "dev": "wrangler dev --local",
     "db:migrate": "wrangler d1 migrations apply mise --local",
-    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check public/countries.js && node --check public/regions.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js && node --check scripts/capture-thumbnails.mjs",
+    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check public/cat.js && node --check src/security.js && node --check public/countries.js && node --check public/regions.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js && node --check scripts/capture-thumbnails.mjs && node --check scripts/check-api-headers.mjs && node --check scripts/check-prod-csp.mjs",
     "build:globe": "node scripts/build-globe.mjs"
   },
   "repository": {

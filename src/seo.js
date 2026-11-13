@@ -1,5 +1,6 @@
 // Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/design/ui.md).
 export const SITE_ORDER = `ORDER BY (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
+import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -24,7 +25,7 @@ export function resolvePath(categories, raw) {
 }
 
 export async function loadCategories(db) {
-  const { results } = await db.prepare(`WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION ALL SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id) SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COUNT(DISTINCT sc.site_id) AS site_count FROM categories c LEFT JOIN tree ON tree.root_id = c.id LEFT JOIN site_categories sc ON sc.category_id = tree.id GROUP BY c.id ORDER BY c.sort_order`).all();
+  const { results } = await db.prepare(`WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id) SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COUNT(DISTINCT sc.site_id) AS site_count FROM categories c LEFT JOIN tree ON tree.root_id = c.id LEFT JOIN site_categories sc ON sc.category_id = tree.id GROUP BY c.id ORDER BY c.sort_order`).all();
   return results;
 }
 
@@ -79,6 +80,8 @@ export async function renderIndex(c, assetResponse) {
   }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
+  const html = await assetResponse.clone().text();
+  const csp = pageCsp(await inlineScriptHashes(html));
   const rw = new HTMLRewriter()
     .on('title', { element: e => e.setInnerContent(title) })
     .on('meta[name="description"]', setContent(desc))
@@ -100,5 +103,6 @@ export async function renderIndex(c, assetResponse) {
   res.headers.delete('ETag');
   res.headers.delete('Last-Modified');
   res.headers.set('Cache-Control', 'public, max-age=0, must-revalidate, s-maxage=60');
+  for (const [k, v] of Object.entries(securityHeaders(csp))) res.headers.set(k, v);
   return res;
 }
