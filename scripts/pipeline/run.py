@@ -16,14 +16,16 @@ import discover
 import features
 import fetcher
 import frontier
-from hostnames import prefilter
+from hostnames import host_key, prefilter
 
 RETRY_AFTER = datetime.timedelta(days=1)
 
 
-def triage(db):
+def triage(db, redo=False):
     """取得前フィルタ: discovered -> queued | rejected"""
     n = collections.Counter()
+    if redo:  # 取得前に除外されたもの(未取得)を、ルール変更後に引き直す
+        db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='rejected' AND last_fetched_at IS NULL")
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
         reason = prefilter(r['host'], jp_only=r['source'] != 'links')
         if reason:
@@ -99,6 +101,15 @@ def judge(db):
     return n
 
 
+def reject(db, hosts, reason):
+    """外部の判定(大手企業のリスト、LLM工程 #48 の結果など)を取り込む: 標準入力のホストを rejected にする。"""
+    n = 0
+    for h in hosts:
+        n += db.execute("UPDATE frontier SET state='rejected', reject_reason=? WHERE key=?", (reason, host_key(h.lower()))).rowcount
+    db.commit()
+    return {'rejected': n}
+
+
 def report(db, sample):
     print('== state'); [print(f'{r[0]:20} {r[1]}') for r in db.execute('SELECT state, count(*) FROM frontier GROUP BY 1 ORDER BY 2 DESC')]
     print('== state / reason'); [print(f'{r[0]:20} {r[1] or "-":28} {r[2]}') for r in db.execute('SELECT state, reject_reason, count(*) FROM frontier GROUP BY 1,2 ORDER BY 3 DESC')]
@@ -110,12 +121,14 @@ def report(db, sample):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report'])
+    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report', 'reject'])
     ap.add_argument('--db', default=None)
     ap.add_argument('--part-file', help='discover-cc: ローカルの vertices パート (.gz)。省略時は自動取得（約40MB）')
     ap.add_argument('--sample-every', type=int, default=1000, help='discover-cc: ホスト名のハッシュで 1/N を決定論的に抽出')
     ap.add_argument('--limit', type=int, default=100, help='discover-cc: 追加上限 / fetch: 取得ホスト数上限')
     ap.add_argument('--workers', type=int, default=3, help='fetch: 並列数（2〜4。ホストは重複しない）')
+    ap.add_argument('--redo', action='store_true', help='triage: 未取得の rejected を引き直す')
+    ap.add_argument('--reason', default='major_org', help='reject: 理由(大手判定など外部の判定結果の取り込み)')
     ap.add_argument('--sample', type=int, default=20, help='report: 候補サンプル件数')
     a = ap.parse_args()
     if not 1 <= a.workers <= 4:
@@ -123,9 +136,10 @@ def main():
     db = frontier.connect(a.db)
     if a.cmd == 'discover-cc': print(discover.discover_commoncrawl(db, a.part_file, a.sample_every, a.limit))
     elif a.cmd == 'discover-links': print(discover.discover_links(db))
-    elif a.cmd == 'triage': print(dict(triage(db)))
+    elif a.cmd == 'triage': print(dict(triage(db, a.redo)))
     elif a.cmd == 'fetch': print('fetched', fetch(db, a.limit, a.workers))
     elif a.cmd == 'judge': print(dict(judge(db)))
+    elif a.cmd == 'reject': print(reject(db, sys.stdin.read().split(), a.reason))
     elif a.cmd == 'report': report(db, a.sample)
 
 

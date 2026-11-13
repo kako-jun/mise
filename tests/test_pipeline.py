@@ -13,8 +13,8 @@ class Hosts(unittest.TestCase):
 
     def test_prefilter(self):
         for host, want in [('www.city.kanazawa.ishikawa.jp', 'government'), ('example.go.jp', 'government'), ('foo.lg.jp', 'government'),
-                           ('example.co.jp', 'corporate_domain'), ('u.ac.jp', 'institution_domain'), ('blog.example.jp', 'subdomain'),
-                           ('ameblo.jp', 'platform'), ('foo-clinic.jp', 'commercial_host'), ('sample-porn.jp', 'adult_host'),
+                           ('toyota.co.jp', 'major_org'), ('u.ac.jp', 'institution_domain'), ('blog.example.jp', 'subdomain'),
+                           ('ameblo.jp', 'platform'), ('foo-clinic.jp', None), ('example.co.jp', None), ('sample-porn.jp', 'adult_host'),
                            ('example.com', 'not_jp'), ('hyuki.jp', None), ('www.hyuki.ne.jp', None), ('1.2.3.4', 'invalid_host')]:
             self.assertEqual(hostnames.prefilter(host), want, host)
 

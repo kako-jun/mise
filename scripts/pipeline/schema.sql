@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   text_len       INTEGER,
   ad_hits        INTEGER,
   ext_refs       INTEGER,
-  flags          TEXT,                     -- JSON: noindex, parking, adult, commercial 等のマーカー
+  flags          TEXT,                     -- JSON: noindex, parking, adult 等のマーカー
   text_head      TEXT,                     -- 本文冒頭（最大300字）
   personal_score INTEGER
 );

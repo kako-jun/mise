@@ -69,7 +69,6 @@ def extract(host, text, headers):
         'noindex': bool(re.search(r'noindex|\bnone\b', rob)),
         'parking': next((m for m in blocklist('parking_markers.txt')[''] if m in low), None),
         'adult_text': next((m for m in blocklist('adult_markers.txt')['text'] if m in low), None),
-        'commercial_text': next((m for m in blocklist('commercial_markers.txt')['text'] if m in (p.title + (p.desc or '')).lower()), None),
     }
     return {
         'title': p.title.strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],
@@ -98,7 +97,4 @@ def judge(row):
     if f.get('adult_text'): return ('rejected', 'adult')
     if row['ad_hits'] >= AD_HITS_REJECT or (row['ad_hits'] >= AD_HITS_THIN and row['text_len'] < THIN_TEXT):
         return ('rejected', 'ad_heavy')
-    # マーカーは台帳の title/description から毎回引き直す（マーカー更新後に再取得なしで再判定できる）
-    tdl = ((row['title'] or '') + (row['description'] or '')).lower()
-    if any(m in tdl for m in blocklist('commercial_markers.txt')['text']): return ('rejected', 'commercial_content')
     return ('candidate', None)

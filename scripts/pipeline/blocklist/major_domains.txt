@@ -1,0 +1,50 @@
+# 大手企業・大手メディアのドメイン（接尾辞一致）。mise は小さな事業者・団体・個人の独立サイトを載せるので、載せないのは大手だけ。
+# 出典: 運用者の一般知識による手作業の編集（全国紙・主要放送局・主要プラットフォーム/メーカーの代表例のみの種リスト）。網羅ではない。
+# 拡張の方針: 東京証券取引所の上場会社一覧(https://www.jpx.co.jp/markets/statistics-equities/misc/01.html)などの公開一覧から
+#   決定論で追記する。残りの判定は run.py reject で LLM 工程(#48)の結果を取り込む。
+asahi.com
+yomiuri.co.jp
+mainichi.jp
+nikkei.com
+sankei.com
+sankei.jp
+nhk.or.jp
+tv-asahi.co.jp
+fujitv.co.jp
+tbs.co.jp
+ntv.co.jp
+tv-tokyo.co.jp
+toyota.co.jp
+honda.co.jp
+nissan.co.jp
+sony.co.jp
+sony.jp
+panasonic.com
+panasonic.jp
+hitachi.co.jp
+toshiba.co.jp
+nec.com
+fujitsu.com
+softbank.jp
+ntt.com
+ntt.co.jp
+kddi.com
+docomo.ne.jp
+au.com
+rakuten.co.jp
+rakuten.ne.jp
+mercari.com
+recruit.co.jp
+cyberagent.co.jp
+dena.com
+mufg.jp
+smbc.co.jp
+mizuhobank.co.jp
+jal.co.jp
+ana.co.jp
+jreast.co.jp
+seven-eleven.co.jp
+lawson.co.jp
+family.co.jp
+aeon.info
+uniqlo.com

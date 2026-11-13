@@ -88,8 +88,6 @@ def prefilter(host, jp_only=True):
         return 'government'  # 層1（#2）で別に扱う
     if second in PREFECTURES and len(labels) >= 4 and labels[-4] in GOV_LABELS:
         return 'government'
-    if second == 'co':
-        return 'corporate_domain'
     if second in ('ac', 'ed', 'ad'):
         return 'institution_domain'
     if suffix_match(host, blocklist('platforms.txt')['']):
@@ -98,13 +96,12 @@ def prefilter(host, jp_only=True):
     extra = host[:-len(reg) - 1] if host != reg else ''
     if extra not in ('', 'www'):
         return 'subdomain'  # 共有サービス配下の可能性が高い。将来「別単位」で扱う候補
+    if suffix_match(host, blocklist('major_domains.txt')['']):
+        return 'major_org'  # 大手企業・大手メディア（種リスト。残りは LLM 工程の結果を run.py reject で取り込む）
     if suffix_match(host, blocklist('ad_domains.txt')['']):
         return 'ad_domain'
-    toks = host_tokens(host)
-    if toks & set(blocklist('adult_markers.txt')['host']):
+    if host_tokens(host) & set(blocklist('adult_markers.txt')['host']):
         return 'adult_host'
-    if toks & set(blocklist('commercial_markers.txt')['host']):
-        return 'commercial_host'
     name = reg.split('.')[0]
     if len(name) > 30 or re.search(r'\d{6,}', name) or name.count('-') >= 4:
         return 'spam_like_name'  # 量産ドメインの形
@@ -115,6 +112,8 @@ def priority(host):
     """発見順の目安。ne.jp(旧来のISP個人向け) と短い名前をやや優先。"""
     labels = host.split('.')
     p = 5
+    if len(labels) >= 2 and labels[-2] == 'co':
+        p -= 2  # 企業ドメインは載せるが後回し
     if len(labels) >= 2 and labels[-2] == 'ne':
         p += 3
     if len(registrable(host).split('.')[0]) <= 12:
