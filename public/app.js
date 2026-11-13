@@ -199,10 +199,15 @@ function showDirectory(path, updateHistory=true) {
   $('#sample-label').hidden=!direct.length; $('#directory-empty').hidden=!!children.length || !!direct.length || !path.length;
 }
 function renderPick() {
-  const list=$('#pick-list'); list.replaceChildren();
+  const list=$('#pick-list');
+  // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
+  const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
+  if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
+  list.replaceChildren();
   if(!pickedIds.length) return;
   const site=sites.find(s=>s.id===pickedIds[pickIndex % pickedIds.length]);
   if(site) renderSite(list,site,true);
+  if(focusIdx>=0){ const nl=list.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
 }
 const picks=$('#picks');
 new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks);
