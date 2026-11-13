@@ -11,7 +11,7 @@
 """
 import csv, datetime, hashlib, json, pathlib, re, sys, unicodedata, urllib.parse, collections, html
 import openpyxl
-from public_bodies_common import host_key, clean_url, anchors
+from public_bodies_common import host_key, clean_url, url_key, anchors
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
 RAW = ROOT / 'raw'
@@ -98,10 +98,11 @@ def load_wikidata():
     return byc
 
 def load_wikidata_gojp():
-    by_host = collections.defaultdict(set)
+    """Wikidata の公式サイト(P856)を URL(パス込み、url_key)単位で引く。ホスト単位だと mlit.go.jp/jtsb/ が mlit.go.jp の項目で通ってしまう。"""
+    by_url = collections.defaultdict(set)
     for r in csv.DictReader(open(ROOT / 'evidence' / 'wikidata-gojp.csv', encoding='utf-8')):
-        by_host[host_key(r['site'])].add(r['ja'] or r['item'].rsplit('/', 1)[-1])
-    return by_host
+        by_url[url_key(r['site'])].add(r['ja'] or r['item'].rsplit('/', 1)[-1])
+    return by_url
 
 # ---- e-Gov ----
 # ---- J-LIS ----
@@ -178,7 +179,7 @@ def main():
             h = sorted(hosts[used[0]] & hosts[used[1]])[0]
             pick = None
             # 掲載用 URL: 同じホストの候補のうち https を優先し、同じ scheme なら手で整えられたリンク集(e-Gov > J-LIS > Wikidata)を優先
-            cands = [(not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'jlis', 'wikidata'))
+            cands = [(not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'wikidata', 'jlis'))
                      for u in srcs.get(sname, []) if host_key(u) == h]
             pick = clean_url(sorted(cands)[0][2])
             tag = ';'.join(f'{ {"wikidata": "wikidata", "egov": "e-gov", "jlis": "j-lis"}[s] }@{ {"wikidata": fetch_day("wikidata-p429.csv"), "egov": fetch_day("egov-local-governments.html"), "jlis": jlis_date.get(c) or fetch_day("jlis-000.html")}[s] }' for s in used)
@@ -229,13 +230,13 @@ def main():
         for n, u in anchors(f):
             h = host_key(u)
             ident = 'nat:' + hashlib.sha1((t + n).encode()).hexdigest()[:8]
-            labels = sorted(wd_gojp.get(h, []))
+            labels = sorted(wd_gojp.get(url_key(u), []))
             if labels:
                 tally['national_confirmed'] += 1
                 ledger.append({'code': ident, 'name_ja': n, 'name_en': '', 'reading_kana': '', 'type': t, 'prefecture': '',
                                'url': clean_url(u), 'host': h, 'domain_class': domain_class(h),
                                'sources': f'e-gov@{fetch_day(f)};wikidata@{fetch_day("wikidata-gojp.csv")}', 'status': 'active',
-                               'status_date': '', 'successor_code': '', 'note': 'Wikidata 側の項目: ' + ' / '.join(labels[:3])})
+                               'status_date': '', 'successor_code': '', 'note': 'Wikidata 側の項目: ' + ' / '.join(labels)})
             else:
                 tally['national_single'] += 1
                 review.append({'code': ident, 'name_ja': n, 'type': t, 'prefecture': '', 'reason': 'single:egov', 'wikidata_urls': '',

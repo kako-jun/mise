@@ -8,11 +8,12 @@ LLM は使わない。人が決めるのは「この規則を使うか」だけ�
 
   uv run python3 scripts/public_bodies_resolve.py fetch   # review.csv の mismatch の出典URLへアクセスし evidence/redirect-check.csv に記録(ネットワーク)
   uv run python3 scripts/public_bodies_resolve.py apply   # evidence を読んで review.csv から ledger.csv へ昇格(ネットワークなし・冪等)
+  uv run python3 scripts/public_bodies_resolve.py national # 国の機関・独立行政法人の第2出典を URL(パス込み)単位で照合し直す(ネットワークなし・冪等)
 
 build を再実行すると ledger/review は出典だけから作り直されるので、build の後に必ず apply をかける。
 """
 import csv, datetime, json, pathlib, subprocess, sys, time, urllib.parse
-from public_bodies_common import host_key, clean_url
+from public_bodies_common import host_key, clean_url, url_key
 import public_bodies_fetch as F
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
@@ -101,5 +102,47 @@ def do_apply():
             for r in sorted(rows, key=lambda r: r['code']): w.writerow(r)
     print(f'昇格 {promoted} 件 / ledger {len(ledger)} 行 / review {len(review)} 行')
 
+def do_normalize():
+    """台帳の掲載候補の URL を clean_url で整え直す(規則を直したあとの再適用。冪等)。"""
+    import public_bodies_build as B
+    ledger = list(csv.DictReader(open(ROOT / 'ledger.csv', encoding='utf-8'))); n = 0
+    for r in ledger:
+        if r['status'] != 'active' or not r['url']: continue
+        u = clean_url(r['url'])
+        if u != r['url']: r['url'], r['host'], r['domain_class'] = u, host_key(u), B.domain_class(host_key(u)); n += 1
+    with open(ROOT / 'ledger.csv', 'w', encoding='utf-8', newline='') as f:
+        w = csv.DictWriter(f, fieldnames=B.FIELDS, lineterminator='\n'); w.writeheader()
+        for r in sorted(ledger, key=lambda r: r['code']): w.writerow(r)
+    print(f'URL を整えた {n} 件')
+
+def do_national():
+    """build 済みの台帳に、国の機関・独立行政法人の URL 単位の照合を適用する。
+    ledger の URL(パス込み)が evidence/wikidata-gojp.csv の公式サイト(P856)と一致しない行は要確認(single:egov)へ戻す。
+    一致する行の note は Wikidata 側の項目名を全部載せ直す。build はすでに同じ規則で動く(raw が無い環境でもこれで揃えられる)。"""
+    import public_bodies_build as B
+    by_url = {}
+    for r in csv.DictReader(open(ROOT / 'evidence' / 'wikidata-gojp.csv', encoding='utf-8')):
+        by_url.setdefault(url_key(r['site']), set()).add(r['ja'] or r['item'].rsplit('/', 1)[-1])
+    ledger = list(csv.DictReader(open(ROOT / 'ledger.csv', encoding='utf-8')))
+    review = list(csv.DictReader(open(ROOT / 'review.csv', encoding='utf-8')))
+    keep, demoted = [], 0
+    for r in ledger:
+        if r['type'] in ('国の機関', '独立行政法人') and r['status'] == 'active' and r['code'].startswith('nat:'):
+            labels = sorted(by_url.get(url_key(r['url']), []))
+            if not labels:
+                review.append({'code': r['code'], 'name_ja': r['name_ja'], 'type': r['type'], 'prefecture': '', 'reason': 'single:egov', 'wikidata_urls': '',
+                               'egov_url': r['url'], 'jlis_url': '', 'domain_class': r['domain_class'], 'wikidata_name': '',
+                               'note': 'Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)'})
+                demoted += 1; continue
+            r['note'] = 'Wikidata 側の項目: ' + ' / '.join(labels)
+            if len(labels) == 1 and labels[0] != r['name_ja']:  # 名称は Wikidata の正式名を優先(e-Gov の表記は途切れや前置きの揺れがある)。code は変えない
+                r['note'] += f'（e-Gov 表記: {r["name_ja"]}）'; r['name_ja'] = labels[0]
+        keep.append(r)
+    for name, rows, fields in (('ledger.csv', keep, B.FIELDS), ('review.csv', review, B.REVIEW_FIELDS)):
+        with open(ROOT / name, 'w', encoding='utf-8', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=fields, lineterminator='\n'); w.writeheader()
+            for r in sorted(rows, key=lambda r: r['code']): w.writerow(r)
+    print(f'要確認へ戻した国の機関 {demoted} 件 / ledger {len(keep)} 行 / review {len(review)} 行')
+
 if __name__ == '__main__':
-    {'fetch': do_fetch, 'apply': do_apply}[sys.argv[1] if len(sys.argv) > 1 else 'apply']()
+    {'fetch': do_fetch, 'apply': do_apply, 'national': do_national, 'normalize': do_normalize}[sys.argv[1] if len(sys.argv) > 1 else 'apply']()

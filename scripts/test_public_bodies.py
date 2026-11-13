@@ -7,6 +7,7 @@ import public_bodies_common as common
 import public_bodies_diff as pdiff
 import public_bodies_sql as psql
 import public_bodies_resolve as pres
+import public_bodies_reach as preach
 
 LEDGER = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies' / 'ledger.csv'
 
@@ -22,6 +23,14 @@ class HostKey(unittest.TestCase):
         self.assertEqual(common.host_key('https://www2.city.x.lg.jp/'), 'www2.city.x.lg.jp')
     def test_clean_url(self):
         self.assertEqual(common.clean_url('http://a.jp/index.html'), 'http://a.jp/')
+        for u, want in (('https://v.jp/gyosei/index.html/', 'https://v.jp/gyosei/'), ('http://a.jp/INDEX.HTM', 'http://a.jp/'),
+                        ('http://a.jp/x/Index.php?lang=ja#top', 'http://a.jp/x/'), ('http://a.jp/default.aspx', 'http://a.jp/'),
+                        ('http://a.jp', 'http://a.jp'), ('http://a.jp/index_ja.html', 'http://a.jp/index_ja.html'), (' http://a.jp/top/ ', 'http://a.jp/top/')):
+            self.assertEqual(common.clean_url(u), want, u)
+    def test_url_key_keeps_path(self):
+        self.assertEqual(common.url_key('https://www.mlit.go.jp/'), 'mlit.go.jp')
+        self.assertEqual(common.url_key('http://MLIT.go.jp/jtsb/index.html'), 'mlit.go.jp/jtsb')
+        self.assertNotEqual(common.url_key('https://www.mlit.go.jp/jtsb/'), common.url_key('https://www.mlit.go.jp/'))
 
 class Diff(unittest.TestCase):
     def kinds(self, o, n): return [r[0] for r in pdiff.diff({r['code']: r for r in o}, {r['code']: r for r in n})]
@@ -45,7 +54,7 @@ class Ledger(unittest.TestCase):
             self.assertGreaterEqual(len(r['sources'].split(';')), 2, r['code'])
             self.assertEqual(common.host_key(r['url']), r['host'], r['code'])
     def test_successor_exists_and_not_self(self):
-        codes = {r['code'] for r in self.rows if r['status'] == 'active'} | {r['code'] for r in csv.DictReader(open(LEDGER.with_name('review.csv'), encoding='utf-8'))}
+        codes = {r['code'] for r in self.rows if r['status'] in ('active', 'unverified-reach')} | {r['code'] for r in csv.DictReader(open(LEDGER.with_name('review.csv'), encoding='utf-8'))}
         for r in self.rows:
             if r['status'] == 'active': continue
             for s in filter(None, r['successor_code'].split('|')):
@@ -77,7 +86,7 @@ class Sql(unittest.TestCase):
         self.assertIn("'pb-nat-abc'", sql); self.assertNotIn("'JP-nat", sql)
         self.assertIn("'2026-11-13T00:00:00Z',1", sql); self.assertIn('ADD COLUMN bulk_import', sql)
         self.assertNotIn('ADD COLUMN', psql.generate([PREF, lrow()], [PREF]))
-        self.assertIn("NOT EXISTS (SELECT 1 FROM sites WHERE url='https://www.city.sapporo.jp/')", sql)
+        self.assertIn("NOT EXISTS (SELECT 1 FROM sites WHERE rtrim(", sql); self.assertIn("='city.sapporo.jp')", sql)
     def test_skips_wards_inactive_and_quotes(self):
         rows = [PREF, lrow(code='011011', type='行政区', name_ja='札幌市中央区'), lrow(code='012025', status='merged'), lrow(code='013001', name_ja="O'x")]
         sql = psql.generate(rows)
@@ -94,9 +103,49 @@ class Sql(unittest.TestCase):
     def test_committed_migration_matches_ledger(self):
         mig = pathlib.Path(__file__).resolve().parent.parent / 'migrations' / '0015_public_bodies.sql'
         self.assertEqual(mig.read_text(encoding='utf-8'), psql.generate(psql.load(LEDGER)), '台帳を変えたら migration を再生成するか、適用済みなら --since で新しい migration を足す')
+    def test_dedupe_by_host_and_path(self):
+        a, b = lrow(), lrow(code='011003', url='http://WWW.city.sapporo.jp/index.html/')
+        self.assertEqual(psql.norm(a['url']), psql.norm(b['url']))
+        self.assertIn("rtrim(replace(replace(replace(lower(url)", psql.generate([PREF, a]))
+    def test_category_added_to_existing_by_normalized_url(self):
+        self.assertIn("SELECT id,'government-government-agencies' FROM sites WHERE rtrim(", psql.generate([PREF, lrow()]))
     def test_ledger_ids_and_urls_unique(self):
         listed = psql.listed(psql.load(LEDGER), False).values()
-        self.assertEqual(len({r['url'] for r in listed}), len(list(listed)))
+        listed = list(listed)
+        self.assertEqual(len({psql.norm(r['url']) for r in listed}), len(listed))
+        for r in listed: self.assertEqual(common.clean_url(r['url']), r['url'], r['code'])
+    def test_listed_rows_have_ok_reachability(self):
+        ev = {e['code']: e for e in csv.DictReader(open(LEDGER.with_name('evidence') / 'reachability.csv', encoding='utf-8'))}
+        for r in psql.listed(psql.load(LEDGER), False).values():
+            e = ev.get(r['code'])
+            self.assertIsNotNone(e, r['code'] + ' に到達確認が無い'); self.assertEqual(e['verdict'], 'ok', r['code'])
+            self.assertEqual(common.host_key(r['url']), common.host_key(e['final_url']), r['code'])
+        for r in psql.load(LEDGER):
+            if r['status'] == 'unverified-reach': self.assertNotIn(r['code'], psql.listed(psql.load(LEDGER), False))
+    def test_national_urls_match_wikidata_by_path(self):
+        ev = LEDGER.with_name('evidence') / 'wikidata-gojp.csv'
+        keys = {common.url_key(e['site']) for e in csv.DictReader(open(ev, encoding='utf-8'))}
+        for r in csv.DictReader(open(LEDGER, encoding='utf-8')):
+            if r['code'].startswith('nat:') and r['status'] == 'active':
+                # 到達確認で最終 URL に置換された行は note に旧→新が残る。それ以外は台帳の URL がそのまま Wikidata の P856 にある
+                self.assertTrue(common.url_key(r['url']) in keys or 'URL移転' in r['note'], r['name_ja'])
+
+class Reach(unittest.TestCase):
+    ROW = {'host': 'city.x.lg.jp'}
+    def v(self, **kw):
+        a = dict(robots_ok=True, exit_code=0, status=200, final='https://www.city.x.lg.jp/', title='X市')
+        a.update(kw); return preach.verdict(self.ROW, **a)
+    def test_ok_and_moves(self):
+        self.assertEqual(self.v(), 'ok')
+        self.assertEqual(self.v(final='https://www.town.y.lg.jp/'), 'ok')   # 公的ドメインへの移転
+        self.assertEqual(self.v(exit_code=63), 'ok')                       # サイズ上限で打ち切り
+    def test_not_ok(self):
+        self.assertEqual(self.v(final='https://shop.example.com/'), 'other-org')
+        self.assertEqual(self.v(exit_code=6, status=0, final=''), 'dead')
+        self.assertEqual(self.v(status=404), 'dead'); self.assertEqual(self.v(status=503), 'dead')
+        self.assertEqual(self.v(exit_code=28, status=0), 'unverified'); self.assertEqual(self.v(status=403), 'unverified')
+        self.assertEqual(self.v(robots_ok=False), 'unverified')
+        self.assertEqual(self.v(title='This domain is for sale'), 'parked')
 
 class Resolve(unittest.TestCase):
     R = {'code': '1', 'wikidata_urls': 'https://new.example.lg.jp/', 'egov_url': '', 'jlis_url': 'http://old.example.jp/'}

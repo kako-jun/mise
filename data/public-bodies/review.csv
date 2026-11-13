@@ -1,5 +1,9 @@
 code,name_ja,type,prefecture,reason,wikidata_urls,egov_url,jlis_url,domain_class,wikidata_name,note
+013927,寿都町,町,北海道,unreachable:dead,,http://www.town.suttu.lg.jp/,,lg.jp,,到達確認 2026-11-13: http=503 curl=0 最終=http://www.town.suttu.lg.jp/
+014346,秩父別町,町,北海道,unreachable:dead,,https://www.town.chippubetsu.hokkaido.jp/,,geo.jp,,到達確認 2026-11-13: http=503 curl=0 最終=https://www.town.chippubetsu.hokkaido.jp/
+014583,東川町,町,北海道,unreachable:other-org,,https://town.higashikawa.hokkaido.jp/,,geo.jp,,到達確認 2026-11-13: http=200 curl=0 最終=https://higashikawa-town.jp/
 014800,留萌振興局,,,wikidata-only,http://www.rumoi.pref.hokkaido.lg.jp/,,,,留萌振興局,総務省の名簿(R6.1.1現在の団体)に無い。新設・コード改定の可能性
+015181,利尻町,町,北海道,unreachable:dead,,https://www.town.rishiri.hokkaido.jp/,,geo.jp,,到達確認 2026-11-13: http=503 curl=0 最終=https://www.town.rishiri.hokkaido.jp/
 016951,色丹村,村,北海道,none,,,,,色丹村,
 016969,泊村,村,北海道,none,,,,,泊村,
 016977,留夜別村,村,北海道,none,,,,,留夜別村,
@@ -10,28 +14,42 @@ code,name_ja,type,prefecture,reason,wikidata_urls,egov_url,jlis_url,domain_class
 043028,七ヶ宿町,町,宮城県,single:wikidata,https://town.shichikashuku.miyagi.jp/,,,geo.jp,七ヶ宿町,
 052094,鹿角市,市,秋田県,mismatch,https://www.city.kazuno.akita.jp/,,https://www.city.kazuno.lg.jp/index.html,geo.jp,鹿角市,
 073687,南会津町,町,福島県,mismatch,http://www.minamiaizu.org/,,https://www.town.minamiaizu.lg.jp/,other,南会津町,
+103454,吉岡町,町,群馬県,unreachable:dead,,https://www.town.yoshioka.gunma.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.town.yoshioka.gunma.jp/
 112330,北本市,市,埼玉県,mismatch,http://www.city.kitamoto.saitama.jp/,,https://www.city.kitamoto.lg.jp/,lg.jp,北本市,
+122211,八千代市,市,千葉県,unreachable:dead,,https://www.city.yachiyo.chiba.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.city.yachiyo.chiba.jp/
+124435,御宿町,町,千葉県,unreachable:dead,,https://www.town.onjuku.chiba.jp/,,geo.jp,,到達確認 2026-11-13: http=503 curl=0 最終=https://www.town.onjuku.chiba.jp/
+134023,青ヶ島村,村,東京都,unreachable:dead,,https://www.vill.aogashima.tokyo.jp/,,geo.jp,,到達確認 2026-11-13: http=503 curl=0 最終=https://www.vill.aogashima.tokyo.jp/
 204307,大桑村,村,長野県,mismatch,https://www.vill.okuwa.lg.jp/,,http://www.vill.ookuwa.nagano.jp/,lg.jp,大桑村,
 216046,白川村,村,岐阜県,mismatch,https://www.shirakawa-go.org/,,https://www.vill.shirakawa.lg.jp/,other,白川村,
 252115,湖南市,市,滋賀県,mismatch,https://www.city.shiga-konan.lg.jp/,,http://www.city.konan.shiga.jp/,geo.jp,湖南市,
 272027,岸和田市,市,大阪府,mismatch,https://www.city.kishiwada.lg.jp/,,http://www.city.kishiwada.osaka.jp/,lg.jp,岸和田市,
+343072,熊野町,町,広島県,unreachable:dead,,https://www.town.kumano.hiroshima.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.town.kumano.hiroshima.jp/
+434281,高森町,町,熊本県,unreachable:dead,,https://www.town.takamori.kumamoto.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.town.takamori.kumamoto.jp/
 452068,日向市,市,宮崎県,mismatch,https://www.hyugacity.jp/,,http://www.city.hyuga.miyazaki.jp/,geo.jp,日向市,
 nat:0038e6ec,日本芸術文化振興会,独立行政法人,,single:egov,,http://www.ntj.jac.go.jp/,,go.jp,,
 nat:045e8e1a,国立研究開発法人 宇宙航空研究開発機構,独立行政法人,,single:egov,,https://www.jaxa.jp/,,other.jp,,
 nat:08308483,農林漁業信用基金,独立行政法人,,single:egov,,http://www.jaffic.go.jp/,,go.jp,,
+nat:14ae69fe,衆議院,国の機関,,single:egov,,http://www.shugiin.go.jp/internet/index.nsf/html/,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
 nat:19357c22,農業者年金基金,独立行政法人,,single:egov,,http://www.nounen.go.jp/,,go.jp,,
 nat:1d17bbd5,農畜産業振興機構,独立行政法人,,single:egov,,http://www.alic.go.jp//,,go.jp,,
 nat:2baa5218,福祉医療機構,独立行政法人,,single:egov,,http://www.wam.go.jp/hp/,,go.jp,,
 nat:45987c69,防災庁,国の機関,,single:egov,,https://www.bousai.go.jp/index.html,,go.jp,,
+nat:45b3bd1a,運輸安全委員会,国の機関,,single:egov,,https://www.mlit.go.jp/jtsb/,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
 nat:4c1817d2,家畜改良センター,独立行政法人,,single:egov,,http://www.nlbc.go.jp/,,go.jp,,
 nat:50d6ffe3,検察庁,国の機関,,single:egov,,http://www.kensatsu.go.jp/top.shtml,,go.jp,,
+nat:54c12614,国立研究開発法人 産業技術総合研究所,独立行政法人,,single:egov,,http://www.aist.go.jp/index_ja.html,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
+nat:676d9c67,エネルギー・金属鉱物資源機構,独立行政法人,,unreachable:dead,,http://www.jogmec.go.jp/,,go.jp,,到達確認 2026-11-13: http=302 curl=6 最終=https://test.jogmec.go.jp/
+nat:92ca0847,国立高等専門学校機構,独立行政法人,,unreachable:dead,,http://www.kosen-k.go.jp/,,go.jp,,到達確認 2026-11-13: http=404 curl=0 最終=http://www.kosen-k.go.jp/
 nat:a0fd3dde,高齢・障害・求職者雇用支援機構,独立行政法人,,single:egov,,https://www.jeed.go.jp/,,go.jp,,
+nat:a3e6327a,国立研究開発法人 国際農林水産業研究センター,独立行政法人,,single:egov,,http://www.jircas.affrc.go.jp/index.sjis.html,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
 nat:af3c3a22,国立研究開発法人 農業・食品産業技術総合研究機構,独立行政法人,,single:egov,,http://www.naro.affrc.go.jp/,,go.jp,,
 nat:b15ef0c9,国税不服審判所,国の機関,,single:egov,,https://www.kfs.go.jp/index.html,,go.jp,,
 nat:d918aeda,国立研究開発法人 国立長寿医療研究センター,独立行政法人,,single:egov,,http://www.ncgg.go.jp/,,go.jp,,
 nat:db184fea,国立研究開発法人 日本医療研究開発機構,独立行政法人,,single:egov,,https://www.amed.go.jp/,,go.jp,,
+nat:df0f4b87,こども家庭庁,国の機関,,single:egov,,https://www.cfa.go.jp/top/,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
 nat:e107d046,国立研究開発法人 国立成育医療研究センター,独立行政法人,,single:egov,,http://www.ncchd.go.jp/,,go.jp,,
 nat:e3280969,農林水産消費安全技術センター,独立行政法人,,single:egov,,http://www.famic.go.jp/,,go.jp,,
+nat:eaf772f9,公安調査庁,国の機関,,single:egov,,http://www.moj.go.jp/psia/,,go.jp,,Wikidata に同じ URL(パス込み)の公式サイトを持つ項目が無い(ホストだけの一致は採らない)
 nat:f83a2d41,勤労者退職金共済機構,独立行政法人,,single:egov,,http://www.taisyokukin.go.jp/,,go.jp,,
 nat:f86f8471,国立研究開発法人 森林研究・整備機構,独立行政法人,,single:egov,,http://www.ffpri.affrc.go.jp/,,go.jp,,
 nat:f91d7230,原子力規制委員会,国の機関,,single:egov,,https://www.nsr.go.jp/,,go.jp,,

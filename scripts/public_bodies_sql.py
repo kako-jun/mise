@@ -10,9 +10,11 @@
 出典の裏付けも弱いため既定では投入しない(--include-wards で含める。掲載単位は Issue #37 で要判断)。
 適用済みの migration は書き換えない。台帳が変わったら --since で新しい migration を足す。
   新設 -> INSERT / 廃止・合併・要確認へ降格(active でなくなった) -> 掲載から DELETE / 名称・URL の変更 -> UPDATE。
-id は台帳の団体コードから決まる(pb-<コード>)。URL が既に別の掲載サイトにある団体は INSERT しない(重複掲載しない)。
+id は台帳の団体コードから決まる(pb-<コード>)。ホスト(www. 除去・小文字)+パスが既に別の掲載サイトにある団体は INSERT しない(重複掲載しない)。
+その既存サイトには政府機関カテゴリだけを追加する(カテゴリは多重所属できる)。
 """
 import argparse, csv, pathlib, re, sys
+from public_bodies_common import clean_url
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
 CATEGORY = 'government-government-agencies'
@@ -23,6 +25,13 @@ TYPE_EN = {'都道府県': 'Prefecture', '市': 'City', '町': 'Town', '村': 'V
 
 def q(s):
     return "'" + s.replace("'", "''") + "'"
+
+def norm(u):
+    """重複判定キー: 小文字化・scheme 除去・'www.' 除去・index系/末尾スラッシュ除去。SQL の NORM_SQL と同じ変換にする。"""
+    return clean_url(u).lower().replace('https://', '').replace('http://', '').replace('www.', '').rstrip('/')
+
+def norm_sql(col):
+    return f"rtrim(replace(replace(replace(lower({col}),'https://',''),'http://',''),'www.',''),'/')"
 
 def site_id(code):
     return 'pb-' + code.replace(':', '-')
@@ -69,13 +78,15 @@ def insert_sql(r, pen):
     cols = "id,url,name,description_ja,description_en,country_code,registered_at,bulk_import" + (",region_code" if reg else "")
     vals = f"{q(site_id(r['code']))},{q(r['url'])},{q(r['name_ja'])},{q(ja)},{q(en) if en else 'NULL'},'JP',{q(confirmed_at(r))},1" + (f",{q(reg)}" if reg else "")
     # URL が既にあるサイトと重複する場合は何も入れない(後続の category/tag は id で結合するので空振りになる)
-    return f"INSERT INTO sites ({cols}) SELECT {vals} WHERE NOT EXISTS (SELECT 1 FROM sites WHERE url={q(r['url'])});"
+    return f"INSERT INTO sites ({cols}) SELECT {vals} WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')}={q(norm(r['url']))});"
 
 def child_sql(rs, pen):
     """カテゴリとタグ。投入された id にだけ付くよう sites と結合する。"""
     out = []
-    ids = ','.join(q(site_id(r['code'])) for r in rs)
-    out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT id,{q(CATEGORY)} FROM sites WHERE id IN ({ids});")
+    # カテゴリは URL の正規化キーで付ける: 新規に入れた行と、すでに別 id で掲載されている同じサイト(例: 国立国会図書館)の両方に付く
+    for i in range(0, len(rs), 150):
+        keys = ','.join(q(norm(r['url'])) for r in rs[i:i + 150])
+        out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT id,{q(CATEGORY)} FROM sites WHERE {norm_sql('url')} IN ({keys});")
     for i in range(0, len(rs), 100):
         vals = ','.join(f"({q(site_id(r['code']))},{q(ja)},{q(en) if en else 'NULL'})" for r in rs[i:i + 100] for ja, en in tags(r, pen))
         out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT v.a,v.b,v.c FROM (SELECT column1 AS a,column2 AS b,column3 AS c FROM (VALUES {vals})) v WHERE v.a IN (SELECT id FROM sites);")
