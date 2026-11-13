@@ -21,12 +21,13 @@
 <meta name="twitter:description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"MISE","url":"https://mise.llll-ll.com/","inLanguage":["en","ja"],"potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://mise.llll-ll.com/?q={search_term_string}"},"query-input":"required name=search_term_string"}}</script>
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
-<link rel="stylesheet" href="style.css?v=22">
-<script src="app.js?v=21" defer></script>
+<link rel="stylesheet" href="style.css?v=23">
+<script src="countries.js?v=1" defer></script>
+<script src="app.js?v=22" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込前に押された fly/reset は記録し、globe 起動時に再生する。読込失敗時は操作ボタンを隠す。
 addEventListener("click", e => { const b = e.target.closest && e.target.closest("#fly-japan, #reset-globe"); if (b) window.__misePendingGlobe = b.id; }, true);
-addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("./globe.js?v=6").catch(() => document.querySelector(".globe-control")?.setAttribute("hidden", ""))));
+addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("./globe.js?v=7").catch(() => document.querySelector(".globe-control")?.setAttribute("hidden", ""))));
 </script>
 <script src="cat.js?v=5" defer></script>
 </head>

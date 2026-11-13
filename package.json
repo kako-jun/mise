@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "wrangler dev --local",
     "db:migrate": "wrangler d1 migrations apply mise --local",
-    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js",
+    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check public/countries.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js",
     "build:globe": "node scripts/build-globe.mjs"
   },
   "repository": {
