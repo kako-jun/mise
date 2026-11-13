@@ -5,7 +5,9 @@ import app from '../src/index.js';
 const stmt = { all: async () => ({ results: [] }), first: async () => ({ total: 0 }) };
 stmt.bind = () => stmt;
 const okDb = { prepare: () => stmt };
-const badDb = { prepare: () => { throw new Error('D1 down'); } };
+const badStmt = { all: async () => { throw new Error('D1 down'); }, first: async () => { throw new Error('D1 down'); } };
+badStmt.bind = () => badStmt;
+const badDb = { prepare: () => badStmt };
 const cases = [
   ['成功 /api/activity', '/api/activity', okDb, 200, 'public, max-age=30'],
   ['D1 故障 /api/sites', '/api/sites', badDb, 500, 'no-store'],
