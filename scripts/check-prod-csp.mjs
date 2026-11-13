@@ -4,7 +4,8 @@
 // URL 省略時は本番。ローカル確認は http://localhost:8787 など。手順は docs/operations/deploy.md。
 // 終了コード: 違反 0 件なら 0、1 件以上または CSP ヘッダなしなら 1。
 import { createRequire } from 'node:module';
-const base = (process.argv[2] || 'https://mise.llll-ll.com').replace(/\/$/, '');
+// 渡されたURLはオリジンだけを使う（確認するページは下の固定リスト。パスを付けても無視する）。
+const base = new URL(process.argv[2] || 'https://mise.llll-ll.com').origin;
 const dir = process.env.PLAYWRIGHT_DIR;
 const { chromium } = createRequire(dir ? dir.replace(/\/?$/, '/') : import.meta.url)('playwright');
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'] });

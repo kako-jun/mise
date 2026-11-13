@@ -7,7 +7,7 @@
 - データベースは **Cloudflare D1**（`migrations/`）。
 - 画面は **HTML / CSS / JavaScript**（`public/`）。UI フレームワークは使わない。Astro は採用しない。
 - 3D は **Three.js**。ソースは `src/client/globe.js`、three 本体は `vendor/three.module.js`（同梱）。`npm run build:globe`（esbuild で minify・tree-shake）が `public/globe.js` を生成する。globe を変えたら再ビルドして生成物もコミットする（直接編集しない）。`public/land-110m.geojson` は `scripts/slim-land.mjs` で軽量化済み（小数 2 桁・property 除去）。
-- 配信: `wrangler.jsonc` の `assets.run_worker_first` に `/api/*`・`/`・`/*/`（範囲ページ `/jp/` `/us/` `/all/`）・`/sitemap.xml` を指定し、これらは Worker が返す。それ以外（`/robots.txt` など）は `public/` の静的ファイル。末尾スラッシュなしの `/jp` は静的ファイルにも無いので 404（正規の形は `/jp/`）。範囲ページは `/jp/` のように階層の下から返るため、`index.html` は CSS・JS・地球儀の資源をすべて絶対パス（`/style.css` など）で参照する。
+- 配信: `wrangler.jsonc` の `assets.run_worker_first` に `/*` と、静的ファイルの拡張子ごとの除外（`!/*.js` など）を指定する。`/api/*`・`/`・範囲ページ（`/jp/` `/us/` `/all/`、末尾スラッシュなしは `/jp/` へ 301）・`/sitemap.xml` は Worker が返し、それ以外（`/robots.txt`・`/style.css` など）は `public/` の静的ファイル。`public/` に新しい拡張子の静的ファイルを足すときは除外も足す（[seo.md](seo.md)）。範囲ページは `/jp/` のように階層の下から返るため、`index.html` は CSS・JS・地球儀の資源をすべて絶対パス（`/style.css` など）で参照する。
 
 ## API
 
@@ -17,7 +17,7 @@
 | `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
 | `GET /api/sites?scope=` | 掲載サイト全件（範囲で絞る。`country_code` が NULL のサイトは `all` にだけ出る）。`site_categories` と `LEFT JOIN` するため、カテゴリ未所属のサイトも `category_id = NULL` で返る（画面では「未分類」として検索に出る。カテゴリ一覧には出ない）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
 | `GET /api/activity?scope=` | 掲載総数と直近 7 日の日別登録数（HUD 用。範囲内だけ） |
-| `GET /` `/:scope/` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。サイトが 1 件も無い国・不正な値は 404、大文字は小文字へ 301 |
+| `GET /` `/:scope/` `/:scope` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。サイトが 1 件も無い国・不正な値は 404、大文字は小文字へ 301 |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
 `/api/*` は（範囲内の）全件返しで、成功応答に `Cache-Control: public, max-age=30`、4xx/5xx に `no-store` を付ける（更新が速やかに反映されるよう短く。ページング・カーソル化は構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。ブラウザ用で、外部向け公開 API としては設計していない。

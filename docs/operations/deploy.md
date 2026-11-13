@@ -6,7 +6,7 @@
 
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
-- 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・`/*/`（範囲ページ）・`/sitemap.xml` は Worker が先に処理する（[architecture.md](../design/architecture.md)）。
+- 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
 - 現在のアプリに本番 secret は無い（`src/` は `DB` と `ASSETS` のみ使う）。
 
 ## ローカル
@@ -45,7 +45,7 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
   bwrap --dev-bind / / --tmpfs /dev/dri node scripts/check-prod-csp.mjs https://mise.llll-ll.com
 ```
 
-`bwrap` は GPU デバイス（`/dev/dri`）を隠してヘッドレス chromium の固まりを避けるためのもの（不要な環境では外してよい）。出力は各ページの CSP ヘッダの有無・ロゴ描画・地球の canvas・インライン script 数・`securitypolicyviolation` とコンソールの違反。ローカルは URL を `http://localhost:8787` などに変えれば同じ確認ができる。
+`bwrap` は GPU デバイス（`/dev/dri`）を隠してヘッドレス chromium の固まりを避けるためのもの（不要な環境では外してよい）。出力は各ページの CSP ヘッダの有無・ロゴ描画・地球の canvas・インライン script 数・`securitypolicyviolation` とコンソールの違反。ローカルは URL を `http://localhost:8787` などに変えれば同じ確認ができる。**渡すのはオリジン（`https://mise.llll-ll.com`、`http://localhost:8787`）だけ**で、確認するページは固定の 4 ページ（`/` `/us/` `/all/?category=science` `/jp/?q=a`。jp・us・all を網羅）。パス付きで渡してもパス部分は使わず捨てる。
 
 問題があるとき:
 

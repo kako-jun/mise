@@ -239,6 +239,6 @@ html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 @media (max-width: 700px) { .scope-key { display: none; } .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-more { transition: none; } }
 /* 範囲内に 1 件も無いカテゴリは隠さず薄く表示する（国ごとに同じ構造に見える）。 */
-.category.is-empty { opacity: .45; }
+.category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }

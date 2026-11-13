@@ -28,10 +28,18 @@ app.get('/api/activity', async c => {
   const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });
+app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 // 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
 const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);
 app.get('/', async c => page(c, DEFAULT_SCOPE, await loadScopes(c.env.DB)));
 // /jp/ /us/ /all/。大文字は小文字へ 301。サイトが 1 件も無い国・不正な値は 404（sitemap にも載せない）。
+// 末尾スラッシュなし（/jp）は存在する範囲だけ /jp/ へ 301（クエリは維持）。run_worker_first の拡張子なしパターンで Worker に届く。
+app.get('/:scope', async c => {
+  const raw = c.req.param('scope'), sc = parseScope(raw.toLowerCase());
+  if (!sc) return c.text('Not Found', 404);
+  if (sc.cc && !(await loadScopes(c.env.DB)).countries.some(r => r.code === sc.cc)) return c.text('Not Found', 404);
+  const u = new URL(c.req.url); u.pathname = `/${sc.scope}/`; return c.redirect(u.toString(), 301);
+});
 app.get('/:scope/', async c => {
   const raw = c.req.param('scope'), sc = parseScope(raw.toLowerCase());
   if (!sc) return c.text('Not Found', 404);
@@ -40,5 +48,4 @@ app.get('/:scope/', async c => {
   if (sc.cc && !scopes.countries.some(r => r.code === sc.cc)) return c.text('Not Found', 404);
   return page(c, sc.scope, scopes);
 });
-app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 export default app;
