@@ -8,7 +8,10 @@ app.use('*', async (c, next) => {
   for (const [k, v] of Object.entries(securityHeaders())) if (!c.res.headers.has(k)) c.res.headers.set(k, v);
 });
 // /api/* はブラウザ用。更新が速やかに反映されるよう短いキャッシュだけ許す（docs/design/architecture.md）。
-app.use('/api/*', async (c, next) => { await next(); c.res.headers.set('Cache-Control', 'public, max-age=30'); });
+// 成功応答だけ。4xx/5xx（D1 の一時的な失敗など）は no-store にして、エラーをキャッシュさせない。
+app.use('/api/*', async (c, next) => { await next(); c.res.headers.set('Cache-Control', c.res.status < 400 ? 'public, max-age=30' : 'no-store'); });
+// D1 失敗などの例外は 500 にして握りつぶさない（上のミドルウェアが no-store を付ける）。
+app.onError((e, c) => c.text('Internal Server Error', 500));
 app.get('/api/categories', async c => c.json(await loadCategories(c.env.DB)));
 // LEFT JOIN: カテゴリ未所属のサイトも category_id = NULL で返す（画面では「未分類」として検索に出る）。
 app.get('/api/sites', async c => {
