@@ -22,3 +22,7 @@
 
 `scripts/collect-source-updated.py` が既存25サイトの更新日を根拠付きで取る。順序は sitemap の lastmod、RSS/Atom の最新日、HTML の <time>・meta、ページ上の「最終更新」表記。Last-Modified ヘッダは動的ページが現在時刻を返すため使わない。robots.txt を守り、1サイト最大4リクエスト（robots・トップ・sitemap・フィード。同一ホストのリダイレクト追従は1回につき最大2回が別枠）、リクエスト間とサイト間に2秒待機、同一ホスト内のリダイレクトのみ追従、内部IPは拒否、本文は1 MiB まで。UA は MiseResearchBot/0.1。取れないものは推測せず NULL。結果と取得できなかった理由は `data/source-updated.json`。25件中11件が取れた（sitemap 9、フィード1、ページ上の表記1）。残り14件は sitemap が無く（404）、フィード・<time>・更新日表記も見つからなかった。取れた値も sitemap の lastmod が自動生成で実更新と一致しない可能性はある。
 既知の制約: 対象は固定25サイトのみ（内部IP拒否はリテラルIPだけなので、対象を広げるなら名前解決後のIPも検査する）。sitemap は lastmod の最大値を採るため、頻繁に再生成される一覧を持つサイトは実更新より新しく見えうる。curl の `--max-filesize` は Content-Length 頼みで、chunked 応答は読み込んだ後に1 MiB で切る。
+
+## 埋め込み可否の実測（2026-11-13、Issue #41）
+
+`scripts/check-embeddable.py` が既存25サイトのトップページについて、iframe で mise 内に表示できるかをHTTPヘッダだけで判定する。robots.txt（1リクエスト）→ トップページの GET（ヘッダのみ、本文は1バイトで切る）を、サイト間・リクエスト間とも2秒以上空けて直列に行い、リダイレクトは同一ホスト宛てのみ最大1回追う（その場合は3リクエスト。別ホスト宛ては追わず記録のみ）。robots.txt は 200 なら規則を読み、404/410 は規則なし、それ以外（取得失敗・3xx・401/403・5xx）はそのサイトを測定せず `robots-unknown` と記録する（collect-source-updated.py と同じ方針）。UA は MiseResearchBot/0.1。記録するのは X-Frame-Options、CSP の frame-ancestors、最終URLのスキーム、HTTPステータス、robots の可否で、迂回はしない。JS の frame-busting など、ヘッダ以外の理由で表示できないケースは判定外。結果は `data/embeddability.json`（生の観測値・判定・UTC時刻）。再実行: `uv run python3 scripts/check-embeddable.py > data/embeddability.json`。実行のたびに実サイトへアクセスする。対象は固定25サイトのみ。
