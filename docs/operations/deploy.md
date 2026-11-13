@@ -71,9 +71,20 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 `/api/*` の `Cache-Control` は成功応答（400 未満）だけ `public, max-age=30`。エラー応答は `no-store`。自己検査は `node scripts/check-api-headers.mjs`。
 
+## PWA の確認手順
+
+実装は [architecture.md](../design/architecture.md#pwa)。ローカルで確認できるのは manifest の取得・SW 登録・オフライン表示（開発サーバーを止めてページ移動する）まで。デプロイ後に本番 HTTPS（`mise.llll-ll.com`）で次を確認する。
+
+- `/manifest.webmanifest` が 200・`application/manifest+json`、`/sw.js` が 200・`Cache-Control: no-cache`（Cloudflare を通っても変わらないこと）。
+- DevTools の Application で manifest にエラーがなく、SW が activated で Cache Storage が空であること。
+- PC の Chrome でインストールでき、スマホ（Android Chrome・iOS Safari）でホーム画面に追加できて、アイコン（maskable の切り抜き含む）が崩れず standalone で起動すること。
+- 機内モードで起動すると「オフラインです」が出て、復帰後に通常表示へ戻ること。
+- SW を変えるデプロイ後、再訪問で新しい `sw.js` に切り替わること（`skipWaiting` + `clients.claim`）。
+
 ## 未整備
 
 - Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ダッシュボードで確認済み（2026-11-14）: Git リポジトリ `kako-jun/mise`、プロダクションブランチ `main`、ルートディレクトリ `/`。本番ビルドの Build コマンドは「なし」、Deploy コマンドは `npx wrangler deploy`。したがって main へのマージは migration を適用せず Worker だけをデプロイする（migration は事前に手動適用）。プレビュー（ブランチ）側は Build コマンドなし・プレビューコマンド `npx wrangler preview`・ルート `/` で、プレビュー URL は無効（上の「プレビュービルド」参照）。
 - migration は自動適用されない。新しい migration を含む PR を main にマージすると、スキーマが旧いまま新 Worker が本番に出る恐れがある。**先に本番へ migration を適用してから、その後マージする**（後方互換の形にする。上の「本番へのデプロイ」参照）。
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。
+- PWA（Issue #10）は実装済みだが、実スマホ・本番 HTTPS での確認は未実施（上の「PWA の確認手順」）。

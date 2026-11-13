@@ -11,7 +11,7 @@ export function pageCsp(scriptHashes) {
   const script = ["'self'", ...scriptHashes.map(h => `'sha256-${h}'`)].join(' ');
   return [
     "default-src 'none'", `script-src ${script}`, "style-src 'self'", "img-src 'self' data:",
-    "connect-src 'self'", "font-src 'self'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'",
+    "connect-src 'self'", "font-src 'self'", "manifest-src 'self'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'", "object-src 'none'",
   ].join('; ');
 }
 
