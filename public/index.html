@@ -6,6 +6,9 @@
 <title>MISE — A directory search engine for today.</title>
 <meta name="description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/pwa/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/pwa/icon-180.png">
 <link rel="canonical" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="en" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="x-default" href="https://mise.llll-ll.com/">
@@ -21,13 +24,16 @@
 <meta name="twitter:description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"MISE","url":"https://mise.llll-ll.com/","inLanguage":["en","ja"],"potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://mise.llll-ll.com/?q={search_term_string}"},"query-input":"required name=search_term_string"}}</script>
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
-<link rel="stylesheet" href="/style.css?v=29">
+<script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
+<link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css?v=32">
 <script src="/countries.js?v=3" defer></script>
 <script src="/regions.js?v=1" defer></script>
-<script src="/app.js?v=27" defer></script>
+<script src="/app.js?v=28" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=11").catch(() => {})));
+addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); });
 </script>
 <script src="/cat.js?v=5" defer></script>
 </head>
@@ -43,7 +49,8 @@ addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => 
     <script>
 // ロゴの M/S 横伸ばしを最速で実測適用する(#35)。適用前は style.css で不可視(領域は確保)、完了で html.logo-ready を付けて表示。失敗しても CSS の遅延アニメで必ず表示される。
 window.__miseLogo = () => { try { const l = [...document.querySelectorAll('.logo span')]; if (l.length < 4) return; const m = l[0].offsetWidth, s = l[2].offsetWidth; if (!m || !s) return; const sc = [1.5, 1, 1.5 * m / s, 1], gap = 8; l.forEach((e, k) => { const x = (sc[k] - 1) * e.offsetWidth / 2 + gap / 2; e.style.transform = `scaleX(${sc[k]})`; e.style.margin = `0 ${x}px`; }); document.documentElement.classList.add('logo-ready'); } catch (_) {} };
-window.__miseLogo();
+// 書体(自己ホスト Anton)の読込後に実測する。低速回線では 2.5 秒で見切って現在の書体で先に測り(Chromium は block を 3 秒で打ち切り代替書体を出すため、その前に横伸ばしを済ませる)、到着後にもう一度測り直す。失敗・未対応でも測る。
+{ const go = () => window.__miseLogo(); if (document.fonts && document.fonts.load) { const f = document.fonts.load('1000 54px "Mise Logo"', 'MISE'); Promise.race([f, new Promise(r => setTimeout(r, 2500))]).then(go, go); f.then(go, go); } else go(); }
 </script>
     <p class="logo-pron" lang="en">/ˈmiːseɪ/</p>
     <p class="logo-caption" data-i18n="tagline">A directory search engine for today.</p>

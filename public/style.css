@@ -1,11 +1,14 @@
+/* ロゴ用の自己ホスト書体(OFL。docs/design/ui.md)。font-display:block で代替書体を一瞬も見せない。Anton は 400 のみなので weight 範囲を宣言して擬似太字を防ぐ */
+@font-face { font-family: "Mise Logo"; src: url("/fonts/anton-mise-v1.woff2") format("woff2"); font-weight: 100 1000; font-style: normal; font-display: block; }
+@font-face { font-family: "Mise Pron"; src: url("/fonts/noto-serif-italic-pron-v1.woff2") format("woff2"); font-weight: 400; font-style: italic; font-display: block; }
 body { margin: 8px; color: #000; background: #fff; font-family: system-ui, "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; font-size: 13px; }
 main { max-width: 640px; margin: 0 auto; }
 a { color: #0000cc; } a:visited { color: #551a8b; }
 header { text-align: center; }
 .logo-row { height: 57px; display: flex; align-items: center; justify-content: center; }
-.logo { color: #c90018 !important; font: 1000 54px/1 Impact, "Arial Narrow", sans-serif; font-stretch: condensed; letter-spacing: 3px; text-decoration: none; transform: scaleX(.75) scaleY(1.12); text-shadow: 1px 1px #73000b; }
+.logo { color: #c90018 !important; font: 1000 54px/1 "Mise Logo", Impact, "Arial Narrow", sans-serif; font-stretch: condensed; letter-spacing: 3px; text-decoration: none; transform: scaleX(.75) scaleY(1.12); text-shadow: 1px 1px #73000b; }
 .logo-caption { margin: 0; font-size: 10px; }
-.logo-pron { margin: -2px 0 3px; font: italic 11px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .14em; opacity: .55; color: inherit; }
+.logo-pron { margin: -2px 0 3px; font: italic 11px/1.2 "Mise Pron", Georgia, "Times New Roman", serif; letter-spacing: .14em; opacity: .55; color: inherit; }
 form { margin-bottom: 16px; } input, button { font-size: 12px; } input { width: 170px; }
 .categories { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 28px; width: 560px; max-width: 100%; margin: auto; }
 .category { margin: 0 0 10px; padding-left: 12px; position: relative; min-width: 0; }
@@ -221,7 +224,6 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 
 /* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。現在の範囲は下線と濃さで示し、色の塊（ピル）は使わない。 */
 .scope-nav { display: flex; justify-content: center; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 10px auto 2px; max-width: 100%; font: 11px/1.5 monospace; color: #087b90; }
-.scope-key { letter-spacing: .18em; font-size: 9px; opacity: .6; }
 .scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; margin: 0; padding: 0; list-style: none; }
 .scope-list[hidden], .scope-list li[hidden] { display: none; }
 .scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-more { display: inline-flex; align-items: center; gap: 6px; padding: 3px 1px 2px; min-height: 18px; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; opacity: .66; transition: opacity .15s, border-color .15s; }
@@ -236,7 +238,7 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
 html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
-@media (max-width: 700px) { .scope-key { display: none; } .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
+@media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-more { transition: none; } }
 /* 範囲内に 1 件も無いカテゴリは隠さず薄く表示する（国ごとに同じ構造に見える）。 */
 .category.is-empty { opacity: .6; }
@@ -250,3 +252,6 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 .list-status { margin: 8px 0; opacity: .7; }
 .list-more { font: inherit; padding: 6px 16px; cursor: pointer; }
 .list-more[hidden] { display: none; }
+
+/* 日本語判定の初回、app.js の初期化まで翻訳対象を不可視にする（レイアウトは動かさない） */
+.i18n-pending [data-i18n], .i18n-pending #scope-nav, .i18n-pending #directory, .i18n-pending #breadcrumbs { visibility: hidden; }

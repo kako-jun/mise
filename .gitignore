@@ -4,4 +4,3 @@ node_modules/
 /var/
 __pycache__/
 *.pyc
-var/
