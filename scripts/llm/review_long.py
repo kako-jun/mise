@@ -38,9 +38,18 @@ def flags(o, src):
     return out
 
 
+def load_results(path):
+    """judge.py results (a list) or pipeline.py results (a dict with "results"; model column = file name)."""
+    d = json.load(open(path, encoding="utf-8"))
+    if isinstance(d, dict):
+        name = path.rsplit("/", 1)[-1].removesuffix(".json")
+        return {r["id"]: dict(r, model=name) for r in d["results"]}
+    return {r["id"]: r for r in d}
+
+
 def main(inp, *results):
     cands = {json.loads(l)["id"]: json.loads(l) for l in open(inp, encoding="utf-8") if l.strip()}
-    runs = [(p, {r["id"]: r for r in json.load(open(p, encoding="utf-8"))}) for p in results]
+    runs = [(p, load_results(p)) for p in results]
     print("| site | model | long_description_ja | evidence quotes (verbatim, checked by validator) | auto flags |")
     print("|---|---|---|---|---|")
     for sid, c in cands.items():

@@ -6,7 +6,7 @@ schema-fixed judgement (descriptions, spam verdict, category ids, location with
 quoted evidence), caches by input hash and enforces money budgets.
 
 The API key is read ONLY from the environment (ANTHROPIC_API_KEY). Nothing in
-this file prints, logs or stores it. See docs/llm-judge.md.
+this file prints, logs or stores it. See docs/collection/llm-judge.md.
 """
 import argparse
 import datetime
@@ -424,7 +424,7 @@ def worst_case(model, system, user_text, max_tokens, batch=False):
 def _headers():
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        raise SystemExit("ANTHROPIC_API_KEY is not set (load it from the env file; see docs/llm-judge.md)")
+        raise SystemExit("ANTHROPIC_API_KEY is not set (load it from the env file; see docs/collection/llm-judge.md)")
     return {"x-api-key": key, "anthropic-version": API_VERSION, "content-type": "application/json"}
 
 
@@ -662,7 +662,7 @@ def dry_run(judge, models, cands, batch):
 
 # --------------------------------------------------------------------------- CLI
 def make_parser():
-    p = argparse.ArgumentParser(description="LLM judge for mise candidates (see docs/llm-judge.md)")
+    p = argparse.ArgumentParser(description="LLM judge for mise candidates (see docs/collection/llm-judge.md)")
     p.add_argument("input", help="candidates JSONL (id, url, title, meta_description, lang, body_excerpt, features)")
     p.add_argument("--model", action="append", help="haiku | sonnet | full model id (repeatable). default: haiku")
     p.add_argument("--escalate-model", help="re-judge low-confidence / non-pass results with this model (single mode)")

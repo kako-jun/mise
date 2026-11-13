@@ -301,6 +301,10 @@ class Pipeline:
                                {"id": c["id"], "stage": stage, "model": model, "output": out})
             else:
                 failed.append((c, extra, base, problem))
+        for _, _, _, problem in failed:
+            probs = self.stats[stage].setdefault("problems", {})
+            key = (problem or "?")[:70]
+            probs[key] = probs.get(key, 0) + 1
         if failed and retry:  # retry only the invalid items, one request each (doubling max_tokens after truncation)
             for c, extra, base, problem in failed:
                 self.stats[stage]["retry_items"] += 1
@@ -477,6 +481,8 @@ def main(argv=None):
         print(f"  {stage}: {s['requests']} requests {s['items']} items in={s['in']} out={s['out']} "
               f"cache_write={s['cw']} cache_read={s['cr']} retries={s['retry_items']} cached_items={s.get('cached', 0)} ${s['usd']:.4f}",
               file=sys.stderr)
+        for prob, n in sorted(s.get("problems", {}).items(), key=lambda t: -t[1]):
+            print(f"      problem x{n}: {prob}", file=sys.stderr)
     return 2 if p.failures else 0
 
 

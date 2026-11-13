@@ -262,3 +262,111 @@ class AdapterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- pipeline.py
+import pipeline  # noqa: E402
+
+
+def tri(**kw):
+    t = {"i": 1, "v": "p", "kd": "-", "sk": "i", "ad": "n", "aq": None, "sc": "s", "cf": "m", "cat": ["science-astronomy"], "r": ""}
+    t.update(kw)
+    return t
+
+
+def des(**kw):
+    d = {"i": 1, "dj": "星の写真のサイト。", "de": "A site of star photographs.", "lj": None, "le": None, "ev": [],
+         "tg": ["astronomy"], "cc": None, "rc": None, "q": None}
+    d.update(kw)
+    return d
+
+
+class PipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.args = type("A", (), dict(body_limit=9000, effort=None, thinking_off=False, cache_ttl="5m", group=5,
+                                       cache_dir="/nonexistent/c", ledger="/nonexistent/l", budget_run=1.0,
+                                       budget_total=90.0, mode="single"))()
+        self.p = pipeline.Pipeline(self.args, CATS)
+
+    def test_wrapper_schemas_closed_and_codes_in_enums(self):
+        for stage in ("triage", "describe", "full"):
+            blob = json.dumps(self.p.schemas[stage])
+            for bad in ("minLength", "maxLength", "maxItems", "minimum"):
+                self.assertNotIn(bad, blob)
+            self.assertIs(self.p.schemas[stage]["additionalProperties"], False)
+        item = self.p.schemas["triage"]["properties"]["r"]["items"]
+        self.assertEqual(set(item["properties"]["v"]["enum"]), set("psrd"))
+        self.assertEqual(set(item["properties"]["cat"]["items"]["enum"]), IDS)
+
+    def test_triage_item_roundtrip_to_full_shape(self):
+        full, problem = pipeline.check_item("triage", tri(), 1, IDS, SOURCE)
+        self.assertIsNone(problem)
+        self.assertEqual(full["spam"]["verdict"], "pass")
+        self.assertEqual(full["site_kind"], "individual")
+
+    def test_triage_rejects_wrong_index_unknown_category_and_bad_deferred(self):
+        self.assertIsNotNone(pipeline.check_item("triage", tri(i=2), 1, IDS, SOURCE)[1])
+        self.assertIsNotNone(pipeline.check_item("triage", tri(cat=["nope"]), 1, IDS, SOURCE)[1])
+        self.assertIsNotNone(pipeline.check_item("triage", tri(v="d"), 1, IDS, SOURCE)[1])
+        self.assertIsNone(pipeline.check_item("triage", tri(v="d", sc="u"), 1, IDS, SOURCE)[1])
+        self.assertIsNotNone(pipeline.check_item("triage", tri(ad="y"), 1, IDS, SOURCE)[1])  # yes needs a quote
+
+    def test_describe_validates_quotes_against_own_source(self):
+        base, _ = pipeline.check_item("triage", tri(), 1, IDS, SOURCE)
+        ok, problem = pipeline.check_item("describe", des(lj="東京都の団体。", le="An organization in Tokyo.",
+                                                          ev=["東京都に事務所のある小さな団体"]), 1, IDS, SOURCE, base)
+        self.assertIsNone(problem)
+        self.assertEqual(ok["long_description_ja"], "東京都の団体。")
+        _, problem = pipeline.check_item("describe", des(lj="x", le="y", ev=["not in the text"]), 1, IDS, SOURCE, base)
+        self.assertIn("verbatim", problem)
+
+    def test_group_text_numbers_candidates_and_key_ignores_group_position(self):
+        a = {"id": "a", "url": "https://a.example/", "title": "A"}
+        b = {"id": "b", "url": "https://b.example/", "title": "B"}
+        text = self.p.group_text([(a, None), (b, None)])
+        self.assertIn('<candidate i="1">', text)
+        self.assertIn('<candidate i="2">', text)
+        self.assertEqual(self.p.key("triage", "m", a), self.p.key("triage", "m", a))
+        self.assertNotEqual(self.p.key("triage", "m", a), self.p.key("describe", "m", a))
+        self.assertNotEqual(self.p.key("triage", "m", a), self.p.key("triage", "m", b))
+
+    def test_request_shape_and_thinking(self):
+        a = {"id": "a", "url": "https://a.example/", "title": "A"}
+        req = self.p.request("triage", "claude-haiku-5-5", [(a, None)])
+        self.assertEqual(req["system"][0]["cache_control"]["type"], "ephemeral")
+        self.assertEqual(req["output_config"]["effort"], "low")
+        self.assertNotIn("thinking", req)
+        self.args.thinking_off = True
+        self.assertEqual(self.p.request("triage", "claude-haiku-5-5", [(a, None)])["thinking"], {"type": "disabled"})
+        self.assertEqual(self.p.request("triage", "claude-sonnet-5-5", [(a, None)])["thinking"], {"type": "between_tools"})
+
+    def test_process_only_flags_bad_items(self):
+        a = {"id": "a", "url": "https://a.example/", "title": "A"}
+        b = {"id": "b", "url": "https://b.example/", "title": "B"}
+        self.p.ledger = judge.Ledger(os.path.join(tempfile.mkdtemp(), "l.jsonl"), 1.0, 90.0)
+        msg = {"stop_reason": "end_turn", "usage": {"input_tokens": 10, "output_tokens": 5},
+               "content": [{"type": "text", "text": json.dumps({"r": [tri(i=1), tri(i=2, cat=["nope"])]})}]}
+        res = self.p.process("triage", "claude-haiku-5-5", [(a, None, None), (b, None, None)], msg, 1.0)
+        self.assertIsNotNone(res[0][0])
+        self.assertIsNone(res[1][0])
+        self.assertEqual(self.p.stats["triage"]["items"], 2)
+        msg["content"][0]["text"] = json.dumps({"r": [tri(i=1)]})
+        res = self.p.process("triage", "claude-haiku-5-5", [(a, None, None), (b, None, None)], msg, 1.0)
+        self.assertEqual(res[1][1], "missing from response")
+
+    def test_dry_run_offline(self):
+        with tempfile.TemporaryDirectory() as d:
+            inp = os.path.join(d, "in.jsonl")
+            with open(inp, "w") as f:
+                for n in range(7):
+                    f.write(json.dumps({"id": f"c{n}", "url": f"https://e{n}.org/", "title": "T", "meta_description": "m"}) + "\n")
+            orig = judge.http
+            judge.http = lambda *a, **k: (_ for _ in ()).throw(AssertionError("network"))
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = pipeline.main([inp, "--stages", "two", "--group", "3", "--dry-run", "--var-dir", d])
+            finally:
+                judge.http = orig
+            self.assertEqual(rc, 0)
+            self.assertIn("triage: 3 requests", buf.getvalue())
