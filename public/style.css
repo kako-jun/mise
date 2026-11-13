@@ -221,26 +221,37 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 
 /* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。現在の範囲は下線と濃さで示し、色の塊（ピル）は使わない。 */
 .scope-nav { display: flex; justify-content: center; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 10px auto 2px; max-width: 100%; font: 11px/1.5 monospace; color: #087b90; }
-.scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; margin: 0; padding: 0; list-style: none; }
+.scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
 .scope-list[hidden], .scope-list li[hidden] { display: none; }
-.scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-more { display: inline-flex; align-items: center; gap: 6px; padding: 3px 1px 2px; min-height: 18px; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; opacity: .66; transition: opacity .15s, border-color .15s; }
+.scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-more { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 6px; min-height: 32px; min-width: 32px; box-sizing: border-box; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; transition: border-color .15s; }
 .scope-nav a.scope-item:hover, .scope-more:hover { opacity: 1; background: none; border-bottom-color: currentColor; }
 .scope-nav a.scope-item[aria-current="page"] { opacity: 1; border-bottom-color: #cc6f32; color: #12272c; }
 .scope-nav a.scope-item:focus-visible, .scope-more:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
 .scope-flag { display: block; width: 16px; height: 12px; border: 1px solid rgba(0, 0, 0, .25); }
 .scope-globe { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
-.scope-count { font-size: 9px; opacity: .65; font-variant-numeric: tabular-nums; }
-.scope-more { padding-right: 2px; }
-.scope-more::before { content: '+'; margin-right: 4px; }
+.scope-count { margin-left: 2px; font-size: 11px; color: #3b565c; font-variant-numeric: tabular-nums; }
+.scope-more-icon { display: block; width: 16px; height: 16px; fill: currentColor; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.scope-more-icon path { fill: none; }
+.scope-code { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
+html[data-theme="dark"] .scope-count { color: #b4d3d9; }
 html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
-@media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 28px; } .scope-count { font-size: 10px; } }
+@media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 36px; min-width: 36px; } .scope-count { font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-more { transition: none; } }
 /* 範囲内に 1 件も無いカテゴリは隠さず薄く表示する（国ごとに同じ構造に見える）。 */
 .category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }
+.pager, .list-foot, .list-prev { width: 560px; max-width: 100%; margin: 12px auto; box-sizing: border-box; font-size: 13px; }
+.pager[hidden] { display: none; }
+.pager a { display: inline-block; padding: 4px 8px; }
+.pager [aria-current] { font-weight: bold; text-decoration: none; }
+.list-foot { text-align: center; min-height: 40px; }
+.list-foot:empty { display: none; }
+.list-status { margin: 8px 0; opacity: .7; }
+.list-more { font: inherit; padding: 6px 16px; cursor: pointer; }
+.list-more[hidden] { display: none; }
 /* 検索バー (#79)。16px 未満だと iOS Safari が focus でズームするため、タッチ端末は幅によらず 16px・高さ 44px。
    700px 以下(スマホ縦)は行いっぱい(最大 480px)に広げる。700→701px で幅が段差になるのは breakpoint として許容 */
 @media (pointer: coarse) { .search-row input[type="search"] { min-height: 44px; font-size: 16px; } }
