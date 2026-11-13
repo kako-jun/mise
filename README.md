@@ -14,7 +14,7 @@ npm run db:migrate
 npm run dev
 ```
 
-表示されたローカルURLを開きます。マイグレーションでローカルD1にカテゴリと9件のサンプルを登録します。`GET /api/categories` と `GET /api/sites` はローカルD1のデータを返します。検索は取得したサンプルをブラウザ内で絞り込みます。クローラーや本格的な検索インデックスは未実装です。
+表示されたローカルURLを開きます。`/sitemap.xml` と `/robots.txt` も配信します（SEO方針は [構想と技術方針](docs/architecture.md#seoクローラ向けの方針)）。マイグレーションでローカルD1にカテゴリと9件のサンプルを登録します。`GET /api/categories` と `GET /api/sites` はローカルD1のデータを返します。検索は取得したサンプルをブラウザ内で絞り込みます。クローラーや本格的な検索インデックスは未実装です。
 
 `wrangler.jsonc` のDB IDはローカル開発用の仮値で、本番DBやデプロイ先は設定していません。
 

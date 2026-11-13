@@ -153,6 +153,8 @@ $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(curren
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
 function restoreLocation() {
+  const q=new URLSearchParams(location.search).get('q');
+  if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
   if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));

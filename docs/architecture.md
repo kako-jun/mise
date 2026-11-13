@@ -54,3 +54,12 @@ mise のマスコットは、MISE と MIKE の語感を掛けた三毛猫が基�
 上部HUDはD1の実データからサイト総数と直近7日間の登録日が分かる件数を表示する。登録日が不明な件数は別に示し、日別棒グラフには含めない。個別サイトの最終確認日時とタグを表示できる。試験収集の2件には取得記録に基づく確認日時と分類を登録し、それ以外の不明値は不明のまま。巡回履歴の時系列は記録していない。アクセス数や人気順は使わない。
 
 ピックアップでも一覧と同じ確認済みファビコンを表示する。将来サムネイルを取得できた場合にも表示を検討し、未取得時は表示しない。詳細は[スクリーンショットの構想](site-schema.md#サイトのスクリーンショット将来構想)を参照。
+
+## SEO・クローラ向けの方針
+
+- **配信**: `/`（トップ・カテゴリ・検索のすべて）と `/sitemap.xml` は Worker が返す（`wrangler.jsonc` の `assets.run_worker_first` に `/api/*`・`/`・`/sitemap.xml` を指定）。`/robots.txt` は静的ファイル `public/robots.txt`。`/api/` はクロール対象外。
+- **カテゴリURLとcanonical**: カテゴリURLは `/?category=<id>&category=<id>…`（祖先からの順）。これを1カテゴリ1ページとして扱い、canonical は ID に正規化した同形式のURL（`name_ja` 指定や存在しない値は正規化後のURL、解決できなければ `/`）。sitemap には本文のあるカテゴリ（配下に1サイト以上）の正規化URLと `/` を載せ、DB から動的生成する。`?q=` の検索結果は canonical を `/` にし、`noindex,follow` を付ける。
+- **SSR可否**: UIフレームワークや SSR 基盤は使わず、Worker が `HTMLRewriter` で `index.html` に URL に応じた title・description・canonical・OGP と、カテゴリ一覧・パンくず・直下サイト一覧のリンク入り本文（日本語）を差し込む「軽量SSR」にした。ブラウザでは従来どおり JS が同じ領域を描き直す。検索結果・英語表示・ピックアップは JS 依存のまま。
+- **hreflang**: 言語切替は同一URL上のJS切替でURLが分かれないため、`ja` と `x-default` のみ同一URLで宣言。英語を独立URLにする場合は別途設計する。
+- **OGP画像**: 専用画像は未作成のため `og:image` は未設定（Twitter Card は `summary`）。#10 のアイコン確定後に設定する。
+- **JSON-LD**: `WebSite` + `SearchAction`（`/?q={search_term_string}`。`app.js` は `q` 付きURLで検索結果を表示する）。

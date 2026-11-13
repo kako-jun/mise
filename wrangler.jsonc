@@ -3,6 +3,6 @@
   "main": "src/index.js",
   "routes": [{ "pattern": "mise.llll-ll.com", "custom_domain": true }],
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/", "/sitemap.xml"] },
   "d1_databases": [{ "binding": "DB", "database_name": "mise", "database_id": "ebcd8092-5f2e-4119-9e15-692c1aae631a", "migrations_dir": "migrations" }]
 }
