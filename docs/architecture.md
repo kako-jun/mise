@@ -29,6 +29,12 @@ mise は、個人や企業のサイトをカテゴリからたどって発見で
 
 PCは行・旗のホバー/フォーカスで約300ms静止してから、スマホは旗のタップで、app.js が `mise-fly-country`（`detail: {lat, lon, hold}`）を発火し、globe.js が地球をその国へ向ける。行本体のクリックは従来どおり遷移のみ。ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から4秒無操作で既定の向き・距離へ戻って自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。`prefers-reduced-motion` では滑らかに動かさず即時切替・自動回転なし。
 
+## 一覧・検索結果の既定の並び
+
+零細の個人サイトの更新が埋もれないよう、既定は「そのサイト自身の更新日」の新しい順。`ORDER BY COALESCE(source_updated_at, registered_at) DESC, id`（日時が読めない/NULLは末尾）。更新日が不明なサイトは mise への登録日で代用する（新規登録を新着扱いにする）。定義は `src/seo.js` の `SITE_ORDER` に一つだけあり、`/api/sites` とSSRのカテゴリ一覧が共有する。app.js は並べ替えず、APIの順を保って絞り込む（検索結果も同じ並び）。ピックアップ（ランダム）は対象外。並び順の切替UIは意味検索・マッチ度とセットで別途。
+
+更新日の取得は `scripts/collect-source-updated.py`（結果 `data/source-updated.json`、投入 `migrations/0012_source_updated_at.sql`）。
+
 ## 今後の実装・未決
 
 - Workers + Hono とD1はローカルで動作する。Cloudflareへのデプロイと定期処理は未実装。
