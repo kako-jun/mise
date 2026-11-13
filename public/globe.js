@@ -36,7 +36,9 @@ try {
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
   fetch('./land-110m.geojson').then(response => { if (!response.ok) throw new Error('Map unavailable'); return response.json(); }).then(drawLand).catch(error => console.warn('海岸線を読み込めませんでした', error));
   const earth = new THREE.Mesh(new THREE.SphereGeometry(1.6, 64, 32), new THREE.MeshPhongMaterial({map: texture, shininess: 10}));
-  scene.add(earth);
+  const axialTilt = new THREE.Group();
+  axialTilt.rotation.z = THREE.MathUtils.degToRad(23.44);
+  axialTilt.add(earth); scene.add(axialTilt);
   // Approximate ocean anchors: Atlantic (52°N, 30°W) and Pacific (52°N, 155°W).
   // Base intervals were sampled against Natural Earth 1:110m and lie over ocean.
   const earMaterial = new THREE.MeshBasicMaterial({color: 0x59dce4, side: THREE.DoubleSide});
