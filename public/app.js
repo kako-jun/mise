@@ -8,6 +8,7 @@ const words = {
   en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' }
 };
 const t = key => words[language][key];
+const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
 const activity = [];
 function logActivity(message) { activity.unshift(message); activity.splice(4); renderLog(); }
@@ -81,7 +82,7 @@ function categoryPath(id) {
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
-  a.href=site.url; configureExternalLink(a); a.textContent=site.name; p.textContent=site.description_ja+t('fallback');
+  a.href=site.url; configureExternalLink(a); a.textContent=site.name; p.textContent=siteDescription(site);
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
   // Only serve previously collected icons from this origin; never probe third-party sites on page load.
   if(site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path)) {
@@ -141,7 +142,7 @@ setInterval(()=>{
 },8000);
 function showResults(query) {
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
-  const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
+  const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
   $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
 }
 function updateSearch() {

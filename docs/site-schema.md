@@ -25,6 +25,8 @@
 
 URL正規化はスキームとホストの小文字化など安全な範囲に限定する。パスの大小文字やクエリの有無で別ページになる場合があり、安易に削らない。リダイレクト後のURL、ミラー、同一サイトの判定規則は未決。URLの一意制約だけで実体の重複を完全には防げない。
 
+現在の試作D1は `sites.description_ja`（必須）と `sites.description_en`（NULL可、migration 0010）の2列で日英の紹介文を持つ。`description_en` が無いサイトだけ、英語表示で日本語に「(Japanese)」を添える。
+
 ### `site_descriptions` — 紹介文と生成・確認履歴
 
 | 列 | 型 | 意味・制約 |
@@ -32,6 +34,7 @@ URL正規化はスキームとホストの小文字化など安全な範囲に�
 | `id` | text | 主キー |
 | `site_id` | text | `sites.id` への参照、必須 |
 | `text` | text | 一文の紹介。必須 |
+| `lang` | text | `ja` / `en`。同じサイトに日英それぞれ1文を用意する。英語は日本語の事実だけを訳し、情報を足さない |
 | `origin` | text | `manual` / `agent`。手書きかエージェント生成か |
 | `status` | text | `draft` / `approved` / `rejected` / `superseded`。公開用に選択できるのは `approved` のみ |
 | `source_url` | text? | 紹介の根拠となる公開ページ。複数根拠が必要な場合は別の根拠テーブルを検討 |
