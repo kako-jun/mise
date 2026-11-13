@@ -21,9 +21,9 @@
 <meta name="twitter:description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"MISE","url":"https://mise.llll-ll.com/","inLanguage":["en","ja"],"potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://mise.llll-ll.com/?q={search_term_string}"},"query-input":"required name=search_term_string"}}</script>
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
-<link rel="stylesheet" href="style.css?v=23">
+<link rel="stylesheet" href="style.css?v=24">
 <script src="countries.js?v=2" defer></script>
-<script src="app.js?v=23" defer></script>
+<script src="app.js?v=24" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込前に押された fly/reset は記録し、globe 起動時に再生する。読込失敗時は操作ボタンを隠す。
 addEventListener("click", e => { const b = e.target.closest && e.target.closest("#fly-japan, #reset-globe"); if (b) window.__misePendingGlobe = b.id; }, true);
@@ -39,6 +39,11 @@ addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => 
 <main>
   <header>
     <div class="logo-row"><a href="./" id="home-link" class="logo" aria-label="MISE Home"><span>M</span><span>I</span><span>S</span><span>E</span></a></div>
+    <script>
+// ロゴの M/S 横伸ばしを最速で実測適用する(#35)。適用前は style.css で不可視(領域は確保)、完了で html.logo-ready を付けて表示。失敗しても CSS の遅延アニメで必ず表示される。
+window.__miseLogo = () => { try { const l = [...document.querySelectorAll('.logo span')]; if (l.length < 4) return; const m = l[0].offsetWidth, s = l[2].offsetWidth; if (!m || !s) return; const sc = [1.5, 1, 1.5 * m / s, 1], gap = 8; l.forEach((e, k) => { const x = (sc[k] - 1) * e.offsetWidth / 2 + gap / 2; e.style.transform = `scaleX(${sc[k]})`; e.style.margin = `0 ${x}px`; }); document.documentElement.classList.add('logo-ready'); } catch (_) {} };
+window.__miseLogo();
+</script>
     <p class="logo-pron" lang="en">/ˈmiːseɪ/</p>
     <p class="logo-caption" data-i18n="tagline">A directory search engine for today.</p>
     <div class="preferences"><button id="theme-toggle" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button><button id="external-toggle" type="button" aria-pressed="false" aria-label="外部リンクを別タブで開く" title="外部リンクを別タブで開く"><svg aria-hidden="true" class="external-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/></svg></button></div>
