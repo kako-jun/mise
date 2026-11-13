@@ -4,7 +4,10 @@
   ranks   RELEASE...  Common Crawl のドメイン版 ranks の先頭 MB を Range 取得して var/attention/dom/ に保存
   lookup  DOMAIN...   取得済みの ranks から指定ドメインの順位を引き、var/attention/ranks.json に保存
   wayback DOMAIN...   Wayback CDX から各 URL の初回保存日(年)を取り var/attention/wb/ に保存
-  plot                取得済みデータから累計・最高順位のグラフ(PNG)を作る(matplotlib が必要)
+  plot [SITE...] [--vs COMPARE...]
+                      var/attention/ に rank_runmax.png(順位の生値と到達した最高順位、掲載サイト群と比較サイト群の2x2)と
+                      wayback_cum.png(累計ページ数と正規化)を作る。matplotlib が必要。
+                      SITE/COMPARE は lookup 済みのドメイン(省略時は全て1群)。Wayback は wb/ の取得済み全て
 
 生データは var/ 配下(.gitignore 済み)に置き、コミットしない。
 実行例: uv run python3 scripts/attention/attention_probe.py ranks cc-main-2026-aug-sep-oct
@@ -54,10 +57,14 @@ def cmd_ranks(releases):
     os.makedirs(f"{OUT}/dom", exist_ok=True)
     for r in releases:
         url = f"{BASE}/{r}/domain/{r}-domain-ranks.txt.gz"
-        with get(url, {"Range": f"bytes=0-{RANGE_MB * 10**6 - 1}"}) as resp, open(f"{OUT}/dom/{r}.gz", "wb") as f:
+        with get(url, {"Range": f"bytes=0-{RANGE_MB * 10**6 - 1}"}) as resp:
+            if resp.status != 206:   # Range が無視されると全体(数GB)が来るので読まずに中止
+                sys.exit(f"{r}: expected HTTP 206 but got {resp.status}; aborting without reading the body")
+            f = open(f"{OUT}/dom/{r}.gz", "wb")
             n = 0
             while chunk := resp.read(1 << 20):
                 f.write(chunk); n += len(chunk)
+            f.close()
         print(r, n, "bytes")
         time.sleep(INTERVAL)
 
@@ -98,9 +105,48 @@ def cmd_wayback(domains, limit=30000):
         time.sleep(5)
 
 
-def cmd_plot():
+def release_key(name):
+    """cc-main-2024-feb-apr-may -> (2024, 5)。2023-24-sep-nov-feb のように年が2つなら後ろの年。末尾の月で並べる。"""
+    mons = "jan feb mar apr may jun jul aug sep oct nov dec".split()
+    t = name.replace("cc-main-", "").split("-")
+    nums = [x for x in t if x.isdigit()]
+    year = int(nums[0]) if len(nums) == 1 else 2000 + int(nums[1])
+    return year + (mons.index(t[-1]) + 0.5) / 12
+
+
+def cmd_plot(args):
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    sites, cmp = (args[:args.index("--vs")], args[args.index("--vs") + 1:]) if "--vs" in args else (args, [])
+    data = json.load(open(f"{OUT}/ranks.json"))
+    rels = sorted(data, key=release_key)
+    xs = [release_key(r) for r in rels]
+
+    def series(d):
+        return [data[r]["found"].get(d, {}).get("hc_pos") for r in rels]
+
+    def runmax(v):
+        out, best = [], None
+        for x in v:
+            if x is not None and (best is None or x < best): best = x
+            out.append(best)
+        return out
+
+    def draw(a, doms, fn, title):
+        for d in doms:
+            pts = [(x, y) for x, y in zip(xs, fn(series(d))) if y]
+            if pts: a.plot(*zip(*pts), marker="o", ms=3, label=d)
+        a.set_yscale("log"); a.invert_yaxis(); a.set_title(title); a.grid(alpha=.3); a.set_ylabel("rank (log, inverted)")
+
+    groups = [("Comparison sites", cmp), ("Listed sites", sites)] if cmp else [("Sites", sites)]
+    fig, ax = plt.subplots(len(groups), 2, figsize=(14, 4.5 * len(groups)), squeeze=False)
+    for row, (name, doms) in zip(ax, groups):
+        draw(row[0], doms, lambda v: v, f"{name}: harmonic centrality rank per release (raw, up=better)")
+        draw(row[1], doms, runmax, f"{name}: best rank reached so far (never goes down)")
+        row[1].legend(fontsize=7, ncol=2)
+    fig.tight_layout(); fig.savefig(f"{OUT}/rank_runmax.png", dpi=90)
+    print("saved", f"{OUT}/rank_runmax.png")
+
     cum = {}
     for f in glob.glob(f"{OUT}/wb/*.txt"):
         ts = [l.strip() for l in open(f) if re.fullmatch(r"\d{14}", l.strip())]
@@ -108,16 +154,22 @@ def cmd_plot():
         c = collections.Counter(int(t[:4]) for t in ts); run = 0; ys = []; ss = []
         for y in range(min(c), time.gmtime().tm_year + 1):
             run += c.get(y, 0); ys.append(y); ss.append(run)
-        cum[os.path.basename(f)[:-4]] = (ys, ss)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    for d, (ys, ss) in cum.items(): ax.plot(ys, ss, marker="o", ms=3, label=d)
-    ax.set_yscale("log"); ax.legend(fontsize=7); ax.grid(alpha=.3)
-    ax.set_title("cumulative distinct HTML pages first archived (Wayback)")
-    fig.savefig(f"{OUT}/wayback_cum.png", dpi=90)
+        cum[os.path.basename(f)[:-4]] = (ys, ss, len(ts))
+    fig, ax = plt.subplots(1, 2, figsize=(14, 5))
+    for d, (ys, ss, n) in cum.items():
+        ax[0].plot(ys, ss, marker="o", ms=3, label=f"{d} ({n})")
+        ax[1].plot(ys, [v / ss[-1] for v in ss], label=d)
+    ax[0].set_yscale("log"); ax[0].legend(fontsize=7); ax[0].grid(alpha=.3)
+    ax[0].set_title("Wayback: cumulative distinct HTML pages first archived by year")
+    ax[1].set_title("same, normalized to final"); ax[1].grid(alpha=.3)
+    fig.tight_layout(); fig.savefig(f"{OUT}/wayback_cum.png", dpi=90)
     print("saved", f"{OUT}/wayback_cum.png")
-    # 最高順位(running max)は ranks.json をリリース順に並べて min を取るだけ: best = min(hc_pos so far)
 
 
 if __name__ == "__main__":
     cmd, args = (sys.argv[1], sys.argv[2:]) if len(sys.argv) > 1 else ("", [])
-    {"ranks": cmd_ranks, "lookup": cmd_lookup, "wayback": cmd_wayback}.get(cmd, lambda a: cmd_plot() if cmd == "plot" else print(__doc__))(args) if cmd != "plot" else cmd_plot()
+    cmds = {"ranks": cmd_ranks, "lookup": cmd_lookup, "wayback": cmd_wayback, "plot": cmd_plot}
+    if cmd in cmds:
+        cmds[cmd](args)
+    else:
+        print(__doc__)

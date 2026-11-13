@@ -102,12 +102,15 @@ site_attention(site_id, metric, observed_at, value)   -- 主キー(site_id, metr
 標準ライブラリのみ（グラフ作成だけ matplotlib）。生データは `var/attention/`（`.gitignore` 済み）に置き、コミットしない。UA は `MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)` で、Common Crawl は 2 秒間隔、Wayback は 5 秒間隔、503/504 は 10 秒から倍々（上限 300 秒・最大 5 回）で再試行する。
 
 ```
-# 順位ファイルの先頭 200MB を取得し(RANGE_MB で変更可)、ドメインを引く
+# 順位ファイルの先頭 200MB を取得し(RANGE_MB で変更可。Range に 206 が返らなければ全体を読まず中止)、ドメインを引く
 uv run python3 -I scripts/attention/attention_probe.py ranks cc-main-2026-aug-sep-oct cc-main-2025-sep-oct-nov
-uv run python3 -I scripts/attention/attention_probe.py lookup paulgraham.com gwern.net
-# Wayback の初回保存日(年ごとの累計の元)と、累計グラフ
+uv run python3 -I scripts/attention/attention_probe.py lookup paulgraham.com gwern.net elm-chan.org
+# Wayback の初回保存日(年ごとの累計の元)
 uv run python3 -I scripts/attention/attention_probe.py wayback jvns.ca elm-chan.org
-uv run --with matplotlib python3 -I scripts/attention/attention_probe.py plot
+# グラフ: rank_runmax.png(順位の生値と到達した最高順位。--vs の前が掲載サイト群、後が比較サイト群)と wayback_cum.png を var/attention/ に出力
+uv run --with matplotlib python3 -I scripts/attention/attention_probe.py plot elm-chan.org --vs paulgraham.com gwern.net
 ```
+
+docs/ideas/attention/ の 2 枚は、この `plot` で（10 公開分を取得・`lookup` 済みの状態から）再生成できる。
 
 施設内プロキシ配下では、Python 3.13 の証明書検証が通らない場合に `MISE_RELAX_TLS_STRICT=1`（X509 strict だけを外す）と、`SSL_CERT_FILE` に CA バンドルを指定する。
