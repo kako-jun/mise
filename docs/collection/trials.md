@@ -67,3 +67,47 @@
 - `adult=yes` は 1 件。語の単独一致をやめたため誤検出は消えたが、「18歳未満」のような強い手がかりも一般サイトに出うる。精度は未検証で、`no` は決定論では出さない。
 - 保留 443 件は未取得。推定 156 件に誤保留が残る可能性がある（基準は #50）。
 - `dns` 失敗が多い（グラフは「リンクされた」ホスト名であり生存の証明ではない）。`robots_unavailable` は再試行の対象。
+
+## LLM 判定工程の比較実験（2026-11-14、Issue #48）
+
+既掲載サイト 20 件（`export_sites.py` の `collected-*` 先頭 20、`fetch_about.py` でトップと About 系を取得）を、`pipeline.py` の構成違いで実行した。実費の合計は約 US$0.31（見積り $0.3〜0.5、予算内）。腕ごとに別の `--var-dir` を使い、結果キャッシュは共有していない。一致率は基準 A との一致で、正解との一致ではない。
+
+| 腕 | 構成 | 要求数 | out トークン | USD | USD/件 | 秒 | 未解決 | 判定一致 | 種別一致 | カテゴリ重なり | 長文 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | full、N=1、haiku（基準） | 22 | 39300 | 0.0263 | 0.0013 | 185 | 0 | 20/20 | 20/20 | 20/20 | 19 |
+| B | two、N=1 | 40 | 36543 | 0.0293 | 0.0015 | 195 | 1 | 19/20 | 17/20 | 15/20 | 16 |
+| C | two、N=5 | 14 | 33145 | 0.0264 | 0.0013 | 147 | 1 | 17/20 | 16/20 | 18/20 | 15 |
+| D | two、N=10 | 14 | 33017 | 0.0278 | 0.0014 | 149 | 0 | 19/20 | 17/20 | 18/20 | 17 |
+| E | two、N=5、思考オフ | 12 | 10679 | 0.0157 | 0.0008 | 56 | 0 | 17/20 | 17/20 | 19/20 | 16 |
+| F | two、N=5、第2段のみ sonnet | 9 | 11278 | 0.1827 | 0.0091 | 78 | 1 | 17/20 | 16/20 | 18/20 | 17 |
+
+表は `exp_summary.py A-full-n1.json B-two-n1.json …` の出力から主な列を抜いたもの（全列と生データは Issue #48 のコメント）。
+
+再現:
+
+```sh
+set -a; . ~/.config/mise/anthropic.env; set +a
+uv run python3 scripts/llm/export_sites.py && head -20 var/sites-candidates.jsonl > var/exp-in-raw.jsonl
+uv run python3 scripts/llm/fetch_about.py var/exp-in-raw.jsonl var/exp-in.jsonl
+# 各腕: --var-dir var/exp/<名> --out var/exp/<名>.json に加えて
+#  A: --stages full --group 1 / B: --stages two --group 1 / C: --stages two --group 5 / D: --stages two --group 10
+#  E: C + --thinking-off / F: C + --describe-model sonnet
+uv run python3 scripts/llm/exp_summary.py var/exp/A-full-n1.json var/exp/B-two-n1.json …
+```
+
+生データ（`var/exp/*.json`）は `.gitignore` の `var/` にあり、コミットしない。取得時点の外部サイトの内容に依存するため、再実行で数字は多少動く。
+
+結果の読み方:
+
+- **費用の大半は出力、その大半は思考トークン。** 思考オフ（E）で out が約 1/3、費用が約 40% 減、時間が約 1/3。品質の指標（判定・種別・カテゴリ・長文の有無）は C と同程度。最大の効き目はここ。
+- **2段階化・まとめ数（B/C/D）は A より安くならなかった。** 第2段の指示文と入力の重複、再試行で相殺される。要求数と時間は N=5 以上で減る。この規模（20 件）では費用差は誤差で、効果は件数が増えたときの要求数と時間にある。
+- **sonnet の第2段（F）は費用が約 12 倍**で、長文の有無・一致は haiku と大差ない。紹介文の質の差は数値に出ないため、必要なら人が読み比べる（未実施）。
+- **失敗は検証で拾えている。** 原文: `triage: verdict deferred must go with site_scope user_page, and only with it`（`collected-elecroom-avr`、B・C・F で未解決。haiku が個人サイトを `deferred` にして `user_page` を付けない）、`output truncated (stop_reason=max_tokens)`（describe で再試行、N=10 で最多）、`1 long_description_evidence quote(s) are not verbatim substrings of the input`、`location needs evidence_quote`。
+- 腕を短い間隔で続けたため、API 側のプロンプトキャッシュが後の腕で効き（`cache_write=0`）、後の腕の費用はやや有利に出ている。
+
+### 推奨の最小構成（暫定）
+
+- **haiku、`--stages two --group 5`、`--thinking-off`、固定指示文をキャッシュ**を既定にする。20 件で $0.016（1 件 約 $0.0008）、1,000 件でも約 $0.8 の見積り。
+- 第2段は haiku のまま。sonnet は、人が読んで質の差が確認できた場合に、信頼度が低い・長文が薄い候補だけに使う。
+- 安全策: 件ごとの検証（逐語引用・`deferred` と `user_page` の整合・所在の根拠）と不正な件だけの再試行、`--budget-run` / `--budget-total`、`--dry-run` / `--count-tokens`。`max_tokens` の打ち切りは再試行時に増やす。
+- 未検証: 20 件・1 回の実行で、正解（人の判断）との一致は見ていない。発見パイプラインの候補（広告中心・量産を含む）での判定精度は別途確認が必要（Issue #48 の残り）。
