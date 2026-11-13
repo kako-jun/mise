@@ -35,6 +35,20 @@ npx wrangler deploy
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
 
+## プレビュービルド（ブランチごと）
+
+Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
+
+- `previews.d1_databases` で、プレビューの `DB` バインディングを**プレビュー専用の D1 `mise-preview`**（`database_id` は `wrangler.jsonc` 参照）に向ける。**本番 DB `mise` をプレビューから触らせない**ため（ブランチの未レビューのコードが本番データを読み書き・破壊しないように）。静的ファイル（`assets`）はトップレベルの設定が使われる。
+- `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）:
+
+```sh
+npx wrangler d1 migrations apply mise-preview --remote
+```
+
+  `wrangler d1 migrations apply` はバインディング名または `database_name` を取るので、対象に `mise-preview` を指定すれば本番には触れない（`mise` と取り違えない）。`mise-preview` のデータは確認用の複製で、本番とのずれは許容する。
+- プレビューの URL とビルド結果は PR のチェック（Cloudflare のコメント）に出る。ローカルでの設定確認は `npx wrangler preview --help` と `npx wrangler dev --local`（デプロイはしない）。
+
 ## CSP を含むデプロイ後の確認手順
 
 CSP（[architecture.md](../design/architecture.md#セキュリティヘッダ)）は、Worker が返す HTML のインライン script のハッシュで許可している。Cloudflare が配信途中で HTML を書き換えると（Rocket Loader、Web Analytics の自動注入、Auto Minify、メールアドレス難読化など）、ハッシュが合わず script が止まる、または余計な script が違反になる。ローカルでは再現しないので、**デプロイのたびに本番で確認する**。
