@@ -71,12 +71,13 @@ export async function sitemapXml(db) {
 
 // 範囲切替の HTML（SSR。JS が起動すると app.js が同じ内容に描き直す）。現在の範囲は aria-current="page"。
 function scopeNavHtml(scopes, scope) {
-  const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}"${code === scope ? ' aria-current="page"' : ''}>${icon}<span class="scope-name">${esc(label)}</span><span class="scope-count">${count}</span></a></li>`;
+  // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。
+  const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}" aria-label="${esc(label)}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
   const globe = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
-  const items = [item('all', '/all/', 'All world', scopes.total, globe)];
+  const items = [item('all', '/all/', 'All world / 全世界', scopes.total, globe)];
   for (const r of scopes.countries) {
     const flag = flagUrl(r.code);
-    items.push(item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : ''));
+    items.push(item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : `<span class="scope-code" aria-hidden="true">${esc(r.code)}</span>`));
   }
   return `<ul class="scope-list">${items.join('')}</ul>`;
 }
