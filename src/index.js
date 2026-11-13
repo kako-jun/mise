@@ -7,9 +7,9 @@ app.get('/api/sites', async c => {
   return c.json(results);
 });
 app.get('/api/activity', async c => {
-  const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN registered_at IS NULL OR datetime(registered_at) IS NULL OR datetime(registered_at) > datetime('now') THEN 1 ELSE 0 END) AS unknown_dates FROM sites`).first();
+  const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites`).first();
   const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') GROUP BY date(registered_at) ORDER BY day`).all();
-  return c.json({total:totals.total, unknown_dates:totals.unknown_dates || 0, known_daily:results});
+  return c.json({total:totals.total, known_daily:results});
 });
 app.get('/', async c => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)))));
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
