@@ -96,6 +96,10 @@ try {
   function fly() { targetRotation = japanRotation; targetTilt = 0.62; targetDistance = 1.94; flying = true; }
   function reset() { targetRotation = 0; targetTilt = 0; targetDistance = 6.6; flying = false; }
   let drag = null;
+  // 手動回転後の自動回転再開: ドラッグ終了から IDLE_RESUME_MS 無操作で再開（flying=飛行中は再開しない）。
+  const IDLE_RESUME_MS = 4000;
+  let lastDragAt = -Infinity, spinGain = 0;
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
   window.addEventListener('pointerdown', event => {
     if (event.button !== 0 || event.target.closest('a, button, input, textarea, select, label')) return;
     drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
@@ -106,10 +110,10 @@ try {
     if (!dx && !dy) return;
     targetRotation += dx * .008;
     targetTilt = Math.max(-1.2, Math.min(1.2, targetTilt + dy * .005));
-    flying = true;
+    lastDragAt = performance.now();
     drag.x = event.clientX; drag.y = event.clientY;
   });
-  const endDrag = event => { if (drag && event.pointerId === drag.id) drag = null; };
+  const endDrag = event => { if (drag && event.pointerId === drag.id) { drag = null; lastDragAt = performance.now(); } };
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
   window.addEventListener('mise-fly-japan', fly);
@@ -123,14 +127,19 @@ try {
   let rafId = 0;
   function animate() {
     rafId = requestAnimationFrame(animate);
-    if (!flying && Math.abs(camera.position.z - targetDistance) < 0.02) targetRotation += 0.0008;
+    const canSpin = !flying && !drag && !reducedMotion.matches
+      && performance.now() - lastDragAt >= IDLE_RESUME_MS
+      && Math.abs(camera.position.z - targetDistance) < 0.02;
+    // 再開時は速度を 0 から滑らかに立ち上げる（急な速度変化を避ける）。
+    spinGain += ((canSpin ? 1 : 0) - spinGain) * .03;
+    if (canSpin) targetRotation += 0.0008 * spinGain;
     earth.rotation.y += (targetRotation - earth.rotation.y) * .04;
     earth.rotation.x += (targetTilt - earth.rotation.x) * .04;
     camera.position.z += (targetDistance - camera.position.z) * .04;
     renderer.render(scene, camera);
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { cancelAnimationFrame(rafId); rafId = 0; } else if (!rafId) animate();
+    if (document.hidden) { cancelAnimationFrame(rafId); rafId = 0; } else if (!rafId) { spinGain = 0; animate(); }
   });
   if (!document.hidden) animate();
 } catch (error) {
