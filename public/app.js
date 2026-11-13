@@ -53,23 +53,22 @@ $('#theme-toggle').addEventListener('click', () => { const theme=document.docume
 window.addEventListener('mise-fly-japan',()=>logActivity('fly japan'));
 
 
-const HISTORY_MAX_SQUARES = 12;
 function renderStats() {
   $('#site-total').textContent = `${t('totalLabel')}: ${activityStats ? activityStats.total : t('unavailable')}`;
   const bars=$('#history-bars'); bars.replaceChildren();
   if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
-  const maxCount=Math.max(0,...days.values()), scale=Math.max(1,Math.ceil(maxCount/HISTORY_MAX_SQUARES));
+  const maxCount=Math.max(0,...days.values());
   bars.style.setProperty('--count-digits', String(Math.max(1,...Array.from(days.values(),n=>String(n).length))));
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
     const item=document.createElement('div'); item.className='history-day'; const sr=document.createElement('span'); sr.className='visually-hidden'; sr.textContent=`${day}: ${count}`;
     const label=document.createElement('span'); label.className='history-date'; label.textContent=date.toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'});
-    const squares=document.createElement('span'); squares.className='history-squares'; squares.setAttribute('aria-hidden','true');
-    for(let n=0;n<Math.ceil(count/scale);n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
+    const bar=document.createElement('span'); bar.className='history-bar'; bar.setAttribute('aria-hidden','true'); bar.style.width=count>0&&maxCount>0?`max(3px, ${count/maxCount*100}%)`:'0';
+    const track=document.createElement('span'); track.className='history-track'; track.setAttribute('aria-hidden','true'); track.append(bar);
     const number=document.createElement('span'); number.className='history-count'; number.textContent=String(count);
-    label.setAttribute('aria-hidden','true'); number.setAttribute('aria-hidden','true'); item.append(sr,label,number,squares); bars.append(item);
+    label.setAttribute('aria-hidden','true'); number.setAttribute('aria-hidden','true'); item.append(sr,label,number,track); bars.append(item);
   }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
