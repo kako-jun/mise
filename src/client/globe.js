@@ -175,7 +175,7 @@ try {
     targetTilt = 0; targetDistance = 6.6;
     if (reducedMotion.matches) { earth.rotation.x = 0; camera.position.z = 6.6; }
   }
-  function releasePeek() { peekHeld = false; lastActiveAt = performance.now(); }
+  function releasePeek() { if (!peekHeld) return; peekHeld = false; lastActiveAt = performance.now(); }
   let drag = null;
   // 自動回転の再開: 最後の操作（実際のドラッグ移動・国への移動・ホバー解除）から IDLE_RESUME_MS 無操作で再開。
   // 「地球から日本へ」(flying) の間だけは再開しない（地球に戻るボタンで解除）。
@@ -216,6 +216,12 @@ try {
   window.addEventListener('mise-fly-country', flyToCountry);
   window.addEventListener('mise-fly-release', releasePeek);
   window.addEventListener('mise-fly-reset', resetView);
+  // 計測・診断用の読み取り表示（data-distance/target/peek）。値が変わったときだけ書く。
+  const shown = {};
+  function publishState() {
+    const next = { distance: camera.position.z.toFixed(2), target: targetDistance.toFixed(2), peek: peek ? '1' : '0' };
+    for (const k in next) if (shown[k] !== next[k]) { shown[k] = next[k]; host.dataset[k] = next[k]; }
+  }
   function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
   window.addEventListener('resize', resize); resize();
   // タブが非表示の間はレンダを止める（復帰時に再開）。
@@ -235,7 +241,7 @@ try {
     earth.rotation.y += (targetRotation - earth.rotation.y) * .04;
     earth.rotation.x += (targetTilt - earth.rotation.x) * .04;
     camera.position.z += (targetDistance - camera.position.z) * .04;
-    host.dataset.distance = camera.position.z.toFixed(2); host.dataset.peek = peek ? '1' : '0'; host.dataset.target = targetDistance.toFixed(2); // 実測・診断用の読み取り専用表示
+    publishState();
     renderer.render(scene, camera);
   }
   document.addEventListener('visibilitychange', () => {

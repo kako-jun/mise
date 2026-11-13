@@ -132,6 +132,13 @@ function countryFlag(site) {
 // 世界全体の見え方へ戻す（ロゴ・トップ・範囲 all）。一覧を描き直すときはホールドも解く（消えた行から pointerleave/focusout が来ないため）。
 const resetGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-reset'));
 const releaseGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-release'));
+// サイト行を作り直す共通の入口。消える行からは pointerleave/focusout が来ないので、置換の前にホールドを解く（地球儀側は保持中でなければ何もしない）。
+const clearSiteRows=box=>{ releaseGlobe(); box.replaceChildren(); };
+// 範囲を変えたときの地球儀: 国別範囲はその国へ、all は世界全体へ。範囲ナビ・地球儀の選択・戻る/進むで共通。
+function globeForScope(scope) {
+  const info=scope==='all' ? null : window.MISE_COUNTRIES?.[scope.toUpperCase()];
+  if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:'country'}})); else resetGlobe();
+}
 const HOVER_DELAY_MS=300;
 // 区画（県・州）が分かるサイトは区画の代表点（国より近い距離）、無ければ国の代表点。
 function flyToPlace(site,hold) {
@@ -142,17 +149,28 @@ function flyToPlace(site,hold) {
 }
 function bindGlobeHover(row,flag,site) {
   let timer=0, flown=false;
-  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToPlace(site,true); },HOVER_DELAY_MS); };
+  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ if(!row.isConnected) return; flown=true; flyToPlace(site,true); },HOVER_DELAY_MS); };
   // 地球を動かしていない（300ms未満で離れた）ときは release を出さない。
   const stop=()=>{ clearTimeout(timer); timer=0; if(flown) { flown=false; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
   row.addEventListener('pointerenter',e=>{ if(e.pointerType!=='touch') start(); });
   row.addEventListener('pointerleave',e=>{ if(e.pointerType!=='touch') stop(); });
-  row.addEventListener('focusin',start);
+  // キーボード操作のフォーカスだけ（リンクのタップ/クリックによるフォーカスでは動かさない）。
+  row.addEventListener('focusin',e=>{ if(e.target.matches?.(':focus-visible')) start(); });
   row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
   // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
   flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToPlace(site,false); });
   // スマホ: 行のリンク・旗以外（説明文・メタ情報・余白）のタップでも所在地へ。click はスクロール/スワイプでは出ない。タイトルのリンクは遷移を妨げない。
-  row.addEventListener('click',e=>{ if(e.pointerType!=='touch' || e.target.closest('a, button, .site-place')) return; clearTimeout(timer); flown=false; flyToPlace(site,false); });
+  // 古い iOS Safari などは click が pointerType なしの MouseEvent になるため、直前の pointerdown/touchstart で入力種別を記録して判定する（pen も touch と同じ扱い）。
+  let input={type:'',at:0};
+  const note=type=>{ input={type,at:performance.now()}; };
+  row.addEventListener('pointerdown',e=>note(e.pointerType));
+  row.addEventListener('touchstart',()=>note('touch'),{passive:true});
+  row.addEventListener('click',e=>{
+    const type=performance.now()-input.at<500 ? input.type : (e.pointerType||'');
+    if(type!=='touch' && type!=='pen') return;
+    if(e.target.closest('a, button, .site-place')) return;
+    clearTimeout(timer); flown=false; flyToPlace(site,false);
+  });
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
@@ -190,9 +208,9 @@ function renderSite(target, site, showCategories=false) {
   target.append(li);
 }
 function showDirectory(path, updateHistory=true) {
-  releaseGlobe(); currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
+  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
-  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
+  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); clearSiteRows(siteBox);
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
@@ -222,9 +240,9 @@ setInterval(()=>{
   renderPick();
 },8000);
 function showResults(query) {
-  releaseGlobe(); currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
+  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
   const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
-  $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
+  $('#result-title').textContent=q?t('results')(query):t('all'); clearSiteRows($('#result-list')); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
 }
 function updateSearch() {
   const q=$('#query').value.trim();
@@ -307,9 +325,7 @@ async function chooseScope(scope) {
   if(!ok) return;
   const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
   renderScopeNav(); renderStats(); applyLanguage();
-  const info=scope==='all' ? null : window.MISE_COUNTRIES?.[scope.toUpperCase()];
-  if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:'country'}}));
-  else resetGlobe();
+  globeForScope(scope);
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。
 window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code||''); if(scopes.countries.some(r=>r.code===code)) chooseScope(code.toLowerCase()); });
@@ -324,9 +340,10 @@ function restoreLocation() {
 }
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
-  const scope=scopeFromLocation();
-  if(scope!==currentScope) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
+  const scope=scopeFromLocation(), changed=scope!==currentScope;
+  if(changed) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
   restoreLocation(); applyLanguage();
+  if(changed) globeForScope(scope);
 });
 (async()=>{
   try {
