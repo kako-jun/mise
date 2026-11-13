@@ -67,9 +67,16 @@ def curl_command(url, parts, addrs):
     try:
         ipaddress.ip_address(parts.hostname)
     except ValueError:
+        try:
+            host = parts.hostname.encode("idna").decode("ascii")  # punycode, the form curl compares against
+        except UnicodeError:
+            raise ValueError("unsafe url (host name cannot be converted to punycode)")
         port = parts.port or (443 if parts.scheme == "https" else 80)
         a = addrs[0]
-        cmd += ["--resolve", f"{parts.hostname}:{port}:{'[' + a + ']' if ':' in a else a}"]
+        cmd += ["--resolve", f"{host}:{port}:{'[' + a + ']' if ':' in a else a}"]
+        if host != parts.hostname:  # connect by the same punycode name the pin refers to
+            netloc = host + (f":{parts.port}" if parts.port else "")
+            url = urllib.parse.urlunsplit(parts._replace(netloc=netloc))
     return cmd + [url]
 
 
@@ -122,11 +129,14 @@ def get(url, rules, hops=2):
     raise ValueError("too many redirects")
 
 
-# Text is joined with "" and a space is added only at block boundaries, so inline markup
-# ("<a>support</a>.") does not leave "support ." and a quote copied from the page stays verbatim.
+# Text is joined with "" and a space is added at block and link boundaries only, so purely typographic
+# markup (<b>, <em>, <span> inside a word) does not split words.
 BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "tr", "td", "th", "table", "section", "article", "header", "footer",
               "nav", "main", "aside", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt", "dl", "blockquote", "pre",
-              "title", "form", "hr", "figure", "figcaption"}
+              "title", "form", "hr", "figure", "figcaption",
+              # siblings such as <a>Home</a><a>About</a> are separate words; a space that lands before
+              # punctuation or next to non-ASCII text is ignored by judge._norm when quotes are compared
+              "a", "button", "label", "option", "summary"}
 
 
 class Page(html.parser.HTMLParser):

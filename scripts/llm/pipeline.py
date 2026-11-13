@@ -10,7 +10,7 @@ Same cache, ledger, budget guard and API plumbing as judge.py (imported). Never 
 """
 import argparse
 import datetime
-import hashlib
+import fcntl
 import json
 import os
 import re
@@ -191,6 +191,7 @@ class Pipeline:
         self.run_id = judge.new_run_id()
         self.stats = {}
         self.failures = {}
+        self.cands_by_id = {}
 
     # -- text / keys
     def text(self, c, extra=None):
@@ -278,17 +279,17 @@ class Pipeline:
         t0 = time.time()
         try:
             msg = http("POST", API, self.request(stage, model, chunk, max_tokens))
-        except AmbiguousRequest:
-            raise  # may have been billed: the reservation stays on the ledger
-        except BaseException:
-            self.ledger.release(tag)
-            raise
+        except BaseException as e:
+            if judge.answered_with_error(e):
+                self.ledger.release(tag)  # refused by the API: nothing billed
+            raise  # no answer / Ctrl-C: may have been billed, the reservation stays (ledger_release.py)
         return msg, time.time() - t0, tag
 
     def run_stage(self, stage, model, work):
         """work: list of (cand, extra, base). Returns {cand_id: full-shaped output or None}; caches per item."""
         done, todo = {}, []
         for c, extra, base in work:
+            self.cands_by_id.setdefault(c["id"], c)
             hit = self.cache.get(self.key(stage, model, c, extra))
             if hit and hit.get("output"):
                 done[c["id"]] = hit["output"]
@@ -312,6 +313,15 @@ class Pipeline:
             self.ledger.release(tag)
 
     def _absorb(self, stage, model, chunk, msg, dt, done, retry, batch=False, key=None):
+        failed = self._collect(stage, model, chunk, msg, dt, done, batch, key)
+        if failed and retry:
+            self._retry(stage, model, failed, done)
+        else:
+            for c, extra, base, problem in failed:
+                self.failures[c["id"]] = f"{stage}: {problem}"
+
+    def _collect(self, stage, model, chunk, msg, dt, done, batch=False, key=None):
+        """Record the usage, validate every item, cache the valid ones. Returns the invalid ones (no retry)."""
         res = self.process(stage, model, chunk, msg, dt, batch, key)
         failed = []
         for n, (c, extra, base) in enumerate(chunk):
@@ -324,69 +334,87 @@ class Pipeline:
                 failed.append((c, extra, base, problem))
         for _, _, _, problem in failed:
             probs = self.stats[stage].setdefault("problems", {})
-            key = (problem or "?")[:70]
-            probs[key] = probs.get(key, 0) + 1
-        if failed and retry:  # retry only the invalid items, one request each (doubling max_tokens after truncation)
-            for c, extra, base, problem in failed:
-                self.stats[stage]["retry_items"] += 1
-                mt = None
-                if problem and "truncated" in problem:
-                    mt = min(16000, 2 * (PER_ITEM_TOKENS[stage] + THINKING_BUFFER[stage]))
-                msg2, dt2, tag2 = self.call(stage, model, [(c, extra)], mt)
-                try:
-                    self._absorb(stage, model, [(c, extra, base)], msg2, dt2, done, retry=False)
-                finally:
-                    self.ledger.release(tag2)
-        else:
-            for c, extra, base, problem in failed:
-                self.failures[c["id"]] = f"{stage}: {problem}"
+            k = (problem or "?")[:70]
+            probs[k] = probs.get(k, 0) + 1
+        return failed
+
+    def _retry(self, stage, model, failed, done):
+        """Retry only the invalid items, one request each (doubling max_tokens after a truncation). An item
+        that is already cached (an earlier, interrupted run retried it) is not paid for again."""
+        for c, extra, base, problem in failed:
+            hit = self.cache.get(self.key(stage, model, c, extra))
+            if hit and hit.get("output"):
+                done[c["id"]] = hit["output"]
+                continue
+            self.stats[stage]["retry_items"] += 1
+            mt = None
+            if problem and "truncated" in problem:
+                mt = min(16000, 2 * (PER_ITEM_TOKENS[stage] + THINKING_BUFFER[stage]))
+            msg2, dt2, tag2 = self.call(stage, model, [(c, extra)], mt)
+            try:
+                self._absorb(stage, model, [(c, extra, base)], msg2, dt2, done, retry=False)
+            finally:
+                self.ledger.release(tag2)
 
     # -- batch mode: one batch of chunk requests; invalid items retried synchronously
-    def _batch_state_path(self, sig):
+    def _batch_dir(self):
         d = os.path.join(os.path.dirname(os.path.abspath(self.a.cache_dir)), "llm-batches")
         os.makedirs(d, exist_ok=True)
-        return os.path.join(d, f"pipeline-{sig}.json")
+        return d
 
     def _run_batch(self, stage, model, todo, done):
-        """Submit (or resume) one batch. The state file llm-batches/pipeline-<hash of the requests>.json is
-        written BEFORE the POST and updated with the batch id after it, so re-running the same command after
-        a failed poll / Ctrl-C resumes the batch instead of submitting it (and paying for it) twice. A settled
-        state (results recorded, reservation released) is not resumed; the same requests are submitted anew."""
-        chunks = self.chunks(todo, self.a.group)
-        if not chunks:
+        """Submit (or resume) one batch of this stage.
+
+        State file llm-batches/pipeline-<stage>-<run id>.json: written BEFORE the POST (batch_id null) and
+        completed after it, with the chunk layout (candidate ids, extras, bases), so a re-run of the same
+        command finds an unsettled state for this stage and RESUMES that batch instead of submitting (and
+        paying for) the remaining items again, even though the unfinished items have changed since. An
+        unsettled state whose submit result is unknown (batch_id null: no answer, Ctrl-C) is never re-submitted:
+        stop and check with scripts/llm/ledger_release.py. The state is settled only after the results are
+        recorded and cached, the invalid items retried, and the reservation released. A lock serialises the
+        check-reserve-submit step between two processes running the same command."""
+        if not todo:
             return
-        reqs, est = [], 0.0
-        for k, chunk in enumerate(chunks):
-            pairs = [(c, extra) for c, extra, _ in chunk]
-            est += self.worst(stage, model, pairs, batch=True)[0]
-            reqs.append({"custom_id": f"{stage}-{k}", "params": self.request(stage, model, pairs)})
-        sig = hashlib.sha256(json.dumps(reqs, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
-        sp = self._batch_state_path(sig)
-        st0 = judge.read_state(sp)
-        if st0 and not st0.get("settled"):
-            bid, tag = st0.get("batch_id"), st0["tag"]
-            if not bid:
-                raise SystemExit(f"{sp}: an earlier submit of these requests ended without an answer, so it is "
-                                 f"unknown whether a batch exists. Check the Console; then either delete this state "
-                                 f"file and run scripts/llm/ledger_release.py {tag} (no batch exists), or wait for it.")
-            print(f"resuming batch {bid} (earlier run did not finish)", file=sys.stderr)
-        else:
-            tag = f"{self.run_id}-{stage}-batch"
-            self.ledger.reserve(est, tag, model)  # before submitting, so parallel runs see it
-            judge.write_state(sp, {"model": model, "stage": stage, "tag": tag, "reserved_usd": round(est, 6),
-                                   "batch_id": None, "settled": False})
-            try:
-                batch = http("POST", API + "/batches", {"requests": reqs})
-            except AmbiguousRequest:
-                raise  # the batch may exist: keep the reservation and the state (batch_id null)
-            except BaseException:
-                self.ledger.release(tag)  # the API answered with an error: nothing was queued
-                judge.write_state(sp, {"model": model, "stage": stage, "tag": tag, "settled": True})
-                raise
-            bid = batch["id"]
-            judge.write_state(sp, {"model": model, "stage": stage, "tag": tag, "reserved_usd": round(est, 6),
-                                   "batch_id": bid, "settled": False})
-            print(f"submitted batch {bid} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
+        d = self._batch_dir()
+        with open(os.path.join(d, f"pipeline-{stage}.lock"), "a") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            pending = [(f, st) for f, st in judge.unsettled_states(d)
+                       if os.path.basename(f).startswith(f"pipeline-{stage}-") and st.get("model") == model]
+            if pending:
+                sp, st0 = pending[0]
+                if not st0.get("batch_id"):
+                    raise SystemExit(
+                        f"{sp}: an earlier submit of a {stage} batch ended without an answer (or was interrupted), "
+                        f"so it is unknown whether a batch exists. Check the Console. If none exists, delete this "
+                        f"state file and release the reservation: scripts/llm/ledger_release.py {st0['tag']}")
+                print(f"resuming batch {st0['batch_id']} (an earlier run did not finish it)", file=sys.stderr)
+                chunks = [[(self.cands_by_id[x["id"]], x["extra"], x["base"]) for x in ch] for ch in st0["chunks"]]
+                bid, tag = st0["batch_id"], st0["tag"]
+            else:
+                chunks = self.chunks(todo, self.a.group)
+                reqs, est = [], 0.0
+                for k, chunk in enumerate(chunks):
+                    pairs = [(c, extra) for c, extra, _ in chunk]
+                    est += self.worst(stage, model, pairs, batch=True)[0]
+                    reqs.append({"custom_id": f"{stage}-{k}", "params": self.request(stage, model, pairs)})
+                tag = f"{self.run_id}-{stage}-batch"
+                sp = os.path.join(d, f"pipeline-{stage}-{self.run_id}.json")
+                layout = [[{"id": c["id"], "extra": extra, "base": base} for c, extra, base in ch] for ch in chunks]
+                self.ledger.reserve(est, tag, model)  # before submitting, so parallel runs see it
+                state = {"model": model, "stage": stage, "tag": tag, "reserved_usd": round(est, 6),
+                         "batch_id": None, "chunks": layout, "settled": False}
+                judge.write_state(sp, state)
+                try:
+                    batch = http("POST", API + "/batches", {"requests": reqs})
+                except BaseException as e:
+                    if judge.answered_with_error(e):  # the API refused it: nothing was queued
+                        self.ledger.release(tag)
+                        judge.write_state(sp, dict(state, settled=True))
+                    raise  # otherwise keep reservation + batch_id null state: the batch may exist
+                bid = batch["id"]
+                judge.write_state(sp, dict(state, batch_id=bid))
+                print(f"submitted batch {bid} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
+        state = judge.read_state(sp)
         t0 = time.time()
         while True:
             st = http("GET", f"{API}/batches/{bid}")
@@ -395,7 +423,8 @@ class Pipeline:
             time.sleep(self.a.poll_seconds)
         dt = time.time() - t0
         raw = http("GET", st.get("results_url") or f"{API}/batches/{bid}/results", raw=True)
-        for line in raw.splitlines():
+        failed = []
+        for line in raw.splitlines():  # first record and cache EVERY row, only then retry
             if not line.strip():
                 continue
             row = json.loads(line)
@@ -414,13 +443,18 @@ class Pipeline:
                 for c, extra, base in chunk:
                     self.failures[c["id"]] = f"{stage}: batch {row['result']['type']}"
                 continue
-            self._absorb(stage, model, chunk, row["result"]["message"], dt / max(1, len(chunks)), done, True,
-                         batch=True, key=key)
+            failed += self._collect(stage, model, chunk, row["result"]["message"], dt / max(1, len(chunks)), done,
+                                    batch=True, key=key)
+        self._retry(stage, model, failed, done)
         self.ledger.release(tag)
-        judge.write_state(sp, {"model": model, "stage": stage, "tag": tag, "batch_id": bid, "settled": True})
+        judge.write_state(sp, dict(state, settled=True))
+        rest = [w for w in todo if w[0]["id"] not in done and w[0]["id"] not in self.failures]
+        if rest and pending:  # a resumed batch did not cover these items: submit them as a new batch
+            self._run_batch(stage, model, rest, done)
 
     # -- the pipeline
     def run(self, model, cands, stages, describe_model=None):
+        self.cands_by_id = {c["id"]: c for c in cands}
         results = {c["id"]: {"id": c["id"]} for c in cands}
         if stages == "full":
             outs = self.run_stage("full", model, [(c, None, None) for c in cands])

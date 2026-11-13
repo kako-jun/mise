@@ -83,7 +83,7 @@
 
 表は `exp_summary.py A-full-n1.json B-two-n1.json …` の出力から主な列を抜いたもの（全列と生データは Issue #48 のコメント）。
 
-再現:
+再現（入力は保存済みの `var/exp-in.jsonl` が基準。`fetch_about.py` を再実行しても、外部サイトの内容の変化や本文連結の仕様変更で同じ入力にはならない。数字を突き合わせるときは保存済み入力を使う）:
 
 ```sh
 set -a; . ~/.config/mise/anthropic.env; set +a

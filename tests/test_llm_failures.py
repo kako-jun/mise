@@ -373,6 +373,97 @@ class BatchResume(Base):
             self.assertEqual(ledger_release.main([tag, "--ledger", self.ledger_path]), 0)
         self.assertAlmostEqual(led.total(), 0.0)
 
+    def test_crash_while_processing_results_then_rerun_does_not_pay_again(self):
+        """Repro: the first run dies after caching only part of the rows. The unfinished list changed, so a
+        state keyed by it would be lost; the re-run must resume the same batch, not submit a new one."""
+        self.args.mode = "batch"
+        rows = [{"custom_id": f"triage-{k}", "result": {"type": "succeeded", "message": msg({"r": [tri()]})}}
+                for k in range(2)]
+        a1 = pipeline.Pipeline(self.args, CATS)
+        orig = a1._collect
+        calls = []
+
+        def dying(*args, **kw):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError("crash while processing the second row")
+            return orig(*args, **kw)
+        a1._collect = dying
+        self.patch_http(Fake([{"id": "msgbatch_8"}, self.ended(), "\n".join(json.dumps(r) for r in rows)]))
+        work = [(CAND, None, None), (CAND2, None, None)]
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(RuntimeError):
+            a1.run_stage("triage", HAIKU, work)
+        calls_after_crash = sum(1 for r in self.rows() if r["kind"] == "call")
+        self.assertEqual(calls_after_crash, 1)
+        fake2 = Fake([self.ended(), "\n".join(json.dumps(r) for r in rows)])
+        self.patch_http(fake2)
+        p2 = pipeline.Pipeline(self.args, CATS)
+        with contextlib.redirect_stderr(io.StringIO()):
+            done = p2.run_stage("triage", HAIKU, work)  # a is cached now; the todo list is just [b]
+        self.assertEqual(set(done), {"a", "b"})
+        self.assertTrue(all(r[0] == "GET" for r in fake2.requests), "a second batch was submitted")
+        self.assertEqual(sum(1 for r in self.rows() if r["kind"] == "call"), 2)  # one per row, never twice
+        self.assertEqual(ledger_release.open_reservations(judge.Ledger(self.ledger_path, 9, 9)), {})
+        # and once settled, the same command submits fresh work again (nothing left to resume)
+        self.assertEqual([st for _, st in judge.unsettled_states(os.path.join(self.tmp.name, "llm-batches"))], [])
+
+    def test_ctrl_c_during_batch_submit_is_treated_as_unknown(self):
+        self.args.mode = "batch"
+
+        def interrupted(*a):
+            raise KeyboardInterrupt()
+        self.patch_http(Fake([interrupted]))
+        with self.assertRaises(KeyboardInterrupt):
+            pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        led = judge.Ledger(self.ledger_path, 9, 9)
+        self.assertGreater(led.total(), 0)  # reservation kept
+        (path, st), = judge.unsettled_states(os.path.join(self.tmp.name, "llm-batches"))
+        self.assertIsNone(st["batch_id"])
+        fake = Fake([])
+        self.patch_http(fake)
+        with self.assertRaises(SystemExit) as cm:
+            pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        self.assertIn("ledger_release.py", str(cm.exception))
+        self.assertEqual(fake.requests, [])  # no second submit
+
+    def test_ctrl_c_during_single_call_keeps_the_reservation(self):
+        def interrupted(*a):
+            raise KeyboardInterrupt()
+        self.patch_http(Fake([interrupted]))
+        with self.assertRaises(KeyboardInterrupt):
+            pipeline.Pipeline(self.args, CATS)._run_chunk("triage", HAIKU, [(CAND, None, None)], {})
+        self.assertGreater(judge.Ledger(self.ledger_path, 9, 9).total(), 0)
+        led = judge.Ledger(self.ledger_path, 9, 9)
+        with self.assertRaises(KeyboardInterrupt), led.hold(0.1, "h1"):
+            raise KeyboardInterrupt()
+        self.assertIn("h1", ledger_release.open_reservations(led))
+
+    def test_judge_batch_submit_interrupted_blocks_a_second_submit(self):
+        j = self.judge_with_batch()
+
+        def interrupted(*a):
+            raise KeyboardInterrupt()
+        self.patch_http(Fake([interrupted]))
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(KeyboardInterrupt):
+            j.run_batch(HAIKU, [CAND])
+        self.assertGreater(self.total(), 0)
+        fake = Fake([])
+        self.patch_http(fake)
+        with self.assertRaises(SystemExit) as cm:
+            self.judge_with_batch().run_batch(HAIKU, [CAND])
+        self.assertIn("UNKNOWN", str(cm.exception))
+        self.assertEqual(fake.requests, [])
+
+    def test_old_format_state_file_is_not_resumed(self):
+        d = os.path.join(self.tmp.name, "llm-batches")
+        os.makedirs(d)
+        with open(os.path.join(d, "msgbatch_old.json"), "w", encoding="utf-8") as f:
+            json.dump({"model": HAIKU, "reserved_usd": 0.1, "ids": ["a"]}, f)
+        self.patch_http(Fake([]))
+        with self.assertRaises(SystemExit) as cm:
+            self.judge_with_batch().run_batch(HAIKU, [CAND], resume="msgbatch_old")
+        self.assertIn("old format", str(cm.exception))
+
     def test_run_ids_differ_between_processes(self):
         with mock.patch("os.getpid", return_value=111):
             a = judge.new_run_id()
@@ -517,6 +608,19 @@ class QuoteAndEnumChecks(unittest.TestCase):
         self.assertEqual(self.check(loc("東京都に事務所がある"), src), [])  # no space next to non-ASCII
         self.assertTrue(self.check(loc("we runthe small shop"), src))  # ASCII words are never glued together
 
+    def test_empty_body_placeholder_is_not_quotable(self):
+        src = "<candidate>\nurl: https://e.org/\ntitle: T\nmeta_description: (none)\nlang: (none)\nfeatures: (none)\nbody_excerpt:\n(none)\n</candidate>"
+        o = good()
+        o.update(location={"country_code": None, "region_code": None, "evidence_quote": None})
+        for q in ("https://e.org/ T (none)", "(none)", "T (none)"):
+            o.update(adult={"value": "yes", "evidence_quote": q})
+            self.assertTrue(judge.validate_output(o, IDS, src), q)
+
+    def test_punctuation_space_is_dropped_only_before_a_word_end(self):
+        self.assertEqual(judge._norm("foo ."), judge._norm("foo."))
+        self.assertEqual(judge._norm("foo , bar"), judge._norm("foo, bar"))
+        self.assertNotEqual(judge._norm("foo .bar"), judge._norm("foo.bar"))
+
     def test_body_line_starting_with_a_label_is_the_sites_own_text(self):
         src = "<candidate>\nurl: https://e.org/\ntitle: T\nbody_excerpt:\ntitle: Our history\n</candidate>"
         o = good()
@@ -590,9 +694,19 @@ class SafeHost(unittest.TestCase):
     def test_html_text_join_keeps_inline_markup_tight(self):
         _, text = fetch_about.parse("<html><body><p>This site is made possible by member <a href='/s'>support</a>.</p>"
                                     "<p>Next</p>日本<b>語</b>のページ</body></html>")
-        self.assertIn("member support.", text)
-        self.assertIn("日本語のページ", text)
-        self.assertIn(". Next", text)  # block boundaries still separate
+        self.assertIn("member support.", judge._norm(text))  # "support ." (link boundary) == "support."
+        self.assertIn("日本語のページ", text)  # <b> inside a word does not split it
+        self.assertIn("Next", text)
+        _, nav = fetch_about.parse("<nav><a href='/'>Home</a><a href='/about'>About</a></nav>")
+        self.assertIn("Home About", nav)  # sibling links are separate words
+
+    def test_idn_host_is_pinned_by_its_punycode_name(self):
+        import urllib.parse
+        u = "https://日本語.example/x"
+        cmd = fetch_about.curl_command(u, urllib.parse.urlsplit(u), ["93.184.216.34"])
+        puny = "日本語.example".encode("idna").decode()
+        self.assertEqual(cmd[cmd.index("--resolve") + 1], f"{puny}:443:93.184.216.34")
+        self.assertEqual(cmd[-1], f"https://{puny}/x")  # curl is told to connect by the pinned name
 
 
 class StoredExperimentRevalidation(unittest.TestCase):

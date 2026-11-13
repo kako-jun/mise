@@ -211,7 +211,11 @@ def _norm(s):
     for i, ch in enumerate(s):
         if ch == " " and 0 < i < len(s) - 1:
             prev, nxt = s[i - 1], s[i + 1]
-            if ord(prev) > 127 or ord(nxt) > 127 or nxt in ".,;:!?)]}" or prev in "([{":
+            after = s[i + 2] if i + 2 < len(s) else ""
+            # a space right before closing punctuation goes only when the punctuation ends a word
+            # ("support ." but not "foo .bar")
+            punct_end = nxt in ".,;:!?)]}" and not (after.isascii() and after.isalnum())
+            if ord(prev) > 127 or ord(nxt) > 127 or punct_end or prev in "([{":
                 continue
         out.append(ch)
     return "".join(out)
@@ -227,20 +231,22 @@ def quote_source(text):
     and <candidate> tags are scaffolding that the model must not be able to quote as if the site had said it.
     In the body only the tags and the "--- page: URL ---" separators written by fetch_about are dropped;
     a body line that happens to start with "title:" is the site's own text and stays."""
-    out, header = [], True
+    out, header, first_body = [], True, False
     for line in text.splitlines():
         line = line.strip()
         if re.match(r"^</?candidate[^>]*>$", line) or _PAGE_SEP.match(line):
             continue
         if header:
             if line == "body_excerpt:":
-                header = False
+                header, first_body = False, True
                 continue
             line = _LABEL.sub("", line)
             if line == "(none)":
                 continue
-        elif line == "(none)" and not out:
-            continue
+        elif first_body:
+            first_body = False
+            if line == "(none)":  # placeholder for an empty body
+                continue
         if line:
             out.append(line)
     return _norm("\n".join(out))
@@ -574,10 +580,11 @@ class Ledger:
         self.reserve(usd, tag, model)
         try:
             yield
-        except AmbiguousRequest:
-            raise  # may have been billed without our seeing the usage: the reservation stays on the ledger
-        except BaseException:
-            self.release(tag)
+        except BaseException as e:
+            if answered_with_error(e):
+                self.release(tag)  # the API refused the request: nothing was billed
+            # anything else (no answer, Ctrl-C, a bug after the response) may have been billed without our
+            # seeing the usage: the reservation stays on the ledger (ledger_release.py after checking)
             raise
         self.release(tag)
 
@@ -632,6 +639,12 @@ def _ssl_context():
     ctx = ssl.create_default_context()
     ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
     return ctx
+
+
+def answered_with_error(exc):
+    """True only when the API itself answered with an error (SystemExit from http()): the request was
+    refused and nothing is billed or queued. No answer, Ctrl-C or any other exception is ambiguous."""
+    return isinstance(exc, SystemExit) and not isinstance(exc, AmbiguousRequest)
 
 
 class AmbiguousRequest(SystemExit):
@@ -699,6 +712,19 @@ def write_state(path, obj):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f)
     os.replace(tmp, path)
+
+
+def unsettled_states(state_dir):
+    """[(path, state)] of batch state files whose results are not settled yet."""
+    out = []
+    for name in sorted(os.listdir(state_dir)) if os.path.isdir(state_dir) else []:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(state_dir, name)
+        st = read_state(path)
+        if st is not None and not st.get("settled", False):
+            out.append((path, st))
+    return out
 
 
 def custom_id_for(cand_id):
@@ -801,6 +827,11 @@ class Judge:
         if resume:
             batch_id = resume
             st0 = read_state(os.path.join(state_dir, batch_id + ".json"))
+            if st0 is not None and "settled" not in st0:
+                raise SystemExit(f"batch {batch_id}: state file is in the old format (no settled mark), so it is "
+                                 "unknown whether its results were already recorded; resuming could count the "
+                                 "calls twice. Check var/llm-batches and the ledger, then add \"settled\": true to "
+                                 "the state file (or delete it) and continue by hand.")
             if st0 and st0.get("settled"):
                 raise SystemExit(f"batch {batch_id} is already settled (results recorded, reservation released); "
                                  "nothing to resume. Re-run without --batch-resume to submit again.")
@@ -820,19 +851,31 @@ class Judge:
                 reqs.append({"custom_id": custom_id_for(c["id"]),
                              "params": build_params(model, self.system, self.schema, user, a.max_tokens,
                                                     a.effort, a.cache_ttl)})
+            pending = unsettled_states(state_dir)
+            if pending:
+                raise SystemExit(
+                    "unsettled batch state exists, so a new batch would be paid for twice: "
+                    + "; ".join(f"{os.path.basename(f)} ({'batch ' + st['batch_id'] if st.get('batch_id') else 'submit result UNKNOWN'})"
+                                for f, st in pending)
+                    + ". Resume a known batch with --batch-resume <id>. If the submit result is unknown, check the "
+                      "Console, then settle it with scripts/llm/ledger_release.py <tag> and delete the state file.")
             tag = f"{self.run_id}-batch-{model}"
+            pend_path = os.path.join(state_dir, f"pending-{tag}.json")
             self.ledger.reserve(est, tag, model)  # before submitting, so parallel runs see it
+            write_state(pend_path, {"model": model, "reserved_usd": round(est, 6), "tag": tag, "batch_id": None,
+                                    "ids": [c["id"] for c in todo], "settled": False})
             try:
                 batch = http("POST", API + "/batches", {"requests": reqs})
-            except AmbiguousRequest:
-                raise  # the batch may exist: keep the reservation
-            except BaseException:
-                self.ledger.release(tag)  # the API answered with an error: nothing was queued
-                raise
+            except BaseException as e:
+                if answered_with_error(e):  # the API refused it: nothing was queued
+                    self.ledger.release(tag)
+                    os.remove(pend_path)
+                raise  # otherwise (no answer / Ctrl-C) keep reservation + pending state: the batch may exist
             batch_id = batch["id"]
             write_state(os.path.join(state_dir, batch_id + ".json"),
                         {"model": model, "reserved_usd": round(est, 6), "tag": tag, "ids": [c["id"] for c in todo],
                          "settled": False})
+            os.remove(pend_path)
             print(f"submitted batch {batch_id} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
         # poll
         t0 = time.time()

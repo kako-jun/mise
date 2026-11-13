@@ -17,7 +17,9 @@ import judge
 
 def open_reservations(ledger):
     net = {}
-    for r in ledger._lines():
+    with ledger._lock():  # a consistent read while another run may be appending
+        rows = ledger._lines()
+    for r in rows:
         if r["kind"] == "reserve":
             net[r["batch"]] = net.get(r["batch"], 0.0) + r["usd"]
         elif r["kind"] == "release":
