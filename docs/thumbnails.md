@@ -20,7 +20,7 @@ node scripts/capture-thumbnails.mjs [--only id,id] [--limit N] [--out var/thumbs
 - 対象は `data/embeddability.json` の25件と `migrations/0014_us_batch1.sql` の12件（計37件。`sites` の全件ではなく、収集で固定した対象）。
 - 撮影は playwright の chromium（chrome-headless-shell）。playwright は、このリポから解決できなければ環境変数 `PLAYWRIGHT_DIR`（`node_modules/playwright` のディレクトリ）で指す（見つからなければ案内付きのエラー）。ブラウザは `~/.cache/ms-playwright` の最新の chrome-headless-shell（`CHROMIUM_PATH` で上書き）。WebP化は ImageMagick（`magick`）。プロキシは `HTTPS_PROXY` を使う。
 - この環境では headless chromium がGPUデバイスを開く所（drm_open）で固まるため、スクリプトは自分自身を `bwrap --dev-bind / / --tmpfs /dev/dri` の中で再実行する（`--no-bwrap` で止められる。bwrap が無い環境ではメッセージを出して終わるので、GPUで固まらない環境なら `--no-bwrap` を付ける）。`--disable-gpu` などのフラグでは直らなかった。
-- 自己検査: `node scripts/capture-thumbnails.mjs --selftest`。ローカルの小さなサーバー（`*.localhost`）だけを相手にし、実サイトへはアクセスしない。別サイトへの302、リテラル内部IPへの302、別サイトへ続く2段のリダイレクト、同一サイト内の `www` への遷移（遷移先の robots.txt を確認）、遷移先 robots が不許可、リテラルIPのサイトURLを確かめ、さらに別サイト・内部IP・不許可サイトの本体にサーバー側でリクエストが一度も届いていないことを確かめる。検査を切った旧挙動（`MISE_THUMBS_GUARD_OFF=1`、自己検査専用）では、別サイトと不許可サイトの本体へリクエストが届く（失敗する）。
+- 自己検査: `node scripts/capture-thumbnails.mjs --selftest`。ローカルの小さなサーバー（`*.localhost`）だけを相手にし、実サイトへはアクセスしない。別サイトへの302、リテラル内部IPへの302、別サイトへ続く2段のリダイレクト、同一サイト内の `www` への遷移（遷移先の robots.txt を確認）、読み込み後の meta refresh・JS の `location` 変更による別サイトへの遷移、WebSocket で内部IPへ接続しようとするページ、遷移先 robots が不許可、リテラルIPのサイトURLを確かめ、さらに別サイト・内部IP・不許可サイトの本体にサーバー側でリクエストが一度も届いていないことを確かめる（WebSocket のハンドシェイクを含む）。検査を切った旧挙動（`MISE_THUMBS_GUARD_OFF=1`、自己検査専用）では、別サイトと不許可サイトの本体へリクエストが届く（失敗する）。
 - `--compare` は比較用に別の幅の画像を `var/thumbs/compare/<幅>/` に、`--mobile` は比較用のスマホ画面を `var/thumbs/mobile/` に出す。どちらも採用値には影響しない。
 - `manifest.json` は各サイトに、id・URL・取得日時（UTC）・HTTPステータス・最終URL・成否と理由・width/height/bytes・所要時間・obscured と面積比・プレースホルダ（data URI）を持つ。スマホ比較を撮ったサイトには `mobile`（viewport・幅・bytes・scroll_width・横はみ出しの有無）が付く。主（1280x800）と比較用（スマホ）は別のキー・別のディレクトリに分けている。
 
@@ -31,7 +31,8 @@ node scripts/capture-thumbnails.mjs [--only id,id] [--limit N] [--out var/thumbs
 - `X-Robots-Tag` と `<meta name="robots">`（`MiseResearchBot` 指定も）に `noarchive`・`noimageindex`・`noindex`・`none` があれば撮らない。画像は撮らないが、ヘッダ・meta を見るためにページは1回読み込む。
 - ナビゲーションのタイムアウト20秒、読み込み後に1.5秒待ってから撮る。
 - リダイレクトは同一サイト（`www.` の有無を除く）のみ。ブラウザのリクエストを CDP の Fetch ドメインで送信前に止めて検査し、リダイレクトは1ホップごとに「次のリクエスト」として止まるので、別サイト（`cross-site-redirect`）・内部IP（`unsafe-url`）への遷移はリクエストが送られる前に中断し、ページは撮らない。同一サイト内で origin が変わる場合（`www`・https化）は、遷移先の origin の robots.txt も確認する（不許可・不明なら撮らない）。
-- 内部IP: 撮影前に `dns.lookup` で全アドレスを調べ、内部・ループバック・リンクローカル等に解決されるホスト名は拒否する。サブリソースも同じ検査をして、内部IPへ行くものはブロックする。
+- 内部IP: 撮影前に `dns.lookup` で全アドレスを調べ、内部・ループバック・リンクローカル等に解決されるホスト名は拒否する。サブリソースも同じ検査をして、内部IPへ行くものはブロックする。WebSocket は Fetch で捕捉できないため、ページ側で `window.WebSocket` を無効化して塞ぐ（WebSocket を使うサイトは、その機能が動かないまま撮られる）。
+- 読み込み後（描画待ちの後と撮影の直前）にも、遮断済みかどうかと現在のURLを再確認する。meta refresh や JS で別サイト・内部IPへ遷移しようとした場合は、エラーページを撮らず `cross-site-redirect` / `unsafe-url` と記録する。
 - obscured: 画面を24x18の格子で調べ、各点の最前面の要素かその祖先が `position: fixed/sticky` であれば覆われているとみなし、面積比が0.5を超えたら `obscured` と記録する（cookie同意バナー・全面モーダルの検知）。撮り直しはしない。
 
 ## 結果（2026-11-13、37件）
@@ -63,6 +64,6 @@ node scripts/capture-thumbnails.mjs [--only id,id] [--limit N] [--out var/thumbs
 
 - 撮影は37件のみ。大手・企業サイト・動的なサイトでは取得失敗やバナーの比率が上がるはず。
 - 描画待ちは固定時間のため、遅延読み込みの画像・アニメーションの途中が写ることがある。
-- 内部IPの検査は撮影前の名前解決の結果で行う。検査後にDNSの答えが変わる（DNS rebinding）場合までは防げない。
+- 内部IPの検査は撮影前の名前解決の結果で行う。検査後にDNSの答えが変わる（DNS rebinding）場合までは防げない。プロキシ経由では実際の名前解決はプロキシ側で行われるため、手元での検査結果と接続先が食い違うことがありうる。Web Worker 内の WebSocket は塞いでいない（固定の公開サイトだけが対象で実害は小さい）。
 - noarchive等の判定は、読み込んだページの最初の応答ヘッダとトップページの meta のみ。
 - 画像を使うことの著作権上の整理（サイト運営者の許諾・取り下げ運用）は #29 で扱う。この試験の画像は公開していない。

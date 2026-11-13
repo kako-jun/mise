@@ -183,7 +183,11 @@ async function capture(browser, site, outDir = OUT) {
   await gap();
 
   const ctx = await browser.newContext({ userAgent: UA, viewport: VIEWPORT, deviceScaleFactor: 1, ignoreHTTPSErrors: false, serviceWorkers: 'block' });
+  // WebSocket は Fetch ドメインで捕捉できないため、ページ側で使えなくする (内部IPへのハンドシェイクを出させない)。
+  await ctx.addInitScript(() => { window.WebSocket = function WebSocket() { throw new DOMException('WebSocket is disabled', 'SecurityError'); }; });
   const page = await ctx.newPage();
+  // 遮断済みなら理由、なければ現在のURLを検査 (遮断でエラーページになっていたら撮らない)。
+  const recheck = async () => { if (stop) return stop; const cu = new URL(page.url()); return cu.protocol.startsWith('http') ? checkNav(cu) : 'error:non-http-page'; };
   // CDP の Fetch ドメインで全リクエストを送信前に止めて検査する。リダイレクトは1ホップごとに「次のリクエスト」として
   // 止まるので、別サイト・内部IPへのリクエストはそもそも送られない (playwright の route はリダイレクト後を捕捉しない)。
   const cdp = await ctx.newCDPSession(page);
@@ -211,6 +215,7 @@ async function capture(browser, site, outDir = OUT) {
     const xrt = blocked(await resp.headerValue('x-robots-tag'));
     if (xrt.length) return done('x-robots-tag:' + xrt.join('+'));
     await page.waitForTimeout(SETTLE_MS);
+    { const lb = await recheck(); if (lb) return done(lb); } // load 後の meta refresh / JS の遷移で別サイトへ行っていないか
     const meta = await page.evaluate(() => [...document.querySelectorAll('meta[name]')].filter((m) => ['robots', 'miseresearchbot'].includes(m.name.toLowerCase())).map((m) => m.content).join(','));
     const mb = blocked(meta);
     if (mb.length) return done('meta-robots:' + mb.join('+'));
@@ -227,6 +232,7 @@ async function capture(browser, site, outDir = OUT) {
       return Math.round(hit / (cols * rows) * 1000) / 1000;
     });
     rec.obscured = rec.obscured_ratio > OBSCURED_RATIO;
+    { const lb = await recheck(); if (lb) return done(lb); }
     const png = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, ...VIEWPORT }, timeout: NAV_TIMEOUT_MS });
     const file = path.join(outDir, `${site.id}.webp`);
     toWebp(png, file);
@@ -235,6 +241,7 @@ async function capture(browser, site, outDir = OUT) {
       // 比較用: 同じ読み込み済みページの viewport だけを狭める (再リクエストしない = 1サイト1回を守る)
       await page.setViewportSize(MOBILE_VIEWPORT); await page.waitForTimeout(1000);
       const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, iw: innerWidth }));
+      { const lb = await recheck(); if (lb) return done(lb); }
       const mpng = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, ...MOBILE_VIEWPORT }, timeout: NAV_TIMEOUT_MS });
       const md = path.join(outDir, 'mobile'); mkdirSync(md, { recursive: true });
       const mf = path.join(md, `${site.id}.webp`); toWebp(mpng, mf, MOBILE_W);
@@ -271,6 +278,9 @@ async function selftest() {
     if (req.url === '/redir-other') return go(`http://b.localhost:${P}/ok`);
     if (req.url === '/redir-ip') return go(`http://127.0.0.1:${P}/ok`);
     if (req.url === '/redir-www') return go(`http://www.${host}:${P}/ok`);
+    if (req.url === '/meta') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(`<!doctype html><meta http-equiv="refresh" content="0;url=http://b.localhost:${P}/ok"><h1>meta</h1>`); }
+    if (req.url === '/js') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(`<!doctype html><h1>js</h1><script>setTimeout(()=>{location.href='http://b.localhost:${P}/ok'},100)</script>`); }
+    if (req.url === '/ws') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(`<!doctype html><h1>ws</h1><script>try{new WebSocket('ws://127.0.0.1:${P}/wsprobe')}catch(e){}</script>`); }
     if (req.url === '/redir-chain') return go(`http://www.${host}:${P}/redir-other`);
     res.writeHead(404); res.end();
   });
@@ -283,6 +293,9 @@ async function selftest() {
     ['st-www', `http://a.localhost:${P}/redir-www`, null],
     ['st-www-robots-disallow', `http://c.localhost:${P}/redir-www`, 'robots-disallow'],
     ['st-chain-to-other-site', `http://d.localhost:${P}/redir-chain`, 'cross-site-redirect'],
+    ['st-meta-refresh', `http://e.localhost:${P}/meta`, 'cross-site-redirect'],
+    ['st-js-location', `http://f.localhost:${P}/js`, 'cross-site-redirect'],
+    ['st-websocket', `http://g.localhost:${P}/ws`, null],
     ['st-literal-ip-site', `http://127.0.0.1:${P}/ok`, 'unsafe-url'],
   ];
   const { chromium } = loadPlaywright();
@@ -298,7 +311,7 @@ async function selftest() {
     }
   } finally { await browser.close(); server.close(); }
   // 別サイト・リテラルIP・robots不許可サイトの本体には、一度もリクエストが届いていないこと
-  for (const forbidden of ['b.localhost/ok', '127.0.0.1/ok', 'www.c.localhost/ok', 'b.localhost/robots.txt']) {
+  for (const forbidden of ['b.localhost/ok', '127.0.0.1/ok', '127.0.0.1/wsprobe', 'www.c.localhost/ok', 'b.localhost/robots.txt']) {
     const hit = log.includes(forbidden); if (hit) bad++;
     console.error(`${hit ? 'FAIL' : 'PASS'}\tサーバーに ${forbidden} が届いていない`);
   }
