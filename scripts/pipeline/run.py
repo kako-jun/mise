@@ -16,19 +16,29 @@ import discover
 import features
 import fetcher
 import frontier
-from hostnames import host_key, prefilter
+from hostnames import DEFERRED_REASONS, prefilter, registrable, subdomain_of_registrable
 
-RETRY_AFTER = datetime.timedelta(days=1)
+SHARED_SUBDOMAIN_THRESHOLD = 3        # 同じ登録ドメイン配下のサブドメインホストがこれ以上台帳にあれば共有サービスとみなして保留
+
+MAX_ATTEMPTS = 3                      # failed の再試行上限（取得試行の通算）
+BACKOFF_DAYS = 1                      # 再試行までの待ち: 1日 × 2^(試行-1) = 1, 2, 4 日
 
 
 def triage(db, redo=False):
-    """取得前フィルタ: discovered -> queued | rejected"""
+    """取得前フィルタ: discovered -> queued | rejected | deferred（共有サービス配下の個人領域。基準の決定は別Issue）"""
     n = collections.Counter()
     if redo:  # 取得前に除外されたもの(未取得)を、ルール変更後に引き直す
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='rejected' AND last_fetched_at IS NULL")
+    if redo:
+        db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred'")
+    fans = collections.Counter(registrable(k) for (k,) in db.execute('SELECT key FROM frontier') if subdomain_of_registrable(k))
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
         reason = prefilter(r['host'], jp_only=r['source'] != 'links')
-        if reason:
+        if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
+            reason = 'shared_service_user'   # 台帳内で同じドメイン配下のホストが多い = 共有サービスの利用者領域の可能性
+        if reason in DEFERRED_REASONS:
+            db.execute("UPDATE frontier SET state='deferred', reject_reason=? WHERE key=?", (reason, r['key']))
+        elif reason:
             db.execute("UPDATE frontier SET state='rejected', reject_reason=? WHERE key=?", (reason, r['key']))
         else:
             db.execute("UPDATE frontier SET state='queued', next_fetch_at=? WHERE key=?", (frontier.now(), r['key']))
@@ -51,7 +61,8 @@ def process(row):
 
 
 def fetch(db, limit, workers):
-    rows = db.execute("SELECT key, host FROM frontier WHERE state='queued' AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY priority DESC, key LIMIT ?", (frontier.now(), limit)).fetchall()
+    # 新規(queued)と、バックオフが明けた failed（試行 MAX_ATTEMPTS 未満）を対象にする
+    rows = db.execute("SELECT key, host FROM frontier WHERE (state='queued' OR (state='failed' AND fetch_attempts<?)) AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY state DESC, priority DESC, key LIMIT ?", (MAX_ATTEMPTS, frontier.now(), limit)).fetchall()
     done = 0
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         futs = {ex.submit(process, r): r for r in rows}
@@ -77,7 +88,6 @@ def apply_result(db, o):
         state, reason = 'rejected', err
     elif err in ('dns', 'connect', 'protocol', 'robots_unavailable', 'too_many_redirects') or (err or '').startswith('exception'):
         state, reason = 'failed', err
-        sets['next_fetch_at'] = (datetime.datetime.now(datetime.timezone.utc) + RETRY_AFTER).isoformat(timespec='seconds')
     elif o['feat'] is not None:
         sets.update(o['feat'])
     else:
@@ -85,6 +95,9 @@ def apply_result(db, o):
         if h: state, reason = h
     if state == 'failed':
         sets['last_error'] = reason
+        attempts = db.execute('SELECT fetch_attempts FROM frontier WHERE key=?', (o['key'],)).fetchone()[0] + 1
+        wait = datetime.timedelta(days=BACKOFF_DAYS * 2 ** (attempts - 1))
+        sets['next_fetch_at'] = (datetime.datetime.now(datetime.timezone.utc) + wait).isoformat(timespec='seconds')
     sets.update(state=state, reject_reason=reason)
     cols = ', '.join(f'{k}=?' for k in sets)
     db.execute(f'UPDATE frontier SET {cols}, fetch_attempts=fetch_attempts+1 WHERE key=?', (*sets.values(), o['key']))
@@ -102,15 +115,6 @@ def judge(db):
     return n
 
 
-def reject(db, hosts, reason):
-    """外部の判定(大手企業のリスト、LLM工程 #48 の結果など)を取り込む: 標準入力のホストを rejected にする。"""
-    n = 0
-    for h in hosts:
-        n += db.execute("UPDATE frontier SET state='rejected', reject_reason=? WHERE key=?", (reason, host_key(h.lower()))).rowcount
-    db.commit()
-    return {'rejected': n}
-
-
 def report(db, sample):
     print('== state'); [print(f'{r[0]:20} {r[1]}') for r in db.execute('SELECT state, count(*) FROM frontier GROUP BY 1 ORDER BY 2 DESC')]
     print('== state / reason'); [print(f'{r[0]:20} {r[1] or "-":28} {r[2]}') for r in db.execute('SELECT state, reject_reason, count(*) FROM frontier GROUP BY 1,2 ORDER BY 3 DESC')]
@@ -124,14 +128,13 @@ def report(db, sample):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report', 'reject'])
+    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report'])
     ap.add_argument('--db', default=None)
     ap.add_argument('--part-file', help='discover-cc: ローカルの vertices パート (.gz)。省略時は自動取得（約40MB）')
     ap.add_argument('--sample-every', type=int, default=1000, help='discover-cc: ホスト名のハッシュで 1/N を決定論的に抽出')
     ap.add_argument('--limit', type=int, default=100, help='discover-cc: 追加上限 / fetch: 取得ホスト数上限')
     ap.add_argument('--workers', type=int, default=3, help='fetch: 並列数（2〜4。ホストは重複しない）')
     ap.add_argument('--redo', action='store_true', help='triage: 未取得の rejected を引き直す')
-    ap.add_argument('--reason', default='major_org', help='reject: 理由(大手判定など外部の判定結果の取り込み)')
     ap.add_argument('--sample', type=int, default=20, help='report: 候補サンプル件数')
     a = ap.parse_args()
     if not 1 <= a.workers <= 4:
@@ -142,7 +145,6 @@ def main():
     elif a.cmd == 'triage': print(dict(triage(db, a.redo)))
     elif a.cmd == 'fetch': print('fetched', fetch(db, a.limit, a.workers))
     elif a.cmd == 'judge': print(dict(judge(db)))
-    elif a.cmd == 'reject': print(reject(db, sys.stdin.read().split(), a.reason))
     elif a.cmd == 'report': report(db, a.sample)
 
 

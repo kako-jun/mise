@@ -12,6 +12,7 @@ MIN_KANA = 20               # 日本語らしさ: かな文字数
 AD_HITS_REJECT = 5          # 広告タグ数がこれ以上なら除外
 AD_HITS_THIN = 2            # 広告2つ以上かつ本文が THIN_TEXT 未満なら除外
 THIN_TEXT = 1500
+WEAK_PARKING_TEXT = 500      # 弱いパーキング語は本文がこれ未満の時だけ有効
 PERSONAL_WORDS = ['個人', '趣味', '日記', '管理人', '自作', 'ブログ', '雑記', '備忘', '作品', '研究', 'ホームページ', '私の', '僕の', '自己紹介', 'リンク集', 'welcome']
 KANA = re.compile(r'[぀-ヿ]')
 
@@ -68,12 +69,12 @@ def extract(host, text, headers):
     rob = ' '.join([headers.get('x-robots-tag', ''), *p.robots]).lower()
     flags = {
         'noindex': bool(re.search(r'noindex|\bnone\b', rob)),
-        'parking': next((m for m in blocklist('parking_markers.txt')[''] if m in low), None),
+        'parking': next((m for m in blocklist('parking_markers.txt')[''] + blocklist('parking_markers.txt')['weak'] if m in low), None),
         'adult_rating': any(re.search(r'adult|mature|rta-5042|restricted', x, re.I) for x in p.rating),
         'adult_text': next((m for m in blocklist('adult_markers.txt')['text'] if m in low), None),
     }
     return {
-        'title': p.title.strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],
+        'title': re.sub(r'\s+', ' ', p.title).strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],
         'kana_count': len(KANA.findall(visible)), 'text_len': len(visible), 'ad_hits': ad_hits, 'ext_refs': ext,
         'flags': json.dumps(flags, ensure_ascii=False), 'text_head': visible[:300],
         'personal_score': sum(1 for w in PERSONAL_WORDS if w in low),
@@ -111,7 +112,12 @@ def judge(row):
     """特徴列から (state, reason)。candidate なら reason は None。"""
     f = json.loads(row['flags'] or '{}')
     if f.get('noindex'): return ('rejected', 'noindex')
-    if f.get('parking'): return ('rejected', 'parking_or_default_page')
+    m = f.get('parking')
+    if m:
+        # 弱いマーカー（Under construction 等）は個人サイトの本文にも普通に出るので、title か短い本文に限る
+        weak = m in blocklist('parking_markers.txt')['weak']
+        if not weak or m in (row['title'] or '').lower() or (row['text_len'] or 0) < WEAK_PARKING_TEXT:
+            return ('rejected', 'parking_or_default_page')
     if (row['text_len'] or 0) < MIN_TEXT_LEN: return ('rejected', 'thin_content')
     if (row['kana_count'] or 0) < MIN_KANA: return ('rejected', 'not_japanese')
     if not row['title']: return ('rejected', 'no_title')

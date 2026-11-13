@@ -17,6 +17,15 @@ def connect(path=None):
     db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row
     db.executescript((Path(__file__).parent / 'schema.sql').read_text(encoding='utf-8'))
+    sql = db.execute("SELECT sql FROM sqlite_master WHERE name='frontier'").fetchone()[0]
+    if "'deferred'" not in sql:  # 旧台帳の state 制約に deferred を追加（表を作り直す）
+        db.executescript('ALTER TABLE frontier RENAME TO frontier_old;')
+        db.executescript((Path(__file__).parent / 'schema.sql').read_text(encoding='utf-8').replace('CREATE INDEX IF NOT EXISTS frontier_state_next', 'DROP INDEX IF EXISTS frontier_state_next; CREATE INDEX frontier_state_next'))
+        old = [r[1] for r in db.execute('PRAGMA table_info(frontier_old)')]
+        new = [r[1] for r in db.execute('PRAGMA table_info(frontier)')]
+        shared = ', '.join(c for c in old if c in new)
+        db.execute(f'INSERT INTO frontier ({shared}) SELECT {shared} FROM frontier_old')
+        db.execute('DROP TABLE frontier_old'); db.commit()
     cols = [r[1] for r in db.execute('PRAGMA table_info(frontier)')]
     for c in ('site_kind', 'adult'):
         if c not in cols:

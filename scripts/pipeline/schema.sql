@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   discovered_at  TEXT NOT NULL,            -- UTC ISO8601
   depth          INTEGER NOT NULL DEFAULT 0,
   state          TEXT NOT NULL DEFAULT 'discovered'
-                 CHECK (state IN ('discovered','queued','fetched','failed','blocked_by_robots','rejected','candidate')),
+                 CHECK (state IN ('discovered','queued','fetched','failed','blocked_by_robots','rejected','candidate','deferred')),
   next_fetch_at  TEXT,
   priority       INTEGER NOT NULL DEFAULT 0,
   fetch_attempts INTEGER NOT NULL DEFAULT 0,

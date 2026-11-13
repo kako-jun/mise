@@ -60,7 +60,8 @@ def http_get(url, max_body=MAX_BODY):
     if not _uses_proxy(parts.scheme):
         # 検査したIPに固定して接続する（検査と接続の間の名前解決差し替えを防ぐ）
         port = parts.port or (443 if parts.scheme == 'https' else 80)
-        cmd += ['--resolve', f'{parts.hostname}:{port}:{ips[0]}']
+        ip = next((i for i in ips if ':' not in i), ips[0])   # IPv4 優先
+        cmd += ['--resolve', f'{parts.hostname}:{port}:' + (f'[{ip}]' if ':' in ip else ip)]
     proc = subprocess.Popen(cmd + [url], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     buf = b''
     try:

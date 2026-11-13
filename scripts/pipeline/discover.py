@@ -15,12 +15,22 @@ from hostnames import from_reversed, host_key, normalize_host, prefilter, priori
 ROOT = frontier.ROOT
 CC_BASE = 'https://data.commoncrawl.org/'
 CC_GRAPH = 'cc-main-2026-jul-aug-sep'   # ホストレベルのウェブグラフのリリース
-CC_JP_PART = 37                          # vertices の .jp ホストが入っているパート（要 --find で再確認）
+CC_JP_PART = 37                          # vertices の .jp ホストが入っているパート。リリースを変えたら各パート先頭を Range 3KB ずつ見て再確認（docs 参照）
 CACHE = ROOT / 'var' / 'cache'
 
 
+MAX_DOWNLOAD = 100 * 1024 * 1024   # パート(約27〜40MB)の上限
+
+
 def _curl(url, dest):
-    subprocess.run(['curl', '--silent', '--show-error', '--fail', '--max-time', '300', '--user-agent', fetcher.USER_AGENT, '-o', str(dest), url], check=True)
+    """一時ファイルへ書き、完了後に rename する（中断で壊れたファイルをキャッシュに残さない）。"""
+    dest = Path(dest); tmp = dest.with_name(dest.name + '.part')
+    try:
+        subprocess.run(['curl', '--silent', '--show-error', '--fail', '--max-time', '300', '--max-filesize', str(MAX_DOWNLOAD),
+                        '--user-agent', fetcher.USER_AGENT, '-o', str(tmp), url], check=True)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def cc_part_path(graph, part):

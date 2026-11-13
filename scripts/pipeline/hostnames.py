@@ -6,6 +6,7 @@ from pathlib import Path
 BLOCKLIST_DIR = Path(__file__).parent / 'blocklist'
 JP_SECOND = {'co', 'or', 'ne', 'ac', 'ad', 'ed', 'go', 'gr', 'lg'}
 PREFECTURES = set('hokkaido aomori iwate miyagi akita yamagata fukushima ibaraki tochigi gunma saitama chiba tokyo kanagawa niigata toyama ishikawa fukui yamanashi nagano gifu shizuoka aichi mie shiga kyoto osaka hyogo nara wakayama tottori shimane okayama hiroshima yamaguchi tokushima kagawa ehime kochi fukuoka saga nagasaki kumamoto oita miyazaki kagoshima okinawa'.split())
+GENERIC_SECOND = {'co', 'com', 'org', 'net', 'ac', 'gov', 'edu', 'ne', 'or'}
 GOV_LABELS = {'city', 'town', 'vill', 'pref', 'metro'}
 LABEL_RE = re.compile(r'^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
@@ -56,6 +57,9 @@ def from_reversed(rev):
 def registrable(host):
     labels = host.split('.')
     if labels[-1] != 'jp' or len(labels) < 2:
+        # co.uk / com.au / co.kr のような2階層の公開サフィックスを粗く扱う
+        if len(labels) >= 3 and len(labels[-1]) == 2 and labels[-2] in GENERIC_SECOND:
+            return '.'.join(labels[-3:])
         return '.'.join(labels[-2:])
     if labels[-2] in JP_SECOND and len(labels) >= 3:
         return '.'.join(labels[-3:])
@@ -90,16 +94,11 @@ def prefilter(host, jp_only=True):
         return 'government'
     if second in ('ac', 'ed', 'ad'):
         return 'institution_domain'
-    if suffix_match(host, blocklist('platforms.txt')['']):
-        return 'platform'
     reg = registrable(host)
-    extra = host[:-len(reg) - 1] if host != reg else ''
-    if extra not in ('', 'www'):
-        return 'subdomain'  # 共有サービス配下の可能性が高い。将来「別単位」で扱う候補
-    if suffix_match(host, blocklist('major_domains.txt')['']):
-        return 'major_org'  # 大手企業・大手メディア（種リスト。残りは LLM 工程の結果を run.py reject で取り込む）
-    if suffix_match(host, blocklist('ad_domains.txt')['']):
-        return 'ad_domain'
+    # 共有サービス（ブログ/SNS/ショップ/ホスティング）: 本体(apex・www)は載せてよい。配下の個人サブドメインは保留。
+    for e in blocklist('platforms.txt')['']:
+        if host.endswith('.' + e) and host not in (e, 'www.' + e):
+            return 'shared_service_user'
     name = reg.split('.')[0]
     if len(name) > 30 or re.search(r'\d{6,}', name) or name.count('-') >= 4:
         return 'spam_like_name'  # 量産ドメインの形
@@ -111,12 +110,22 @@ def adult_host_hint(host):
     return bool(host_tokens(host) & set(blocklist('adult_markers.txt')['host']))
 
 
+def subdomain_of_registrable(host):
+    """登録ドメイン配下の追加ラベル（なければ空、www は空扱い）。"""
+    reg = registrable(host)
+    extra = host[:-len(reg) - 1] if host != reg else ''
+    return '' if extra == 'www' else extra
+
+
+DEFERRED_REASONS = {'shared_service_user'}   # 拒否ではなく保留(deferred)にする理由
+
+
 def priority(host):
     """発見順の目安。ne.jp(旧来のISP個人向け) と短い名前をやや優先。"""
     labels = host.split('.')
     p = 5
-    if len(labels) >= 2 and labels[-2] == 'co':
-        p -= 2  # 企業ドメインは載せるが後回し
+    if subdomain_of_registrable(host):
+        p -= 2  # 機能サブドメイン(blog.example.jp 等)は後回し
     if len(labels) >= 2 and labels[-2] == 'ne':
         p += 3
     if len(registrable(host).split('.')[0]) <= 12:
