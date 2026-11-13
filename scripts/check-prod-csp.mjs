@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// デプロイ後の CSP 確認。実サイトへ数リクエスト（トップ・カテゴリ・検索の3ページ）だけ送り、CSP 違反の件数を出す。
+// デプロイ後の CSP 確認。実サイトへ数リクエスト（トップ・範囲・カテゴリ・検索の4ページ）だけ送り、CSP 違反の件数を出す。
 // 実行: PLAYWRIGHT_DIR=<playwright の入った node_modules> [CHROMIUM=<chrome 実行ファイル>] node scripts/check-prod-csp.mjs [URL]
 // URL 省略時は本番。ローカル確認は http://localhost:8787 など。手順は docs/operations/deploy.md。
 // 終了コード: 違反 0 件なら 0、1 件以上または CSP ヘッダなしなら 1。
@@ -9,7 +9,7 @@ const dir = process.env.PLAYWRIGHT_DIR;
 const { chromium } = createRequire(dir ? dir.replace(/\/?$/, '/') : import.meta.url)('playwright');
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'] });
 let total = 0, missing = 0;
-for (const path of ['/', '/?category=science', '/?q=a']) {
+for (const path of ['/', '/us/', '/all/?category=science', '/jp/?q=a']) {
   const page = await (await browser.newContext({ viewport: { width: 1300, height: 900 } })).newPage();
   const found = [];
   await page.addInitScript(() => document.addEventListener('securitypolicyviolation', e => (window.__cspv = window.__cspv || []).push(`${e.violatedDirective} ${e.blockedURI} ${(e.sample || '').slice(0, 60)}`)));

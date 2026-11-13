@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { loadCategories, renderIndex, sitemapXml, SITE_ORDER } from './seo.js';
+import { loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, SITE_ORDER, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
 const app = new Hono();
 app.use('*', async (c, next) => {
@@ -12,17 +12,33 @@ app.use('*', async (c, next) => {
 app.use('/api/*', async (c, next) => { await next(); c.res.headers.set('Cache-Control', c.res.status < 400 ? 'public, max-age=30' : 'no-store'); });
 // D1 失敗などの例外は 500 にして握りつぶさない（上のミドルウェアが no-store を付ける）。
 app.onError((e, c) => c.text('Internal Server Error', 500));
-app.get('/api/categories', async c => c.json(await loadCategories(c.env.DB)));
+// 範囲（?scope=jp|us|…|all。省略は all）。不正な値は 400（no-store）。カテゴリの件数・サイト・活動はすべて範囲内だけを数える。
+const scopeOf = c => parseScope(c.req.query('scope'));
+app.get('/api/scopes', async c => c.json(await loadScopes(c.env.DB)));
+app.get('/api/categories', async c => { const sc = scopeOf(c); return sc ? c.json(await loadCategories(c.env.DB, sc.cc)) : c.json({ error: 'invalid scope' }, 400); });
 // LEFT JOIN: カテゴリ未所属のサイトも category_id = NULL で返す（画面では「未分類」として検索に出る）。
 app.get('/api/sites', async c => {
-  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s LEFT JOIN site_categories sc ON s.id = sc.site_id ${SITE_ORDER}`).all();
+  const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
+  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s LEFT JOIN site_categories sc ON s.id = sc.site_id WHERE (?1 IS NULL OR s.country_code = ?1) ${SITE_ORDER}`).bind(sc.cc).all();
   return c.json(results);
 });
 app.get('/api/activity', async c => {
-  const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites`).first();
-  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') GROUP BY date(registered_at) ORDER BY day`).all();
+  const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
+  const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites WHERE (?1 IS NULL OR country_code = ?1)`).bind(sc.cc).first();
+  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });
-app.get('/', async c => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url)))));
+// 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
+const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);
+app.get('/', async c => page(c, DEFAULT_SCOPE, await loadScopes(c.env.DB)));
+// /jp/ /us/ /all/。大文字は小文字へ 301。サイトが 1 件も無い国・不正な値は 404（sitemap にも載せない）。
+app.get('/:scope/', async c => {
+  const raw = c.req.param('scope'), sc = parseScope(raw.toLowerCase());
+  if (!sc) return c.text('Not Found', 404);
+  if (raw !== sc.scope) { const u = new URL(c.req.url); u.pathname = `/${sc.scope}/`; return c.redirect(u.toString(), 301); }
+  const scopes = await loadScopes(c.env.DB);
+  if (sc.cc && !scopes.countries.some(r => r.code === sc.cc)) return c.text('Not Found', 404);
+  return page(c, sc.scope, scopes);
+});
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 export default app;

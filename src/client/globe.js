@@ -34,7 +34,7 @@ try {
     texture.needsUpdate = true;
   }
   const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
-  fetch('./land-110m.geojson').then(response => { if (!response.ok) throw new Error('Map unavailable'); return response.json(); }).then(drawLand).catch(error => console.warn('海岸線を読み込めませんでした', error));
+  fetch('/land-110m.geojson').then(response => { if (!response.ok) throw new Error('Map unavailable'); return response.json(); }).then(drawLand).catch(error => console.warn('海岸線を読み込めませんでした', error));
   const earth = new THREE.Mesh(new THREE.SphereGeometry(1.6, 64, 32), new THREE.MeshPhongMaterial({map: texture, shininess: 10}));
   const axialTilt = new THREE.Group();
   axialTilt.rotation.z = THREE.MathUtils.degToRad(23.44);
@@ -89,6 +89,53 @@ try {
   scene.add(new THREE.AmbientLight(0xffffff, 2));
   const light = new THREE.DirectionalLight(0xffffff, 1.2); light.position.set(-3, 3, 5); scene.add(light);
   earth.rotation.y = 0;
+  // 範囲（国）の目印と選択。app.js が window.MISE_SCOPE = {countries:[{code,lat,lon}], current} を置き、変わるたびに 'mise-scope-changed' を発火する。
+  // 選べる国（サイトが 1 件以上ある国）にだけ小さな点を置き、現在の範囲の国は大きく暖色で示す。背景（地球）をクリック/タップすると近い国を範囲に選ぶ。
+  const markers = new Map();
+  const markerMaterial = new THREE.MeshBasicMaterial({color: 0x007e90}), markerActiveMaterial = new THREE.MeshBasicMaterial({color: 0xdf7f3e});
+  const markerGeometry = new THREE.SphereGeometry(1, 12, 8);
+  function syncMarkers() {
+    const scope = window.MISE_SCOPE || {countries: [], current: 'all'};
+    for (const marker of markers.values()) earth.remove(marker);
+    markers.clear();
+    for (const c of scope.countries) {
+      if (!Number.isFinite(c.lat) || !Number.isFinite(c.lon)) continue;
+      const active = c.code.toLowerCase() === scope.current;
+      const marker = new THREE.Mesh(markerGeometry, active ? markerActiveMaterial : markerMaterial);
+      marker.scale.setScalar(active ? .045 : .03);
+      marker.position.set(...globePoint(c.lon, c.lat, 1.63));
+      earth.add(marker); markers.set(c.code, marker);
+    }
+  }
+  window.addEventListener('mise-scope-changed', syncMarkers); syncMarkers();
+  const raycaster = new THREE.Raycaster(), pointer = new THREE.Vector2();
+  // 画面上の点が当たる緯度経度（地球に当たらなければ null）。globePoint の逆変換。
+  function pickLonLat(clientX, clientY) {
+    pointer.set(clientX / innerWidth * 2 - 1, -(clientY / innerHeight) * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObject(earth, false)[0];
+    if (!hit) return null;
+    const p = earth.worldToLocal(hit.point.clone()).normalize();
+    const lat = THREE.MathUtils.radToDeg(Math.asin(p.y));
+    const phi = (Math.atan2(p.z, -p.x) + Math.PI * 2) % (Math.PI * 2);
+    return { lat, lon: phi / (Math.PI * 2) * 360 - 180 };
+  }
+  // 当たった点に最も近い選べる国（角距離 12° 以内）。国境の多角形は持たないので代表点からの距離で選ぶ。
+  const PICK_RADIUS_DEG = 12;
+  function countryAt(clientX, clientY) {
+    const at = pickLonLat(clientX, clientY); if (!at) return null;
+    const rad = THREE.MathUtils.degToRad, a = rad(at.lat);
+    let best = null, bestDistance = rad(PICK_RADIUS_DEG);
+    for (const c of (window.MISE_SCOPE?.countries || [])) {
+      if (!Number.isFinite(c.lat) || !Number.isFinite(c.lon)) continue;
+      const b = rad(c.lat), d = Math.acos(Math.min(1, Math.max(-1, Math.sin(a) * Math.sin(b) + Math.cos(a) * Math.cos(b) * Math.cos(rad(at.lon - c.lon)))));
+      if (d < bestDistance) { best = c.code; bestDistance = d; }
+    }
+    return best;
+  }
+  // 何も載っていない背景（html/body と、本文の入れ物の余白）だけが地球の入力になる。リンク・ボタン・文章の上では選ばない。
+  const BACKGROUND = 'main, header, .logo-row, .search-row, #directory, #categories, #results, footer, hr';
+  const isBackground = el => el === document.documentElement || el === document.body || (el instanceof Element && el.matches(BACKGROUND));
   let targetRotation = 0, targetTilt = 0, targetDistance = 6.6;
   let flying = false;
   // 国への向き移動（旗のホバー/タップ）。flying は立てない: 無操作 IDLE_RESUME_MS 後に既定の向き・距離へ戻り自動回転が再開する。
@@ -143,7 +190,21 @@ try {
     drag.x = event.clientX; drag.y = event.clientY;
   });
   // 動かさずに離しただけ（背景クリック等）では時刻を更新しない。
-  const endDrag = event => { if (drag && event.pointerId === drag.id) { if (drag.moved) lastActiveAt = performance.now(); drag = null; } };
+  const endDrag = event => {
+    if (drag && event.pointerId === drag.id) {
+      if (drag.moved) lastActiveAt = performance.now();
+      else if (event.type === 'pointerup' && isBackground(event.target)) { const code = countryAt(event.clientX, event.clientY); if (code) window.dispatchEvent(new CustomEvent('mise-globe-pick', {detail: {code}})); }
+      drag = null;
+    }
+  };
+  // 選べる国の上にポインターがあるときはカーソルを手の形にする（CSS: html.globe-hot）。
+  let hotAt = 0, hot = false;
+  window.addEventListener('pointermove', event => {
+    if (drag || event.pointerType === 'touch' || performance.now() - hotAt < 60) return;
+    hotAt = performance.now();
+    const next = isBackground(event.target) && !!countryAt(event.clientX, event.clientY);
+    if (next !== hot) { hot = next; document.documentElement.classList.toggle('globe-hot', hot); }
+  });
   window.addEventListener('pointerup', endDrag);
   window.addEventListener('pointercancel', endDrag);
   window.addEventListener('mise-fly-country', flyToCountry);
