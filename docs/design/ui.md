@@ -58,7 +58,7 @@
 
 大文字の太い縦長ゴシック体 `MISE`。三毛猫模様のグラデーション。ホバー・フォーカスで模様の境界がなだらかにぼける（`@property --blur` による補間。`prefers-reduced-motion` では即時。`@property` 非対応のブラウザでは補間されず、ホバーで即時にぼける。`@supports` の分岐はない）。M/S の横伸ばしはインラインスクリプトで初回描画前に適用し、通常幅の瞬間を見せない。タイトル下に発音記号 `/ˈmiːseɪ/` を小さく出す。
 
-書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。ライセンス全文は `public/licenses/`。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
+書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。woff2 が 2.5 秒以内に届かない低速回線では、そこで見切って現在の書体で先に測って横伸ばしを済ませ（Chromium は block を約 3 秒で打ち切り代替書体を出すため）、到着後にもう一度測り直す。ライセンス全文は `public/licenses/`。woff2 は `uv run --with fonttools --with brotli python3 -m fontTools.subset <ttf> --text=<文字> --flavor=woff2 --layout-features='*' --name-IDs='*'` で作る（Noto Serif は先に `fontTools.varLib.instancer` で `wght=400 wdth=100` に固定）。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
 
 ## アクセシビリティ
 
