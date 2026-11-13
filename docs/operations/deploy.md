@@ -32,6 +32,11 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 手動での再デプロイや緊急時は `npx wrangler deploy` を使う。
 
 - 本番 DB への適用は取り返しがつかないため、migration の内容とローカルでの確認結果を見てから行う。スキーマ変更は、適用後も旧 Worker が動き続けられる後方互換の形にする。
+- **0018（`sites.search_text`）を適用した後**は、検索用の列を NFKC + 小文字化で埋め直す。migration の暫定値は ASCII の小文字化だけで、全角半角や非 ASCII の大小は埋め直すまで合わない。サイトを migration で足した後も同じ。本番 → プレビューの順に実行する（`--db` は `mise` / `mise-preview` のみ。`--local` は `mise` 専用）:
+  ```
+  node scripts/refresh-search-text.mjs --remote --db mise
+  node scripts/refresh-search-text.mjs --remote --db mise-preview
+  ```
 - 適用済みの migration は書き換えない。データの修正は新しい番号の migration で行う。番号は他の作業と衝突しないよう、最新を確認してから振る。
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。

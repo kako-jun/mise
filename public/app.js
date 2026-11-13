@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-let categories = [], sites = [], currentPath = [], currentSearch = null, pickedIds = [], pickIndex = 0, picksVisible = false, activityStats = null;
+let categories = [], pickedSites = [], currentPath = [], currentSearch = null, pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字）または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国（サイトが 1 件以上ある国）と件数。
 const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
@@ -16,8 +16,8 @@ let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, prevPage:'‹ 前のページ' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, prevPage:'‹ Previous page' }
 };
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
@@ -173,7 +173,7 @@ function renderSite(target, site, showCategories=false) {
   if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
-    const ids=[...new Set(sites.filter(s=>s.id===site.id).map(s=>s.category_id))].filter(id=>id!=null);
+    const ids=(site.category_ids||[]).filter(id=>categories.some(c=>c.id===id));
     if(!ids.length) row.append(t('uncategorized'));
     ids.forEach((id,index)=>{
       if(index) row.append(' / ');
@@ -184,19 +184,96 @@ function renderSite(target, site, showCategories=false) {
   }
   target.append(li);
 }
-function showDirectory(path, updateHistory=true) {
+
+// ---- 一覧のページング（カーソル方式 API + スクロールで追加読み込み。docs/design/ui.md） ----
+// 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
+const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
+let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
+// 行を消す処理はここ 1 か所（地球儀の解除など、行が消えるときの後始末をここに足す）。
+function clearListRows(ul) { ul.replaceChildren(); }
+const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
+function startList(opts) {
+  if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
+  if(activeList) activeList.stop();
+  // 一覧があるときだけ自前で位置を復元する（manual）。一覧の無い画面（トップ・子カテゴリだけの階層）はブラウザ標準の復元（auto）に任せる。履歴の項目ごとの設定なので遷移のたびに切り替える。
+  history.scrollRestoration=opts.params ? 'manual' : 'auto';
+  if(!opts.params) { activeList=null; clearListRows(opts.ul); opts.foot.replaceChildren(); return; }
+  activeList=createList(opts); activeList.start();
+}
+const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
+function createList(opts) {
+  const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
+  const foot=opts.foot, ul=opts.ul;
+  const saved=history.state && history.state.mise; const onMove=()=>{ L.userMoved=true; };
+  // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
+  L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
+  if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
+  const status=document.createElement('p'), live=document.createElement('p'), btn=document.createElement('button');
+  status.className='list-status'; live.className='visually-hidden'; live.setAttribute('role','status'); live.setAttribute('aria-live','polite');
+  btn.type='button'; btn.className='list-more'; btn.addEventListener('click',()=>L.loadMore(true));
+  const prev=document.createElement('p'); prev.className='list-prev';
+  L.render=()=>{
+    const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
+    // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
+    const hold=o.preserve && !L.items.length && (L.loading || L.error);
+    if(!hold) { clearListRows(ul); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    const empty=!L.items.length && L.ended;
+    status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : L.total!=null ? t('remaining')(Math.max(0,L.total-L.offset-L.items.length)) : '';
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
+    if(empty) foot.replaceChildren(); else foot.replaceChildren(status,btn,live);
+    if(hold) return;
+    if(ps) { ps.hidden=true; ps.replaceChildren(); }
+    prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
+  };
+  L.rerender=()=>{ L.render(); };
+  L.stop=()=>{ L.stopped=true; L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
+  // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
+  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
+  L.loadMore=async (force)=>{
+    if(L.loading || L.stopped || (L.ended && !force)) return;
+    L.loading=true; L.error=false; status.textContent=t('loadingMore'); btn.hidden=true; L.ctl=new AbortController();
+    try {
+      const r=await fetch(L.url(),{signal:L.ctl.signal}); if(!r.ok) throw Error('API');
+      const d=await r.json(); if(L.stopped) return;
+      const first=!L.items.length && L.total==null;
+      L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
+      if(first) { L.render(); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
+    } catch (e) { if(L.stopped) return; L.error=true; L.endRestore(); }
+    L.loading=false; if(L.stopped) return;
+    status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
+    live.textContent=L.error ? t('listError') : L.ended && L.items.length ? t('listEnd')(L.total) : '';
+    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.endRestore(); else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.endRestore(); scrollTo(0,w.y); } }
+    if(!L.ended && !L.error && listIo) { listIo.unobserve(foot); listIo.observe(foot); }
+  };
+  L.start=()=>{
+    if(!opts.preserve) clearListRows(ul);
+    foot.replaceChildren(status,btn,live); status.textContent=t('loadingMore'); btn.hidden=true;
+    // preserve のとき SSR の 1 ページ目とページ番号リンクは最初の応答まで残す。
+    const ps=document.getElementById('site-pager'); if(ps && !opts.preserve) { ps.hidden=true; ps.replaceChildren(); }
+    L.loadMore();
+  };
+  return L;
+}
+let saveTimer=0;
+addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
+addEventListener('pagehide',saveListState);
+function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
+function showDirectory(path, updateHistory=true, preserveSsr=false) {
   currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
-  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
+  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);}));
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
   for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';p.textContent=categories.filter(x=>x.parent_id===c.id).map(name).join(' ');div.append(p);} box.append(div); }
-  const direct=sites.filter(s=>s.category_id===path.at(-1)); direct.forEach(s=>renderSite(siteBox,s));
   $('#picks').hidden=false; renderPick();
-  $('#sample-label').hidden=!direct.length; $('#directory-empty').hidden=!!children.length || !!direct.length || !path.length;
+  const pageNo=path.length ? pageFromLocation() : 1;
+  startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
+    onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
+  if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
 function renderPick() {
   const list=$('#pick-list');
@@ -204,32 +281,33 @@ function renderPick() {
   const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
   if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
   list.replaceChildren();
-  if(!pickedIds.length) return;
-  const site=sites.find(s=>s.id===pickedIds[pickIndex % pickedIds.length]);
-  if(site) renderSite(list,site,true);
+  if(!pickedSites.length) return;
+  renderSite(list,pickedSites[pickIndex % pickedSites.length],true);
   if(focusIdx>=0){ const nl=list.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
 }
 const picks=$('#picks');
-new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks);
+if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
 setInterval(()=>{
-  if(pickedIds.length<2 || picks.hidden || !picksVisible || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  pickIndex=(pickIndex+1)%pickedIds.length;
+  if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  pickIndex=(pickIndex+1)%pickedSites.length;
   renderPick();
 },8000);
 function showResults(query) {
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
-  const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
-  $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
+  $('#result-title').textContent=query?t('results')(query):t('all'); $('#empty').hidden=true;
+  startList({ key:`${currentScope}|?q|${query}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query}, startPage:1, showCategories:true,
+    onTotal:total=>{ $('#empty').hidden=!!total; } });
 }
 function updateSearch() {
   const q=$('#query').value.trim();
   if(q) showResults(q); else showDirectory(currentPath, false);
 }
+let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
-$('#query').addEventListener('compositionend',()=>{composing=false;updateSearch();});
-$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearch();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
+$('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
+$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);});
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
@@ -286,9 +364,9 @@ function renderScopeNav() {
 function loadScopeData(scope) {
   if(!scopeCache.has(scope)) {
     const q=`?scope=${encodeURIComponent(scope)}`;
-    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/sites${q}`),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
-      if(!a.ok||!b.ok) throw Error('API');
-      return { categories:await a.json(), sites:await b.json(), stats:stats && stats.ok ? await stats.json() : null };
+    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/picks${q}`).catch(()=>null),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
+      if(!a.ok) throw Error('API');
+      return { categories:await a.json(), picks:b && b.ok ? await b.json() : [], stats:stats && stats.ok ? await stats.json() : null };
     });
     scopeCache.set(scope,p); p.catch(()=>scopeCache.delete(scope));
   }
@@ -298,10 +376,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; sites=data.sites; activityStats=data.stats;
-  const ids=[...new Set(sites.map(s=>s.id))];
-  for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}
-  pickedIds=ids.slice(0,3); pickIndex=0;
+  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0;
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。
@@ -320,12 +395,14 @@ window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code|
 function restoreLocation() {
   const q=new URLSearchParams(location.search).get('q');
   if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
+  const first=!restoredOnce; restoredOnce=true;
   $('#query').value='';
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
   if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));
-  showDirectory(path,false);
+  showDirectory(path,false,first);
 }
+let restoredOnce=false;
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
   const scope=scopeFromLocation();

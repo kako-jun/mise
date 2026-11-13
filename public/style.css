@@ -243,6 +243,15 @@ html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 .category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }
+.pager, .list-foot, .list-prev { width: 560px; max-width: 100%; margin: 12px auto; box-sizing: border-box; font-size: 13px; }
+.pager[hidden] { display: none; }
+.pager a { display: inline-block; padding: 4px 8px; }
+.pager [aria-current] { font-weight: bold; text-decoration: none; }
+.list-foot { text-align: center; min-height: 40px; }
+.list-foot:empty { display: none; }
+.list-status { margin: 8px 0; opacity: .7; }
+.list-more { font: inherit; padding: 6px 16px; cursor: pointer; }
+.list-more[hidden] { display: none; }
 /* 検索バー (#79)。16px 未満だと iOS Safari が focus でズームするため、タッチ端末は幅によらず 16px・高さ 44px。
    700px 以下(スマホ縦)は行いっぱい(最大 480px)に広げる。700→701px で幅が段差になるのは breakpoint として許容 */
 @media (pointer: coarse) { .search-row input[type="search"] { min-height: 44px; font-size: 16px; } }
