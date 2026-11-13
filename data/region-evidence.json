@@ -1,0 +1,6 @@
+[
+  {"id": "collected-kofun-map", "region_code": "JP-13", "source_url": "https://kofun.info/pages/staff", "evidence": "運営について(staff)に「都内在住のWebプログラマと事務員のチームで開発・運営しています」（collection-batch1.json の country_evidence と同一）", "checked_at": "2026-11-13"},
+  {"id": "collected-stellarscenes", "region_code": "JP-08", "source_url": "https://stellarscenes.net/intro.html", "evidence": "作者紹介の居住地欄に茨城県日立市（collection-batch1.json の country_evidence と同一）", "checked_at": "2026-11-13"},
+  {"id": "sample-6", "region_code": "JP-13", "source_url": "https://www.ndl.go.jp/access", "evidence": "国立国会図書館 公式アクセスページに東京本館の所在地「〒100-8924 千代田区永田町1-10-1」（千代田区は東京都の特別区）", "checked_at": "2026-11-13"},
+  {"id": "sample-7", "region_code": "JP-13", "source_url": "https://www.nao.ac.jp/", "evidence": "国立天文台 公式トップページ末尾の住所「東京都三鷹市大沢2-21-1」", "checked_at": "2026-11-13"}
+]
