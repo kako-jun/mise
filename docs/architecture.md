@@ -14,7 +14,7 @@ mise は、個人や企業のサイトをカテゴリからたどって発見で
 - APIとサーバー側処理は **Cloudflare Workers + Hono**。
 - データベースは **Cloudflare D1**。
 - 画面は **HTML / CSS / JavaScript**。UIフレームワークは使わない。
-- 3D表現には **Three.js** を使う。ソースは `src/client/globe.js`、three 本体は `vendor/three.module.js`（同梱）。`npm run build:globe`（esbuild で minify・tree-shake）が `public/globe.js` を生成するので、globe を変えたら再ビルドして生成物もコミットする（直接編集しない）。`land-110m.geojson` は `scripts/slim-land.mjs` で軽量化済み（小数2桁・property除去）。globe.js はページの load 後に遅延読込し、タブ非表示中は描画を止める。
+- 3D表現には **Three.js** を使う。ソースは `src/client/globe.js`、three 本体は `vendor/three.module.js`（同梱）。`npm run build:globe`（esbuild で minify・tree-shake）が `public/globe.js` を生成するので、globe を変えたら再ビルドして生成物もコミットする（直接編集しない）。`land-110m.geojson` は `scripts/slim-land.mjs` で軽量化済み（小数2桁・property除去）。globe.js はページの load 後に遅延読込し（読込前に押された fly/reset は index.html が記録して起動時に再生する方式。disabled にすると見た目が変わるため。読込失敗時は操作ボタンを隠す）、タブ非表示中は描画を止める。
 - **Astro は現時点では採用しない**。
 
 ## 現在の試作
@@ -54,3 +54,14 @@ mise のマスコットは、MISE と MIKE の語感を掛けた三毛猫が基�
 上部HUDはD1の実データからサイト総数と直近7日間の登録日が分かる件数を表示する。登録日が不明な件数は別に示し、日別棒グラフには含めない。個別サイトの最終確認日時とタグを表示できる。試験収集の2件には取得記録に基づく確認日時と分類を登録し、それ以外の不明値は不明のまま。巡回履歴の時系列は記録していない。アクセス数や人気順は使わない。
 
 ピックアップでも一覧と同じ確認済みファビコンを表示する。将来サムネイルを取得できた場合にも表示を検討し、未取得時は表示しない。詳細は[スクリーンショットの構想](site-schema.md#サイトのスクリーンショット将来構想)を参照。
+
+## SEO・クローラ向けの方針
+
+- **キャッシュと負荷**: `/` は URL ごとに本文が違うため、書き換え後のレスポンスから元アセットの ETag / Last-Modified を除き、`Cache-Control: public, max-age=0, must-revalidate, s-maxage=60`（ブラウザは毎回再検証、共有キャッシュは60秒）とする。再帰CTEのカテゴリ集計は毎リクエスト走るが、現状の件数では軽く、s-maxage で足りると判断。サイト数・カテゴリ数が増えたら Cache API での URL 単位キャッシュと一覧の件数上限を検討する。
+- **配信**: `/`（トップ・カテゴリ・検索のすべて）と `/sitemap.xml` は Worker が返す（`wrangler.jsonc` の `assets.run_worker_first` に `/api/*`・`/`・`/sitemap.xml` を指定）。`/robots.txt` は静的ファイル `public/robots.txt`。`/api/` は JS のレンダリングに必要なため robots では塞がない。JS の取得失敗時も、SSR 本文があれば消さない。ブラウザで JS が描画した後も title はカテゴリ名を保つ。
+- **カテゴリURLとcanonical**: カテゴリURLは `/?category=<id>&category=<id>…`（祖先からの順）。これを1カテゴリ1ページとして扱い、canonical は ID に正規化した同形式のURL（`name_ja` 指定や存在しない値は正規化後のURL、解決できなければ `/`）。sitemap には本文のあるカテゴリ（配下に1サイト以上）の正規化URLと `/` を載せ、DB から動的生成する。`?q=` の検索結果は （空でない場合のみ。`?category=` との併用でも）canonical を `/` にし、`noindex,follow` を付ける。
+- **既定言語**: 既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語（ブラウザ言語での自動判定はしない）。`<html lang>`・title・description・OGP・JSON-LD・SSR本文・`index.html` の静的テキストはすべて英語を既定にする。
+- **SSR可否**: UIフレームワークや SSR 基盤は使わず、Worker が `HTMLRewriter` で `index.html` に URL に応じた title・description・canonical・OGP と、カテゴリ一覧・パンくず・直下サイトのリンク入り本文（英語）を差し込む「軽量SSR」にした。カテゴリ名は `name_en`。サイトは名前が言語共通で、紹介文は日本語のみのため `description_ja` に「(Japanese)」を添える（app.js の英語表示と同じ扱い）。ブラウザでは従来どおり JS が同じ領域を描き直す。検索結果・日本語表示・ピックアップは JS 依存のまま。日本語設定のユーザーには、JS 描画までの一瞬 SSR の英語が見える（既知・許容）。
+- **hreflang**: 言語切替は同一URL上のJS切替でURLが分かれず、クローラは保存値のない状態（英語）しか見ない。そのため `en` と `x-default` のみ同一URLで宣言し、`?lang=ja` のような日本語URLの分離は行わない（canonical・sitemap・SSR・app.js の全部に波及するため、必要になった時に別途設計する）。sitemap と canonical は言語非依存の同一URL。
+- **OGP画像**: 専用画像は未作成のため `og:image` は未設定（Twitter Card は `summary`）。#10 のアイコン確定後に設定する。
+- **JSON-LD**: `WebSite` + `SearchAction`（`/?q={search_term_string}`。`app.js` は `q` 付きURLで検索結果を表示する）。

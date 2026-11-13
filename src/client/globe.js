@@ -115,6 +115,8 @@ try {
   window.addEventListener('mise-fly-japan', fly);
   document.querySelector('#fly-japan')?.addEventListener('click', fly);
   document.querySelector('#reset-globe')?.addEventListener('click', reset);
+  // globe.js の読込前に押されたボタンを再生する。
+  if (window.__misePendingGlobe === 'fly-japan') fly(); else if (window.__misePendingGlobe === 'reset-globe') reset();
   function resize() { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
   window.addEventListener('resize', resize); resize();
   // タブが非表示の間はレンダを止める（復帰時に再開）。
@@ -130,7 +132,7 @@ try {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { cancelAnimationFrame(rafId); rafId = 0; } else if (!rafId) animate();
   });
-  animate();
+  if (!document.hidden) animate();
 } catch (error) {
   host.hidden = true;
   document.querySelector('.globe-control')?.setAttribute('hidden', '');
