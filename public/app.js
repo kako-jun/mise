@@ -161,5 +161,5 @@ function restoreLocation() {
 window.addEventListener('popstate',restoreLocation);
 Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{$('#directory').textContent=t('error');});
 
-// ロゴの S を M と同じ表示幅にそろえる（M は scaleX(1.5)）
-(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{const l=document.querySelectorAll('.logo span');if(l.length<3)return;const m=l[0].offsetWidth,s=l[2].offsetWidth;if(m&&s){l[2].style.transform=`scaleX(${1.5*m/s})`;l[2].style.marginLeft=l[0].style.marginLeft||'8px';}});
+// ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
+(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{const l=[...document.querySelectorAll('.logo span')];if(l.length<4)return;const m=l[0].offsetWidth,s=l[2].offsetWidth;if(!m||!s)return;const sc=[1.5,1,1.5*m/s,1],gap=8;l.forEach((e,k)=>{const x=(sc[k]-1)*e.offsetWidth/2+gap/2;e.style.transform=`scaleX(${sc[k]})`;e.style.margin=`0 ${x}px`;});});
