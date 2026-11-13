@@ -234,7 +234,6 @@ function scopeItem(code, label, count, icon) {
 }
 function renderScopeNav() {
   const nav=$('#scope-nav'); if(!nav) return;
-  const key=document.createElement('span'); key.className='scope-key'; key.setAttribute('aria-hidden','true'); key.textContent='SCOPE';
   const list=document.createElement('ul'); list.className='scope-list';
   list.append(scopeItem('all',t('allWorld'),scopes.total,SCOPE_ICON));
   const extras=[];
@@ -246,7 +245,7 @@ function renderScopeNav() {
     if(i>=INLINE_SCOPES) { li.hidden=!scopesExpanded && code!==currentScope; extras.push(li); }
     list.append(li);
   });
-  const parts=[key,list];
+  const parts=[list];
   if(extras.length) {
     if(extras.some(li=>li.querySelector('[aria-current]'))) { scopesExpanded=true; extras.forEach(li=>{li.hidden=false;}); }
     const more=document.createElement('button'); more.type='button'; more.className='scope-more'; more.setAttribute('aria-expanded',String(scopesExpanded));
