@@ -81,7 +81,7 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 
 ### 状態遷移・申請
 
-掲載の状態（`listed` / `down` / `long_down` / `suspect` …）と申請（`add` / `remove` / `correct`）のデータは未設計。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
+掲載の状態（`listed` / `down` / `long_down` / `suspect` …）のデータは未設計。申請は `requests`、拒否リストは `blocked_hosts`（[operations/requests.md](../operations/requests.md)）。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
 
 ## 未決事項
 
