@@ -20,4 +20,5 @@
 
 ## サイトの更新日（2026-11-13）
 
-`scripts/collect-source-updated.py` が既存25サイトの更新日を根拠付きで取る。順序は sitemap の lastmod、RSS/Atom の最新日、HTML の <time>・meta、ページ上の「最終更新」表記。Last-Modified ヘッダは動的ページが現在時刻を返すため使わない。robots.txt を守り、1サイト最大4リクエスト（robots・トップ・sitemap・フィード）、リクエスト間とサイト間に2秒待機、同一ホスト内のリダイレクトのみ追従、内部IPは拒否、本文は1 MiB まで。UA は MiseResearchBot/0.1。取れないものは推測せず NULL。結果と取得できなかった理由は `data/source-updated.json`。25件中11件が取れた（sitemap 9、フィード1、ページ上の表記1）。残り14件は sitemap が無く（404）、フィード・<time>・更新日表記も見つからなかった。取れた値も sitemap の lastmod が自動生成で実更新と一致しない可能性はある。
+`scripts/collect-source-updated.py` が既存25サイトの更新日を根拠付きで取る。順序は sitemap の lastmod、RSS/Atom の最新日、HTML の <time>・meta、ページ上の「最終更新」表記。Last-Modified ヘッダは動的ページが現在時刻を返すため使わない。robots.txt を守り、1サイト最大4リクエスト（robots・トップ・sitemap・フィード。同一ホストのリダイレクト追従は1回につき最大2回が別枠）、リクエスト間とサイト間に2秒待機、同一ホスト内のリダイレクトのみ追従、内部IPは拒否、本文は1 MiB まで。UA は MiseResearchBot/0.1。取れないものは推測せず NULL。結果と取得できなかった理由は `data/source-updated.json`。25件中11件が取れた（sitemap 9、フィード1、ページ上の表記1）。残り14件は sitemap が無く（404）、フィード・<time>・更新日表記も見つからなかった。取れた値も sitemap の lastmod が自動生成で実更新と一致しない可能性はある。
+既知の制約: 対象は固定25サイトのみ（内部IP拒否はリテラルIPだけなので、対象を広げるなら名前解決後のIPも検査する）。sitemap は lastmod の最大値を採るため、頻繁に再生成される一覧を持つサイトは実更新より新しく見えうる。curl の `--max-filesize` は Content-Length 頼みで、chunked 応答は読み込んだ後に1 MiB で切る。

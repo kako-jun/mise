@@ -3,7 +3,10 @@
 
 Order: sitemap lastmod, RSS/Atom newest entry, HTML <time>/meta modified, on-page "最終更新"/"Last updated" text.
 Last-Modified headers are not used (dynamic pages return the request time). At most 4 requests per site
-(robots.txt, top page, sitemap, feed), robots.txt obeyed, 2s between requests and between sites.
+(robots.txt, top page, sitemap, feed; same-host redirect hops, at most 2 each, are extra), robots.txt obeyed, 2s between requests and between sites.
+Known limits: targets are the fixed 25 sites only (only literal IPs are rejected; resolve and check the IP before widening);
+sitemap lastmod takes the maximum, so a site with a frequently regenerated listing looks newer than its real update;
+curl --max-filesize relies on Content-Length (chunked bodies are cut at 1 MiB after reading, bounded by --max-time).
 Usage: uv run python3 scripts/collect-source-updated.py > data/source-updated.json
 """
 import datetime, email.parser, email.utils, html.parser, ipaddress, json, re, subprocess, sys, time, urllib.parse, urllib.robotparser
@@ -101,7 +104,7 @@ def extract(sid, url):
     if page.feeds:
         try:
             fu, fb = get(urllib.parse.urljoin(purl, page.feeds[0]), rules)
-            d = sorted(xml_dates(fb, r'<(?:updated|pubDate|dc:date|published)>\s*([^<]+?)\s*</') + [x for x in (norm(m) for m in []) if x])
+            d = sorted(xml_dates(fb, r'<(?:updated|pubDate|dc:date|published)>\s*([^<]+?)\s*</'))
             if not d:  # RFC 822 pubDate
                 for m in re.findall(r'<pubDate>\s*([^<]+?)\s*</pubDate>', fb):
                     try: d.append(email.utils.parsedate_to_datetime(m).date().isoformat())
@@ -119,7 +122,6 @@ def extract(sid, url):
     return None, None, None, "; ".join(notes) or "no date found"
 
 if __name__ == '__main__':
-    import email.utils
     out = []
     for sid, url in SITES.items():
         try: d, ev, kind, why = extract(sid, url)
