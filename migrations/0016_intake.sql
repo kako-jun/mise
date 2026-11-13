@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS requests (
   reason TEXT,                  -- 理由・訂正内容(最大 1000 字、プレーンテキスト)
   contact TEXT,                 -- 連絡先(メールまたは https URL)。決定の 90 日後に NULL にする
   ip_hash TEXT,                 -- レート制限用の IP ハッシュ(IPv6 は /64)。生 IP は保存しない。7 日後に NULL にする
+  net_hash TEXT,                -- 同 /48(IPv6)の緩い上限用。IPv4 は ip_hash と同じ。7 日後に NULL にする
   note TEXT,                    -- 管理者メモ(blocklisted など)。blocklisted の自動却下は連絡先を保存しない
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   decided_at TEXT
@@ -18,10 +19,14 @@ CREATE INDEX IF NOT EXISTS idx_requests_status ON requests (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_key ON requests (normalized_key, type, status);
 CREATE INDEX IF NOT EXISTS idx_requests_ip ON requests (ip_hash, created_at);
 
--- 拒否リスト: 取り下げ承認・robots/noindex で外したホスト。巡回・推薦で再追加しない。
+-- 拒否リスト: 取り下げ承認・robots/noindex で外した対象。巡回・推薦で再追加しない。
+-- path_prefix が '' ならホスト全体(登録ドメイン配下を含む)、それ以外はそのパス配下だけ
+-- (ameblo.jp/foo のようなパス型のユーザー領域の取り下げで、サービス全体を拒否しないため)。小文字・先頭 '/'・末尾 '/' なし。
 CREATE TABLE IF NOT EXISTS blocked_hosts (
-  host TEXT PRIMARY KEY,
+  host TEXT NOT NULL,           -- 小文字・www. なし
+  path_prefix TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL,         -- 'removal_request' | 'robots' | 'noindex' | 'manual'
   request_id INTEGER REFERENCES requests(id),
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (host, path_prefix)
 );

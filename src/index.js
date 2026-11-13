@@ -30,7 +30,11 @@ app.get('/api/activity', async c => {
   return c.json({total:totals.total, known_daily:results});
 });
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md
-app.post('/api/requests', async c => { const r = await receiveRequest(c); return c.json(r.body, r.status); });
+const NOJS = `<!doctype html><meta charset="utf-8"><title>MISE</title><p>この窓口は JavaScript が必要です。代わりに <a href="https://github.com/kako-jun/mise/issues/new?template=removal-request.yml">GitHub の Issue</a> から依頼できます。</p><p>This form needs JavaScript. You can use a <a href="https://github.com/kako-jun/mise/issues/new?template=removal-request.yml">GitHub issue</a> instead.</p>`;
+app.post('/api/requests', async c => {
+  // JS なしのフォーム送信(ブラウザの遷移)には JSON でなく簡単な HTML を返す。
+  if ((c.req.header('Accept') || '').includes('text/html') && !(c.req.header('Content-Type') || '').toLowerCase().startsWith('application/json')) return c.html(NOJS, 415);
+  const r = await receiveRequest(c); return c.json(r.body, r.status); });
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 // 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
 const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);

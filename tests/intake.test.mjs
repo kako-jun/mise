@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, normalizeContact, validateRequest, ipHash, ipPrefix, blockCandidates, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
+import { normalizeUrl, normalizeContact, validateRequest, ipHash, ipPrefix, blockCandidates, isBlocked, decodeUnreserved, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
 
 test('normalizeUrl: 正規化', () => {
-  assert.deepEqual(normalizeUrl('Example.COM/foo/?a=1#x'), { ok: true, url: 'https://example.com/foo', host: 'example.com', key: 'example.com/foo' });
+  assert.deepEqual(normalizeUrl('Example.COM/foo/?a=1#x'), { ok: true, url: 'https://example.com/foo', host: 'example.com', path: '/foo', key: 'example.com/foo' });
   assert.equal(normalizeUrl('http://blog.example.jp/').url, 'http://blog.example.jp');
 });
 test('normalizeUrl: SSRF になりうる宛先・形式を拒否', () => {
@@ -12,7 +12,7 @@ test('normalizeUrl: SSRF になりうる宛先・形式を拒否', () => {
 });
 test('normalizeContact: メールか https URL のみ', () => {
   assert.equal(normalizeContact('me@example.com'), 'me@example.com');
-  assert.equal(normalizeContact('https://Example.com/profile/?a=1#x'), 'https://example.com/profile');
+  assert.equal(normalizeContact('https://www.facebook.com/profile.php?id=123'), 'https://www.facebook.com/profile.php?id=123'); // クエリを保つ
   for (const bad of ['', 'x', 'http://example.com/', 'a b@example.com', '<a@b.com>', 'https://example.com/a"b', 'https://example.com/a b', "https://example.com/'", 'https://example.com/<x>', 'javascript:alert(1)', 'a'.repeat(250) + '@example.com']) assert.equal(normalizeContact(bad), null, bad);
 });
 test('validateRequest: 正常・異常', () => {
@@ -61,16 +61,18 @@ test('ipPrefix: IPv6 は /64', () => {
 test('readLimited: Content-Length と実バイト数の両方で上限', async () => {
   const mk = (body, h = {}) => new Request('https://m.example/x', { method: 'POST', headers: h, body });
   assert.equal(await readLimited(mk('{"a":1}')), '{"a":1}');
-  assert.equal(await readLimited(mk('x'.repeat(5000))), null);
+  assert.equal(await readLimited(mk('x'.repeat(9000))), null);
   assert.equal(await readLimited(mk('x', { 'Content-Length': '99999' })), null);
-  assert.equal(await readLimited(mk('あ'.repeat(1500))), null); // 文字数 1500 でも 4500 バイト
+  assert.equal(await readLimited(mk('あ'.repeat(3000))), null); // 文字数 3000 は 9000 バイト
+  assert.equal((await readLimited(mk('あ'.repeat(1500)))).length, 1500); // 4500 バイトは通る
 });
 
 // receiveRequest: 偽 D1 で分岐を確認(SQL 自体の確認は実 D1 の実機テストで行う)
 function fakeDb({ blocked = false, changes = 1, dupAfter = false } = {}) {
   const calls = [];
   const mk = sql => ({ sql, args: [], bind(...a) { this.args = a; calls.push(this); return this; },
-    first: async () => (/blocked_hosts/.test(sql) ? (blocked ? { x: 1 } : null) : (dupAfter ? { x: 1 } : null)),
+    all: async () => ({ results: blocked ? (Array.isArray(blocked) ? blocked : [{ host: 'example.com', path_prefix: '' }]) : [] }),
+    first: async () => (dupAfter ? { x: 1 } : null),
     run: async () => ({ meta: { changes } }) });
   return { prepare: mk, calls };
 }
@@ -88,7 +90,7 @@ test('receiveRequest: 受理 / 検証 / 向き', async () => {
   assert.equal((await receiveRequest(ctx(good, fakeDb(), { ct: 'application/jsonx' }))).status, 415);
   assert.equal((await receiveRequest(ctx('{bad', fakeDb()))).status, 400);
   assert.equal((await receiveRequest(ctx({ ...good, url: 'http://127.0.0.1/' }, fakeDb()))).status, 400);
-  assert.equal((await receiveRequest(ctx('x'.repeat(5000), fakeDb()))).status, 413);
+  assert.equal((await receiveRequest(ctx('x'.repeat(9000), fakeDb()))).status, 413);
 });
 test('receiveRequest: INTAKE_SALT 未設定なら 503 で何も保存しない', async () => {
   const d = fakeDb();
@@ -110,7 +112,7 @@ test('receiveRequest: 同一URLでも別IPなら握りつぶさず保存(重複�
 test('receiveRequest: 全体上限は推薦と取り下げ・訂正で別枠', async () => {
   const a = fakeDb(), r = fakeDb();
   await receiveRequest(ctx(good, a)); await receiveRequest(ctx({ ...good, type: 'remove' }, r));
-  assert.deepEqual([ins(a).args[11], ins(a).args[12]], [1, LIMITS.addPerDay]);
+  assert.deepEqual([ins(a).args[11], ins(a).args[12], ins(a).args[14]], [1, LIMITS.addPerDay, LIMITS.netPerDay]);
   assert.deepEqual([ins(r).args[11], ins(r).args[12]], [0, LIMITS.otherPerDay]);
 });
 test('receiveRequest: ハニーポットは保存しない', async () => {
@@ -127,4 +129,39 @@ test('receiveRequest: 拒否リスト済みへの推薦は rejected で連絡先
   const d2 = fakeDb({ blocked: true });
   await receiveRequest(ctx({ ...good, type: 'remove' }, d2));
   assert.equal(ins(d2).args[1], 'pending'); assert.equal(ins(d2).args[6], 'me@example.com');
+});
+
+test('normalizeUrl: スキーム省略+ポート、%7E と ~、ゼロ幅文字', () => {
+  assert.equal(normalizeUrl('example.com:443').url, 'https://example.com');
+  assert.equal(normalizeUrl('example.com:8080').ok, false);
+  assert.equal(normalizeUrl('javascript:alert(1)').ok, false);
+  assert.equal(normalizeUrl('https://sakura.ne.jp/%7Ebob/').key, normalizeUrl('https://sakura.ne.jp/~bob').key);
+  assert.equal(decodeUnreserved('/%41%2f%7e%e3'), '/A%2F~%E3');
+  assert.equal(normalizeUrl('exa\u200bmple.com\ufeff').url, 'https://example.com');
+});
+test('ipPrefix: IPv4 射影は IPv4 に、/48 も', () => {
+  assert.equal(ipPrefix('::ffff:203.0.113.9'), '203.0.113.9');
+  assert.equal(ipPrefix('::ffff:cb00:7109'), '203.0.113.9');
+  assert.equal(ipPrefix('2001:db8:1:2::1', 3), ipPrefix('2001:db8:1:9::5', 3));
+  assert.notEqual(ipPrefix('2001:db8:1:2::1', 3), ipPrefix('2001:db8:2:2::1', 3));
+});
+test('isBlocked: パス型は host 全体を拒否しない', () => {
+  const rows = [{ host: 'ameblo.jp', path_prefix: '/foo' }];
+  assert.equal(isBlocked(rows, 'ameblo.jp', '/foo'), true);
+  assert.equal(isBlocked(rows, 'www.ameblo.jp', '/foo/entry-1'), true);
+  assert.equal(isBlocked(rows, 'ameblo.jp', '/foobar'), false);
+  assert.equal(isBlocked(rows, 'ameblo.jp', '/bar'), false);
+  assert.equal(isBlocked(rows, 'ameblo.jp', ''), false);
+  assert.equal(isBlocked([{ host: 'example.com', path_prefix: '' }], 'a.example.com', '/x'), true);
+});
+test('receiveRequest: パス型の拒否はそのパス配下だけ rejected', async () => {
+  const rows = [{ host: 'ameblo.jp', path_prefix: '/foo' }];
+  const d1 = fakeDb({ blocked: rows }); await receiveRequest(ctx({ ...good, url: 'https://ameblo.jp/foo/entry' }, d1));
+  assert.equal(ins(d1).args[1], 'rejected');
+  const d2 = fakeDb({ blocked: rows }); await receiveRequest(ctx({ ...good, url: 'https://ameblo.jp/bar' }, d2));
+  assert.equal(ins(d2).args[1], 'pending');
+});
+test('receiveRequest: 重複判定は連絡先も含む(連絡先違いは別行)', async () => {
+  const d = fakeDb(); await receiveRequest(ctx(good, d));
+  assert.match(ins(d).sql, /contact IS \?7 AND status='pending'/);
 });
