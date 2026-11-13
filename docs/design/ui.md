@@ -56,7 +56,7 @@
 
 ## 言語
 
-既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語になる。ブラウザ言語での自動判定はしない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
+初期言語は、`localStorage` の `mise-language`（`ja` / `en`）があればそれを最優先し、無ければ `navigator.languages`（なければ `navigator.language`）の先頭が `ja` で始まるときだけ日本語、それ以外は英語（`app.js` の `initialLanguage`）。言語を切り替えると `mise-language` に保存される。サーバー側（SSR・`<html lang>`）は Accept-Language で出し分けず常に英語のまま（同一 URL で言語を変えると SEO 設計（`seo.md` の hreflang・canonical）と CDN キャッシュ（Vary）を壊すため）。判定は `index.html` の `<head>` の同期インラインスクリプトが行い、ja 判定時は `<html lang="ja">` にして `i18n-pending` クラスを付け、翻訳対象（`[data-i18n]`・`#scope-nav`・`#directory`・`#breadcrumbs`）を `visibility:hidden` で初期化まで不可視にする（レイアウトは動かさない）。`app.js` は初回の `applyLanguage()` 後（取得失敗時も）にクラスを外し、保険として 3 秒でも外れる。英語判定ではクラスを付けず挙動は変わらない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
 
 ## ロゴ
 
