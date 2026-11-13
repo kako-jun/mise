@@ -45,7 +45,7 @@ export async function renderIndex(c, assetResponse) {
   const raw = url.searchParams.getAll('category');
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
-  const isSearch = url.searchParams.has('q');
+  const isSearch = !!url.searchParams.get('q')?.trim();
 
   let title = 'MISE — 今だからこそ、ディレクトリ型検索エンジン。';
   let desc = DEFAULT_DESC;
@@ -54,7 +54,7 @@ export async function renderIndex(c, assetResponse) {
     title = `${names.join(' › ')} — MISE`;
     desc = `MISE の「${names.join(' › ')}」カテゴリ（${current.site_count}サイト）。まだ知らない独立サイトを探せます。`;
   }
-  const canonical = ORIGIN + categoryHref(path);
+  const canonical = ORIGIN + categoryHref(isSearch ? [] : path);
 
   // 本文（JS が起動すると置き換わる）
   const children = categories.filter(x => x.parent_id === (path.at(-1) ?? null));
@@ -71,7 +71,7 @@ export async function renderIndex(c, assetResponse) {
   let siteItems = '';
   if (path.length) {
     const { results } = await c.env.DB.prepare('SELECT s.name, s.url, s.description_ja FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ORDER BY s.id').bind(path.at(-1)).all();
-    siteItems = results.map(s => `<li><a href="${esc(s.url)}">${esc(s.name)}</a> — ${esc(s.description_ja)}</li>`).join('');
+    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a> — ${esc(s.description_ja)}</li>`).join('');
   }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
@@ -87,10 +87,14 @@ export async function renderIndex(c, assetResponse) {
     .on('link[hreflang]', { element: e => e.setAttribute('href', canonical) })
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })
+    .on('#sample-label', { element: e => { if (siteItems) e.removeAttribute('hidden'); } })
     .on('#directory-sites', { element: e => e.setInnerContent(siteItems, { html: true }) });
   if (isSearch) rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
 
   const res = rw.transform(new Response(assetResponse.body, assetResponse));
-  res.headers.set('Cache-Control', 'public, max-age=300');
+  // 元assetのETag/Last-Modifiedは書き換え後の本文と対応しないので残さない（304で別ページが返るのを防ぐ）
+  res.headers.delete('ETag');
+  res.headers.delete('Last-Modified');
+  res.headers.set('Cache-Control', 'public, max-age=0, must-revalidate, s-maxage=60');
   return res;
 }

@@ -12,9 +12,13 @@ const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
 const activity = [];
 function logActivity(message) { activity.unshift(message); activity.splice(4); renderLog(); }
 function renderLog() { $('#activity-entries').replaceChildren(...(activity.length ? activity : [t('idle')]).map(entry => { const line=document.createElement('div'); line.textContent=activity.length ? `> ${entry}` : entry; return line; })); }
+function updateTitle() {
+  const cur = currentPath.map(id => categories.find(x => x.id === id)).filter(Boolean);
+  document.title = cur.length ? `${cur.map(name).join(' › ')} — MISE` : `MISE — ${t('tagline')}`;
+}
 function applyLanguage() {
   document.documentElement.lang = language;
-  document.title = `MISE — ${t('tagline')}`;
+  updateTitle();
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
   updateExternalToggle();
@@ -107,7 +111,7 @@ function renderSite(target, site, showCategories=false) {
   target.append(li);
 }
 function showDirectory(path, updateHistory=true) {
-  currentPath=path; currentSearch=null; $('#directory').hidden=false; $('#results').hidden=true;
+  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
   if(path.length) {
@@ -161,7 +165,7 @@ function restoreLocation() {
   showDirectory(path,false);
 }
 window.addEventListener('popstate',restoreLocation);
-Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{$('#directory').textContent=t('error');});
+Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error');});
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{const l=[...document.querySelectorAll('.logo span')];if(l.length<4)return;const m=l[0].offsetWidth,s=l[2].offsetWidth;if(!m||!s)return;const sc=[1.5,1,1.5*m/s,1],gap=8;l.forEach((e,k)=>{const x=(sc[k]-1)*e.offsetWidth/2+gap/2;e.style.transform=`scaleX(${sc[k]})`;e.style.margin=`0 ${x}px`;});});

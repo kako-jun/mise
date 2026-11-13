@@ -1,5 +1,4 @@
 User-agent: *
 Allow: /
-Disallow: /api/
 
 Sitemap: https://mise.llll-ll.com/sitemap.xml
