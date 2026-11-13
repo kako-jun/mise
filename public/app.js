@@ -16,8 +16,8 @@ let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国', lessScopes:'閉じる' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'More', lessScopes:'Less' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries' }
 };
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
@@ -235,26 +235,33 @@ $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.c
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
+// 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
+const countryLabel = code => { const e=window.MISE_COUNTRIES?.[code]?.[language]; if(e) return e; try { return new Intl.DisplayNames([language],{type:'region'}).of(code)||code; } catch (_) { return code; } };
+const scopeAria = (label,count) => language==='ja' ? `${label} ${count}件` : `${label}, ${count} ${Number(count)===1?'site':'sites'}`;
+const codeIcon = code => { const el=document.createElement('span'); el.className='scope-code'; el.setAttribute('aria-hidden','true'); el.textContent=code; return el; };
 function scopeItem(code, label, count, icon) {
   const li=document.createElement('li'), a=document.createElement('a');
   a.className='scope-item'; a.href=`/${code}/`; if(code===currentScope) a.setAttribute('aria-current','page');
   if(icon instanceof Node) a.append(icon); else a.insertAdjacentHTML('beforeend',icon);
-  const n=document.createElement('span'); n.className='scope-name'; n.textContent=label;
+  a.setAttribute('aria-label',scopeAria(label,count)); a.title=label;
   const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
-  a.append(n,c);
+  a.append(c);
   a.addEventListener('click',e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); chooseScope(code); });
   li.append(a); return li;
 }
 function renderScopeNav() {
   const nav=$('#scope-nav'); if(!nav) return;
+  // 作り直すとフォーカスが BODY に落ちるので、範囲ナビ内にあったなら同じ項目へ戻す。
+  const fa=document.activeElement, hadFocus=nav.contains(fa), focusMore=hadFocus && fa.classList?.contains('scope-more');
   const list=document.createElement('ul'); list.className='scope-list';
   list.append(scopeItem('all',t('allWorld'),scopes.total,SCOPE_ICON));
   const extras=[];
   scopes.countries.forEach((r,i)=>{
-    const code=r.code.toLowerCase(), info=window.MISE_COUNTRIES?.[r.code];
+    const code=r.code.toLowerCase();
     let icon='';
-    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>{img.hidden=true;}); icon=img; }
-    const li=scopeItem(code,info?.[language]??r.code,r.count,icon);
+    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>img.replaceWith(codeIcon(r.code))); icon=img; }
+    else icon=codeIcon(r.code);
+    const li=scopeItem(code,countryLabel(r.code),r.count,icon);
     if(i>=INLINE_SCOPES) { li.hidden=!scopesExpanded && code!==currentScope; extras.push(li); }
     list.append(li);
   });
@@ -262,11 +269,14 @@ function renderScopeNav() {
   if(extras.length) {
     if(extras.some(li=>li.querySelector('[aria-current]'))) { scopesExpanded=true; extras.forEach(li=>{li.hidden=false;}); }
     const more=document.createElement('button'); more.type='button'; more.className='scope-more'; more.setAttribute('aria-expanded',String(scopesExpanded));
-    more.textContent=scopesExpanded?t('lessScopes'):`${t('moreScopes')} (${extras.length})`;
+    const label=scopesExpanded?t('lessScopes'):t('moreScopes'); // 文字は出さず、アイコン(⋯ / ▴)+ aria-label + title
+    more.setAttribute('aria-label',label); more.title=label;
+    more.innerHTML=scopesExpanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>';
     more.addEventListener('click',()=>{ scopesExpanded=!scopesExpanded; renderScopeNav(); });
     parts.push(more);
   }
   nav.replaceChildren(...parts);
+  if(hadFocus) (focusMore ? nav.querySelector('.scope-more') : nav.querySelector('[aria-current]'))?.focus();
   $('#home-link').href=categoryUrl([]);
   // 地球儀へ「選べる国」と現在の範囲を伝える（目印の点と、背景クリックで国を選ぶ判定に使う）。
   window.MISE_SCOPE={ current:currentScope, countries:scopes.countries.map(r=>({code:r.code,lat:window.MISE_COUNTRIES?.[r.code]?.lat,lon:window.MISE_COUNTRIES?.[r.code]?.lon})) };
