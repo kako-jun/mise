@@ -23,6 +23,11 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `country_code` | 運営者の所在国（ISO 3166-1 alpha-2 大文字 2 文字、CHECK で形式を縛る） | 0011 |
 | `region_code` | 運営者の所在県・州（ISO 3166-2 第 1 階層、例 `JP-13`）。`country_code` が必須で先頭 2 文字が一致すること（CHECK） | 0013 |
 
+### インデックス（0018）
+
+- `idx_sites_sort`: 一覧の既定の並び（`datetime(COALESCE(source_updated_at, registered_at)) DESC, id`）の式インデックス。式は `src/sites.js` の `SORT_KEY` と同じ文字列にする。
+- `idx_site_categories_category`: `(category_id, site_id)`。カテゴリ別一覧・件数の逆引き。
+
 ### `categories` / `site_categories` / `site_tags`
 
 - `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。

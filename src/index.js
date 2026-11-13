@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
-import { loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, SITE_ORDER, DEFAULT_SCOPE } from './seo.js';
+import { loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
+import { querySites, randomSites, parseLimit, parsePage, decodeCursor } from './sites.js';
 const app = new Hono();
 app.use('*', async (c, next) => {
   await next();
@@ -16,12 +17,17 @@ app.onError((e, c) => c.text('Internal Server Error', 500));
 const scopeOf = c => parseScope(c.req.query('scope'));
 app.get('/api/scopes', async c => c.json(await loadScopes(c.env.DB)));
 app.get('/api/categories', async c => { const sc = scopeOf(c); return sc ? c.json(await loadCategories(c.env.DB, sc.cc)) : c.json({ error: 'invalid scope' }, 400); });
-// LEFT JOIN: カテゴリ未所属のサイトも category_id = NULL で返す（画面では「未分類」として検索に出る）。
+// カーソル方式。`limit`（既定 40・最大 100）+ `cursor`（前の応答の next_cursor）。絞り込みは `category`（そのカテゴリ直下）・`q`（名前・紹介文・URL の部分一致）。
+// `page`（>=1）は開始位置の指定（クロール用ページ番号URLと同じ区切り。カーソルが無いときだけ有効）。total は先頭の応答（cursor なし）だけに入る。
+// カテゴリ未所属のサイトも category 指定なしなら出る（category_ids が空配列。画面では「未分類」）。
 app.get('/api/sites', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
-  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s LEFT JOIN site_categories sc ON s.id = sc.site_id WHERE (?1 IS NULL OR s.country_code = ?1) ${SITE_ORDER}`).bind(sc.cc).all();
-  return c.json(results);
+  const cursor = decodeCursor(c.req.query('cursor')); if (!cursor) return c.json({ error: 'invalid cursor' }, 400);
+  const limit = parseLimit(c.req.query('limit')), q = c.req.query('q')?.trim().slice(0, 100) || null;
+  return c.json(await querySites(c.env.DB, { cc: sc.cc, category: c.req.query('category') || null, q, limit, cursor, offset: (parsePage(c.req.query('page')) - 1) * limit }));
 });
+// ピックアップ用のランダム 3 件（範囲内）。
+app.get('/api/picks', async c => { const sc = scopeOf(c); return sc ? c.json(await randomSites(c.env.DB, sc.cc, 3)) : c.json({ error: 'invalid scope' }, 400); });
 app.get('/api/activity', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
   const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites WHERE (?1 IS NULL OR country_code = ?1)`).bind(sc.cc).first();
