@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""個人・小規模サイト発見パイプライン（決定論。LLM/エージェントのトークンは使わない）。
+"""独立サイトの発見パイプライン（決定論。LLM/エージェントのトークンは使わない）。
 
   uv run python3 scripts/pipeline/run.py init|discover-cc|discover-links|triage|fetch|judge|report [options]
 """
@@ -8,6 +8,7 @@ import collections
 import concurrent.futures
 import datetime
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -121,9 +122,12 @@ def report(db, sample):
     print('== site_kind (candidate)'); [print(f'{r[0] or "-":8} {r[1]}') for r in db.execute("SELECT site_kind, count(*) FROM frontier WHERE state='candidate' GROUP BY 1 ORDER BY 2 DESC")]
     print('== adult (candidate)'); [print(f'{r[0] or "-":8} {r[1]}') for r in db.execute("SELECT adult, count(*) FROM frontier WHERE state='candidate' GROUP BY 1")]
     print('== source'); [print(f'{r[0]:24} {r[1]}') for r in db.execute('SELECT source, count(*) FROM frontier GROUP BY 1')]
-    print(f'== candidate sample (personal_score desc, {sample})')
-    for r in db.execute("SELECT host, title, description, personal_score, site_kind, ad_hits, text_len FROM frontier WHERE state='candidate' ORDER BY personal_score DESC, key LIMIT ?", (sample,)):
-        print(f'{r["host"]} | {r["title"][:50]} | {(r["description"] or "")[:60]} | kind={r["site_kind"]} score={r["personal_score"]} ads={r["ad_hits"]} len={r["text_len"]}')
+    print(f'== candidate sample (host 順に等間隔で {sample} 件。偏りを避けるため score 順は使わない)')
+    rows = db.execute("SELECT host, title, description, personal_score, site_kind, adult, ad_hits, text_len FROM frontier WHERE state='candidate' ORDER BY key").fetchall()
+    step = max(1, len(rows) // max(sample, 1))
+    for r in rows[::step][:sample]:
+        title = (r['title'] or '')[:50]; desc = re.sub(r'\s+', ' ', r['description'] or '')[:60]
+        print(f'{r["host"]} | {title} | {desc} | kind={r["site_kind"]} adult={r["adult"]} ads={r["ad_hits"]} len={r["text_len"]}')
 
 
 def main():

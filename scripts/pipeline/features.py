@@ -6,7 +6,7 @@ import urllib.parse
 
 from hostnames import adult_host_hint, blocklist, suffix_match
 
-# 判定の閾値（誤判定の傾向を見て調整する。docs/personal-sites-pipeline.md 参照）
+# 判定の閾値（誤判定の傾向を見て調整する。docs/independent-sites-pipeline.md 参照）
 MIN_TEXT_LEN = 200          # 可視テキストの最小文字数
 MIN_KANA = 20               # 日本語らしさ: かな文字数
 AD_HITS_REJECT = 5          # 広告タグ数がこれ以上なら除外
