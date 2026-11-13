@@ -25,6 +25,14 @@ mise は、個人や企業のサイトをカテゴリからたどって発見で
 
 各サイト行に、運営者の所在国（`sites.country_code`）の国旗SVGを常時表示する（国コードが無いサイトは出さない。alt相当は `aria-label` に「日本 / Japan」）。旗は絵文字でなく SVG（Windows では絵文字の国旗が国コード文字になるため）。[flag-icons](https://github.com/lipis/flag-icons)（MIT、[ライセンス全文](../public/licenses/flag-icons-MIT.txt)）の 4x3 版から必要な国だけを `public/flags/<小文字コード>.svg` に置く（全旗は配信しない。国を足すときは SVG・`public/countries.js` の座標表に1行・同ファイルの旗リスト `MISE_FLAGS` に国コード。リストに無い国は旗要素を作らず404も出さない）。`public/countries.js` は国名（日英）と代表座標の静的表で、app.js と globe.js が共有する。
 
+### 区画（県・州）
+
+運営者の所在する県・州が公開情報で分かったサイトだけ、`sites.region_code`（ISO 3166-2 第1階層。例 `JP-13`。`country_code` の先頭2文字と一致必須、DBのCHECKで担保）を持つ。表示は旗の右に区画名（言語に応じ ja/en、11px）を小さく出し、`aria-label` は「日本 東京都 / Japan Tokyo」。区画名は行の高さを動かさない（旗と同じ行内）。region が無い、または区画表に無いコードのサイトは従来どおり旗のみ。
+
+区画の名前（ja/en）と代表座標の表は `public/regions.js`（`window.MISE_REGIONS`、app.js が読む）。`scripts/collect-regions.py`（`uv run python3`）が Wikidata SPARQL から生成する（手で編集しない）。出典は Wikidata（CC0）の P300（ISO 3166-2）・P625（座標）・ja/en ラベル（enが無ければ mul）、対象は「国の第1階層行政区画」(Q10864048) のクラスに属する項目で、`MISE_FLAGS` と同じ13か国。取得日・件数・欠損は `public/regions.js` 先頭コメントに出力される（初回 2026-11-13: 384件。JP 47、US 57 ほか。Wikidata の網羅は ISO と完全一致しない: 例 KR は 17 のうち 15）。国を足したらスクリプトの `COUNTRIES` と `public/countries.js` を揃えて再実行する。
+
+旗・区画名のホバー/タップで、region があれば区画の代表点へ、無ければ国の代表点へ向ける。イベント `mise-fly-country` の `detail` は `{lat, lon, hold, level}`（`level` は `'region'` / `'country'`）。globe.js のカメラ距離は定数: 国 `COUNTRY_DISTANCE = 4.2`、区画 `REGION_DISTANCE = 3.2`（「地球から日本へ」は 1.94）。
+
 「地球から日本へ」も同じ向き計算（`aimAt`）で日本へ寄る。
 
 PCは行・旗のホバー/フォーカスで約300ms静止してから、スマホは旗のタップで、app.js が `mise-fly-country`（`detail: {lat, lon, hold}`）を発火し、globe.js が地球をその国へ向ける。行本体のクリックは従来どおり遷移のみ。ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から4秒無操作で既定の向き・距離へ戻って自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。`prefers-reduced-motion` では滑らかに動かさず即時切替・自動回転なし。

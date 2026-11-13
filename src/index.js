@@ -3,7 +3,7 @@ import { loadCategories, renderIndex, sitemapXml, SITE_ORDER } from './seo.js';
 const app = new Hono();
 app.get('/api/categories', async c => c.json(await loadCategories(c.env.DB)));
 app.get('/api/sites', async c => {
-  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s JOIN site_categories sc ON s.id = sc.site_id ${SITE_ORDER}`).all();
+  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s JOIN site_categories sc ON s.id = sc.site_id ${SITE_ORDER}`).all();
   return c.json(results);
 });
 app.get('/api/activity', async c => {

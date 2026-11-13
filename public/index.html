@@ -23,7 +23,8 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <link rel="stylesheet" href="style.css?v=24">
 <script src="countries.js?v=2" defer></script>
-<script src="app.js?v=24" defer></script>
+<script src="regions.js?v=1" defer></script>
+<script src="app.js?v=25" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込前に押された fly/reset は記録し、globe 起動時に再生する。読込失敗時は操作ボタンを隠す。
 addEventListener("click", e => { const b = e.target.closest && e.target.closest("#fly-japan, #reset-globe"); if (b) window.__misePendingGlobe = b.id; }, true);

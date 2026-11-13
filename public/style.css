@@ -210,10 +210,12 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 @media (max-width: 1199px) { .hud { display: none; } }
 
 /* 国旗: 常時表示の小さな旗。国コードが無いサイトには出さない。 */
-.site-flag { display: inline-block; margin-left: 6px; vertical-align: -2px; line-height: 0; cursor: pointer; }
-.site-flag[hidden] { display: none; }
+.site-place { display: inline-block; margin-left: 6px; vertical-align: -2px; line-height: 0; cursor: pointer; white-space: nowrap; }
+.site-place[hidden] { display: none; }
+.site-flag { display: inline-block; line-height: 0; }
+.site-region { display: inline-block; margin-left: 5px; font-size: 11px; line-height: 13.5px; vertical-align: top; color: #4f7480; }
 .site-flag img { width: 18px; height: 13.5px; display: block; border: 1px solid rgba(0, 0, 0, .25); }
-@media (pointer: coarse) { .site-flag { padding: 8px 6px; margin: -8px 0 -8px 0; } }
+@media (pointer: coarse) { .site-place { padding: 8px 6px; margin: -8px 0 -8px 0; } }
 
 /* #35: 実測適用(index.html の __miseLogo)前は不可視で領域だけ確保。0.8s 後は必ず表示するフォールバック */
 .logo span { opacity: 0; animation: logo-fallback 0s linear .8s forwards; }

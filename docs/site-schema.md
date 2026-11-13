@@ -19,6 +19,7 @@
 | `source_updated_at` | text? | 元サイトの更新日時。確認できた場合のみ記録し、根拠を別途保持する。巡回日時とは別 |
 | `source_updated_evidence_url` | text? | 元サイトの更新日時の出典。日時とともに保存 |
 | `country_code` | text? | サイトの属する国（運営者の所在国）。ISO 3166-1 alpha-2 の大文字2文字、確認できなければ `null`（旗を出さない）。DBはCHECKで形式を縛る（migration 0011）。詳細は下の「運営者の所在国」 |
+| `region_code` | text? | 運営者の所在する県・州（ISO 3166-2 第1階層、例 `JP-13`）。確認できなければ `null`。`country_code` と先頭2文字一致必須（migration 0013）。詳細は下の「運営者の所在区画」 |
 | `last_crawl_attempt_at` | text? | 最後に巡回を試みた日時 |
 | `last_crawled_at` | text? | 最後に取得に成功した日時。初回成功前はnull |
 | `last_crawl_status` | text? | `success` / `failed` / `blocked` 等の結果。具体的な失敗理由と再試行方針は実装時に設計 |
@@ -31,6 +32,10 @@ URL正規化はスキームとホストの小文字化など安全な範囲に�
 ### 運営者の所在国（`sites.country_code`）
 
 一覧の各サイトに国旗を常時表示し、旗のホバー/タップで地球をその国へ向けるための値（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れ、**ドメイン（.jp 等）・言語・ホスティングだけでは決めない**。確認できなければ `null`。根拠は収集JSONの `country_code` / `country_evidence`（`data/collection-batch1.json`）と migration 0011 のコメントに残す。`site_locations` は将来の詳細な場所記録用で、旗の表示には使わない。
+
+### 運営者の所在区画（`sites.region_code`）
+
+県・州まで分かったサイトだけ、旗の右に区画名を出し、地球を区画の代表点へ向けるための値。ISO 3166-2 の第1階層コード（`JP-13` 等）。`country_code` が必須で先頭2文字が一致すること（migration 0013 のCHECK）。判定基準は国と同じく公開情報に明記されたものだけ（サイトの記載、公的機関の公式所在地）で、推測しない。確認できなければ `null`（旗のみ）。根拠は `data/region-evidence.json`（id・region_code・出典URL・根拠・確認日）。区画名・座標の表は `public/regions.js`（生成物。詳細は architecture.md の「区画」）。
 
 ### `site_descriptions` — 紹介文と生成・確認履歴
 
