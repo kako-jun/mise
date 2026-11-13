@@ -14,6 +14,8 @@
 
 1 回の `fetch` は `--limit` で打ち切り、残りは翌日以降に `queued` から引く。`failed` はバックオフ（[pipeline.md](../collection/pipeline.md)）で再試行される。同時に複数起動しない（`flock`）。`var/` は再生成可能なので、バックアップは任意。
 
+再巡回（[recrawl.md](../collection/recrawl.md)）は週 1 程度で `recrawl.py run --limit 50` を回す想定（cron は未登録。`flock` で単独起動）。
+
 官公庁の名簿は月 1 回程度、差分追従を手動で回す（[public-bodies.md](../collection/public-bodies.md#廃止合併新設名称変更url-変更への追従)）。
 
 ## 巡回作法（共通）

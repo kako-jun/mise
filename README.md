@@ -36,6 +36,7 @@ Cloudflare Workers + D1。main へのマージで Workers Builds が自動デプ
 - 3D 表示には同梱の Three.js を使用し、バンドルに表記を残す（[MIT License](public/THREE-LICENSE.txt)）。
 - 国旗: [flag-icons](https://github.com/lipis/flag-icons)（[MIT License](public/licenses/flag-icons-MIT.txt)）。必要な国だけ `public/flags/` に置いている。
 - 区画名（県・州）: 名前・座標は [Wikidata](https://www.wikidata.org/)（CC0）から `scripts/collect-regions.py` で生成した `public/regions.js`。
+- フォント: [Anton](https://github.com/google/fonts/tree/main/ofl/anton)（[SIL OFL](public/licenses/Anton-OFL.txt)、ロゴ）と [Noto Serif](https://github.com/google/fonts/tree/main/ofl/notoserif)（[SIL OFL](public/licenses/NotoSerif-OFL.txt)、発音記号）。使う文字だけにサブセット化して `public/fonts/` に置いている。
 - GitHub アイコン: [GitHub Octicons](https://github.com/primer/octicons)（[MIT License](public/licenses/octicons-MIT.txt)）。
 - 官公庁の名簿は総務省・e-Gov・Wikidata・J-LIS を出典とする（[利用条件](docs/collection/public-bodies.md)）。
 - 参考: [1996年当時のYahoo! JAPANトップページ](https://internet.watch.impress.co.jp/docs/news/755478.html)
