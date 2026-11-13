@@ -42,6 +42,35 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
 
+## 官公庁の名簿（0015・0019）を本番へ適用する手順（Issue #37、PR #71）
+
+**この手順は承認を取ってから実行する。** 0015 は約 1850 件のサイトを追加し、0019 は一覧の並びのインデックスを作り直す。ローカルでの確認結果（件数・ページング・HUD）は PR #71 を見る。順序は **マージ前に migration → 検索用列の埋め直し → マージ（デプロイ）**。0015 の `bulk_import` 列と 0019 のインデックスを、旧 Worker は使わない（旧 Worker は列を見ないので、先に適用しても壊れない。新 Worker は列が無いと 500 になる）。
+
+1. バックアップ（本番とプレビューのそれぞれ。取り直せるよう日付を付ける）:
+   ```sh
+   npx wrangler d1 export mise --remote --output backup-mise-$(date +%Y%m%d).sql
+   npx wrangler d1 export mise-preview --remote --output backup-mise-preview-$(date +%Y%m%d).sql
+   ```
+   バックアップはリポジトリにコミットしない。
+2. 適用（本番 → プレビュー。0015 → 0016〜0018 のうち未適用 → 0019 の順に自動で当たる。事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する）:
+   ```sh
+   npx wrangler d1 migrations apply mise --remote
+   npx wrangler d1 migrations apply mise-preview --remote
+   ```
+3. 検索用列の埋め直し（0015 の INSERT はトリガが ASCII の小文字化だけの暫定値を入れる。全角半角の検索がヒットするよう NFKC に直す）:
+   ```sh
+   node scripts/refresh-search-text.mjs --remote --db mise
+   node scripts/refresh-search-text.mjs --remote --db mise-preview
+   ```
+4. 確認（適用後、マージ前に本番 DB を直接読む）:
+   ```sh
+   npx wrangler d1 execute mise --remote --command "SELECT bulk_import, COUNT(*) FROM sites GROUP BY bulk_import"
+   npx wrangler d1 execute mise --remote --command "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_sites_sort%'"
+   ```
+   期待: `bulk_import=1` が約 1850、インデックスは `idx_sites_sort_9b34c1ec` のみ（旧 `idx_sites_sort_2489145a` は 0019 で DROP 済み）。
+5. マージ後の確認: `/api/scopes` の日本の件数、`/jp/?category=government&category=government-government-agencies` の初回表示、`/api/activity` に台帳分が入っていないこと（HUD の直近登録）。
+6. 戻し方: 0015 の投入分は `DELETE FROM site_tags/site_categories/sites WHERE id LIKE 'pb-%'`（`bulk_import` 列は残ってよい）。全体はバックアップから `d1 execute --file` で戻す前に、影響範囲を確認する。台帳が変わったら `public_bodies_sql.py --since` で差分 migration を足す（[public-bodies.md](../collection/public-bodies.md)）。
+
 ## プレビュービルド（ブランチごと）
 
 Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ダッシュボードで確認済み、2026-11-14: プレビューブランチのビルドも Build コマンドは「なし」、プレビューコマンドは `npx wrangler preview`、ルートディレクトリ `/`。プレビュー URL は現在「無効」で、ビルドは実行されるが URL は有効化するまで作られない）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
