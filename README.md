@@ -25,4 +25,5 @@ npm run dev
 - 参考: [1996年当時のYahoo! JAPANトップページ](https://internet.watch.impress.co.jp/docs/news/755478.html)
 
 - 国旗: [flag-icons](https://github.com/lipis/flag-icons)（[MIT License](public/licenses/flag-icons-MIT.txt)）。必要な国だけ `public/flags/` に置いている。サイト行の旗にカーソルを乗せる（スマホはタップ）と地球がその国へ向く（[国旗と地球の連動](docs/architecture.md#国旗と地球の連動)）。
+- 区画名（県・州）: 名前・座標は [Wikidata](https://www.wikidata.org/)（CC0）から `scripts/collect-regions.py` で生成した `public/regions.js`。
 - GitHubアイコン: [GitHub Octicons](https://github.com/primer/octicons)（[MIT License](public/licenses/octicons-MIT.txt)）。

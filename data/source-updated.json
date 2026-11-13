@@ -1,0 +1,227 @@
+[
+  {
+    "id": "sample-1",
+    "url": "https://llll-ll.com/",
+    "source_updated_at": "2026-06-20",
+    "evidence_url": "https://llll-ll.com/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-2",
+    "url": "https://hn.llll-ll.com/",
+    "source_updated_at": "2026-06-20",
+    "evidence_url": "https://hn.llll-ll.com/rss",
+    "kind": "feed-latest",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-3",
+    "url": "https://3min.llll-ll.com/",
+    "source_updated_at": "2025-12-10",
+    "evidence_url": "https://3min.llll-ll.com/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-4",
+    "url": "https://agasteer.llll-ll.com/",
+    "source_updated_at": "2025-12-10",
+    "evidence_url": "https://agasteer.llll-ll.com/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-5",
+    "url": "https://www.aozora.gr.jp/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-6",
+    "url": "https://www.ndl.go.jp/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: no lastmod",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "sample-7",
+    "url": "https://www.nao.ac.jp/",
+    "source_updated_at": "2026-11-10",
+    "evidence_url": "https://www.nao.ac.jp/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-hyuki",
+    "url": "https://www.hyuki.com/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-kmonos",
+    "url": "https://www.kmonos.net/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-elm-chan",
+    "url": "https://elm-chan.org/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-genbu",
+    "url": "https://www.genbu.net/",
+    "source_updated_at": "2019-09-01",
+    "evidence_url": "https://www.genbu.net/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-kofun-map",
+    "url": "https://kofun.info/",
+    "source_updated_at": "2026-11-13",
+    "evidence_url": "https://kofun.info/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-zukan-bouz",
+    "url": "https://www.zukan-bouz.com/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: Command '['curl', '-s', '-S', '--max-time', '15', '--max-filesize', '1048576', '-A', 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)', '-D', '-', 'https://www.zukan-bouz.com/sitemap.xml']' returned non-zero exit status 63.",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-stellarscenes",
+    "url": "https://stellarscenes.net/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-sora-can",
+    "url": "https://sora-can.com/",
+    "source_updated_at": "2021-12-08",
+    "evidence_url": "https://sora-can.com/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-hoshi-izanai",
+    "url": "https://www.asahi-net.or.jp/~dy7s-ynym/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-elecroom-avr",
+    "url": "https://www.ne.jp/asahi/shared/o-family/ElecRoom/ElecMAIN.htm",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-denshi-muscat",
+    "url": "https://www.zea.jp/audio/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-kyotani-hobby",
+    "url": "http://www.kyotani-hobby.com/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-susutawari",
+    "url": "https://susutawari.org/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-mlum-factory",
+    "url": "https://www.mlum-factory.com/",
+    "source_updated_at": "2026-09-12",
+    "evidence_url": "https://www.mlum-factory.com/sitemap.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-naruken",
+    "url": "http://naruken.cweb.tk/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-hana300",
+    "url": "https://www.hana300.com/",
+    "source_updated_at": null,
+    "evidence_url": null,
+    "kind": null,
+    "reason": "sitemap: HTTP 404",
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-tanken-com",
+    "url": "https://tanken.com/",
+    "source_updated_at": "2026-10-25",
+    "evidence_url": "https://tanken.com/",
+    "kind": "page-text-last-updated",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  },
+  {
+    "id": "collected-arch-hiroshima",
+    "url": "https://arch-hiroshima.net/",
+    "source_updated_at": "2026-11-10",
+    "evidence_url": "https://arch-hiroshima.net/sitemap_index.xml",
+    "kind": "sitemap-lastmod",
+    "reason": null,
+    "checked_at": "2026-11-13T06:25:29+00:00"
+  }
+]
