@@ -1,4 +1,5 @@
-# 広告・アフィリエイト配信ドメイン（接尾辞一致）。取得後の広告タグ数の計算にだけ使う（ホスト名の除外には使わない）。
+# 広告・アフィリエイト配信ドメイン（接尾辞一致）。取得後の広告数の計算にだけ使う（ホスト名の除外には使わない）。
+# 楽天・Yahoo!の通常ページへのリンクは数えない（アフィリエイト用ホスト afl.rakuten.co.jp と広告配信ホストのみ）。
 # 出典: 運用者の一般知識による手作業の編集（主要な広告ネットワーク名のみ。網羅ではない）。
 doubleclick.net
 googlesyndication.com
@@ -11,7 +12,7 @@ valuecommerce.com
 afi-b.com
 accesstrade.net
 moshimo.com
-rakuten.co.jp
+afl.rakuten.co.jp
 linksynergy.com
 microad.jp
 microad.co.jp
@@ -29,5 +30,4 @@ geniee.jp
 ad-stir.com
 ads.yahoo.co.jp
 yads.c.yimg.jp
-yimg.jp
 admax.jp

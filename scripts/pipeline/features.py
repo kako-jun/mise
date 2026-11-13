@@ -49,6 +49,13 @@ class Page(html.parser.HTMLParser):
         elif not self.skip: self.text.append(data)
 
 
+def has_marker(marker, low):
+    """マーカーの一致。英数字のみの語(r18 等)は単語境界つき、日本語は部分一致。"""
+    if re.fullmatch(r'[a-z0-9-]+', marker):
+        return re.search(r'(?<![a-z0-9])' + re.escape(marker) + r'(?![a-z0-9])', low) is not None
+    return marker in low
+
+
 def extract(host, text, headers):
     """HTML文字列と応答ヘッダから特徴 dict を作る。"""
     p = Page()
@@ -72,8 +79,8 @@ def extract(host, text, headers):
         'parking': next((m for m in blocklist('parking_markers.txt')[''] + blocklist('parking_markers.txt')['weak'] if m in low), None),
         'adult_rating': any(re.search(r'adult|mature|rta-5042|restricted', x, re.I) for x in p.rating),
         # 成人向け属性: 単独の語では決めない。強い手がかり(年齢確認・18禁等)1つか、弱い語2種類以上
-        'adult_text': next((m for m in blocklist('adult_markers.txt')['strong'] if m in low), None),
-        'adult_weak': sum(1 for m in blocklist('adult_markers.txt')['weak'] if m in low),
+        'adult_text': next((m for m in blocklist('adult_markers.txt')['strong'] if has_marker(m, low)), None),
+        'adult_weak': sum(1 for m in blocklist('adult_markers.txt')['weak'] if has_marker(m, low)),
     }
     return {
         'title': re.sub(r'\s+', ' ', p.title).strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],

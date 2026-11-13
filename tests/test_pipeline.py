@@ -24,7 +24,7 @@ class Hosts(unittest.TestCase):
 
 class Links(unittest.TestCase):
     def test_non_jp_allowed_for_links(self):
-        self.assertIsNone(hostnames.prefilter('hyuki.com', jp_only=False))
+        self.assertIsNone(hostnames.prefilter('hyuki.jp', jp_only=False))
         self.assertEqual(hostnames.prefilter('foo.github.io', jp_only=False), 'shared_service_user')
         self.assertIsNone(hostnames.prefilter('github.io', jp_only=False))
         self.assertIsNone(hostnames.prefilter('foo.co.uk', jp_only=False))
@@ -94,6 +94,19 @@ class Adult(unittest.TestCase):
         self.assertEqual(features.adult_attr({**two, 'host': 'x.jp'}), 'yes')
         g = features.extract('x.jp', Judge.PAGE, {})
         self.assertEqual(features.adult_attr({**g, 'host': 'x.jp'}), 'unknown')
+
+
+class Markers(unittest.TestCase):
+    def test_word_boundary(self):
+        self.assertTrue(features.has_marker('r18', 'この作品は r18 です'))
+        self.assertFalse(features.has_marker('r18', 'sample-rr18x と abcr18'))
+        self.assertTrue(features.has_marker('年齢確認', 'ここで年齢確認をします'))
+
+    def test_ordinary_links_not_counted_as_ads(self):
+        html = '<html lang=ja><title>t</title><body>' + ''.join(f'<a href="https://item.rakuten.co.jp/s/{i}/">x</a><a href="https://news.yahoo.co.jp/{i}">y</a>' for i in range(6)) + '</body>'
+        self.assertEqual(features.extract('x.jp', html, {})['ad_hits'], 0)
+        html = '<html><body>' + '<a href="https://hb.afl.rakuten.co.jp/x">a</a>' * 3 + '</body>'
+        self.assertEqual(features.extract('x.jp', html, {})['ad_hits'], 3)
 
 
 class Robots(unittest.TestCase):
@@ -208,6 +221,36 @@ class Ledger(unittest.TestCase):
         self.assertEqual(st['a.sharedhost.jp'], 'deferred')       # 同一ドメイン配下が多い=共有サービスとみなす
         self.assertEqual(st['solo.jp'], 'queued')
         self.assertEqual(self.db.execute("SELECT reject_reason FROM frontier WHERE key='a.jugem.jp'").fetchone()[0], 'shared_service_user')
+
+    def test_heuristic_exempts_domains_with_apex_or_links(self):
+        for h in ('a.hyuki.jp', 'b.hyuki.jp', 'c.hyuki.jp', 'hyuki.jp'):          # apex がある → 独立サイトの機能サブドメイン群
+            frontier.add(self.db, hostnames.host_key(h), h, f'https://{h}/', 's')
+        for h in ('a.linked.jp', 'b.linked.jp', 'c.linked.jp'):                        # links 由来を含む
+            frontier.add(self.db, h, h, f'https://{h}/', 'links' if h.startswith('a.') else 's')
+        for h in ('x.sakura-like.jp', 'y.sakura-like.jp', 'z.sakura-like.jp'):         # apex も www も無く配下だけ多数 → 共有サービス
+            frontier.add(self.db, h, h, f'https://{h}/', 's')
+        run.triage(self.db)
+        st = dict(self.db.execute('SELECT key, state FROM frontier').fetchall())
+        self.assertEqual({st[k] for k in ('a.hyuki.jp', 'b.hyuki.jp', 'c.hyuki.jp', 'hyuki.jp')}, {'queued'})
+        self.assertEqual({st[k] for k in ('a.linked.jp', 'b.linked.jp', 'c.linked.jp')}, {'queued'})
+        self.assertEqual({st[k] for k in ('x.sakura-like.jp', 'y.sakura-like.jp', 'z.sakura-like.jp')}, {'deferred'})
+
+    def test_last_error_cleared_on_success(self):
+        frontier.add(self.db, 'a.jp', 'a.jp', 'https://a.jp/', 's', state='queued')
+        self.apply('a.jp', 'dns')
+        self.assertEqual(self.db.execute("SELECT last_error FROM frontier").fetchone()[0], 'dns')
+        feat = features.extract('a.jp', Judge.PAGE, {})
+        self.apply('a.jp', None, 200, feat)
+        self.assertIsNone(self.db.execute("SELECT last_error FROM frontier").fetchone()[0])
+
+    def test_adult_yes_drops_description_and_text_head(self):
+        frontier.add(self.db, 'c.jp', 'c.jp', 'https://c.jp/', 's', state='queued')
+        feat = features.extract('c.jp', '<html lang=ja><title>サークル</title><meta name="description" content="紹介文"><meta name="rating" content="adult"><body>' + 'ここは創作サークルです。' * 30 + '</body>', {})
+        self.apply('c.jp', None, 200, feat)
+        run.judge(self.db)
+        r = self.db.execute('SELECT adult, description, text_head, title, state FROM frontier').fetchone()
+        self.assertEqual((r['adult'], r['description'], r['text_head'], r['state']), ('yes', None, None, 'candidate'))
+        self.assertEqual(r['title'], 'サークル')
 
     def test_old_ledger_gets_deferred_state(self):
         path = pathlib.Path(self.dir.name) / 'old.sqlite'

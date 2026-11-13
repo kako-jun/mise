@@ -33,7 +33,7 @@ mise は個人に限らず、小さな事業者・企業の公式サイト・EC�
 
 `state`: `discovered` → `queued`（取得前を通過）/ `rejected` / `deferred`（共有サービス配下の個人領域）→ 取得後 `fetched`（特徴を抽出済み）/ `failed` / `blocked_by_robots` / `rejected` → `judge` で `candidate` または `rejected`。`judge` は台帳の特徴だけを見るので、閾値や語を変えたら再取得せず再判定できる（`triage --redo` は未取得の取得前除外と保留を引き直す）。
 
-**再取得**: `failed`（DNS・接続・robots 到達不能・5xx・429）は `next_fetch_at` が来たら `fetch` の対象になる。待ちは 1・2・4 日（`BACKOFF_DAYS` × 2^(試行-1)）、試行は通算 3 回（`MAX_ATTEMPTS`）まで。上限に達したら `failed` のまま残す。
+**再取得**: `failed`（DNS・接続・robots 到達不能・5xx・429）は `next_fetch_at` が来たら `fetch` の対象になる。待ちは 1 回目の失敗後 1 日、2 回目の失敗後 2 日（`BACKOFF_DAYS` × 2^(試行-1)）で、3 回目の失敗（通算 `MAX_ATTEMPTS`=3）で打ち止めにして `failed` のまま残す。再取得で成功/確定したら `last_error` は消える。
 
 ## 発見元
 
@@ -45,7 +45,7 @@ mise は個人に限らず、小さな事業者・企業の公式サイト・EC�
 
 ## フィルタ
 
-**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または台帳内で同じ登録ドメイン配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（共有サービスの利用者領域とみなす推定）。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
+**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または、台帳に apex も `www.` も無い（本体がリンクされていない）登録ドメインの配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（`sakura.ne.jp` 型の共有サービスの利用者領域とみなす推定）。apex か `www.` が台帳にある登録ドメイン、および `links`（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群として推定の対象外。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
 
 **取得後（`features.judge`）**: 取得できない/HTTP状態（`http_404` 等。5xx・429 は `failed`）、`noindex`（X-Robots-Tag と meta robots）、`parking_or_default_page`（売却・パーキング・サーバ初期ページ。`Under construction` / `coming soon` などの弱い語は **title に出た時だけ**有効。本文だけに出る場合は無視し、本文が薄ければ `thin_content` が拾う）、`thin_content`（可視テキスト 200 字未満）、`not_japanese`（かな 20 字未満）、`no_title`、`ad_heavy`（広告・アフィリエイト参照が 3 以上かつ「本文 300 字あたり 1 つ以上」＝広告が本文より多い、または 15 以上の量産テンプレ級。広告を載せた個人ブログは通す）。通過したものが `candidate`。語による拒否（会社・法人・成人向け・大手など）は使わない。
 
@@ -56,7 +56,11 @@ mise は個人に限らず、小さな事業者・企業の公式サイト・EC�
 - ホスト別に 1.5 秒待機。ホストごとに1ジョブなので同一ホストへの同時アクセスはなく、全体の並列は 1〜4（`--workers`、既定3）。
 - 本文は先頭 512KB まで、応答待ちは 20 秒まで、リダイレクトは3ホップまで。ポートは 80/443 のみ。
 - ホスト名を解決して全アドレスが公開アドレス（`ipaddress.is_global`）であることを確認し、拒否すれば `ssrf_blocked`。プロキシを使わない環境では検査したIP（IPv4 優先）に `--resolve` で固定して接続する。**プロキシ経由の環境ではプロキシ側が名前解決するため固定はできず、検査は事前のみ**（運用機でプロキシなしにするか、egress を制限する）。
-- 取得物は台帳に保存しない。保存するのは特徴量と本文冒頭 300 字のみ。成人向け(`adult=yes`)と判定したものは本文冒頭も消す。画像・サムネは取得しない（HTML の先頭だけ）。
+- 取得物は台帳に保存しない。保存するのは特徴量と本文冒頭 300 字のみ。成人向け(`adult=yes`)と判定したものは本文冒頭と description も保存しない（残るのは title と属性。title は一覧の識別に必要）。画像・サムネは取得しない（HTML の先頭だけ）。
+
+## 実ネットワークでの未検証事項
+
+次は単体テスト（ネットワークを差し替え）では確認したが、**実ネットワークでは未検証**: `failed` の再取得（バックオフ明けの実取得）、Common Crawl パートの一時ファイル + rename と `--max-filesize`（試験は手元に取得済みのパートを使用）、`triage --redo`（試験台帳の複製への適用のみ）、IPv6 の `--resolve`、プロキシなし環境での IP 固定。
 
 ## 実行方法
 
@@ -87,7 +91,7 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 
 2026-11-13 に実サイトで小規模試験を実施し、基準の訂正後に**取得済みデータから再判定**した（新規アクセスなし）。発見は Common Crawl ホストグラフ（パート37、`.jp` 1,373,242 件中 1/1000 抽出 = 1,347 件）と既掲載サイトの外部リンク（18 シード中 15 を取得、55 件）で、台帳は計 1,402 件。優先度順の 450 ホストを実取得（並列3、ホスト間隔 1.5 秒）。
 
-取得前（1,402 件）: 保留 `deferred` 468（共有サービス配下）、`government` 7、`spam_like_name` 1、残り 926（うち 450 を取得、476 は未取得の `queued`。`.ac.jp` 等の除外撤去で増えた分は未取得）。
+取得前（1,402 件）: 保留 `deferred` 443（登録済みの共有サービス配下 287、推定 156。推定は `sakura.ne.jp`・`softonic.jp`・`shinobi.jp`・`sblo.jp` など実際に共有サービスのものが大半。`hyuki.github.io` は github.io 配下として保留）、`government` 7、`spam_like_name` 1、残り 951（うち 450 を取得、501 は未取得の `queued`。`.ac.jp` 等の除外撤去と、推定の対象外化で戻した分は未取得）。
 
 取得した 450 ホストの結果:
 
@@ -108,7 +112,7 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 - 本文が極端に短い独立サイト（manabumiwa.jp は 54 字）は `thin_content` で落ちる。準備中ページとの区別は本文だけではつかない。取りこぼしの可能性があり、保留にするかは次段の判断。
 - `thin_content` 46 件のうち、トップが JS 描画・フレーム・画像のみの独立サイトを取りこぼしている可能性がある。
 - `adult=yes` は 1 件（mid-track.jp、「18歳未満」）。語の単独一致をやめたため setolaw.jp 型の誤検出は消えたが、「18歳未満」のような強い手がかりも一般サイトに出うる。精度は未検証で、`no` は決定論では出さない。
-- 共有サービス配下の保留 468 件は未取得で、台帳内に同一ドメイン配下のホストが 3 件以上ある推定を含む（誤保留の可能性）。基準は #50。
+- 保留 443 件は未取得。推定 156 件に誤保留が残る可能性がある（直前の版は apex/www が台帳にある独立サイト hyuki.jp・zukan-bouz.com などを誤って保留にしていたため、対象外にして 25 件を戻した）。基準は #50。
 - `dns` 失敗が多い（グラフは「リンクされた」ホスト名であり生存の証明ではない）。`robots_unavailable` 31 件は再試行の対象。
 
 ## 次段の提案

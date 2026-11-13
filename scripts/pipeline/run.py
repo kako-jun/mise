@@ -22,7 +22,7 @@ from hostnames import DEFERRED_REASONS, prefilter, registrable, subdomain_of_reg
 SHARED_SUBDOMAIN_THRESHOLD = 3        # 同じ登録ドメイン配下のサブドメインホストがこれ以上台帳にあれば共有サービスとみなして保留
 
 MAX_ATTEMPTS = 3                      # failed の再試行上限（取得試行の通算）
-BACKOFF_DAYS = 1                      # 再試行までの待ち: 1日 × 2^(試行-1) = 1, 2, 4 日
+BACKOFF_DAYS = 1                      # 再試行までの待ち: 1日 × 2^(試行-1)。1回目の失敗後 1 日、2回目の失敗後 2 日、3回目の失敗で打ち止め
 
 
 def triage(db, redo=False):
@@ -32,7 +32,12 @@ def triage(db, redo=False):
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='rejected' AND last_fetched_at IS NULL")
     if redo:
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred'")
-    fans = collections.Counter(registrable(k) for (k,) in db.execute('SELECT key FROM frontier') if subdomain_of_registrable(k))
+    # 共有サービスの推定: 台帳に apex も www も無く(= 本体がリンクされていない)、配下のホストだけが多数ある登録ドメイン。
+    # apex/www がある登録ドメイン、または links（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群とみなして対象外。
+    keys = [k for (k,) in db.execute('SELECT key FROM frontier')]
+    exempt = {registrable(k) for k in keys if not subdomain_of_registrable(k)}
+    exempt |= {registrable(k) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
+    fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
         reason = prefilter(r['host'], jp_only=r['source'] != 'links')
         if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
@@ -99,6 +104,8 @@ def apply_result(db, o):
         attempts = db.execute('SELECT fetch_attempts FROM frontier WHERE key=?', (o['key'],)).fetchone()[0] + 1
         wait = datetime.timedelta(days=BACKOFF_DAYS * 2 ** (attempts - 1))
         sets['next_fetch_at'] = (datetime.datetime.now(datetime.timezone.utc) + wait).isoformat(timespec='seconds')
+    if state != 'failed':
+        sets['last_error'] = None   # 再取得に成功/確定したら前回のエラーを消す
     sets.update(state=state, reject_reason=reason)
     cols = ', '.join(f'{k}=?' for k in sets)
     db.execute(f'UPDATE frontier SET {cols}, fetch_attempts=fetch_attempts+1 WHERE key=?', (*sets.values(), o['key']))
@@ -110,7 +117,8 @@ def judge(db):
     for r in db.execute("SELECT * FROM frontier WHERE state IN ('fetched','candidate') OR (state='rejected' AND title IS NOT NULL AND last_http_status=200)").fetchall():
         st, reason = features.judge(r)
         adult = features.adult_attr(r)
-        db.execute('UPDATE frontier SET state=?, reject_reason=?, site_kind=?, adult=?, text_head=CASE WHEN ?=\'yes\' THEN NULL ELSE text_head END WHERE key=?', (st, reason, features.site_kind(r['host'], r['title'], r['description']), adult, adult, r['key']))
+        # 成人向け(yes)は本文冒頭と description を保存しない（title と属性だけ残す）
+        db.execute('UPDATE frontier SET state=?, reject_reason=?, site_kind=?, adult=?, text_head=CASE WHEN ?=\'yes\' THEN NULL ELSE text_head END, description=CASE WHEN ?=\'yes\' THEN NULL ELSE description END WHERE key=?', (st, reason, features.site_kind(r['host'], r['title'], r['description']), adult, adult, adult, r['key']))
         n[reason or 'candidate'] += 1
     db.commit()
     return n
