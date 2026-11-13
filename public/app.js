@@ -322,13 +322,14 @@ function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textConte
 $('#request-form').addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.currentTarget, st=$('#req-status'), btn=$('#req-submit');
   const show=(key,state)=>{reqStatus={key,state};renderReqStatus();};
-  btn.disabled=true; show('reqSending','info');
+  if(btn.getAttribute('aria-disabled')==='true') return; // 二重送信ガード(disabled にするとフォーカスが外れて Esc が効かなくなる)
+  btn.setAttribute('aria-disabled','true'); show('reqSending','info');
   try {
     const res=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:f.type.value,url:f.url.value,reason:f.reason.value,website:f.website.value})});
     if(res.ok){ show('reqOk','ok'); f.url.value=''; f.reason.value=''; }
     else { const j=await res.json().catch(()=>({})); show(t('reqErr_'+j.error)?'reqErr_'+j.error:(res.status===429?'reqErr_rate_limited':'reqErr_other'),'error'); }
   } catch(_) { show('reqErr_other','error'); }
-  finally { btn.disabled=false; }
+  finally { btn.removeAttribute('aria-disabled'); }
 });
 // 申請フォームの開閉。開いている間はカテゴリ一覧(パンくず・カテゴリ)を隠す(CSS の .req-open。再描画されても取り残されない)。
 function setRequestOpen(open, focus) {
@@ -337,7 +338,7 @@ function setRequestOpen(open, focus) {
   if(focus) (open?$('#req-type'):link).focus();
 }
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();setRequestOpen($('#recommend').hidden,true);});
-$('#recommend').addEventListener('keydown',e=>{ if(e.key==='Escape' && !$('#recommend').hidden){ e.preventDefault(); setRequestOpen(false,true); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !e.defaultPrevented && !$('#recommend').hidden){ e.preventDefault(); setRequestOpen(false,true); } });
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
 // 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
@@ -413,7 +414,7 @@ async function chooseScope(scope) {
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
   const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
-  renderScopeNav(); renderStats(); applyLanguage();
+  renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage();
   const info=scope==='all' ? null : window.MISE_COUNTRIES?.[scope.toUpperCase()];
   if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:'country'}}));
 }

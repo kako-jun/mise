@@ -6,11 +6,11 @@
 
 - 3 種は同じ「申請」で、1 つのテーブル `requests` と同じ状態遷移（`pending` → `approved` / `rejected`）で扱う。
 - **申請は依頼であって、叶うとは限らない**。画面にもそう書く。承認・却下は管理者が決める。
-- **確認は管理者がサイト自身の公開情報で判断する**。mise にトークン設置などの確認機構は作らない。承認の判断は、サイト自身の公開情報を運営者が確認して行う。申請者の連絡先は集めず、**結果は申請者に通知しない**（不採用でも伝えない。通知機能は作らない）。
+- **確認は管理者（mise の運営者）がサイト自身の公開情報で判断する**。mise にトークン設置などの確認機構は作らない。申請者の連絡先は集めず、**結果は申請者に通知しない**（不採用でも伝えない。通知機能は作らない）。
 - **確認が取れて承認するまで、掲載の状態は何も変えない**（推薦は未掲載のまま、取り下げ・訂正は掲載のまま）。一時非表示にはしない（他人が競合サイトを外す悪用を防ぐため。運営者の保護は、確認を急ぐ運用で担う）。
 - 公開 API は作らない。`POST /api/requests` で受けるだけで、申請の読み出し API は無い。
 - X への自動投稿はしない。
-- robots.txt の Disallow・noindex など運営者が自サイトに出す意思表示は申請ではなく収集時の遵守事項（[discovery-policy.md](../collection/discovery-policy.md)）。
+- robots.txt の Disallow・noindex などサイトの運営者が自サイトに出す意思表示は申請ではなく収集時の遵守事項（[discovery-policy.md](../collection/discovery-policy.md)）。
 
 ## 受付 API
 
@@ -39,7 +39,7 @@ D1 の `requests` で、再送の判定とレート制限を INSERT と同時に
 | 全体（推薦 `add`） | 24 時間に 300 件 |
 | 全体（取り下げ・訂正） | 別枠で 24 時間に 100 件（推薦の洪水で本物の取り下げが止まらないように分ける） |
 
-超えた申請は 429 で保存しない。**全体上限は、大きなアドレス帯（/48 など）を持つ相手に埋められうる**。本物の運営者が 429 になった場合に備え、画面の 429 の文言と画面下に代替窓口を出している: GitHub の Issue（<https://github.com/kako-jun/mise/issues/new?template=removal-request.yml>、テンプレート `.github/ISSUE_TEMPLATE/removal-request.yml`）。Issue は公開されるため、個人情報は書かせず、本人確認は Issue の外（サイトに公開されている運営者の連絡手段）で行う。拒否リスト（`blocked_hosts`）に当たる推薦は、`rejected`・`note='blocklisted'` で記録する。照合は `www.` を無視し、登録ドメイン配下（`blog.example.com` は `example.com` の拒否で止まる）も対象にする（`path_prefix` が空の行）。**パス型の行は、そのホスト自身のパス配下だけに効く**（`ameblo.jp/foo` の拒否は `s.ameblo.jp/foo` のようなサブドメインには効かない。サブドメイン型のサービスは別の行として `host` を入れる）。パスは照合前に畳む（`//foo`・`/foo%2F`・`/foo;x`・`/foo%20`・`/foo.` は `/foo` とみなす。`%2F` は `/`、`;params` と `.`・`..` セグメント、末尾の `.`・空白・`/` を除く）。**自動却下は補助**で、拒否リストへの追加（特にホスト全体の拒否）の承認は人が必ず目で確認する。`path_prefix` を持つ行（パス型のユーザー領域。`ameblo.jp/foo`、`note.com/foo`、`sakura.ne.jp/~bob`）は、そのホスト自身のそのパス配下の推薦だけを止め、サービス全体は止めない。共有ホスティング（`github.io`・`pages.dev`・`blogspot.com` など。一覧は `src/intake.js` の `SHARED_SUFFIXES`）はユーザー領域（`user.github.io`）の完全一致とその配下だけで、親には広げない。取り下げ・訂正は拒否リストにあっても `pending` で記録する。
+超えた申請は 429 で保存しない。**全体上限は、大きなアドレス帯（/48 など）を持つ相手に埋められうる**。本物のサイトの運営者が 429 になっても、代替窓口は設けない（画面は「しばらくしてからもう一度」だけで、GitHub Issue などへは誘導しない）。拒否リスト（`blocked_hosts`）に当たる推薦は、`rejected`・`note='blocklisted'` で記録する。照合は `www.` を無視し、登録ドメイン配下（`blog.example.com` は `example.com` の拒否で止まる）も対象にする（`path_prefix` が空の行）。**パス型の行は、そのホスト自身のパス配下だけに効く**（`ameblo.jp/foo` の拒否は `s.ameblo.jp/foo` のようなサブドメインには効かない。サブドメイン型のサービスは別の行として `host` を入れる）。パスは照合前に畳む（`//foo`・`/foo%2F`・`/foo;x`・`/foo%20`・`/foo.` は `/foo` とみなす。`%2F` は `/`、`;params` と `.`・`..` セグメント、末尾の `.`・空白・`/` を除く）。**自動却下は補助**で、拒否リストへの追加（特にホスト全体の拒否）の承認は人が必ず目で確認する。`path_prefix` を持つ行（パス型のユーザー領域。`ameblo.jp/foo`、`note.com/foo`、`sakura.ne.jp/~bob`）は、そのホスト自身のそのパス配下の推薦だけを止め、サービス全体は止めない。共有ホスティング（`github.io`・`pages.dev`・`blogspot.com` など。一覧は `src/intake.js` の `SHARED_SUFFIXES`）はユーザー領域（`user.github.io`）の完全一致とその配下だけで、親には広げない。取り下げ・訂正は拒否リストにあっても `pending` で記録する。
 
 ## データ
 
@@ -50,7 +50,7 @@ migration `0016_intake.sql`。
 
 ## 個人情報の保持期間
 
-- 申請者の連絡先は集めない（`contact` 列は未使用）。
+- 申請者の連絡先は集めない（`contact` 列は未使用）。`migrations/0016_intake.sql` の `contact` 列コメント（90 日後に NULL）と `note` コメント（blocklisted は連絡先を保存しない）は、連絡先の廃止前の記述で、現在は当てはまらない（適用済みのためファイルは変えない）。
 - 未処理のまま 180 日たった申請は、却下にする。
 - `ip_hash`・`net_hash` は 7 日後に NULL にする。
 - 誤申請・取り消しの窓口は画面に無い。管理者が `rejected`・`note='withdrawn'` にする。
@@ -67,7 +67,7 @@ UPDATE requests SET ip_hash=NULL, net_hash=NULL WHERE (ip_hash IS NOT NULL OR ne
 
 管理画面は無い。`wrangler d1 execute` で行う（本番は `--remote`、ローカルは `--local`）。理由は**利用者の入力**なので、画面やメール本文に貼るときはプレーンテキストとして扱い、記載のリンクを不用意に開かない。
 
-1. 未処理を、同じ対象（比較キー+種別）ごとに束ねて見る。同じ対象への申請が複数あるときは、**誰が本物の運営者かを確認で見分ける**（先に出た申請を信用しない）:
+1. 未処理を、同じ対象（比較キー+種別）ごとに束ねて見る。同じ対象への申請が複数あるときは、**誰が本物のサイトの運営者かを確認で見分ける**（先に出た申請を信用しない）:
 
    ```sh
    npx wrangler d1 execute mise --remote --command "SELECT normalized_key, type, COUNT(*) AS n, group_concat(id) AS ids, MIN(created_at) AS first_at FROM requests WHERE status='pending' GROUP BY normalized_key, type ORDER BY first_at LIMIT 50"
@@ -75,7 +75,7 @@ UPDATE requests SET ip_hash=NULL, net_hash=NULL WHERE (ip_hash IS NOT NULL OR ne
    npx wrangler d1 execute mise --remote --command "SELECT id,type,url,reason,created_at FROM requests WHERE status='pending' AND normalized_key='example.com/blog' ORDER BY created_at"
    ```
 
-2. 確認は**サイト自身の公開情報**（運営者の記載、サイトの内容）を見て運営者が行う。申請者へは連絡しない。確認できない申請は `pending` のまま置くか却下する（掲載の状態は変えない）。
+2. 確認は**サイト自身の公開情報**（サイトの運営者の記載、サイトの内容）を見て管理者が行う。申請者へは連絡しない。確認できない申請は `pending` のまま置くか却下する（掲載の状態は変えない）。
 3. 決定を記録する:
 
    ```sh
@@ -90,7 +90,7 @@ UPDATE requests SET ip_hash=NULL, net_hash=NULL WHERE (ip_hash IS NOT NULL OR ne
    npx wrangler d1 execute mise --remote --command "INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason,request_id) SELECT substr(normalized_key,1,instr(normalized_key||'/','/')-1), CASE WHEN instr(normalized_key,'/')>0 THEN substr(normalized_key,instr(normalized_key,'/')) ELSE '' END, 'removal_request', id FROM requests WHERE id=12 AND type='remove' AND status='pending'; UPDATE requests SET status='approved', decided_at=datetime('now') WHERE id=12 AND type='remove' AND status='pending'"
    # 追加後に対象行を確認する
    npx wrangler d1 execute mise --remote --command "SELECT host,path_prefix,reason,request_id FROM blocked_hosts WHERE request_id=12"
-   # ホスト全体を拒否してよいのは、運営者がそのドメイン全体の所有者と確認できた場合だけ。パス付きの申請(ブログサービスなどのユーザー領域)で
+   # ホスト全体を拒否してよいのは、サイトの運営者がそのドメイン全体の所有者と確認できた場合だけ。パス付きの申請(ブログサービスなどのユーザー領域)で
    # ホスト全体を入れると、そのサービス全体が以後拒否されるので入れない。必要なときだけ手で: INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason,request_id) VALUES ('example.com','','removal_request',12)
    ```
 
