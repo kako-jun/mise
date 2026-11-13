@@ -1,6 +1,5 @@
-// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/design/ui.md).
-export const SITE_ORDER = `ORDER BY (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
 import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
+import { querySites, parsePage, PAGE_SIZE } from './sites.js';
 // 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
 import '../public/countries.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
@@ -18,7 +17,21 @@ export function parseScope(raw) {
   if (raw == null || raw === '' || raw === 'all') return { scope: 'all', cc: null };
   return /^[a-z]{2}$/.test(raw) ? { scope: raw, cc: raw.toUpperCase() } : null;
 }
-export const categoryHref = (path, scope = DEFAULT_SCOPE) => `/${scope}/` + (path.length ? '?' + path.map(id => 'category=' + encodeURIComponent(id)).join('&') : '');
+// page >= 2 のときだけ `page=N` を付ける（1 ページ目の URL は付けない形に正規化）。
+export const categoryHref = (path, scope = DEFAULT_SCOPE, page = 1) => {
+  const qs = [...path.map(id => 'category=' + encodeURIComponent(id)), ...(page > 1 ? ['page=' + page] : [])];
+  return `/${scope}/` + (qs.length ? '?' + qs.join('&') : '');
+};
+// ページ番号リンク（JS なし・クローラ用）。先頭・末尾・現在地の前後 2 ページ + 前へ/次へ。
+function pagerHtml(path, scope, page, pages) {
+  const a = (n, label, rel, cur) => `<a href="${esc(categoryHref(path, scope, n))}"${rel ? ` rel="${rel}"` : ''}${cur ? ' aria-current="page"' : ''}>${label}</a>`;
+  const nums = [...new Set([1, page - 2, page - 1, page, page + 1, page + 2, pages].filter(n => n >= 1 && n <= pages))].sort((x, y) => x - y);
+  let out = page > 1 ? `<span class="pager-prev">${a(page - 1, '‹ Prev', 'prev')}</span> ` : '';
+  let last = 0;
+  for (const n of nums) { if (n - last > 1) out += '… '; out += (n === page ? `<span class="pager-num">${a(n, n, '', true)}</span>` : `<span class="pager-num">${a(n, n)}</span>`) + ' '; last = n; }
+  if (page < pages) out += `<span class="pager-next">${a(page + 1, 'Next ›', 'next')}</span>`;
+  return out;
+}
 
 // サイトが 1 件以上ある国（件数の多い順）と全体の件数。範囲として選べる国 = ここに出る国だけ。
 export async function loadScopes(db) {
@@ -96,6 +109,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
   const isSearch = !!url.searchParams.get('q')?.trim();
+  const page = path.length && !isSearch ? parsePage(url.searchParams.get('page')) : 1;
+  if (page === null) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
   // 範囲ごとに title / description を変える（all は従来どおり）。国は英語名。
   const place = cc ? countryName(cc) : null, inPlace = place && (/^United /.test(place) ? 'the ' : '') + place;
@@ -108,7 +123,6 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     title = `${names.join(' › ')}${place ? ` (${place})` : ''} — MISE`;
     desc = `${names.join(' › ')} on MISE${place ? ` in ${inPlace}` : ''}: ${current.site_count} ${current.site_count === 1 ? 'site' : 'sites'}. Discover independent websites you have yet to find.`;
   }
-  const canonical = ORIGIN + categoryHref(isSearch ? [] : path, scope);
 
   // 本文（JS が起動すると置き換わる）
   const children = categories.filter(x => x.parent_id === (path.at(-1) ?? null));
@@ -122,11 +136,18 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     const sub = path.length ? '' : `<p class="sub">${esc(categories.filter(x => x.parent_id === ch.id).map(x => x.name_en).join(' '))}</p>`;
     return `<div class="category${ch.site_count ? '' : ' is-empty'}"><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2>${sub}</div>`;
   }).join('');
-  let siteItems = '';
+  let siteItems = '', pagerBody = '', pages = 1;
   if (path.length) {
-    const { results } = await c.env.DB.prepare(`SELECT s.name, s.url, s.description_ja, s.description_en, s.country_code, s.region_code FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ?1 AND (?2 IS NULL OR s.country_code = ?2) ${SITE_ORDER}`).bind(path.at(-1), cc).all();
-    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    const { items, total } = await querySites(c.env.DB, { cc, category: path.at(-1), limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+    pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+    siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    if (isSearch) pages = 1; // 検索結果はページ番号なし（noindex。エンドレススクロールのみ）
+    if (pages > 1) pagerBody = pagerHtml(path, scope, page, pages);
   }
+  // ページ番号つきの URL は自己参照の canonical（2 ページ目以降を 1 ページ目に寄せない）。title に「Page N」を添えて区別する。
+  const canonical = ORIGIN + categoryHref(isSearch ? [] : path, scope, page);
+  if (page > 1) { title = `${title.replace(/ — MISE$/, '')} — Page ${page} — MISE`; desc = `${desc} Page ${page} of ${pages}.`; }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
   const html = await assetResponse.clone().text();
@@ -146,7 +167,11 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })
     .on('#sample-label', { element: e => { if (siteItems) e.removeAttribute('hidden'); } })
-    .on('#directory-sites', { element: e => e.setInnerContent(siteItems, { html: true }) });
+    .on('#directory-sites', { element: e => e.setInnerContent(siteItems, { html: true }) })
+    .on('#site-pager', { element: e => { if (pagerBody) { e.setInnerContent(pagerBody, { html: true }); e.removeAttribute('hidden'); } } });
+  // 前後ページの関係（クローラ向け。Google は rel=next/prev を使わないが、他の検索エンジンと意味づけのために出す）
+  const rels = [page > 1 && `<link rel="prev" href="${esc(ORIGIN + categoryHref(path, scope, page - 1))}">`, page < pages && `<link rel="next" href="${esc(ORIGIN + categoryHref(path, scope, page + 1))}">`].filter(Boolean).join('');
+  if (rels) rw.on('head', { element: e => e.append(rels, { html: true }) });
   if (isSearch) rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
 
   const res = rw.transform(new Response(assetResponse.body, assetResponse));
