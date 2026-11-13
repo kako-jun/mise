@@ -27,6 +27,10 @@ Cloudflare Workers + D1 に手動でデプロイしている。手順は [docs/o
 
 設計・収集・運用・決定・構想の入口は **[docs/README.md](docs/README.md)**。実装済みのことと構想（未実装）は分けて書いている。決定記録は [docs/decisions.md](docs/decisions.md)、用語は [docs/glossary.md](docs/glossary.md)。
 
+## ライセンス
+
+このリポジトリ自体のライセンスは未決（権利者が決める）。
+
 ## 同梱・利用している素材
 
 - 3D 表示には同梱の Three.js を使用し、バンドルに表記を残す（[MIT License](public/THREE-LICENSE.txt)）。
