@@ -15,7 +15,7 @@
 npm install
 npm run db:migrate   # ローカル D1 に migrations を適用（--local）
 npm run dev          # wrangler dev --local
-npm run check        # node --check による構文確認
+npm run check        # 構文確認（node --check）+ API ヘッダ自己検査
 npm run build:globe  # src/client/globe.js から public/globe.js を生成
 ```
 
@@ -23,12 +23,13 @@ npm run build:globe  # src/client/globe.js から public/globe.js を生成
 
 ## 本番へのデプロイ
 
-手動で行う。順序は、**マイグレーション適用 → デプロイ**。
+main へのマージで Workers Builds が本番へ自動デプロイする。migration は自動適用されないため、**マージ前に**手動で本番へ適用する（順序は、**migration 適用 → マージ**）。スキーマは旧 Worker でも動く後方互換の形にする。
 
 ```sh
-npx wrangler d1 migrations apply mise --remote
-npx wrangler deploy
+npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 ```
+
+手動での再デプロイや緊急時は `npx wrangler deploy` を使う。
 
 - 本番 DB への適用は取り返しがつかないため、migration の内容とローカルでの確認結果を見てから行う。スキーマ変更は、適用後も旧 Worker が動き続けられる後方互換の形にする。
 - 適用済みの migration は書き換えない。データの修正は新しい番号の migration で行う。番号は他の作業と衝突しないよう、最新を確認してから振る。
@@ -37,7 +38,7 @@ npx wrangler deploy
 
 ## プレビュービルド（ブランチごと）
 
-Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
+Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ビルドログ由来の情報で、現在の Build / Deploy コマンドの設定値は未確認）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
 
 - `previews.d1_databases` で、プレビューの `DB` バインディングを**プレビュー専用の D1 `mise-preview`**（`database_id` は `wrangler.jsonc` 参照）に向ける。**本番 DB `mise` をプレビューから触らせない**ため（ブランチの未レビューのコードが本番データを読み書き・破壊しないように）。静的ファイル（`assets`）はトップレベルの設定が使われる。
 - `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）:
@@ -72,6 +73,7 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 ## 未整備
 
-- Workers Builds による GitHub 連携の自動デプロイは、2026-11-13 時点で未設定（Cloudflare ダッシュボードの OAuth が必要）。自動化するなら「マイグレーション適用に成功した場合だけデプロイ」の順序、トークンの最小権限、失敗時に旧 Worker が動き続ける条件を先に決める（Issue #7）。
+- Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ただし Build / Deploy コマンドの正確な設定値はダッシュボードで未確認。
+- migration は自動適用されない。新しい migration を含む PR を main にマージすると、スキーマが旧いまま新 Worker が本番に出る恐れがある。**先に本番へ migration を適用してから、その後マージする**（後方互換の形にする。上の「本番へのデプロイ」参照）。
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。
