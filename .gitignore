@@ -1,7 +1,7 @@
 /node_modules
 node_modules/
 .wrangler/
-
+/var/
 __pycache__/
 *.pyc
 var/

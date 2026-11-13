@@ -21,6 +21,8 @@ npm run dev
 - [構想と技術方針](docs/architecture.md)
 - [サイトレコードの設計案](docs/site-schema.md)
 - [サムネイル撮影の設計と試験](docs/thumbnails.md)
+- [独立サイトの発見パイプライン](docs/independent-sites-pipeline.md)（frontier台帳・決定論フィルタ・実行方法）
+- [官公庁・自治体の名簿（公式サイト台帳）](docs/public-bodies.md)
 - 3D表示には同梱の Three.js を使用し、バンドルに表記を残す（[MIT License](public/THREE-LICENSE.txt)）
 - 参考: [1996年当時のYahoo! JAPANトップページ](https://internet.watch.impress.co.jp/docs/news/755478.html)
 
