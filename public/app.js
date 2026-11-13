@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 let categories = [], sites = [], currentPath = [], currentSearch = null, pickedIds = [], pickIndex = 0, picksVisible = false, picksHovered = false, activityStats = null;
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
-let language = storage.get('mise-language') === 'en' ? 'en' : 'ja';
+let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
   ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' },
@@ -12,9 +12,13 @@ const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
 const activity = [];
 function logActivity(message) { activity.unshift(message); activity.splice(4); renderLog(); }
 function renderLog() { $('#activity-entries').replaceChildren(...(activity.length ? activity : [t('idle')]).map(entry => { const line=document.createElement('div'); line.textContent=activity.length ? `> ${entry}` : entry; return line; })); }
+function updateTitle() {
+  const cur = currentPath.map(id => categories.find(x => x.id === id)).filter(Boolean);
+  document.title = cur.length ? `${cur.map(name).join(' › ')} — MISE` : `MISE — ${t('tagline')}`;
+}
 function applyLanguage() {
   document.documentElement.lang = language;
-  document.title = `MISE — ${t('tagline')}`;
+  updateTitle();
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
   updateExternalToggle();
@@ -107,7 +111,7 @@ function renderSite(target, site, showCategories=false) {
   target.append(li);
 }
 function showDirectory(path, updateHistory=true) {
-  currentPath=path; currentSearch=null; $('#directory').hidden=false; $('#results').hidden=true;
+  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
   if(path.length) {
@@ -153,13 +157,15 @@ $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(curren
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
 function restoreLocation() {
+  const q=new URLSearchParams(location.search).get('q');
+  if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
   if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));
   showDirectory(path,false);
 }
 window.addEventListener('popstate',restoreLocation);
-Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{$('#directory').textContent=t('error');});
+Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error');});
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{const l=[...document.querySelectorAll('.logo span')];if(l.length<4)return;const m=l[0].offsetWidth,s=l[2].offsetWidth;if(!m||!s)return;const sc=[1.5,1,1.5*m/s,1],gap=8;l.forEach((e,k)=>{const x=(sc[k]-1)*e.offsetWidth/2+gap/2;e.style.transform=`scaleX(${sc[k]})`;e.style.margin=`0 ${x}px`;});});
