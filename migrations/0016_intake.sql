@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS requests (
   reason TEXT,                  -- 理由・訂正内容(最大 1000 字、プレーンテキスト)
   contact TEXT,                 -- 連絡先(メールまたは https URL)。決定の 90 日後に NULL にする
   ip_hash TEXT,                 -- レート制限用の IP ハッシュ(IPv6 は /64)。生 IP は保存しない。7 日後に NULL にする
-  net_hash TEXT,                -- 同 /48(IPv6)の緩い上限用。IPv4 は ip_hash と同じ。7 日後に NULL にする
+  net_hash TEXT,                -- 同 /48(IPv6)の緩い上限用。IPv4 は ip_hash と同じ。7 日後に NULL にする。索引は不要(全体上限が 1 日 400 件・掃除で古い行は片付くため表が小さく、全件走査で足りる)
   note TEXT,                    -- 管理者メモ(blocklisted など)。blocklisted の自動却下は連絡先を保存しない
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   decided_at TEXT

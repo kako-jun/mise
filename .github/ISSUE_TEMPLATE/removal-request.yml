@@ -1,7 +1,6 @@
-name: 取り下げ・訂正の依頼 / Removal or correction request
+name: 申請(推薦・取り下げ・訂正) / Request (add, remove or correct)
 description: 掲載の取り下げ・訂正を依頼する(サイトの申請フォームが使えないとき) / Ask to remove or correct a listing (when the on-site form is unavailable)
-title: "取り下げ依頼: (サイトの URL)"
-labels: ["request"]
+title: "申請: (サイトの URL)"
 body:
   - type: markdown
     attributes:

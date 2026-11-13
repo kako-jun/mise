@@ -4,16 +4,33 @@ export const TYPES = ['add', 'remove', 'correct'];
 export const LIMITS = { body: 8192, url: 500, reason: 1000, contact: 200, perHour: 3, perDay: 10, netPerDay: 30, addPerDay: 300, otherPerDay: 100 };
 
 // 共有ホスティング(ユーザーごとのサブドメイン)。拒否リストはここでは完全一致(+その配下)だけで、親(github.io 等)には広げない。
-export const SHARED_SUFFIXES = ['github.io', 'gitlab.io', 'pages.dev', 'netlify.app', 'vercel.app', 'workers.dev', 'blogspot.com', 'wordpress.com', 'tumblr.com', 'web.app', 'firebaseapp.com', 'herokuapp.com', 'fc2.com', 'hatenablog.com', 'hatenadiary.jp', 'wixsite.com', 'weebly.com', 'sakura.ne.jp', 'neocities.org', 'glitch.me'];
+export const SHARED_SUFFIXES = ['github.io', 'gitlab.io', 'pages.dev', 'netlify.app', 'vercel.app', 'workers.dev', 'blogspot.com', 'hateblo.jp', 'hatenablog.jp', 'hatenadiary.com', 'hatenadiary.org', 'jimdofree.com', 'seesaa.net', 'livedoor.blog', 'blog.jp', 'jugem.jp', 'exblog.jp', 'wordpress.com', 'tumblr.com', 'web.app', 'firebaseapp.com', 'herokuapp.com', 'fc2.com', 'hatenablog.com', 'hatenadiary.jp', 'wixsite.com', 'weebly.com', 'sakura.ne.jp', 'neocities.org', 'glitch.me'];
 
-// 制御文字(C0/C1)・双方向制御文字を除いてトリムする。
-const clean = s => String(s ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f​-‏⁠﻿‪-‮⁦-⁩]/g, '').trim();
+const STRIP = [[0, 8], [0xb, 0xc], [0xe, 0x1f], [0x7f, 0x9f], [0xad, 0xad], [0x61c, 0x61c], [0x180e, 0x180e], [0x200b, 0x200f], [0x202a, 0x202e], [0x2060, 0x2064], [0x2066, 0x2069], [0xfeff, 0xfeff]];
+const STRIP_RE = new RegExp(`[${STRIP.map(([a, b]) => String.fromCharCode(a) + (b > a ? `-${String.fromCharCode(b)}` : '')).join('')}]`, 'g');
+const clean = s => String(s ?? '').replace(STRIP_RE, '').trim();
 
 const isIp = h => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || h.includes(':') || /^\[/.test(h) || /^0x/i.test(h) || /^\d+$/.test(h);
 
 // RFC 3986 の unreserved(A-Za-z0-9-._~)の %XX を復号する(%7E と ~ を同一視)。それ以外の %XX は大文字に揃える。
 export function decodeUnreserved(s) {
   return s.replace(/%([0-9a-f]{2})/gi, (m, h) => { const c = String.fromCharCode(parseInt(h, 16)); return /[A-Za-z0-9\-._~]/.test(c) ? c : `%${h.toUpperCase()}`; });
+}
+
+// 拒否リスト照合・比較キー用のパス。すり抜け防止のため、%2F を / に、%20 を空白に、連続 / を 1 つに畳み、
+// セグメントの ;params と . / .. セグメントを除き、末尾の . 空白 / を落とす(`//foo` `/foo%2F` `/foo;x` `/foo%20` `/foo.` を `/foo` とみなす)。
+export function matchPath(path) {
+  const d = decodeUnreserved(path).replace(/%2f/gi, '/').replace(/%20/g, ' ').replace(/%5c/gi, '/');
+  const out = [];
+  for (const seg0 of d.split('/')) {
+    const seg = seg0.replace(/;.*$/, '');
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { out.pop(); continue; }
+    out.push(seg);
+  }
+  let p = out.length ? `/${out.join('/')}` : '';
+  p = p.replace(/[.\s/]+$/, '');
+  return p.toLowerCase();
 }
 
 // 戻り値: { ok, url, host, path, key } | { ok:false, error }。key は比較キー(スキーム・www.・末尾スラッシュ・大文字小文字を同一視)。
@@ -30,7 +47,7 @@ export function normalizeUrl(input) {
   if (isIp(host) || host === 'localhost' || !host.includes('.') || !/^[a-z0-9.-]+$/.test(host)) return { ok: false, error: 'invalid_url' };
   if (/\.(local|localhost|internal|lan|home|test|invalid|example)$/.test(host) || host.endsWith('.arpa')) return { ok: false, error: 'invalid_url' };
   const path = u.pathname.replace(/\/+$/, '');
-  const kpath = decodeUnreserved(path).toLowerCase();
+  const kpath = matchPath(path);
   return { ok: true, url: `${u.protocol}//${host}${path}`, host, path: kpath, key: `${host.replace(/^www\./, '')}${kpath}` };
 }
 
@@ -61,7 +78,7 @@ export function normalizeContact(input) {
   if (!c || c.length > LIMITS.contact) return null;
   if (EMAIL.test(c)) return c;
   if (/[<>"'\s]/.test(c) || !/^https:\/\//i.test(c) || !normalizeUrl(c).ok) return null;
-  try { return new URL(c).href; } catch { return null; }
+  try { const h = new URL(c).href; return h.length > LIMITS.contact ? null : h; } catch { return null; }
 }
 
 // body: 任意のパース済みJSON。戻り値 { ok, value:{type,url,host,path,key,reason,contact} } | { ok:false, error }
@@ -82,8 +99,8 @@ export function validateRequest(body) {
 
 // IPv4 射影アドレス(::ffff:a.b.c.d / ::ffff:xxxx:xxxx)は IPv4 にする。
 function mapped(ip) {
-  let m = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip); if (m) return m[1];
-  m = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
+  let m = /^(?:::|(?:0{1,4}:){5})ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip); if (m) return m[1];
+  m = /^(?:::|(?:0{1,4}:){5})ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ip);
   if (m) { const a = parseInt(m[1], 16), b = parseInt(m[2], 16); return `${a >> 8}.${a & 255}.${b >> 8}.${b & 255}`; }
   return ip;
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, normalizeContact, validateRequest, ipHash, ipPrefix, blockCandidates, isBlocked, decodeUnreserved, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
+import { normalizeUrl, normalizeContact, validateRequest, ipHash, ipPrefix, blockCandidates, isBlocked, matchPath, decodeUnreserved, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
 
 test('normalizeUrl: 正規化', () => {
   assert.deepEqual(normalizeUrl('Example.COM/foo/?a=1#x'), { ok: true, url: 'https://example.com/foo', host: 'example.com', path: '/foo', key: 'example.com/foo' });
@@ -164,4 +164,26 @@ test('receiveRequest: パス型の拒否はそのパス配下だけ rejected', a
 test('receiveRequest: 重複判定は連絡先も含む(連絡先違いは別行)', async () => {
   const d = fakeDb(); await receiveRequest(ctx(good, d));
   assert.match(ins(d).sql, /contact IS \?7 AND status='pending'/);
+});
+
+test('パス型の拒否のすり抜け(//foo, %2F, ;x, %20, 末尾.)を畳んで防ぐ', () => {
+  const rows = [{ host: 'ameblo.jp', path_prefix: '/foo' }];
+  for (const u of ['https://ameblo.jp//foo', 'https://ameblo.jp/foo%2fbar', 'https://ameblo.jp/foo%2F', 'https://ameblo.jp/foo;x', 'https://ameblo.jp/foo%20', 'https://ameblo.jp/foo.', 'https://ameblo.jp/foo/./bar', 'https://ameblo.jp/x/../foo/y', 'https://ameblo.jp/%2e/foo', 'https://ameblo.jp/foo/;a/b', 'https://ameblo.jp/FOO/']) {
+    const n = normalizeUrl(u);
+    assert.equal(isBlocked(rows, n.host, n.path), true, u);
+  }
+  for (const u of ['https://ameblo.jp/foobar', 'https://ameblo.jp/bar/foo', 'https://s.ameblo.jp/foo']) {
+    const n = normalizeUrl(u);
+    assert.equal(isBlocked(rows, n.host, n.path), false, u);
+  }
+  assert.equal(matchPath('/a%2Fb;x/c.'), '/a/b/c');
+  assert.equal(normalizeUrl('https://ameblo.jp//foo/').key, normalizeUrl('https://ameblo.jp/foo').key);
+});
+test('共有ホスティングの追加分と見えない文字・連絡先の長さ・長い ::ffff:', () => {
+  for (const h of ['x.hateblo.jp', 'x.jugem.jp', 'x.exblog.jp', 'x.seesaa.net', 'x.hatenadiary.org']) assert.deepEqual(blockCandidates(h), [h], h);
+  for (const ch of ['\u00ad', '\u061c', '\u180e', '\u2061', '\u2064', '\u200b', '\ufeff']) assert.equal(normalizeUrl(`exa${ch}mple.com`).url, 'https://example.com');
+  assert.equal(normalizeContact('https://example.com/' + 'a'.repeat(170)), 'https://example.com/' + 'a'.repeat(170));
+  assert.equal(normalizeContact('https://example.com/' + 'a'.repeat(150) + '\u00e9'.repeat(9)), null); // 文字数 200 以内でも href(%エンコード)が 200 を超える
+  assert.equal(ipPrefix('0:0:0:0:0:ffff:203.0.113.9'), '203.0.113.9');
+  assert.equal(ipPrefix('0000:0:0:0:0:ffff:cb00:7109'), '203.0.113.9');
 });

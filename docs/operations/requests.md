@@ -39,13 +39,13 @@ D1 の `requests` で、再送の判定とレート制限を INSERT と同時に
 | 全体（推薦 `add`） | 24 時間に 300 件 |
 | 全体（取り下げ・訂正） | 別枠で 24 時間に 100 件（推薦の洪水で本物の取り下げが止まらないように分ける） |
 
-超えた申請は 429 で保存しない。**全体上限は、大きなアドレス帯（/48 など）を持つ相手に埋められうる**。本物の運営者が 429 になった場合に備え、画面の 429 の文言と画面下に代替窓口を出している: GitHub の Issue（<https://github.com/kako-jun/mise/issues/new?template=removal-request.yml>、テンプレート `.github/ISSUE_TEMPLATE/removal-request.yml`）。Issue は公開されるため、個人情報は書かせず、本人確認は Issue の外（サイトに公開されている運営者の連絡手段）で行う。拒否リスト（`blocked_hosts`）に当たる推薦は、`rejected`・`note='blocklisted'` で記録し、**連絡先は保存しない**。照合は `www.` を無視し、登録ドメイン配下（`blog.example.com` は `example.com` の拒否で止まる）も対象にする（`path_prefix` が空の行）。`path_prefix` を持つ行（パス型のユーザー領域。`ameblo.jp/foo`、`note.com/foo`、`sakura.ne.jp/~bob`）は、そのホスト自身のそのパス配下の推薦だけを止め、サービス全体は止めない。共有ホスティング（`github.io`・`pages.dev`・`blogspot.com` など。一覧は `src/intake.js` の `SHARED_SUFFIXES`）はユーザー領域（`user.github.io`）の完全一致とその配下だけで、親には広げない。取り下げ・訂正は拒否リストにあっても `pending` で記録する。
+超えた申請は 429 で保存しない。**全体上限は、大きなアドレス帯（/48 など）を持つ相手に埋められうる**。本物の運営者が 429 になった場合に備え、画面の 429 の文言と画面下に代替窓口を出している: GitHub の Issue（<https://github.com/kako-jun/mise/issues/new?template=removal-request.yml>、テンプレート `.github/ISSUE_TEMPLATE/removal-request.yml`）。Issue は公開されるため、個人情報は書かせず、本人確認は Issue の外（サイトに公開されている運営者の連絡手段）で行う。拒否リスト（`blocked_hosts`）に当たる推薦は、`rejected`・`note='blocklisted'` で記録し、**連絡先は保存しない**。照合は `www.` を無視し、登録ドメイン配下（`blog.example.com` は `example.com` の拒否で止まる）も対象にする（`path_prefix` が空の行）。**パス型の行は、そのホスト自身のパス配下だけに効く**（`ameblo.jp/foo` の拒否は `s.ameblo.jp/foo` のようなサブドメインには効かない。サブドメイン型のサービスは別の行として `host` を入れる）。パスは照合前に畳む（`//foo`・`/foo%2F`・`/foo;x`・`/foo%20`・`/foo.` は `/foo` とみなす。`%2F` は `/`、`;params` と `.`・`..` セグメント、末尾の `.`・空白・`/` を除く）。**自動却下は補助**で、拒否リストへの追加（特にホスト全体の拒否）の承認は人が必ず目で確認する。`path_prefix` を持つ行（パス型のユーザー領域。`ameblo.jp/foo`、`note.com/foo`、`sakura.ne.jp/~bob`）は、そのホスト自身のそのパス配下の推薦だけを止め、サービス全体は止めない。共有ホスティング（`github.io`・`pages.dev`・`blogspot.com` など。一覧は `src/intake.js` の `SHARED_SUFFIXES`）はユーザー領域（`user.github.io`）の完全一致とその配下だけで、親には広げない。取り下げ・訂正は拒否リストにあっても `pending` で記録する。
 
 ## データ
 
 migration `0016_intake.sql`。
 
-- `requests`: `type`, `status`, `url`, `host`, `normalized_key`, `reason`, `contact`, `ip_hash`（NULL 可）, `note`, `created_at`, `decided_at`。
+- `requests`: `type`, `status`, `url`, `host`, `normalized_key`, `reason`, `contact`, `ip_hash`（NULL 可）, `net_hash`（NULL 可。IPv6 /48 単位のハッシュ）, `note`, `created_at`, `decided_at`。
 - `blocked_hosts`: `host` + `path_prefix`（主キー。`''` はホスト全体、それ以外は小文字・先頭 `/`・末尾 `/` なしのパス配下だけ）, `reason`（`removal_request` / `robots` / `noindex` / `manual`）, `request_id`, `created_at`。取り下げを承認した、または robots/noindex で外したホストを入れる。巡回・推薦で再追加しないための台帳。
 
 ## 個人情報（連絡先）の保持期間
@@ -82,10 +82,15 @@ UPDATE requests SET ip_hash=NULL, net_hash=NULL WHERE (ip_hash IS NOT NULL OR ne
    ```sh
    # 却下
    npx wrangler d1 execute mise --remote --command "UPDATE requests SET status='rejected', note='not verified', decided_at=datetime('now') WHERE id=12"
-   # 承認（取り下げ）: 記録 + 拒否リスト。サイトの削除は別途（下）。同じ対象の他の未処理は、確認結果に応じて別途 rejected にする
+   # 承認（取り下げ）: まず対象を確認する(1 行だけ・type='remove'・pending であること。申請 URL と連絡先を目で見る)
+   npx wrangler d1 execute mise --remote --command "SELECT id,type,status,url,normalized_key,contact FROM requests WHERE id=12 AND type='remove' AND status='pending'"
+   # 記録 + 拒否リスト。サイトの削除は別途（下）。同じ対象の他の未処理は、確認結果に応じて別途 rejected にする
    # 拒否リストへは、申請の対象の範囲だけを入れる: 申請 URL にパスがあれば path_prefix つき(そのパス配下だけ)、ホストだけならホスト全体。
-   # host は小文字・www. なし、path_prefix は小文字・先頭 / ・末尾 / なし(normalized_key から切り出す)
-   npx wrangler d1 execute mise --remote --command "UPDATE requests SET status='approved', decided_at=datetime('now') WHERE id=12; INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason,request_id) SELECT substr(normalized_key,1,instr(normalized_key||'/','/')-1), CASE WHEN instr(normalized_key,'/')>0 THEN substr(normalized_key,instr(normalized_key,'/')) ELSE '' END, 'removal_request', id FROM requests WHERE id=12"
+   # host は小文字・www. なし、path_prefix は小文字・先頭 / ・末尾 / なし(normalized_key から切り出す)。
+   # INSERT を先に、UPDATE を後に(UPDATE で pending で無くなると INSERT が空振りするため)。どちらも type='remove' AND status='pending' で歯止め
+   npx wrangler d1 execute mise --remote --command "INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason,request_id) SELECT substr(normalized_key,1,instr(normalized_key||'/','/')-1), CASE WHEN instr(normalized_key,'/')>0 THEN substr(normalized_key,instr(normalized_key,'/')) ELSE '' END, 'removal_request', id FROM requests WHERE id=12 AND type='remove' AND status='pending'; UPDATE requests SET status='approved', decided_at=datetime('now') WHERE id=12 AND type='remove' AND status='pending'"
+   # 追加後に対象行を確認する
+   npx wrangler d1 execute mise --remote --command "SELECT host,path_prefix,reason,request_id FROM blocked_hosts WHERE request_id=12"
    # ホスト全体を拒否してよいのは、運営者がそのドメイン全体の所有者と確認できた場合だけ。パス付きの申請(ブログサービスなどのユーザー領域)で
    # ホスト全体を入れると、そのサービス全体が以後拒否されるので入れない。必要なときだけ手で: INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason,request_id) VALUES ('example.com','','removal_request',12)
    ```
