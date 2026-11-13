@@ -150,7 +150,7 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 .search-row { margin-bottom: 3px; }
 .recommend-row { margin: 0 0 18px; font-size: 12px; }
 .logo span:first-child { transform: scaleX(1.5); margin-left: 8px; margin-right: 12px; }
-.logo span:nth-child(3) { transform: scaleX(1.5); margin-left: 6px; margin-right: 8px; }
+.logo span:nth-child(3) { transform: scaleX(1.5); margin-left: 8px; margin-right: 12px; }
 .logo span { background-image: linear-gradient(135deg, #202831 0 30%, #b9460e 31% 57%, #8a5a37 58% 72%, #202831 73%); }
 html[data-theme="dark"] .logo span { background-image: linear-gradient(135deg, #e6e2da 0 30%, #ff9a55 31% 57%, #aa8067 58% 72%, #e6e2da 73%); }
 .logo-caption { font-weight: 400; }
