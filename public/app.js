@@ -116,7 +116,10 @@ function countryFlag(site) {
   if(region) { const name=document.createElement('span'); name.className='site-region'; name.textContent=language==='ja'?region.ja:region.en; wrap.append(name); }
   return wrap;
 }
-// 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗のタップ。行本体のクリックは従来どおり遷移のみ。
+// 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗または行（リンク以外）のタップ。リンクのクリックは従来どおり遷移のみ。
+// 世界全体の見え方へ戻す（ロゴ・トップ・範囲 all）。一覧を描き直すときはホールドも解く（消えた行から pointerleave/focusout が来ないため）。
+const resetGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-reset'));
+const releaseGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-release'));
 const HOVER_DELAY_MS=300;
 // 区画（県・州）が分かるサイトは区画の代表点（国より近い距離）、無ければ国の代表点。
 function flyToPlace(site,hold) {
@@ -136,6 +139,8 @@ function bindGlobeHover(row,flag,site) {
   row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
   // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
   flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToPlace(site,false); });
+  // スマホ: 行のリンク・旗以外（説明文・メタ情報・余白）のタップでも所在地へ。click はスクロール/スワイプでは出ない。タイトルのリンクは遷移を妨げない。
+  row.addEventListener('click',e=>{ if(e.pointerType!=='touch' || e.target.closest('a, button, .site-place')) return; clearTimeout(timer); flown=false; flyToPlace(site,false); });
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
@@ -173,11 +178,11 @@ function renderSite(target, site, showCategories=false) {
   target.append(li);
 }
 function showDirectory(path, updateHistory=true) {
-  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
+  releaseGlobe(); currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
   if(path.length) {
-    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);}));
+    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
@@ -204,7 +209,7 @@ setInterval(()=>{
   renderPick();
 },8000);
 function showResults(query) {
-  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
+  releaseGlobe(); currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
   const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
   $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
 }
@@ -218,7 +223,7 @@ $('#query').addEventListener('compositionend',()=>{composing=false;updateSearch(
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearch();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);});
-$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
+$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
@@ -291,6 +296,7 @@ async function chooseScope(scope) {
   renderScopeNav(); renderStats(); applyLanguage();
   const info=scope==='all' ? null : window.MISE_COUNTRIES?.[scope.toUpperCase()];
   if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:'country'}}));
+  else resetGlobe();
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。
 window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code||''); if(scopes.countries.some(r=>r.code===code)) chooseScope(code.toLowerCase()); });

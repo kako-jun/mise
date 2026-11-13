@@ -53,7 +53,7 @@
 
 ### 連動の挙動
 
-- PC は行・旗のホバー/フォーカスで約 300ms 静止してから、スマホは旗のタップで、`app.js` がイベント `mise-fly-country`（`detail: {lat, lon, hold, level}`、`level` は `'region'` / `'country'`）を発火し、`globe.js` が地球をその国・区画へ向ける。region があれば区画の代表点へ、無ければ国の代表点へ。行本体のクリックは従来どおり遷移のみ。
-- ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から 4 秒無操作で既定の向き・距離へ戻り、自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。
+- PC は行・旗のホバー/フォーカスで約 300ms 静止してから、スマホは旗、または行のリンク以外（説明文・メタ情報・余白）のタップ（`click` のみ。スクロール/スワイプでは出ない）で、`app.js` がイベント `mise-fly-country`（`detail: {lat, lon, hold, level}`、`level` は `'region'` / `'country'`）を発火し、`globe.js` が地球をその国・区画へ向ける。region があれば区画の代表点へ、無ければ国の代表点へ。タイトルのリンクのタップは通常の遷移のみで、地球は動かさない。
+- ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から 4 秒無操作で既定の向き・距離へ戻り、自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。ロゴ・「トップ」パンくず・範囲を `all` に切り替えたときは `mise-fly-reset` で待たずに既定の向き・距離（世界全体）へ戻し（国別範囲は従来どおり、その国へ向ける）、一覧を描き直すときは `mise-fly-release` でホールドも解く（消えた行からは pointerleave/focusout が来ないため）。`#globe-background` の `data-distance` / `data-target` / `data-peek` は計測用の読み取り表示。
 - カメラ距離は `globe.js` の定数: 国 `COUNTRY_DISTANCE = 4.2`、区画 `REGION_DISTANCE = 3.2`。向きは `aimAt` で求める。
 - `prefers-reduced-motion` では滑らかに動かさず即時切替・自動回転なし。
