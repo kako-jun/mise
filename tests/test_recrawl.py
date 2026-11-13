@@ -67,12 +67,27 @@ class AllDown(Handler):
         self.send(503, 'down')
 
 
+class RobotsDown(Handler):
+    pages = []
+
+    def do_GET(self):
+        if self.path == '/robots.txt':
+            return self.send(503, 'down')
+        RobotsDown.pages.append(self.path)
+        self.send(302, '', {'Location': '/ok'})
+
+
 class Sold(Handler):
     def do_GET(self):
         self.send(301, '', {'Location': 'http://sold-domain.example/'})
 
 
 class Local(unittest.TestCase):
+    @staticmethod
+    def _free_port():
+        s = socket.socket(); s.bind(('127.0.0.1', 0)); p = s.getsockname()[1]; s.close()
+        return p
+
     @classmethod
     def setUpClass(cls):
         def serve(h):
@@ -80,14 +95,15 @@ class Local(unittest.TestCase):
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             cls.addClassCleanup(srv.server_close); cls.addClassCleanup(srv.shutdown)
             return srv.server_address[1]
-        cls.port = serve(Handler); cls.down_port = serve(AllDown); cls.sold_port = serve(Sold)
+        cls.port = serve(Handler); cls.down_port = serve(AllDown); cls.sold_port = serve(Sold); cls.rdown_port = serve(RobotsDown)
+        cls.free_port = cls._free_port()
         saved = (fetcher.ALLOWED_PORTS, fetcher.ALLOW_PRIVATE, fetcher.TIMEOUT, dict(os.environ))
 
         def restore():
             fetcher.ALLOWED_PORTS, fetcher.ALLOW_PRIVATE, fetcher.TIMEOUT = saved[:3]
             os.environ.clear(); os.environ.update(saved[3])
         cls.addClassCleanup(restore)
-        fetcher.ALLOWED_PORTS = (cls.port, cls.down_port, cls.sold_port); fetcher.ALLOW_PRIVATE = True; fetcher.TIMEOUT = 1
+        fetcher.ALLOWED_PORTS = (cls.port, cls.down_port, cls.sold_port, cls.rdown_port, cls.free_port); fetcher.ALLOW_PRIVATE = True; fetcher.TIMEOUT = 1
         for k in [k for k in os.environ if k.lower().endswith('_proxy')]:
             del os.environ[k]
 
@@ -132,6 +148,33 @@ class Local(unittest.TestCase):
     def test_all_paths_503_counts_as_failure(self):
         r = self.check('/', self.down_port)
         self.assertEqual((r['kind'], r['http_status']), ('http_5xx', 503))
+
+    def test_robots_5xx_does_not_fetch_page(self):
+        RobotsDown.pages.clear()
+        r = self.check('/', self.rdown_port)
+        self.assertEqual((r['kind'], r['http_status']), ('http_5xx', 503))
+        self.assertEqual(RobotsDown.pages, [])
+
+    def test_robots_connection_failure_is_failure(self):
+        self.assertEqual(self.check('/', self.free_port)['kind'], 'connect')
+
+    def test_health_check_skipped_when_nothing_due(self):
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        with mock.patch.object(recrawl, 'network_healthy') as nh:
+            self.assertEqual(recrawl.run(db, host_wait=0, now=T0, log=lambda *_: None), 0)
+        nh.assert_not_called()
+
+    def test_network_failure_during_run_is_not_recorded(self):
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        db.execute("INSERT INTO sites(site_id,url) VALUES('a',?)", (f'http://127.0.0.1:{self.free_port}/',))
+        with mock.patch.object(recrawl, 'network_healthy', side_effect=[True, False]):
+            with self.assertRaises(recrawl.NetworkUnhealthy):
+                recrawl.run(db, host_wait=0, now=T0, log=lambda *_: None, probes=['x'])
+        self.assertEqual(db.execute('SELECT COUNT(*) FROM checks').fetchone()[0], 0)
+        # 終了時に健全なら(サイト単独の障害)記録する
+        with mock.patch.object(recrawl, 'network_healthy', return_value=True):
+            recrawl.run(db, host_wait=0, now=T0, log=lambda *_: None, probes=['x'])
+        self.assertEqual(db.execute('SELECT consecutive_failures FROM sites').fetchone()[0], 1)
 
     def test_all_paths_redirect_to_other_domain(self):
         r = self.check('/', self.sold_port)
@@ -219,14 +262,25 @@ class StateMachine(unittest.TestCase):
         r = self.feed(db2, ['dns'], start=T0 + datetime.timedelta(days=14))            # ちょうど14日
         self.assertEqual(r['state'], 'hide_candidate')
 
-    def test_flagged_review_is_sticky_until_ok(self):
+    def test_flagged_review_is_sticky_until_confirmed(self):
         db = recrawl.connect(':memory:'); self.addCleanup(db.close)
         self.feed(db, ['redirect_offsite'])
-        r = self.feed(db, ['dns', 'robots_disallowed'], start=T0 + datetime.timedelta(days=3))
-        self.assertEqual(r['state'], 'needs_review')
+        r = self.feed(db, ['dns', 'robots_disallowed', 'ok'], start=T0 + datetime.timedelta(days=3))
+        self.assertEqual((r['state'], r['flag']), ('needs_review', 'offsite'))
         self.assertIn('別ドメイン', r['note'])
-        r = self.feed(db, ['ok'], start=T0 + datetime.timedelta(days=9))
+        self.assertEqual([c['flag'] for c in recrawl.candidates(db)], ['offsite'])
+        self.assertIn("'offsite'", recrawl.to_sql(db))
+        recrawl.confirm(db, 'http://x.example/', '移転先を確認、問題なし', now=T0 + datetime.timedelta(days=9))
+        r = db.execute("SELECT * FROM sites").fetchone()
         self.assertEqual((r['state'], r['flag']), ('listed', None))
+        self.assertEqual(db.execute('SELECT flag,reason FROM confirmations').fetchone()[:], ('offsite', '移転先を確認、問題なし'))
+        self.assertEqual(recrawl.candidates(db), [])
+
+    def test_hide_candidate_keeps_flag(self):
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        self.feed(db, ['redirect_offsite'] + ['dns'] * 6, step_days=3)
+        r = db.execute("SELECT * FROM sites").fetchone()
+        self.assertEqual((r['state'], r['flag']), ('hide_candidate', 'offsite'))
 
     def test_ssrf_blocked_needs_review(self):
         db = recrawl.connect(':memory:'); self.addCleanup(db.close)
@@ -243,7 +297,7 @@ class StateMachine(unittest.TestCase):
 
     def test_neutral_does_not_count(self):
         db = recrawl.connect(':memory:'); self.addCleanup(db.close)
-        r = self.feed(db, ['robots_disallowed', 'http_denied', 'robots_unavailable'] * 3)
+        r = self.feed(db, ['robots_disallowed', 'http_denied', 'error'] * 3)
         self.assertEqual((r['state'], r['consecutive_failures']), ('listed', 0))
 
     def test_offsite_redirect_needs_review(self):

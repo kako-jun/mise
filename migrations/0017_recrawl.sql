@@ -3,6 +3,7 @@
 CREATE TABLE site_checks (
   site_id TEXT PRIMARY KEY,
   state TEXT NOT NULL DEFAULT 'listed',        -- listed | needs_review | hide_candidate
+  flag TEXT,                                   -- 由来: offsite(別ドメイン転送) | ssrf(内部アドレス)。人が confirm するまで残る
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   last_checked_at TEXT, last_ok_at TEXT, last_kind TEXT, last_http_status INTEGER,
   title TEXT, content_hash TEXT, next_check_at TEXT

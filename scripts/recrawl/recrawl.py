@@ -5,6 +5,7 @@ site_checks(migrations/0017_recrawl.sql)向けの SQL を出す。自動削除�
 取得作法は scripts/pipeline/fetcher.py を再利用(UA=MiseResearchBot、robots 遵守、内部IP拒否)。
 """
 import argparse
+import functools
 import concurrent.futures
 import datetime
 import glob
@@ -15,6 +16,7 @@ import sqlite3
 import sys
 import time
 import urllib.parse
+import urllib.robotparser
 from collections import defaultdict
 from pathlib import Path
 
@@ -33,10 +35,11 @@ HASH_TEXT_CHARS = 20000
 
 # 失敗として数える種別 / 数えない(サイトの生死を判断できない)種別
 FAIL_KINDS = {'http_404', 'http_410', 'http_4xx', 'http_5xx', 'dns', 'timeout', 'connect', 'tls', 'too_many_redirects'}
-NEUTRAL_KINDS = {'robots_disallowed', 'robots_unavailable', 'http_denied', 'error'}
+NEUTRAL_KINDS = {'robots_disallowed', 'http_denied', 'error'}
 FLAG_KINDS = {'redirect_offsite': '別ドメインへ転送(移転・乗っ取り・売却の疑い)', 'ssrf_blocked': '内部アドレスへ解決(失効後の乗っ取り・設定ミスの疑い)'}
 NETWORK_KINDS = {'dns', 'timeout', 'connect', 'tls'}
 # 実行機のネットワーク障害の検出用。全件失敗の回を失敗に数えないため、先にここへ到達できるか確かめる
+NETWORK_FAIL_RATIO = 0.5
 HEALTH_URLS = ('https://www.w3.org/', 'https://www.mext.go.jp/')
 # 共有ホスティング(サブドメインごとに別の持ち主)。ここに属するホストは完全一致で同一サイトとみなす
 EXTRA_SHARED = {'github.io', 'blogspot.com', 'netlify.app', 'pages.dev', 'workers.dev', 'vercel.app', 'wordpress.com', 'herokuapp.com',
@@ -55,6 +58,8 @@ CREATE TABLE IF NOT EXISTS sites (
 CREATE TABLE IF NOT EXISTS checks (
   id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, checked_at TEXT NOT NULL, kind TEXT NOT NULL,
   http_status INTEGER, final_url TEXT, error TEXT, state_after TEXT);
+CREATE TABLE IF NOT EXISTS confirmations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, confirmed_at TEXT NOT NULL, flag TEXT, reason TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS changes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, site_id TEXT NOT NULL, detected_at TEXT NOT NULL, field TEXT NOT NULL, old TEXT, new TEXT);
 """
@@ -93,11 +98,12 @@ def _strip(h):
     return h[4:] if h.startswith('www.') else h
 
 
+@functools.lru_cache(maxsize=1)
 def _shared_suffixes():
     out = set(EXTRA_SHARED)
     for entries in hostnames.blocklist('platforms.txt').values():
         out.update(entries)
-    return out
+    return frozenset(out)
 
 
 def _site_key(host):
@@ -156,8 +162,9 @@ def text_hash(html):
 
 
 class Robots(fetcher.RobotsCache):
-    """robots.txt の取得。5xx・接続失敗でも例外にせず 'unavailable' を返す(本体の死活判定を止めないため)。
-    別ドメインへの転送は 'offsite'(第2要素=転送先)。"""
+    """robots.txt の取得。RFC 9309 に従い、5xx・接続失敗は全面 disallow 扱い(本体は取りに行かない)。
+    その場合は ('error', (種別, HTTP状態)) を返し、呼び出し側が robots.txt 取得自体の失敗として分類する。
+    別ドメインへの転送は ('offsite', 転送先)。"""
     def _fetch(self, origin):
         url = origin + '/robots.txt'
         host = urllib.parse.urlsplit(origin).hostname
@@ -172,26 +179,22 @@ class Robots(fetcher.RobotsCache):
                         return 'offsite', nxt
                     url = nxt; host = nh; continue
                 break
-        except fetcher.FetchError:
-            return 'unavailable', None
-        return self._interpret(status, headers, body)
-
-    def _interpret(self, status, headers, body):
-        import urllib.robotparser
+        except fetcher.FetchError as e:
+            return 'error', (classify_error(e), None, e.detail[:200])
         if status == 200:
             p = urllib.robotparser.RobotFileParser(); p.parse(fetcher.decode_body(body, headers).splitlines())
             return 'allowed', p
-        if status in (404, 410):
-            return 'allowed_no_robots', None
         if status in (401, 403):
             return 'disallowed', None
-        return 'unavailable', None
+        if status == 429 or status >= 500 or status < 400 and status >= 300:
+            return 'error', (classify_status(status) if status != 429 else 'http_denied', status, f'robots.txt HTTP {status}')
+        return 'allowed_no_robots', None      # 404/410 ほか 4xx は規則なし
 
     def check(self, origin, path):
         if origin not in self.rules:
             self.rules[origin] = self._fetch(origin)
         st, p = self.rules[origin]
-        if st == 'offsite':
+        if st in ('offsite', 'error'):
             return st, False, p
         return super().check(origin, path)
 
@@ -210,10 +213,12 @@ def check_url(url, robots, sleep=time.sleep, host_wait=HOST_WAIT):
         st, ok, delay = robots.check(origin, parts.path or '/')
         if st == 'offsite':
             out.update(kind='redirect_offsite', final_url=delay); return out
-        unconfirmed = st == 'unavailable'
-        if not unconfirmed and not ok:
+        if st == 'error':
+            kind, status, detail = delay
+            out.update(kind=kind, http_status=status, error=detail, final_url=origin + '/robots.txt'); return out
+        if not ok:
             out['kind'] = 'robots_disallowed'; return out
-        sleep(max(host_wait, delay if not unconfirmed else 0))
+        sleep(max(host_wait, delay))
         try:
             status, headers, body = fetcher.http_get(cur)
         except fetcher.FetchError as e:
@@ -226,8 +231,6 @@ def check_url(url, robots, sleep=time.sleep, host_wait=HOST_WAIT):
                 out['kind'] = 'error'; out['error'] = 'bad redirect'; return out
             if not _same_domain(np_.hostname, first_host):
                 out.update(kind='redirect_offsite', final_url=nxt); return out
-            if unconfirmed:                    # robots 未確認では転送先へ進まない
-                out['kind'] = 'robots_unavailable'; return out
             cur = nxt; out['final_url'] = nxt; continue
         out['kind'] = classify_status(status)
         if out['kind'] == 'ok':
@@ -247,8 +250,10 @@ def parse_iso(s):
 def next_state(kind, failures, first_failure_at, now, flag=None, state='listed'):
     """(連続失敗回数, 状態, 理由, flag) を返す。自動削除はない。
 
-    flag(offsite/ssrf)が付いた needs_review は、同一ドメインでの成功(kind=ok)になるまで維持する。"""
+    flag(offsite/ssrf)が付いた状態は、成功しても人が `confirm` するまで維持する。"""
     if kind == 'ok':
+        if flag:       # 転送後に売却ページが 200 で返る等があるため、人が confirm するまで維持
+            return 0, state, None, flag
         return 0, 'listed', None, None
     if kind in FLAG_KINDS:
         return failures, 'needs_review', FLAG_KINDS[kind], 'offsite' if kind == 'redirect_offsite' else 'ssrf'
@@ -297,7 +302,7 @@ def apply_result(db, site, res, now):
             old = site[field]
             if old is not None and old != new:
                 db.execute("INSERT INTO changes(site_id,detected_at,field,old,new) VALUES(?,?,?,?,?)", (site['site_id'], ts, field, old, new))
-    recovered = kind == 'ok' and site['state'] != 'listed'
+    recovered = kind == 'ok' and site['state'] != 'listed' and not flag
     note = reason or ('復旧(自動で listed に戻った。人の確認推奨)' if recovered else (site['note'] if state != 'listed' else None))
     db.execute("INSERT INTO checks(site_id,checked_at,kind,http_status,final_url,error,state_after) VALUES(?,?,?,?,?,?,?)",
                (site['site_id'], ts, kind, res['http_status'], res['final_url'], res['error'], state))
@@ -329,9 +334,11 @@ def network_healthy(probes, host_wait=HOST_WAIT):
 
 def run(db, limit=None, workers=3, host_wait=HOST_WAIT, now=None, log=print, probes=HEALTH_URLS):
     now = now or datetime.datetime.now(datetime.timezone.utc)
+    sites = due_sites(db, now, limit)
+    if not sites:
+        return 0                      # 対象 0 件なら到達確認の外部アクセスもしない
     if not network_healthy(probes, host_wait):
         raise NetworkUnhealthy('到達確認先にも届かない。実行機のネットワーク障害とみなし、失敗に数えず中止')
-    sites = due_sites(db, now, limit)
     groups = defaultdict(list)       # ホスト単位で直列(同一ホストへの同時アクセスはしない)。順序=優先度
     for s in sites:
         groups[_strip(urllib.parse.urlsplit(s['url']).hostname or '')].append(s)
@@ -347,19 +354,36 @@ def run(db, limit=None, workers=3, host_wait=HOST_WAIT, now=None, log=print, pro
             out.append((s, res))
         return out
 
-    n = 0
+    results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
         for fut in concurrent.futures.as_completed([ex.submit(work, g) for g in groups.values()]):
-            for s, res in fut.result():
-                apply_result(db, s, res, now)
-                n += 1
-                log(f"{res['kind']:18} {res['http_status'] or '-'!s:4} {s['url']}")
-    return n
+            results += fut.result()
+    # 実行中のネットワーク障害の検出: ネットワーク系失敗が多く、終了時の再プローブでも届かなければ記録しない
+    net = sum(1 for _, r in results if r['kind'] in NETWORK_KINDS)
+    if probes and net / len(results) >= NETWORK_FAIL_RATIO and not network_healthy(probes, host_wait):
+        raise NetworkUnhealthy(f'実行中にネットワーク障害の疑い(ネットワーク系失敗 {net}/{len(results)})。この回は記録しない')
+    for s, res in results:
+        apply_result(db, s, res, now)
+        log(f"{res['kind']:18} {res['http_status'] or '-'!s:4} {s['url']}")
+    return len(results)
+
+
+def confirm(db, key, reason, now=None):
+    """人が確認して flag を解除する(site_id または url)。解除理由と日時を confirmations に残す。"""
+    r = db.execute("SELECT * FROM sites WHERE site_id=? OR url=?", (key, key)).fetchone()
+    if not r:
+        raise KeyError(key)
+    ts = now_iso(now or datetime.datetime.now(datetime.timezone.utc))
+    db.execute("INSERT INTO confirmations(site_id,confirmed_at,flag,reason) VALUES(?,?,?,?)", (r['site_id'], ts, r['flag'], reason))
+    state = 'listed' if r['consecutive_failures'] < REVIEW_AFTER else 'needs_review'
+    db.execute("UPDATE sites SET flag=NULL, state=?, note=? WHERE site_id=?", (state, f'人が確認して解除({ts}): {reason}', r['site_id']))
+    db.commit()
+    return r['site_id']
 
 
 def candidates(db):
-    return db.execute("SELECT site_id,url,name,state,consecutive_failures,first_failure_at,last_checked_at,last_ok_at,last_kind,last_http_status,last_error,last_final_url,note "
-                      "FROM sites WHERE state IN ('needs_review','hide_candidate') ORDER BY (state='hide_candidate') DESC, consecutive_failures DESC, site_id").fetchall()
+    return db.execute("SELECT site_id,url,name,state,flag,consecutive_failures,first_failure_at,last_checked_at,last_ok_at,last_kind,last_http_status,last_error,last_final_url,note "
+                      "FROM sites WHERE state IN ('needs_review','hide_candidate') OR flag IS NOT NULL ORDER BY (state='hide_candidate') DESC, consecutive_failures DESC, site_id").fetchall()
 
 
 def _q(v):
@@ -370,7 +394,7 @@ def _q(v):
 
 def to_sql(db):
     """migrations/0017_recrawl.sql の site_checks 向け SQL。本番への適用は人が行う(自動では流さない)。"""
-    cols = ['site_id', 'state', 'consecutive_failures', 'last_checked_at', 'last_ok_at', 'last_kind', 'last_http_status', 'title', 'content_hash', 'next_check_at']
+    cols = ['site_id', 'state', 'flag', 'consecutive_failures', 'last_checked_at', 'last_ok_at', 'last_kind', 'last_http_status', 'title', 'content_hash', 'next_check_at']
     lines = ['-- generated by scripts/recrawl/recrawl.py sql']
     for r in db.execute("SELECT * FROM sites WHERE last_checked_at IS NOT NULL ORDER BY site_id"):
         lines.append(f"INSERT OR REPLACE INTO site_checks({','.join(cols)}) VALUES({','.join(_q(r[c]) for c in cols)});")
@@ -385,6 +409,7 @@ def main(argv=None):
     p = sub.add_parser('run', help='期限が来たサイトを優先度順に再巡回'); p.add_argument('--limit', type=int, default=50)
     p.add_argument('--workers', type=int, default=3); p.add_argument('--host-wait', type=float, default=HOST_WAIT)
     sub.add_parser('candidates', help='要確認・非表示候補の一覧(人が見る)').add_argument('--json', action='store_true')
+    p = sub.add_parser('confirm', help='flag 付き(転送・内部アドレス)の要確認を人が確認して解除する'); p.add_argument('key', help='site_id または url'); p.add_argument('--reason', required=True)
     p = sub.add_parser('sql', help='site_checks 向けの SQL を出力'); p.add_argument('--out')
     p = sub.add_parser('changes', help='タイトル・本文ハッシュの変化の記録'); p.add_argument('--limit', type=int, default=50)
     a = ap.parse_args(argv)
@@ -402,9 +427,14 @@ def main(argv=None):
         if a.json:
             print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
         for r in ([] if a.json else rows):
-            print(f"[{r['state']}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
+            print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
         if not rows and not a.json:
             print('候補なし')
+    elif a.cmd == 'confirm':
+        try:
+            print(f'{confirm(db, a.key, a.reason)} の flag を解除')
+        except KeyError:
+            print('該当サイトなし', file=sys.stderr); sys.exit(1)
     elif a.cmd == 'sql':
         s = to_sql(db)
         Path(a.out).write_text(s, encoding='utf-8') if a.out else print(s, end='')
