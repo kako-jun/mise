@@ -6,6 +6,7 @@ header { text-align: center; }
 .logo { color: #c90018 !important; font: 1000 54px/1 Impact, "Arial Narrow", sans-serif; font-stretch: condensed; letter-spacing: 3px; text-decoration: none; transform: scaleX(.75) scaleY(1.12); text-shadow: 1px 1px #73000b; }
 .ornament { font-size: 20px; }
 .logo-caption { margin: 0; font-size: 10px; }
+.logo-pron { margin: -2px 0 3px; font: italic 11px/1.2 Georgia, "Times New Roman", serif; letter-spacing: .14em; opacity: .55; color: inherit; }
 .top-links { margin: 25px 0 14px; font-size: 12px; }
 .globe { font-size: 19px; }
 form { margin-bottom: 16px; } input, button { font-size: 12px; } input { width: 170px; }
