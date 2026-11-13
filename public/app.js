@@ -189,11 +189,11 @@ function renderSite(target, site, showCategories=false) {
 // ---- 一覧のページング（カーソル方式 API + スクロールで追加読み込み。docs/design/ui.md） ----
 // 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
 const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
-let activeList=null; const listIo=('IntersectionObserver' in window) ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
+let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
 history.scrollRestoration='manual';
 const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
 function startList(opts) {
-  if(activeList && activeList.key===opts.key) { activeList.opts=opts; activeList.rerender(); return; }
+  if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
   if(activeList) activeList.stop();
   if(!opts.params) { activeList=null; opts.ul.replaceChildren(); opts.foot.replaceChildren(); return; }
   activeList=createList(opts); activeList.start();
@@ -208,16 +208,21 @@ function createList(opts) {
   const prev=document.createElement('p'); prev.className='list-prev';
   L.render=()=>{
     const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
-    ul.replaceChildren(); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories));
+    // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
+    const hold=o.preserve && !L.items.length && (L.loading || L.error);
+    if(!hold) { ul.replaceChildren(); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    const empty=!L.items.length && L.ended;
     status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : L.total!=null ? t('remaining')(Math.max(0,L.total-L.offset-L.items.length)) : '';
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
-    foot.replaceChildren(status,btn,live);
+    if(empty) foot.replaceChildren(); else foot.replaceChildren(status,btn,live);
+    if(hold) return;
     if(ps) { ps.hidden=true; ps.replaceChildren(); }
     prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
   };
   L.rerender=()=>{ L.render(); };
   L.stop=()=>{ L.stopped=true; L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
-  L.url=(limit)=>{ const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
+  // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
+  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
   L.loadMore=async (force)=>{
     if(L.loading || L.stopped || (L.ended && !force)) return;
     L.loading=true; L.error=false; status.textContent=t('loadingMore'); btn.hidden=true; L.ctl=new AbortController();
@@ -227,7 +232,7 @@ function createList(opts) {
       const first=!L.items.length && L.total==null;
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
       if(first) { L.render(); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
-    } catch (e) { if(L.stopped) return; L.error=true; }
+    } catch (e) { if(L.stopped) return; L.error=true; L.restore=null; }
     L.loading=false; if(L.stopped) return;
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
@@ -270,7 +275,7 @@ function renderPick() {
   renderSite(list,pickedSites[pickIndex % pickedSites.length],true);
 }
 const picks=$('#picks');
-new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks);
+if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
 picks.addEventListener('pointerenter',()=>{picksHovered=true;});
 picks.addEventListener('pointerleave',()=>{picksHovered=false;});
 function updatePickPause() { const b=$('#pick-pause'); b.textContent=t(pickPaused?'pickResume':'pickPause'); b.setAttribute('aria-pressed',String(pickPaused)); b.hidden=pickedSites.length<2; }

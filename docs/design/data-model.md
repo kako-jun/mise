@@ -23,10 +23,11 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `country_code` | 運営者の所在国（ISO 3166-1 alpha-2 大文字 2 文字、CHECK で形式を縛る） | 0011 |
 | `region_code` | 運営者の所在県・州（ISO 3166-2 第 1 階層、例 `JP-13`）。`country_code` が必須で先頭 2 文字が一致すること（CHECK） | 0013 |
 
-### インデックス（0018）
+### インデックスと検索用列（0018）
 
-- `idx_sites_sort`: 一覧の既定の並び（`datetime(COALESCE(source_updated_at, registered_at)) DESC, id`）の式インデックス。式は `src/sites.js` の `SORT_KEY` と同じ文字列にする。
+- `idx_sites_sort`: 一覧の既定の並びの式インデックス。**並びの定義は `src/sites.js` の `SORT_KEYS` 1 か所**で、`ORDER BY`・カーソルのキー列・「次のページ」の比較条件・インデックスはそこから生成する。並びのキーを足す/変えるとき（例: 官公庁台帳 #71 の `bulk_import` を先頭に足す）は、`SORT_KEYS` を直し、`sortIndexSql()` が出す `CREATE INDEX` を新しい migration に書く（`npm run check` が一致を検査する）。画面に出す列が増えるなら `COLUMNS` にも足す。カーソルはキー値の配列なので形式は変わらない。
 - `idx_site_categories_category`: `(category_id, site_id)`。カテゴリ別一覧・件数の逆引き。
+- `sites.search_text`: 検索用の正規化済みテキスト（名前・日英の紹介文・URL を NFKC + 小文字化）。`/api/sites?q=` はこの列を `LIKE` で引く。migration は暫定値（SQL の `lower()` = ASCII のみ）を入れ、INSERT 時のトリガも同じ暫定値を入れる。全角半角・非 ASCII の大小を正しく扱うには、サイトを足した/直した後に `node scripts/refresh-search-text.mjs --local|--remote` で埋め直す。
 
 ### `categories` / `site_categories` / `site_tags`
 
@@ -48,7 +49,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 ### 制約と注意
 
-- `GET /api/sites` は `site_categories` と `JOIN` するため、カテゴリ未所属のサイトは API にも検索にも出ない。
+- カテゴリ未所属のサイトも `GET /api/sites`（`category` 指定なし）と検索には出る（`category_ids` が空配列。画面では「未分類」）。カテゴリ別の一覧には出ない。
 - 官公庁の台帳（`data/public-bodies/`）と frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
 
 ## 将来案（未実装）

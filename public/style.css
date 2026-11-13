@@ -249,6 +249,7 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 .pager a { display: inline-block; padding: 4px 8px; }
 .pager [aria-current] { font-weight: bold; text-decoration: none; }
 .list-foot { text-align: center; min-height: 40px; }
+.list-foot:empty { display: none; }
 .list-status { margin: 8px 0; opacity: .7; }
 .list-more { font: inherit; padding: 6px 16px; cursor: pointer; }
 .list-more[hidden] { display: none; }

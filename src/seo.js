@@ -105,6 +105,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   const current = categories.find(x => x.id === path.at(-1));
   const isSearch = !!url.searchParams.get('q')?.trim();
   const page = path.length && !isSearch ? parsePage(url.searchParams.get('page')) : 1;
+  if (page === null) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
   // 範囲ごとに title / description を変える（all は従来どおり）。国は英語名。
   const place = cc ? countryName(cc) : null, inPlace = place && (/^United /.test(place) ? 'the ' : '') + place;
@@ -136,6 +137,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    if (isSearch) pages = 1; // 検索結果はページ番号なし（noindex。エンドレススクロールのみ）
     if (pages > 1) pagerBody = pagerHtml(path, scope, page, pages);
   }
   // ページ番号つきの URL は自己参照の canonical（2 ページ目以降を 1 ページ目に寄せない）。title に「Page N」を添えて区別する。
