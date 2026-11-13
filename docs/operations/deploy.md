@@ -6,7 +6,7 @@
 
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
-- 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・`/sitemap.xml` は Worker が先に処理する（[architecture.md](../design/architecture.md)）。
+- 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
 - 現在のアプリに本番 secret は無い（`src/` は `DB` と `ASSETS` のみ使う）。
 
 ## ローカル
@@ -35,17 +35,31 @@ npx wrangler deploy
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
 
+## プレビュービルド（ブランチごと）
+
+Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
+
+- `previews.d1_databases` で、プレビューの `DB` バインディングを**プレビュー専用の D1 `mise-preview`**（`database_id` は `wrangler.jsonc` 参照）に向ける。**本番 DB `mise` をプレビューから触らせない**ため（ブランチの未レビューのコードが本番データを読み書き・破壊しないように）。静的ファイル（`assets`）はトップレベルの設定が使われる。
+- `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）:
+
+```sh
+npx wrangler d1 migrations apply mise-preview --remote
+```
+
+  `wrangler d1 migrations apply` はバインディング名または `database_name` を取るので、対象に `mise-preview` を指定すれば本番には触れない（`mise` と取り違えない）。`mise-preview` のデータは確認用の複製で、本番とのずれは許容する。
+- プレビューの URL とビルド結果は PR のチェック（Cloudflare のコメント）に出る。ローカルでの設定確認は `npx wrangler preview --help` と `npx wrangler dev --local`（デプロイはしない）。
+
 ## CSP を含むデプロイ後の確認手順
 
 CSP（[architecture.md](../design/architecture.md#セキュリティヘッダ)）は、Worker が返す HTML のインライン script のハッシュで許可している。Cloudflare が配信途中で HTML を書き換えると（Rocket Loader、Web Analytics の自動注入、Auto Minify、メールアドレス難読化など）、ハッシュが合わず script が止まる、または余計な script が違反になる。ローカルでは再現しないので、**デプロイのたびに本番で確認する**。
 
 ```sh
-# 実サイトへ 3 ページだけ。違反が 1 件でもあれば終了コード 1
+# 実サイトへ 4 ページだけ。違反が 1 件でもあれば終了コード 1
 PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行ファイル> \
   bwrap --dev-bind / / --tmpfs /dev/dri node scripts/check-prod-csp.mjs https://mise.llll-ll.com
 ```
 
-`bwrap` は GPU デバイス（`/dev/dri`）を隠してヘッドレス chromium の固まりを避けるためのもの（不要な環境では外してよい）。出力は各ページの CSP ヘッダの有無・ロゴ描画・地球の canvas・インライン script 数・`securitypolicyviolation` とコンソールの違反。ローカルは URL を `http://localhost:8787` などに変えれば同じ確認ができる。
+`bwrap` は GPU デバイス（`/dev/dri`）を隠してヘッドレス chromium の固まりを避けるためのもの（不要な環境では外してよい）。出力は各ページの CSP ヘッダの有無・ロゴ描画・地球の canvas・インライン script 数・`securitypolicyviolation` とコンソールの違反。ローカルは URL を `http://localhost:8787` などに変えれば同じ確認ができる。**渡すのはオリジン（`https://mise.llll-ll.com`、`http://localhost:8787`）だけ**で、確認するページは固定の 4 ページ（`/` `/us/` `/all/?category=science` `/jp/?q=a`。jp・us・all を網羅）。パス付きで渡してもパス部分は使わず捨てる。
 
 問題があるとき:
 

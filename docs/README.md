@@ -42,7 +42,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | 機能 | コード |
 |---|---|
 | API・配信・sitemap | `src/index.js`、`src/seo.js` |
-| 画面（カテゴリ階層・検索・ピックアップ・HUD） | `public/app.js`、`public/index.html`、`public/style.css` |
+| 画面（範囲・カテゴリ階層・検索・ピックアップ・HUD） | `public/app.js`、`public/index.html`、`public/style.css` |
 | 地球儀 | `src/client/globe.js` → `public/globe.js`（生成） |
 | 国・区画の表 | `public/countries.js`、`public/regions.js`（生成） |
 | データベース | `migrations/` |
