@@ -53,6 +53,8 @@ URL正規化はスキームとホストの小文字化など安全な範囲に�
 
 `categories` は `id`（主キー）、`name`、`parent_id`（親カテゴリID、トップ階層ならnull）、`sort_order` を持つ。`site_categories` は `site_id` と `category_id` の組を主キーとし、各々の外部キーを持つ。同じサイトを複数カテゴリに登録でき、同じ組の重複は不可。カテゴリを削除するときの扱い、分類の根拠や自動分類の確認フローは未決。
 
+`sites.registered_at` は ISO8601 UTC（`YYYY-MM-DDTHH:MM:SSZ`）。`source_updated_at` は日付（`YYYY-MM-DD`）で、根拠URLを `source_updated_evidence_url` に持つ（migration 0012）。一覧・検索結果・SSRの既定の並びは `COALESCE(source_updated_at, registered_at)` の新しい順（NULL/不正値は末尾、同時刻は `id`）。詳細は architecture.md の「一覧・検索結果の既定の並び」。
+
 現在の試作はD1の14カテゴリとその子を使用する。URLの `?category=親ID&category=子ID` は表示階層を上から順に表し、日本語名を使う旧URLもIDへ変換する。複数カテゴリへの所属と、いま表示している1本の階層パスは別の概念。
 
 ### `site_locations` — 場所の主張と根拠
