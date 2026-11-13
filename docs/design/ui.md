@@ -50,6 +50,10 @@
 
 元サイトで確認したものをローカル配信する（`sites.favicon_path`、`public/icons/`）。未取得・失敗時は何も表示せず、表示時に第三者のサーバーへ問い合わせない。
 
+## アプリとして追加（PWA）
+
+ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">` で赤地に白の `M` になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
+
 ## 言語
 
 既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語になる。ブラウザ言語での自動判定はしない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。

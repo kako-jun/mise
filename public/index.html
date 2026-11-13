@@ -6,6 +6,9 @@
 <title>MISE — A directory search engine for today.</title>
 <meta name="description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/pwa/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/pwa/icon-180.png">
 <link rel="canonical" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="en" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="x-default" href="https://mise.llll-ll.com/">
@@ -29,6 +32,7 @@
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=11").catch(() => {})));
+addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); });
 </script>
 <script src="/cat.js?v=5" defer></script>
 </head>
