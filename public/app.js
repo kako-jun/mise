@@ -11,8 +11,10 @@ const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
 const activity = [];
-function logActivity(message) { activity.unshift(message); activity.splice(4); renderLog(); }
-function renderLog() { $('#activity-entries').replaceChildren(...(activity.length ? activity : [t('idle')]).map(entry => { const line=document.createElement('div'); line.textContent=activity.length ? `> ${entry}` : entry; return line; })); }
+const ACTIVITY_MAX_LINES = 5;
+function activityLine(entry) { const line=document.createElement('div'); line.textContent=`> ${entry}`; return line; }
+function logActivity(message) { const first=!activity.length; activity.push(message); while (activity.length > ACTIVITY_MAX_LINES) activity.shift(); if (first) { renderLog(); return; } const box=$('#activity-entries'); box.append(activityLine(message)); while (box.children.length > activity.length) box.firstElementChild.remove(); }
+function renderLog() { $('#activity-entries').replaceChildren(...(activity.length ? activity.map(activityLine) : [Object.assign(document.createElement('div'), { textContent: t('idle') })])); }
 function updateTitle() {
   const cur = currentPath.map(id => categories.find(x => x.id === id)).filter(Boolean);
   document.title = cur.length ? `${cur.map(name).join(' › ')} — MISE` : `MISE — ${t('tagline')}`;
