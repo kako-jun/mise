@@ -4,7 +4,8 @@
 Run: uv run python3 scripts/check-embeddable.py > data/embeddability.json
 Only response headers are observed (never bypassing anything). Per site: robots.txt (1 request),
 the top URL (1), and at most one redirect follow (1); never parallel; 2 s between every request.
-Judgement is deterministic from the observed headers.
+Judgement is deterministic from the observed headers (JS frame-busting etc. is out of scope).
+robots.txt: 200 read, 404/410 no rules, anything else -> not measured (robots-unknown). Only same-host redirects are followed.
 """
 import datetime, ipaddress, json, subprocess, sys, time, urllib.parse, urllib.robotparser
 
@@ -66,9 +67,17 @@ def csp_ancestors(csps):
     return out
 
 def allows_mise(srcs):
+    mh = urllib.parse.urlsplit(MISE_ORIGIN).hostname
     for s in srcs:
-        s = s.strip("'").lower() if s.startswith("'") else s.lower()
-        if s in ('*', 'https:', MISE_ORIGIN, 'https://*.llll-ll.com', 'https://mise.llll-ll.com/'): return True
+        s = s.lower()
+        if s in ('*', 'https:'): return True
+        if s.startswith("'"): continue  # 'self' / 'none' never match a foreign origin
+        t = s if '://' in s else 'https://' + s
+        p = urllib.parse.urlsplit(t)
+        if p.scheme != 'https' or not p.hostname: continue
+        if p.port not in (None, 443): continue
+        if p.path not in ('', '/'): continue
+        if p.hostname == mh or (p.hostname.startswith('*.') and mh.endswith(p.hostname[1:])): return True
     return False
 
 def judge(final_url, status, h):
@@ -91,14 +100,15 @@ def check(sid, url):
     p = urllib.parse.urlsplit(url)
     rules = urllib.robotparser.RobotFileParser()
     rr = fetch(f'{p.scheme}://{p.netloc}/robots.txt', True); o['requests'] += 1
-    if 'error' in rr: o['robots'] = {'error': rr['error']}; allowed = True
+    if 'error' in rr: o['robots'] = {'error': rr['error']}; allowed = None
     else:
         o['robots'] = {'status': rr['status']}
         if rr['status'] in (404, 410): allowed = True
         elif rr['status'] == 200: rules.parse(rr['body'].decode('utf-8', 'replace').splitlines()); allowed = rules.can_fetch(UA, url)
-        elif rr['status'] in (401, 403): allowed = False
-        else: allowed = True
+        else: allowed = None  # 3xx/401/403/5xx: unknown, same policy as collect-source-updated.py
     o['robots']['allowed'] = allowed
+    if allowed is None:
+        o.update(result='not-measured', embeddable=None, reasons=['robots-unknown'], notes=[]); return o
     if not allowed:
         o.update(result='not-measured', embeddable=None, reasons=['robots-disallow'], notes=[]); return o
     chain, cur, resp = [], url, None
@@ -109,7 +119,12 @@ def check(sid, url):
         chain.append({'url': cur, 'status': resp['status'], 'location': (resp['headers'].get('location') or [None])[0]})
         loc = chain[-1]['location']
         if resp['status'] in (301, 302, 303, 307, 308) and loc and hop == 0:
-            cur = urllib.parse.urljoin(cur, loc); continue
+            nxt = urllib.parse.urljoin(cur, loc)
+            if urllib.parse.urlsplit(nxt).hostname != urllib.parse.urlsplit(cur).hostname:
+                # only same-host redirects are followed (robots.txt of this host already applied)
+                o.update(chain=chain, final_url=cur, status=resp['status'], headers={}, embeddable=None,
+                         reasons=['cross-host-redirect-not-followed'], notes=[]); return o
+            cur = nxt; continue
         break
     h = resp['headers']
     keep = {k: h[k] for k in ('x-frame-options', 'content-security-policy', 'content-security-policy-report-only', 'content-type') if k in h}

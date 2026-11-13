@@ -25,4 +25,4 @@
 
 ## 埋め込み可否の実測（2026-11-13、Issue #41）
 
-`scripts/check-embeddable.py` が既存25サイトのトップページについて、iframe で mise 内に表示できるかをHTTPヘッダだけで判定する。robots.txt（1リクエスト）→ トップページの GET（ヘッダのみ、本文は1バイトで切る）を、サイト間・リクエスト間とも2秒以上空けて直列に行い、リダイレクトは最大1回だけ追う（その場合は3リクエスト）。UA は MiseResearchBot/0.1。記録するのは X-Frame-Options、CSP の frame-ancestors、最終URLのスキーム、HTTPステータス、robots の可否で、迂回はしない。結果は `data/embeddability.json`（生の観測値・判定・UTC時刻）。再実行: `uv run python3 scripts/check-embeddable.py > data/embeddability.json`。実行のたびに実サイトへアクセスする。対象は固定25サイトのみ。
+`scripts/check-embeddable.py` が既存25サイトのトップページについて、iframe で mise 内に表示できるかをHTTPヘッダだけで判定する。robots.txt（1リクエスト）→ トップページの GET（ヘッダのみ、本文は1バイトで切る）を、サイト間・リクエスト間とも2秒以上空けて直列に行い、リダイレクトは同一ホスト宛てのみ最大1回追う（その場合は3リクエスト。別ホスト宛ては追わず記録のみ）。robots.txt は 200 なら規則を読み、404/410 は規則なし、それ以外（取得失敗・3xx・401/403・5xx）はそのサイトを測定せず `robots-unknown` と記録する（collect-source-updated.py と同じ方針）。UA は MiseResearchBot/0.1。記録するのは X-Frame-Options、CSP の frame-ancestors、最終URLのスキーム、HTTPステータス、robots の可否で、迂回はしない。JS の frame-busting など、ヘッダ以外の理由で表示できないケースは判定外。結果は `data/embeddability.json`（生の観測値・判定・UTC時刻）。再実行: `uv run python3 scripts/check-embeddable.py > data/embeddability.json`。実行のたびに実サイトへアクセスする。対象は固定25サイトのみ。
