@@ -21,6 +21,14 @@ mise は、個人や企業のサイトをカテゴリからたどって発見で
 
 静的HTML/CSS/JavaScriptとThree.jsによるローカルの叩き台。14の大カテゴリと子カテゴリ、クエリURLによる階層移動、パンくず、手書きサンプルサイトの検索がある。ローカルD1にサンプルを保存し、Workers + Hono のAPIから取得する。検索は取得済みデータをブラウザ内で絞り込み、本格的な検索インデックスではない。3D地球は簡略化した地形であり、正確な地図ではない。推薦リンクは準備中の案内を表示する。
 
+## 国旗と地球の連動
+
+各サイト行に、運営者の所在国（`sites.country_code`）の国旗SVGを常時表示する（国コードが無いサイトは出さない。alt相当は `aria-label` に「日本 / Japan」）。旗は絵文字でなく SVG（Windows では絵文字の国旗が国コード文字になるため）。[flag-icons](https://github.com/lipis/flag-icons)（MIT、[ライセンス全文](../public/licenses/flag-icons-MIT.txt)）の 4x3 版から必要な国だけを `public/flags/<小文字コード>.svg` に置く（全旗は配信しない。国を足すときは SVG・`public/countries.js` の座標表に1行・同ファイルの旗リスト `MISE_FLAGS` に国コード。リストに無い国は旗要素を作らず404も出さない）。`public/countries.js` は国名（日英）と代表座標の静的表で、app.js と globe.js が共有する。
+
+「地球から日本へ」も同じ向き計算（`aimAt`）で日本へ寄る。
+
+PCは行・旗のホバー/フォーカスで約300ms静止してから、スマホは旗のタップで、app.js が `mise-fly-country`（`detail: {lat, lon, hold}`）を発火し、globe.js が地球をその国へ向ける。行本体のクリックは従来どおり遷移のみ。ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から4秒無操作で既定の向き・距離へ戻って自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。`prefers-reduced-motion` では滑らかに動かさず即時切替・自動回転なし。
+
 ## 今後の実装・未決
 
 - Workers + Hono とD1はローカルで動作する。Cloudflareへのデプロイと定期処理は未実装。

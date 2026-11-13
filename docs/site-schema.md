@@ -18,6 +18,7 @@
 | `active_description_id` | text? | 現在表示する承認済み紹介文への参照。未設定可 |
 | `source_updated_at` | text? | 元サイトの更新日時。確認できた場合のみ記録し、根拠を別途保持する。巡回日時とは別 |
 | `source_updated_evidence_url` | text? | 元サイトの更新日時の出典。日時とともに保存 |
+| `country_code` | text? | サイトの属する国（運営者の所在国）。ISO 3166-1 alpha-2 の大文字2文字、確認できなければ `null`（旗を出さない）。DBはCHECKで形式を縛る（migration 0011）。詳細は下の「運営者の所在国」 |
 | `last_crawl_attempt_at` | text? | 最後に巡回を試みた日時 |
 | `last_crawled_at` | text? | 最後に取得に成功した日時。初回成功前はnull |
 | `last_crawl_status` | text? | `success` / `failed` / `blocked` 等の結果。具体的な失敗理由と再試行方針は実装時に設計 |
@@ -26,6 +27,10 @@
 URL正規化はスキームとホストの小文字化など安全な範囲に限定する。パスの大小文字やクエリの有無で別ページになる場合があり、安易に削らない。リダイレクト後のURL、ミラー、同一サイトの判定規則は未決。URLの一意制約だけで実体の重複を完全には防げない。
 
 現在の試作D1は `sites.description_ja`（必須）と `sites.description_en`（NULL可、migration 0010）の2列で日英の紹介文を持つ。`description_en` が無いサイトだけ、英語表示で日本語に「(Japanese)」を添える。
+
+### 運営者の所在国（`sites.country_code`）
+
+一覧の各サイトに国旗を常時表示し、旗のホバー/タップで地球をその国へ向けるための値（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れ、**ドメイン（.jp 等）・言語・ホスティングだけでは決めない**。確認できなければ `null`。根拠は収集JSONの `country_code` / `country_evidence`（`data/collection-batch1.json`）と migration 0011 のコメントに残す。`site_locations` は将来の詳細な場所記録用で、旗の表示には使わない。
 
 ### `site_descriptions` — 紹介文と生成・確認履歴
 

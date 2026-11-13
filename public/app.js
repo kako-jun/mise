@@ -82,6 +82,37 @@ function categoryPath(id) {
   while(node) { path.unshift(node.id); node=categories.find(c=>c.id===node.parent_id); }
   return path;
 }
+// 国旗（SVG。絵文字は Windows で国コード文字になるため使わない）。国コードが無い/表に無いサイトは出さない。
+// 旗の画像は必要になった国のものだけ /flags/ から読み、無ければ旗ごと隠す。
+function countryFlag(site) {
+  const code=site.country_code, info=window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(code||'') ? window.MISE_COUNTRIES[code] : null;
+  if(!info || !(window.MISE_FLAGS||[]).includes(code)) return null;
+  const label=`${info.ja} / ${info.en}`;
+  const span=document.createElement('span'); span.className='site-flag'; span.setAttribute('role','img'); span.setAttribute('aria-label',label); span.title=label; span.dataset.country=code;
+  const img=document.createElement('img'); img.alt=''; img.src=`/flags/${code.toLowerCase()}.svg`; img.loading='lazy'; img.decoding='async';
+  img.addEventListener('error',()=>{span.hidden=true;});
+  span.append(img);
+  return span;
+}
+// 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗のタップ。行本体のクリックは従来どおり遷移のみ。
+const HOVER_DELAY_MS=300;
+function flyToCountry(code,hold) {
+  const info=window.MISE_COUNTRIES && window.MISE_COUNTRIES[code]; if(!info) return;
+  window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold}}));
+  logActivity(`look ${code}`);
+}
+function bindGlobeHover(row,flag,code) {
+  let timer=0, flown=false;
+  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToCountry(code,true); },HOVER_DELAY_MS); };
+  // 地球を動かしていない（300ms未満で離れた）ときは release を出さない。
+  const stop=()=>{ clearTimeout(timer); timer=0; if(flown) { flown=false; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
+  row.addEventListener('pointerenter',e=>{ if(e.pointerType!=='touch') start(); });
+  row.addEventListener('pointerleave',e=>{ if(e.pointerType!=='touch') stop(); });
+  row.addEventListener('focusin',start);
+  row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
+  // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
+  flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToCountry(code,false); });
+}
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
   a.href=site.url; configureExternalLink(a); a.textContent=site.name; p.textContent=siteDescription(site);
@@ -95,6 +126,7 @@ function renderSite(target, site, showCategories=false) {
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
   if(Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
   content.append(p);
+  const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site.country_code); }
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';

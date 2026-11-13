@@ -23,4 +23,5 @@ npm run dev
 - 3D表示には同梱の Three.js を使用し、バンドルに表記を残す（[MIT License](public/THREE-LICENSE.txt)）
 - 参考: [1996年当時のYahoo! JAPANトップページ](https://internet.watch.impress.co.jp/docs/news/755478.html)
 
+- 国旗: [flag-icons](https://github.com/lipis/flag-icons)（[MIT License](public/licenses/flag-icons-MIT.txt)）。必要な国だけ `public/flags/` に置いている。サイト行の旗にカーソルを乗せる（スマホはタップ）と地球がその国へ向く（[国旗と地球の連動](docs/architecture.md#国旗と地球の連動)）。
 - GitHubアイコン: [GitHub Octicons](https://github.com/primer/octicons)（[MIT License](public/licenses/octicons-MIT.txt)）。

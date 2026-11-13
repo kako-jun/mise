@@ -208,3 +208,9 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 
 
 @media (max-width: 1199px) { .hud { display: none; } }
+
+/* 国旗: 常時表示の小さな旗。国コードが無いサイトには出さない。 */
+.site-flag { display: inline-block; margin-left: 6px; vertical-align: -2px; line-height: 0; cursor: pointer; }
+.site-flag[hidden] { display: none; }
+.site-flag img { width: 18px; height: 13.5px; display: block; border: 1px solid rgba(0, 0, 0, .25); }
+@media (pointer: coarse) { .site-flag { padding: 8px 6px; margin: -8px 0 -8px 0; } }
