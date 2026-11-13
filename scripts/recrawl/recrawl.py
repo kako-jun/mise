@@ -37,7 +37,7 @@ HASH_TEXT_CHARS = 20000
 FAIL_KINDS = {'http_404', 'http_410', 'http_4xx', 'http_5xx', 'dns', 'timeout', 'connect', 'tls', 'too_many_redirects'}
 NEUTRAL_KINDS = {'robots_disallowed', 'http_denied', 'error'}
 FLAG_KINDS = {'redirect_offsite': '別ドメインへ転送(移転・乗っ取り・売却の疑い)', 'ssrf_blocked': '内部アドレスへ解決(失効後の乗っ取り・設定ミスの疑い)'}
-NETWORK_KINDS = {'dns', 'timeout', 'connect', 'tls'}
+NETWORK_KINDS = {'dns', 'timeout', 'connect', 'tls', 'ssrf_blocked'}   # ssrf_blocked: キャプティブポータル/DNS ハイジャックで全件に出うる
 # 実行機のネットワーク障害の検出用。全件失敗の回を失敗に数えないため、先にここへ到達できるか確かめる
 NETWORK_FAIL_RATIO = 0.5
 HEALTH_URLS = ('https://www.w3.org/', 'https://www.mext.go.jp/')
@@ -202,8 +202,8 @@ class Robots(fetcher.RobotsCache):
 def check_url(url, robots, sleep=time.sleep, host_wait=HOST_WAIT):
     """1サイトのトップを robots 確認の上で取得し分類する。戻り dict: kind, http_status, final_url, error, title, hash
 
-    robots.txt が取れない(5xx・タイムアウト・接続失敗)ときは、サイトの死活を見るため本体を 1 回だけ取得して
-    HTTP 結果で判定する(リダイレクトは追わない)。robots.txt が別ドメインへ転送されたら redirect_offsite。"""
+    robots.txt が 5xx・タイムアウト・接続失敗のときは本体を取らず(RFC 9309: 全面 disallow)、robots.txt 取得自体の
+    結果(http_5xx / timeout / connect など)を失敗として返す。robots.txt が別ドメインへ転送されたら redirect_offsite。"""
     out = {'kind': 'error', 'http_status': None, 'final_url': url, 'error': None, 'title': None, 'hash': None}
     first_host = urllib.parse.urlsplit(url).hostname or ''
     cur = url
@@ -370,9 +370,16 @@ def run(db, limit=None, workers=3, host_wait=HOST_WAIT, now=None, log=print, pro
 
 def confirm(db, key, reason, now=None):
     """人が確認して flag を解除する(site_id または url)。解除理由と日時を confirmations に残す。"""
-    r = db.execute("SELECT * FROM sites WHERE site_id=? OR url=?", (key, key)).fetchone()
-    if not r:
+    rows = db.execute("SELECT * FROM sites WHERE site_id=?", (key,)).fetchall() or db.execute("SELECT * FROM sites WHERE url=?", (key,)).fetchall()
+    if not rows:
         raise KeyError(key)
+    if len(rows) > 1:
+        raise ValueError(f'同じ URL のサイトが {len(rows)} 件ある。site_id で指定する: ' + ', '.join(r['site_id'] for r in rows))
+    r = rows[0]
+    if not r['flag']:
+        raise ValueError(f"{r['site_id']} に flag は付いていない(解除対象なし)")
+    if r['state'] == 'hide_candidate':
+        raise ValueError(f"{r['site_id']} は非表示候補(連続失敗 {r['consecutive_failures']} 回)。flag の解除ではなく、掲載の扱いを人が判断する")
     ts = now_iso(now or datetime.datetime.now(datetime.timezone.utc))
     db.execute("INSERT INTO confirmations(site_id,confirmed_at,flag,reason) VALUES(?,?,?,?)", (r['site_id'], ts, r['flag'], reason))
     state = 'listed' if r['consecutive_failures'] < REVIEW_AFTER else 'needs_review'
@@ -414,34 +421,39 @@ def main(argv=None):
     p = sub.add_parser('changes', help='タイトル・本文ハッシュの変化の記録'); p.add_argument('--limit', type=int, default=50)
     a = ap.parse_args(argv)
     db = connect(a.db)
-    if a.cmd == 'import':
-        files = a.files or sorted(glob.glob(str(ROOT / 'data' / 'collection-*.json')))
-        print(f'{import_sites(db, files)} 件を取り込み')
-    elif a.cmd == 'run':
-        try:
-            print(f'{run(db, a.limit, a.workers, a.host_wait)} 件を確認')
-        except NetworkUnhealthy as e:
-            print(f'警告: {e}', file=sys.stderr); sys.exit(2)
-    elif a.cmd == 'candidates':
-        rows = candidates(db)
-        if a.json:
-            print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
-        for r in ([] if a.json else rows):
-            print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
-        if not rows and not a.json:
-            print('候補なし')
-    elif a.cmd == 'confirm':
-        try:
-            print(f'{confirm(db, a.key, a.reason)} の flag を解除')
-        except KeyError:
-            print('該当サイトなし', file=sys.stderr); sys.exit(1)
-    elif a.cmd == 'sql':
-        s = to_sql(db)
-        Path(a.out).write_text(s, encoding='utf-8') if a.out else print(s, end='')
-    elif a.cmd == 'changes':
-        for r in db.execute("SELECT * FROM changes ORDER BY id DESC LIMIT ?", (a.limit,)):
-            print(f"{r['detected_at']} {r['site_id']} {r['field']}: {r['old']!r} -> {r['new']!r}")
+    try:
+        if a.cmd == 'import':
+            files = a.files or sorted(glob.glob(str(ROOT / 'data' / 'collection-*.json')))
+            print(f'{import_sites(db, files)} 件を取り込み')
+        elif a.cmd == 'run':
+            try:
+                print(f'{run(db, a.limit, a.workers, a.host_wait)} 件を確認')
+            except NetworkUnhealthy as e:
+                print(f'警告: {e}', file=sys.stderr); sys.exit(2)
+        elif a.cmd == 'candidates':
+            rows = candidates(db)
+            if a.json:
+                print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
+            for r in ([] if a.json else rows):
+                print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
+            if not rows and not a.json:
+                print('候補なし')
+        elif a.cmd == 'confirm':
+            try:
+                print(f'{confirm(db, a.key, a.reason)} の flag を解除')
+            except KeyError:
+                print('該当サイトなし', file=sys.stderr); sys.exit(1)
+            except ValueError as e:
+                print(f'拒否: {e}', file=sys.stderr); sys.exit(1)
+        elif a.cmd == 'sql':
+            s = to_sql(db)
+            Path(a.out).write_text(s, encoding='utf-8') if a.out else print(s, end='')
+        elif a.cmd == 'changes':
+            for r in db.execute("SELECT * FROM changes ORDER BY id DESC LIMIT ?", (a.limit,)):
+                print(f"{r['detected_at']} {r['site_id']} {r['field']}: {r['old']!r} -> {r['new']!r}")
 
+    finally:
+        db.close()
 
 if __name__ == '__main__':
     main()

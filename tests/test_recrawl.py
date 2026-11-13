@@ -276,6 +276,31 @@ class StateMachine(unittest.TestCase):
         self.assertEqual(db.execute('SELECT flag,reason FROM confirmations').fetchone()[:], ('offsite', '移転先を確認、問題なし'))
         self.assertEqual(recrawl.candidates(db), [])
 
+    def test_confirm_refusals(self):
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        self.feed(db, ['dns'])
+        with self.assertRaises(ValueError):
+            recrawl.confirm(db, 's', 'x')            # flag なし
+        self.assertIsNone(db.execute('SELECT note FROM sites').fetchone()[0])
+        db2 = recrawl.connect(':memory:'); self.addCleanup(db2.close)
+        self.feed(db2, ['redirect_offsite'] + ['dns'] * 6, step_days=3)
+        with self.assertRaises(ValueError):
+            recrawl.confirm(db2, 's', 'x')           # flag 付きの hide_candidate
+        r = db2.execute('SELECT * FROM sites').fetchone()
+        self.assertEqual((r['state'], r['flag']), ('hide_candidate', 'offsite'))
+        self.assertEqual(db2.execute('SELECT COUNT(*) FROM confirmations').fetchone()[0], 0)
+
+    def test_confirm_ambiguous_url(self):
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        for sid in ('a', 'b'):
+            db.execute("INSERT INTO sites(site_id,url,flag,state) VALUES(?,?,?,?)", (sid, 'http://dup.example/', 'offsite', 'needs_review'))
+        with self.assertRaises(ValueError):
+            recrawl.confirm(db, 'http://dup.example/', 'x')
+        recrawl.confirm(db, 'a', 'x')
+
+    def test_ssrf_counts_as_network_failure(self):
+        self.assertIn('ssrf_blocked', recrawl.NETWORK_KINDS)
+
     def test_hide_candidate_keeps_flag(self):
         db = recrawl.connect(':memory:'); self.addCleanup(db.close)
         self.feed(db, ['redirect_offsite'] + ['dns'] * 6, step_days=3)
