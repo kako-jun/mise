@@ -53,7 +53,7 @@ window.__miseLogo();
     <section id="recommend" class="recommend" hidden aria-labelledby="req-title">
       <h2 id="req-title" data-i18n="reqTitle">Requests</h2>
       <p class="req-note" data-i18n="reqNote">A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.</p>
-      <form id="request-form" class="request-form" novalidate>
+      <form id="request-form" class="request-form" method="post" action="/api/requests" novalidate>
         <label for="req-type" data-i18n="reqType">Kind</label>
         <select id="req-type" name="type"><option value="add" data-i18n="reqAdd">Add a site</option><option value="remove" data-i18n="reqRemove">Remove my site</option><option value="correct" data-i18n="reqCorrect">Correct a listing</option></select>
         <label for="req-url" data-i18n="reqUrl">Site URL</label>
