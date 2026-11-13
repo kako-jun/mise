@@ -1,0 +1,4 @@
+# 静的ファイル用。HTML（/）と /api/* は Worker が src/security.js で付与する。
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

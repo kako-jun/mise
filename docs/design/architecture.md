@@ -14,16 +14,24 @@
 | エンドポイント | 内容 |
 |---|---|
 | `GET /api/categories` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える |
-| `GET /api/sites` | 掲載サイト全件。`site_categories` との `JOIN` のため、カテゴリ未所属のサイトは返らない。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
+| `GET /api/sites` | 掲載サイト全件。`site_categories` と `LEFT JOIN` するため、カテゴリ未所属のサイトも `category_id = NULL` で返る（画面では「未分類」として検索に出る。カテゴリ一覧には出ない）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
 | `GET /api/activity` | 掲載総数と直近 7 日の日別登録数（HUD 用） |
 | `GET /` | `index.html` に URL に応じた内容を差し込んで返す（[seo.md](seo.md)） |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
-`/api/*` は全件返しで、`Cache-Control` を付けていない（ページング・カーソル化は構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。ブラウザ用で、外部向け公開 API としては設計していない。
+`/api/*` は全件返しで、`Cache-Control: public, max-age=30` を付ける（更新が速やかに反映されるよう短く。ページング・カーソル化は構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。ブラウザ用で、外部向け公開 API としては設計していない。
+
+## セキュリティヘッダ
+
+`src/security.js` が定義し、Worker の全応答に付ける: `Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`。静的ファイルには `public/_headers` で nosniff と Referrer-Policy を付ける（CSP は文書だけに意味があるため）。
+
+- HTML（`/`）の CSP は `script-src 'self'` に、`index.html` のインライン `<script>`（実行されるもの。JSON-LD のデータブロックは対象外）の sha256 を足したもの。ハッシュは `seo.js` がアセットの HTML から毎回計算するので、インラインスクリプトを編集してもハッシュの更新は要らない。`unsafe-inline` は使わない。`style-src 'self'`（HTML にインライン style なし。JS からの CSSOM 操作は対象外）、`img-src 'self' data:`、`connect-src 'self'`、`frame-ancestors 'none'`、`object-src 'none'`、`base-uri 'none'`。
+- HTML 以外の応答は `default-src 'none'`。
+- 外部の画像・スクリプト・フォントを足すときは `security.js` の許可も足す。新しい CSP を試すときは `CSP_REPORT_ONLY` を `true` にして、コンソールの違反を確認してから強制に戻す。
 
 ## 地球儀
 
-- `globe.js` はページの load 後に遅延読込する。読込前に押された fly/reset は `index.html` が記録して起動時に再生する（disabled にすると見た目が変わるため）。読込失敗時は操作ボタンを隠す。
+- `globe.js` はページの load 後に遅延読込する。読込に失敗しても画面は地球なしで使える。
 - タブ非表示中は描画を止める。
 - 自動回転は、ドラッグ終了から約 4 秒の無操作で現在の向きから再開する（速度は 0 から滑らかに立ち上げ）。ドラッグ中・飛行中・`prefers-reduced-motion: reduce` では回転しない。
 - 海岸線は簡略化した地形であり、正確な地図ではない。
@@ -42,5 +50,5 @@
 
 - PC は行・旗のホバー/フォーカスで約 300ms 静止してから、スマホは旗のタップで、`app.js` がイベント `mise-fly-country`（`detail: {lat, lon, hold, level}`、`level` は `'region'` / `'country'`）を発火し、`globe.js` が地球をその国・区画へ向ける。region があれば区画の代表点へ、無ければ国の代表点へ。行本体のクリックは従来どおり遷移のみ。
 - ホバーを離す/フォーカスが外れると `mise-fly-release`。最後の操作から 4 秒無操作で既定の向き・距離へ戻り、自動回転に復帰する（手動ドラッグも同様。実際に動かした時だけ最終操作時刻を更新し、背景クリックだけでは止めない）。
-- カメラ距離は `globe.js` の定数: 国 `COUNTRY_DISTANCE = 4.2`、区画 `REGION_DISTANCE = 3.2`（「地球から日本へ」は 1.94）。「地球から日本へ」も同じ向き計算（`aimAt`）で日本へ寄る。
+- カメラ距離は `globe.js` の定数: 国 `COUNTRY_DISTANCE = 4.2`、区画 `REGION_DISTANCE = 3.2`。向きは `aimAt` で求める。
 - `prefers-reduced-motion` では滑らかに動かさず即時切替・自動回転なし。
