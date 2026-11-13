@@ -255,29 +255,6 @@
     "source_updated_note": "sitemap: cross-host redirect"
   },
   {
-    "id": "collected-historicbridges",
-    "url": "https://historicbridges.org/index.php",
-    "name": "Historic Bridges.org",
-    "categories": [
-      "arts-architecture"
-    ],
-    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
-    "checked_at": "2026-11-13T06:55:17Z",
-    "robots_url": "https://historicbridges.org/robots.txt",
-    "robots_http_status": 200,
-    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
-    "page_http_status": 200,
-    "observed_title": "Historic Bridges .org",
-    "observed_meta_description": "Historic bridges resource with photographs and information for bridges in North America. Includes in-depth articles about types in general.",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く",
-    "country_code": null,
-    "country_evidence": "確認できず（トップページと取得した範囲の運営者情報に運営者の所在の明記なし。ドメイン・言語・ホスティングだけでは決めない）",
-    "region_evidence": "州の記載は確認できず",
-    "source_updated_at": null,
-    "source_updated_kind": null,
-    "source_updated_note": "sitemap: Command '['curl', '-s', '-S', '--max-time', '15', '--max-filesize', '1048576', '-A', 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)', '-D', '-', 'https://historicbridges.org/sitemap.xml']' returned non-zero exit status 63."
-  },
-  {
     "id": "collected-nutritionfacts",
     "url": "https://nutritionfacts.org/",
     "name": "NutritionFacts.org",

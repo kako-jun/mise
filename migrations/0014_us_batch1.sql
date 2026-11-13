@@ -65,11 +65,6 @@ INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-s
 UPDATE sites SET last_crawled_at='2026-11-13T06:52:28Z' WHERE id='collected-stevemorse';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-stevemorse','系図調査','Genealogy');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-stevemorse','記録検索','Record search');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-historicbridges','https://historicbridges.org/index.php','Historic Bridges.org','北米の歴史的な橋の写真と情報を集め、橋の種類ごとの詳しい記事も収めた資料サイト。','A historic bridges resource with photographs and information for bridges in North America, including in-depth articles about bridge types.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
-INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-historicbridges','arts-architecture');
-UPDATE sites SET last_crawled_at='2026-11-13T06:55:17Z' WHERE id='collected-historicbridges';
-INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-historicbridges','橋','Bridges');
-INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-historicbridges','歴史的建造物','Historic structures');
 INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-nutritionfacts','https://nutritionfacts.org/','NutritionFacts.org','医師Michael Gregerが、最新の栄養研究を分かりやすい動画・ブログ記事・ポッドキャストで届けるサイト。','A site by Dr. Michael Greger delivering the latest nutrition research in easy-to-understand videos, blog posts and podcasts.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-nutritionfacts','health-nutrition');
 UPDATE sites SET last_crawled_at='2026-11-13T06:50:46Z' WHERE id='collected-nutritionfacts';
