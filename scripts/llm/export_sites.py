@@ -10,6 +10,7 @@ reference file used for comparison.
 import argparse
 import glob
 import json
+import pathlib
 import os
 import sqlite3
 import sys
@@ -21,7 +22,7 @@ def load_db(root=ROOT):
     c = sqlite3.connect(":memory:")
     c.executescript("CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT);")
     for f in sorted(glob.glob(os.path.join(root, "migrations", "*.sql"))):
-        c.executescript(open(f, encoding="utf-8").read())
+        c.executescript(pathlib.Path(f).read_text(encoding="utf-8"))
     return c
 
 
@@ -29,11 +30,11 @@ def fetched_text(root=ROOT):
     """url -> {title, meta_description} from the stored collection results."""
     by_url = {}
     p = os.path.join(root, "data", "collection-sample.json")
-    for r in json.load(open(p, encoding="utf-8")):
+    for r in json.loads(pathlib.Path(p).read_text(encoding="utf-8")):
         by_url[r["url"]] = {"title": r.get("title"), "meta_description": r.get("meta_description"),
                             "http_status": r.get("page_http_status"), "checked_at": r.get("checked_at")}
     p = os.path.join(root, "data", "collection-batch1.json")
-    for r in json.load(open(p, encoding="utf-8")):
+    for r in json.loads(pathlib.Path(p).read_text(encoding="utf-8")):
         by_url[r["url"]] = {"title": r.get("observed_title"), "meta_description": r.get("observed_meta_description"),
                             "http_status": r.get("page_http_status"), "checked_at": r.get("checked_at")}
     return by_url
@@ -59,6 +60,7 @@ def export(root=ROOT, with_human_description=False):
                       "lang": None, "body_excerpt": "", "features": features})
         refs.append({"id": sid, "name": name, "description_ja": dja, "description_en": den,
                      "categories": cats, "country_code": cc, "region_code": rc})
+    db.close()
     return cands, refs
 
 
@@ -75,7 +77,8 @@ def main(argv=None):
         for c in cands:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
     rp = os.path.join(a.out_dir, "sites-reference.json")
-    json.dump(refs, open(rp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    with open(rp, "w", encoding="utf-8") as f:
+        json.dump(refs, f, ensure_ascii=False, indent=1)
     print(f"{len(cands)} sites -> {cp}; reference -> {rp}", file=sys.stderr)
     return 0
 

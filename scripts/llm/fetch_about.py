@@ -12,7 +12,10 @@ Usage: uv run python3 scripts/llm/fetch_about.py var/sites-candidates.jsonl var/
 import html.parser
 import ipaddress
 import json
+import os
+import pathlib
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -30,11 +33,26 @@ WEAK_WORDS = ["概要", "紹介", "について", "団体"]
 SKIP_EXT = re.compile(r"\.(pdf|jpe?g|png|gif|zip|lzh|exe|mp[34]|xml|rss|css|js)$", re.I)
 
 
+def _via_proxy():
+    return any(os.environ.get(k) for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "ALL_PROXY", "all_proxy"))
+
+
 def safe_host(host):
+    """Public hosts only. A name is resolved and EVERY address must be global (a public-looking name that
+    resolves to 127.0.0.1 / 10.x / 169.254.x is refused). Where a proxy is configured the proxy resolves
+    names, so a failed local lookup is not treated as unsafe (a successful one is still checked)."""
     try:
         return ipaddress.ip_address(host).is_global
     except ValueError:
-        return host.lower() != "localhost" and "." in host
+        pass
+    if host.lower() == "localhost" or "." not in host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return _via_proxy()
+    addrs = {i[4][0].split("%")[0] for i in infos}
+    return bool(addrs) and all(ipaddress.ip_address(a).is_global for a in addrs)
 
 
 def fetch(url):
@@ -183,7 +201,7 @@ def enrich(c):
 def main(argv):
     src, dst = argv
     done = []
-    for line in open(src, encoding="utf-8"):
+    for line in pathlib.Path(src).read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         c = json.loads(line)

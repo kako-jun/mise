@@ -9,7 +9,9 @@ The API key is read ONLY from the environment (ANTHROPIC_API_KEY). Nothing in
 this file prints, logs or stores it. See docs/collection/llm-judge.md.
 """
 import argparse
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -32,7 +34,16 @@ PRICING = {
     "claude-haiku-5-5": {"in": 0.10, "out": 0.50, "cw5": 0.125, "cw1h": 0.20, "cr": 0.01},
     "claude-sonnet-5-5": {"in": 2.00, "out": 10.00, "cw5": 2.50, "cw1h": 4.00, "cr": 0.10},
 }
+# Haiku 5.5 bills prompts above 100K tokens at a higher tier ($0.50 in / $2.50 out per 1M). The cache
+# figures are derived from the standard multipliers (write 1.25x / 2x, read 0.1x of the input price).
+LONG_PROMPT_TOKENS = 100_000
+PRICING_LONG = {
+    "claude-haiku-5-5": {"in": 0.50, "out": 2.50, "cw5": 0.625, "cw1h": 1.00, "cr": 0.05},
+}
 BATCH_FACTOR = 0.5
+# The ledger is shared by every run, var-dir and worktree on this machine, so the total budget cannot be
+# split by changing --var-dir. Next to the API key, outside the repository.
+DEFAULT_LEDGER = os.path.expanduser("~/.config/mise/llm-ledger.jsonl")
 
 SPAM_VERDICTS = ["pass", "suspect", "reject", "deferred"]
 SITE_SCOPES = ["standalone", "service_top", "user_page"]
@@ -41,6 +52,7 @@ SPAM_KINDS = ["none", "advertising", "affiliate", "mass_produced",
 ADULT_VALUES = ["yes", "no", "unknown"]
 SITE_KINDS = ["individual", "business", "organization", "company", "unknown"]
 CONFIDENCE = ["low", "medium", "high"]
+REJECT_KINDS = {"advertising", "affiliate", "mass_produced", "parking", "spam"}
 
 
 # ---------------------------------------------------------------- category tree
@@ -191,7 +203,24 @@ def render_candidate(c, body_limit=BODY_LIMIT):
 
 # ------------------------------------------------------------------- validation
 def _norm(s):
-    return re.sub(r"\s+", "", s)
+    """Whitespace runs -> one space (strict enough that words are not glued together)."""
+    return re.sub(r"\s+", " ", s).strip()
+
+
+_LABEL = re.compile(r"^(url|title|meta_description|lang|features|body_excerpt):[ \t]*", re.I)
+_STRUCTURE = re.compile(r"^(\(none\)|</?candidate[^>]*>|--- page: .* ---)$")
+
+
+def quote_source(text):
+    """The part of the rendered candidate that a quote may come from: the values only. The field labels
+    (url:, title:, ...), "(none)" placeholders, <candidate> tags and page separators are scaffolding that
+    the model must not be able to quote as if the site had said it."""
+    out = []
+    for line in text.splitlines():
+        line = _LABEL.sub("", line.strip())
+        if line and not _STRUCTURE.match(line):
+            out.append(line)
+    return _norm("\n".join(out))
 
 
 def validate_output(obj, valid_ids, source_text):
@@ -199,6 +228,7 @@ def validate_output(obj, valid_ids, source_text):
     errs = []
     if not isinstance(obj, dict):
         return ["output is not an object"]
+    source_text = quote_source(source_text)
     want = {"description_ja", "description_en", "long_description_ja", "long_description_en",
             "long_description_evidence", "spam", "categories", "tags",
             "adult", "site_scope", "site_kind", "site_kind_reason", "confidence", "location", "notes"}
@@ -228,6 +258,8 @@ def validate_output(obj, valid_ids, source_text):
             errs.append(f"{len(bad)} long_description_evidence quote(s) are not verbatim substrings of the candidate text")
     if isinstance(lja, str) and len(lja) > 800:
         errs.append("long_description_ja too long")
+    if isinstance(len_, str) and len(len_) > 1600:
+        errs.append("long_description_en too long")
     sp = obj["spam"]
     if not isinstance(sp, dict) or set(sp) != {"verdict", "kind", "reason"}:
         errs.append("spam object malformed")
@@ -238,6 +270,16 @@ def validate_output(obj, valid_ids, source_text):
             errs.append("spam.kind invalid")
         if not isinstance(sp["reason"], str) or not sp["reason"].strip():
             errs.append("spam.reason empty")
+        v, k = sp["verdict"], sp["kind"]
+        if v in SPAM_VERDICTS and k in SPAM_KINDS:
+            if v in ("pass", "deferred") and k != "none":
+                errs.append(f"verdict {v} must have kind none")
+            elif v == "reject" and k not in REJECT_KINDS:
+                errs.append(f"verdict reject needs a kind of {sorted(REJECT_KINDS)}, not {k}")
+            elif v == "suspect" and k == "none":
+                errs.append("verdict suspect needs a kind other than none")
+            if k == "insufficient_input" and v != "suspect":
+                errs.append("kind insufficient_input goes with verdict suspect")
     cats = obj["categories"]
     if not isinstance(cats, list) or len(cats) > 3 or not all(isinstance(x, str) for x in cats):
         errs.append("categories must be a list of at most 3 strings")
@@ -308,17 +350,24 @@ def parse_response_text(msg):
 
 
 # ------------------------------------------------------------------ cost / cache
+def price_for(model, prompt_tokens):
+    """Price row for a prompt of this many tokens (Haiku 5.5 has a higher tier above 100K)."""
+    if prompt_tokens > LONG_PROMPT_TOKENS and model in PRICING_LONG:
+        return PRICING_LONG[model]
+    return PRICING[model]
+
+
 def usage_cost(model, usage, batch=False):
-    p = PRICING[model]
     cc = usage.get("cache_creation") or {}
     w5 = cc.get("ephemeral_5m_input_tokens")
     w1 = cc.get("ephemeral_1h_input_tokens", 0)
     total_w = usage.get("cache_creation_input_tokens", 0) or 0
     if w5 is None:
         w5, w1 = total_w, 0
+    cr = usage.get("cache_read_input_tokens", 0) or 0
+    p = price_for(model, usage.get("input_tokens", 0) + total_w + cr)
     usd = (usage.get("input_tokens", 0) * p["in"] + usage.get("output_tokens", 0) * p["out"]
-           + w5 * p["cw5"] + w1 * p["cw1h"]
-           + (usage.get("cache_read_input_tokens", 0) or 0) * p["cr"]) / 1e6
+           + w5 * p["cw5"] + w1 * p["cw1h"] + cr * p["cr"]) / 1e6
     return usd * (BATCH_FACTOR if batch else 1.0)
 
 
@@ -361,22 +410,61 @@ class BudgetExceeded(Exception):
     pass
 
 
+class LedgerError(SystemExit):
+    """The ledger is missing (while results exist) or corrupt: stop instead of treating it as 0 USD."""
+
+
 class Ledger:
-    """Append-only JSONL. total = sum(call cost) + open reservations."""
+    """Append-only JSONL shared by every run. total = sum(call cost) + open reservations.
+
+    Every read-check-append is done under an exclusive flock on <path>.lock, so parallel runs cannot
+    both pass the budget check. A reservation (worst-case cost) is written BEFORE the API is called and
+    released after the real cost is recorded."""
+
+    KINDS = ("call", "reserve", "release", "init")
 
     def __init__(self, path, budget_run, budget_total):
         self.path = path
         self.budget_run = budget_run
         self.budget_total = budget_total
         self.run_spent = 0.0
-        self.run_reserved = 0.0
+        self.open = {}  # tag -> usd reserved by this process
+
+    @property
+    def run_reserved(self):
+        return sum(self.open.values())
+
+    @contextlib.contextmanager
+    def _lock(self):
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        with open(self.path + ".lock", "a") as lf:
+            fcntl.flock(lf, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lf, fcntl.LOCK_UN)
 
     def _lines(self):
         try:
-            with open(self.path, encoding="utf-8") as f:
-                return [json.loads(x) for x in f if x.strip()]
+            f = open(self.path, encoding="utf-8")
         except FileNotFoundError:
             return []
+        rows = []
+        with f:
+            for n, x in enumerate(f, 1):
+                if not x.strip():
+                    continue
+                try:
+                    r = json.loads(x)
+                except json.JSONDecodeError as e:
+                    raise LedgerError(f"ledger {self.path}:{n} is corrupt ({e.msg}); repair or restore it. "
+                                      "The total is not guessed.")
+                usd_key = "cost_usd" if isinstance(r, dict) and r.get("kind") == "call" else "usd"
+                if (not isinstance(r, dict) or r.get("kind") not in self.KINDS
+                        or (r["kind"] != "init" and not isinstance(r.get(usd_key), (int, float)))):
+                    raise LedgerError(f"ledger {self.path}:{n} is not a valid record; repair or restore it.")
+                rows.append(r)
+        return rows
 
     def total(self):
         t = 0.0
@@ -389,19 +477,71 @@ class Ledger:
                 t -= r["usd"]
         return t
 
-    def append(self, rec):
-        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+    def _append_nolock(self, rec):
         rec = dict(rec, ts=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
 
-    def check(self, worst_case_usd):
-        if self.run_spent + self.run_reserved + worst_case_usd > self.budget_run:
+    def append(self, rec):
+        with self._lock():
+            self._append_nolock(rec)
+
+    def ensure_ready(self, cache_dir, init=False):
+        """Refuse to start when results/caches exist but the ledger does not (it would read as 0 USD spent)."""
+        with self._lock():
+            if os.path.exists(self.path):
+                self._lines()  # validates
+                return
+            var = os.path.dirname(os.path.abspath(cache_dir))
+            found = [d for d in (cache_dir, os.path.join(var, "llm-batches"))
+                     if os.path.isdir(d) and os.listdir(d)]
+            if found and not init:
+                raise LedgerError(
+                    f"ledger {self.path} does not exist, but {', '.join(found)} already holds results. Spending "
+                    "so far would count as 0 USD. Merge the old ledgers first (scripts/llm/merge_ledgers.py), "
+                    "or pass --init-ledger to start an empty one on purpose.")
+            self._append_nolock({"kind": "init", "note": "ledger created"})
+
+    def _check_nolock(self, worst_case_usd):
+        eps = 1e-9
+        if self.run_spent + self.run_reserved + worst_case_usd > self.budget_run + eps:
             raise BudgetExceeded(f"run budget {self.budget_run:.2f} USD would be exceeded "
                                  f"(spent {self.run_spent:.4f}, next worst case {worst_case_usd:.4f})")
-        if self.total() + worst_case_usd > self.budget_total:
+        total = self.total()
+        if total + worst_case_usd > self.budget_total + eps:
             raise BudgetExceeded(f"total budget {self.budget_total:.2f} USD would be exceeded "
-                                 f"(ledger total {self.total():.4f}, next worst case {worst_case_usd:.4f})")
+                                 f"(ledger total {total:.4f}, next worst case {worst_case_usd:.4f})")
+
+    def check(self, worst_case_usd):
+        with self._lock():
+            self._check_nolock(worst_case_usd)
+
+    def reserve(self, usd, tag, model=None):
+        """Check the budgets and write the reservation in one locked step."""
+        usd = round(usd, 6)
+        with self._lock():
+            self._check_nolock(usd)
+            self._append_nolock({"kind": "reserve", "batch": tag, "usd": usd, "model": model})
+        self.open[tag] = usd
+
+    def release(self, tag, usd=None):
+        usd = self.open.pop(tag, usd)
+        if usd:
+            self.append({"kind": "release", "batch": tag, "usd": usd})
+
+    @contextlib.contextmanager
+    def hold(self, usd, tag, model=None):
+        self.reserve(usd, tag, model)
+        try:
+            yield
+        except AmbiguousRequest:
+            raise  # may have been billed without our seeing the usage: the reservation stays on the ledger
+        except BaseException:
+            self.release(tag)
+            raise
+        self.release(tag)
 
     def record_call(self, run_id, cand_id, model, mode, usage, cost, seconds, note=""):
         self.run_spent += cost
@@ -413,10 +553,18 @@ class Ledger:
                      "cost_usd": round(cost, 6), "seconds": round(seconds, 2), "note": note})
 
 
-def worst_case(model, system, user_text, max_tokens, batch=False):
+def worst_case(model, system, user_text, max_tokens, batch=False, cache_ttl="5m"):
+    """Upper bound in USD: the system block is billed as a cache WRITE (1.25x for 5m, 2x for 1h), the rest
+    as input, plus max_tokens of output. Refuses prompts that may fall in Haiku's >100K tier."""
     p = PRICING[model]
-    n_in = estimate_tokens(system) + estimate_tokens(user_text) + 400  # + schema/overhead
-    usd = (n_in * p["in"] + max_tokens * p["out"]) / 1e6
+    n_sys = estimate_tokens(system)
+    n_user = estimate_tokens(user_text) + 400  # + schema/overhead
+    n_in = n_sys + n_user
+    if model in PRICING_LONG and n_in > LONG_PROMPT_TOKENS:
+        raise BudgetExceeded(f"{model}: prompt of ~{n_in} tokens may exceed {LONG_PROMPT_TOKENS} tokens, "
+                             "which is billed at a higher tier; lower --body-limit / --group")
+    cw = p["cw1h"] if cache_ttl == "1h" else p["cw5"]
+    usd = (n_sys * cw + n_user * p["in"] + max_tokens * p["out"]) / 1e6
     return usd * (BATCH_FACTOR if batch else 1.0), n_in
 
 
@@ -436,7 +584,16 @@ def _ssl_context():
     return ctx
 
 
-def http(method, url, body=None, raw=False, retries=4):
+class AmbiguousRequest(SystemExit):
+    """A non-idempotent request failed without an answer: it may have been billed / queued. Not re-sent."""
+
+
+def http(method, url, body=None, raw=False, retries=4, idempotent=None):
+    """Only idempotent requests (GET, or count_tokens) are re-sent after a timeout / connection error: a
+    re-sent POST may be billed twice or submit a batch twice. Status 429/5xx are re-sent for every method
+    (the server answered, so the failure is known)."""
+    if idempotent is None:
+        idempotent = method == "GET"
     data = None if body is None else json.dumps(body).encode("utf-8")
     delay = 3
     for attempt in range(retries + 1):
@@ -452,12 +609,14 @@ def http(method, url, body=None, raw=False, retries=4):
                 delay *= 2
                 continue
             raise SystemExit(f"API error {e.code} on {method} {url.split('/v1/')[-1]}: {msg}")
-        except (urllib.error.URLError, TimeoutError) as e:
-            if attempt < retries:
+        except (urllib.error.URLError, OSError) as e:  # URLError, timeouts, connection resets
+            if idempotent and attempt < retries:
                 time.sleep(delay)
                 delay *= 2
                 continue
-            raise SystemExit(f"network error on {method} {url.split('/v1/')[-1]}: {getattr(e, 'reason', e)}")
+            hint = "" if idempotent else " (not re-sent: the request may already have been billed or queued)"
+            err = AmbiguousRequest if not idempotent else SystemExit
+            raise err(f"network error on {method} {url.split('/v1/')[-1]}: {getattr(e, 'reason', e)}{hint}")
 
 
 def build_params(model, system, schema, user_text, max_tokens, effort, cache_ttl):
@@ -525,12 +684,13 @@ class Judge:
                 max_tokens = min(max_tokens * 2, 16000)
             params = build_params(model, self.system, self.schema, user, max_tokens,
                                   self.args.effort, self.args.cache_ttl)
-            wc, _ = worst_case(model, self.system + json.dumps(self.schema), user, max_tokens)
-            self.ledger.check(wc)
+            wc, _ = worst_case(model, self.system + json.dumps(self.schema), user, max_tokens,
+                               cache_ttl=self.args.cache_ttl)
             t0 = time.time()
-            msg = http("POST", API, params)
-            dt = time.time() - t0
-            obj, problem, usage, cost = self.finish(model, cand, msg, "single", dt)
+            with self.ledger.hold(wc, f"{self.run_id}-single-{custom_id_for(cand['id'])}-{attempt}", model):
+                msg = http("POST", API, params)
+                dt = time.time() - t0
+                obj, problem, usage, cost = self.finish(model, cand, msg, "single", dt)
             cost_total += cost
             spent += dt
             if obj is not None:
@@ -549,9 +709,15 @@ class Judge:
             if esc and r.get("output") and esc != model and (
                     r["output"]["confidence"] == "low" or r["output"]["spam"]["verdict"] != "pass"):
                 r2 = self.judge_one(esc, c)
-                r2["escalated_from"] = model
-                results.append(r2)
-                tag = f"escalated->{esc}"
+                if r2.get("output"):
+                    r2["escalated_from"] = model
+                    results.append(r2)
+                    tag = f"escalated->{esc}"
+                else:  # the stronger model failed: keep the valid first result, note what happened
+                    r["escalation_failed"] = {"model": esc, "error": r2.get("error"),
+                                              "cost_usd": r2.get("cost_usd", 0.0)}
+                    results.append(r)
+                    tag = f"escalation to {esc} FAILED, kept {model} result"
             else:
                 results.append(r)
                 tag = "cached" if r.get("cached") else "ok" if r.get("output") else "INVALID"
@@ -579,18 +745,25 @@ class Judge:
             reqs, est = [], 0.0
             for c in todo:
                 user = self.user_text(c)
-                wc, _ = worst_case(model, self.system + json.dumps(self.schema), user, a.max_tokens, batch=True)
+                wc, _ = worst_case(model, self.system + json.dumps(self.schema), user, a.max_tokens, batch=True,
+                                   cache_ttl=a.cache_ttl)
                 est += wc
                 reqs.append({"custom_id": custom_id_for(c["id"]),
                              "params": build_params(model, self.system, self.schema, user, a.max_tokens,
                                                     a.effort, a.cache_ttl)})
-            self.ledger.check(est)
-            batch = http("POST", API + "/batches", {"requests": reqs})
+            tag = f"{self.run_id}-batch-{model}"
+            self.ledger.reserve(est, tag, model)  # before submitting, so parallel runs see it
+            try:
+                batch = http("POST", API + "/batches", {"requests": reqs})
+            except AmbiguousRequest:
+                raise  # the batch may exist: keep the reservation
+            except BaseException:
+                self.ledger.release(tag)  # the API answered with an error: nothing was queued
+                raise
             batch_id = batch["id"]
-            self.ledger.run_reserved += est
-            self.ledger.append({"kind": "reserve", "batch": batch_id, "usd": round(est, 6), "model": model})
-            with open(os.path.join(state_dir, batch_id + ".json"), "w") as f:
-                json.dump({"model": model, "reserved_usd": est, "ids": [c["id"] for c in todo]}, f)
+            with open(os.path.join(state_dir, batch_id + ".json"), "w", encoding="utf-8") as f:
+                json.dump({"model": model, "reserved_usd": round(est, 6), "tag": tag,
+                           "ids": [c["id"] for c in todo]}, f)
             print(f"submitted batch {batch_id} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
         # poll
         t0 = time.time()
@@ -603,7 +776,10 @@ class Judge:
         seconds = time.time() - t0
         raw = http("GET", st["results_url"] if st.get("results_url") else f"{API}/batches/{batch_id}/results", raw=True)
         meta_path = os.path.join(state_dir, batch_id + ".json")
-        meta = json.load(open(meta_path)) if os.path.exists(meta_path) else {"reserved_usd": 0, "model": model}
+        meta = {"reserved_usd": 0, "model": model}
+        if os.path.exists(meta_path):
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
         model = meta.get("model", model)
         out = []
         per = seconds / max(1, len(raw.splitlines()))
@@ -612,9 +788,14 @@ class Judge:
                 continue
             row = json.loads(line)
             cand = by_cid.get(row["custom_id"])
-            if cand is None:
-                continue
             res = row["result"]
+            if cand is None:
+                # billed even though we cannot match it: record the cost so ledger and reservation agree
+                if res.get("type") == "succeeded":
+                    usage = res["message"].get("usage", {})
+                    self.ledger.record_call(self.run_id, "unmatched:" + str(row["custom_id"])[:80], model, "batch",
+                                            usage, usage_cost(model, usage, True), per, note="unmatched custom_id")
+                continue
             if res["type"] != "succeeded":
                 out.append({"id": cand["id"], "model": model, "output": None, "error": res["type"],
                             "cost_usd": 0.0, "seconds": per, "attempts": 1, "cached": False})
@@ -628,8 +809,7 @@ class Judge:
                 self.cache.put(self.key(model, cand), r)
             out.append(r)
         if meta.get("reserved_usd"):
-            self.ledger.append({"kind": "release", "batch": batch_id, "usd": meta["reserved_usd"]})
-            self.ledger.run_reserved = 0.0
+            self.ledger.release(meta.get("tag", batch_id), meta["reserved_usd"])
         return out
 
 
@@ -644,8 +824,13 @@ def dry_run(judge, models, cands, batch):
         n_in = wc_sum = exp_sum = 0.0
         for c in cands:
             user = judge.user_text(c)
-            wc, tin = worst_case(m, judge.system + json.dumps(judge.schema), user, a.max_tokens, batch)
-            p = PRICING[m]
+            try:
+                wc, tin = worst_case(m, judge.system + json.dumps(judge.schema), user, a.max_tokens, batch,
+                                     a.cache_ttl)
+            except BudgetExceeded as e:
+                print(f"  {m}: NOT RUNNABLE: {e}")
+                break
+            p = price_for(m, tin)
             exp = (tin * p["in"] + a.expected_output_tokens * p["out"]) / 1e6 * (BATCH_FACTOR if batch else 1.0)
             n_in += tin
             wc_sum += wc
@@ -661,6 +846,14 @@ def dry_run(judge, models, cands, batch):
 
 
 # --------------------------------------------------------------------------- CLI
+def add_ledger_args(p):
+    p.add_argument("--ledger", default=DEFAULT_LEDGER,
+                   help="cost ledger shared by all runs (default: ~/.config/mise/llm-ledger.jsonl, independent of "
+                        "--var-dir so the total budget cannot be split)")
+    p.add_argument("--init-ledger", action="store_true",
+                   help="allow starting an empty ledger although results/caches already exist (otherwise stop)")
+
+
 def make_parser():
     p = argparse.ArgumentParser(description="LLM judge for mise candidates (see docs/collection/llm-judge.md)")
     p.add_argument("input", help="candidates JSONL (id, url, title, meta_description, lang, body_excerpt, features)")
@@ -680,6 +873,7 @@ def make_parser():
     p.add_argument("--out", help="results JSON path (default var/llm-results-<model>.json)")
     p.add_argument("--results-dir", help="where llm-results-<model>.json go (default: var dir)")
     p.add_argument("--var-dir", default=os.path.join(ROOT, "var"))
+    add_ledger_args(p)
     p.add_argument("--poll-seconds", type=int, default=30)
     p.add_argument("--batch-resume", help="resume polling an already submitted batch id")
     return p
@@ -688,7 +882,6 @@ def make_parser():
 def main(argv=None):
     a = make_parser().parse_args(argv)
     a.cache_dir = os.path.join(a.var_dir, "llm-cache")
-    a.ledger = os.path.join(a.var_dir, "llm-ledger.jsonl")
     models = [MODELS.get(m, m) for m in (a.model or ["haiku"])]
     for m in models + ([a.escalate_model] if a.escalate_model else []):
         if m not in PRICING:
@@ -700,6 +893,7 @@ def main(argv=None):
     if a.dry_run:
         dry_run(judge, models, cands, a.mode == "batch")
         return 0
+    judge.ledger.ensure_ready(a.cache_dir, a.init_ledger)
     rc = 0
     for m in models:
         t0 = time.time()

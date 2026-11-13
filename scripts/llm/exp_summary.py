@@ -6,11 +6,12 @@ Agreement is measured against the first file: same verdict, same site_kind, over
 adult attribute, and (for the described subset) whether a long description exists.
 """
 import json
+import pathlib
 import sys
 
 
 def load(p):
-    d = json.load(open(p, encoding="utf-8"))
+    d = json.loads(pathlib.Path(p).read_text(encoding="utf-8"))
     return d, {r["id"]: r for r in d["results"]}
 
 

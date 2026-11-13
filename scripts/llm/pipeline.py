@@ -17,10 +17,10 @@ import sys
 import time
 
 import judge
-from judge import (BudgetExceeded, Cache, Ledger, PRICING, MODELS, ROOT, API, ADULT_VALUES, CONFIDENCE, SITE_KINDS,
+from judge import (AmbiguousRequest, BudgetExceeded, Cache, Ledger, PRICING, MODELS, ROOT, API, ADULT_VALUES, CONFIDENCE, SITE_KINDS,
                    SITE_SCOPES, SPAM_KINDS, SPAM_VERDICTS, custom_id_for, estimate_tokens, http, input_hash,
                    load_categories, read_candidates, render_candidate, usage_cost, validate_output, worst_case,
-                   BATCH_FACTOR)
+                   BATCH_FACTOR, DEFAULT_LEDGER, add_ledger_args, price_for)
 
 NS = {"type": "string"}
 NULLABLE = {"anyOf": [{"type": "string"}, {"type": "null"}]}
@@ -155,7 +155,8 @@ def check_item(stage, item, idx, valid_ids, src, base=None):
     try:
         if stage == "triage":
             full = triage_to_full(item)
-            errs = [e for e in validate_output(full, valid_ids, src)
+            extra_errs = ["aq given but ad is not y"] if item.get("ad") != "y" and item.get("aq") else []
+            errs = extra_errs + [e for e in validate_output(full, valid_ids, src)
                     if "description" not in e and "long_description" not in e]
         elif stage == "describe":
             full = merge_describe(base, item)
@@ -207,8 +208,11 @@ class Pipeline:
         return input_hash(model, self.systems[stage], self.schemas[stage], self.text(c, extra),
                           PER_ITEM_TOKENS[stage], f"{stage}|{self.a.effort}|{self.a.thinking_off}")
 
+    def default_max_tokens(self, stage, n):
+        return min(16000, PER_ITEM_TOKENS[stage] * n + THINKING_BUFFER[stage])
+
     def request(self, stage, model, chunk, max_tokens=None):
-        mt = max_tokens or min(16000, PER_ITEM_TOKENS[stage] * len(chunk) + THINKING_BUFFER[stage])
+        mt = max_tokens or self.default_max_tokens(stage, len(chunk))
         cc = {"type": "ephemeral"}
         if self.a.cache_ttl == "1h":
             cc["ttl"] = "1h"
@@ -224,9 +228,11 @@ class Pipeline:
             p["thinking"] = th
         return p
 
-    def worst(self, stage, model, chunk, batch=False):
-        mt = PER_ITEM_TOKENS[stage] * len(chunk) + THINKING_BUFFER[stage]
-        return worst_case(model, self.systems[stage] + json.dumps(self.schemas[stage]), self.group_text(chunk), mt, batch)
+    def worst(self, stage, model, chunk, batch=False, max_tokens=None):
+        """Worst case for the max_tokens that is actually sent (default or the doubled retry value)."""
+        mt = max_tokens or self.default_max_tokens(stage, len(chunk))
+        return worst_case(model, self.systems[stage] + json.dumps(self.schemas[stage]), self.group_text(chunk), mt,
+                          batch, self.a.cache_ttl)
 
     # -- processing one API message for a chunk
     def process(self, stage, model, chunk, msg, seconds, batch=False):
@@ -262,10 +268,21 @@ class Pipeline:
         return [items[k:k + n] for k in range(0, len(items), n)]
 
     def call(self, stage, model, chunk, max_tokens=None):
-        self.ledger.check(self.worst(stage, model, chunk)[0])
+        """Reserve the worst case for the request actually sent, call, return (msg, seconds, tag).
+        The caller records the usage (process) and then releases the reservation."""
+        wc = self.worst(stage, model, chunk, max_tokens=max_tokens)[0]
+        self.seq = getattr(self, "seq", 0) + 1
+        tag = f"{self.run_id}-{stage}-{self.seq}"
+        self.ledger.reserve(wc, tag, model)
         t0 = time.time()
-        msg = http("POST", API, self.request(stage, model, chunk, max_tokens))
-        return msg, time.time() - t0
+        try:
+            msg = http("POST", API, self.request(stage, model, chunk, max_tokens))
+        except AmbiguousRequest:
+            raise  # may have been billed: the reservation stays on the ledger
+        except BaseException:
+            self.ledger.release(tag)
+            raise
+        return msg, time.time() - t0, tag
 
     def run_stage(self, stage, model, work):
         """work: list of (cand, extra, base). Returns {cand_id: full-shaped output or None}; caches per item."""
@@ -287,8 +304,11 @@ class Pipeline:
 
     def _run_chunk(self, stage, model, chunk, done, retry=True):
         pairs = [(c, extra) for c, extra, _ in chunk]
-        msg, dt = self.call(stage, model, pairs)
-        self._absorb(stage, model, chunk, msg, dt, done, retry)
+        msg, dt, tag = self.call(stage, model, pairs)
+        try:
+            self._absorb(stage, model, chunk, msg, dt, done, retry)
+        finally:
+            self.ledger.release(tag)
 
     def _absorb(self, stage, model, chunk, msg, dt, done, retry, batch=False):
         res = self.process(stage, model, chunk, msg, dt, batch)
@@ -311,8 +331,11 @@ class Pipeline:
                 mt = None
                 if problem and "truncated" in problem:
                     mt = min(16000, 2 * (PER_ITEM_TOKENS[stage] + THINKING_BUFFER[stage]))
-                msg2, dt2 = self.call(stage, model, [(c, extra)], mt)
-                self._absorb(stage, model, [(c, extra, base)], msg2, dt2, done, retry=False)
+                msg2, dt2, tag2 = self.call(stage, model, [(c, extra)], mt)
+                try:
+                    self._absorb(stage, model, [(c, extra, base)], msg2, dt2, done, retry=False)
+                finally:
+                    self.ledger.release(tag2)
         else:
             for c, extra, base, problem in failed:
                 self.failures[c["id"]] = f"{stage}: {problem}"
@@ -327,11 +350,16 @@ class Pipeline:
             pairs = [(c, extra) for c, extra, _ in chunk]
             est += self.worst(stage, model, pairs, batch=True)[0]
             reqs.append({"custom_id": f"{stage}-{k}", "params": self.request(stage, model, pairs)})
-        self.ledger.check(est)
-        batch = http("POST", API + "/batches", {"requests": reqs})
+        tag = f"{self.run_id}-{stage}-batch"
+        self.ledger.reserve(est, tag, model)  # before submitting, so parallel runs see it
+        try:
+            batch = http("POST", API + "/batches", {"requests": reqs})
+        except AmbiguousRequest:
+            raise  # the batch may exist: keep the reservation
+        except BaseException:
+            self.ledger.release(tag)
+            raise
         bid = batch["id"]
-        self.ledger.run_reserved += est
-        self.ledger.append({"kind": "reserve", "batch": bid, "usd": round(est, 6), "model": model})
         print(f"submitted batch {bid} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
         t0 = time.time()
         while True:
@@ -345,14 +373,22 @@ class Pipeline:
             if not line.strip():
                 continue
             row = json.loads(line)
-            chunk = chunks[int(row["custom_id"].rsplit("-", 1)[1])]
+            try:
+                chunk = chunks[int(row["custom_id"].rsplit("-", 1)[1])]
+            except (ValueError, IndexError, KeyError):
+                chunk = None
+            if chunk is None:  # cannot be matched, but a succeeded row was billed: keep ledger and reservation consistent
+                if row.get("result", {}).get("type") == "succeeded":
+                    usage = row["result"]["message"].get("usage", {})
+                    self.ledger.record_call(self.run_id, "unmatched:" + str(row.get("custom_id"))[:80], model, "batch",
+                                            usage, usage_cost(model, usage, True), dt, note="unmatched custom_id")
+                continue
             if row["result"]["type"] != "succeeded":
                 for c, extra, base in chunk:
                     self.failures[c["id"]] = f"{stage}: batch {row['result']['type']}"
                 continue
             self._absorb(stage, model, chunk, row["result"]["message"], dt / max(1, len(chunks)), done, True, batch=True)
-        self.ledger.append({"kind": "release", "batch": bid, "usd": round(est, 6)})
-        self.ledger.run_reserved = 0.0
+        self.ledger.release(tag)
 
     # -- the pipeline
     def run(self, model, cands, stages, describe_model=None):
@@ -389,7 +425,7 @@ def count_tokens(p, stage, model, work):
         pairs = [(c, extra) for c, extra, _ in chunk]
         req = p.request(stage, model, pairs)
         body = {k: req[k] for k in ("model", "system", "messages")}
-        r = http("POST", API + "/count_tokens", body)
+        r = http("POST", API + "/count_tokens", body, idempotent=True)
         total += r["input_tokens"]
     return total
 
@@ -407,8 +443,12 @@ def dry_run(p, cands, model, stages):
         n_in = wc = exp = 0.0
         for chunk in reqs:
             pairs = [(c, e) for c, e, _ in chunk]
-            w, tin = p.worst(stage, model, pairs, a.mode == "batch")
-            pr = PRICING[model]
+            try:
+                w, tin = p.worst(stage, model, pairs, a.mode == "batch")
+            except BudgetExceeded as e:
+                print(f"  {stage}: NOT RUNNABLE: {e}")
+                return
+            pr = price_for(model, tin)
             out_exp = a.expected_output_tokens.get(stage, 300) * len(chunk)
             exp += (tin * pr["in"] + out_exp * pr["out"]) / 1e6 * (BATCH_FACTOR if a.mode == "batch" else 1)
             wc += w
@@ -419,6 +459,14 @@ def dry_run(p, cands, model, stages):
         tot_wc += wc
     print(f"TOTAL expected ${tot_exp:.4f}, worst case ${tot_wc:.4f}  (offline estimates; no API call was made; "
           f"use --count-tokens for exact input counts)")
+
+
+def check_args(ap, a):
+    """Reject combinations the API would refuse, before any work or money is spent."""
+    if a.thinking_off and a.effort in ("xhigh", "max"):
+        ap.error(f"--thinking-off cannot be combined with --effort {a.effort} (high effort needs thinking)")
+    if a.group < 1:
+        ap.error("--group must be at least 1")
 
 
 def main(argv=None):
@@ -440,10 +488,11 @@ def main(argv=None):
     ap.add_argument("--limit", type=int)
     ap.add_argument("--poll-seconds", type=int, default=20)
     ap.add_argument("--var-dir", default=os.path.join(ROOT, "var"))
+    add_ledger_args(ap)
     ap.add_argument("--out", help="results JSON path")
     a = ap.parse_args(argv)
+    check_args(ap, a)
     a.cache_dir = os.path.join(a.var_dir, "llm-cache")
-    a.ledger = os.path.join(a.var_dir, "llm-ledger.jsonl")
     a.expected_output_tokens = {"triage": 90, "describe": 450, "full": 600}
     model = MODELS.get(a.model, a.model)
     dmodel = MODELS.get(a.describe_model, a.describe_model) if a.describe_model else None
@@ -457,6 +506,8 @@ def main(argv=None):
     if a.dry_run:
         dry_run(p, cands, model, a.stages)
         return 0
+    if not a.count_tokens:
+        p.ledger.ensure_ready(a.cache_dir, a.init_ledger)
     if a.count_tokens:
         for stage in (["full"] if a.stages == "full" else ["triage", "describe"]):
             work = [(c, None if stage != "describe" else "pre-judged: adult=n", None) for c in cands]
@@ -471,9 +522,10 @@ def main(argv=None):
     wall = time.time() - t0
     out = a.out or os.path.join(a.var_dir, f"pipeline-{a.stages}-g{a.group}-{a.model}.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    json.dump({"args": {k: v for k, v in vars(a).items() if k not in ("cache_dir", "ledger")}, "stats": p.stats,
-               "wall_seconds": wall, "failures": p.failures, "results": list(results.values())},
-              open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"args": {k: v for k, v in vars(a).items() if k not in ("cache_dir", "ledger")}, "stats": p.stats,
+                   "wall_seconds": wall, "failures": p.failures, "results": list(results.values())},
+                  f, ensure_ascii=False, indent=1)
     tot = sum(s["usd"] for s in p.stats.values())
     print(f"{a.stages} group={a.group} {a.model}: {len(results)} candidates, {len(p.failures)} unresolved, "
           f"cost ${tot:.4f}, wall {wall:.1f}s -> {out}", file=sys.stderr)

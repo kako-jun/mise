@@ -12,7 +12,8 @@
 | `scripts/llm/judge.py` | 共通部（指示文・スキーマ・検証・キャッシュ・台帳・予算ガード・API）と、1件ずつ全項目を返す基準実装 |
 | `scripts/llm/export_sites.py` | 既掲載サイト（`migrations/` を in-memory SQLite に適用）と `data/` の取得結果から入力JSONLと、比較用の人手の値を書き出す。新規アクセスなし |
 | `scripts/llm/export_candidates.py` | 発見パイプラインの frontier（`state='candidate'`）を読み取り専用で入力JSONLにする |
-| `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助 |
+| `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助。名前を解決して**全アドレスが公開アドレス**でなければ取得しない（プロキシ設定がある環境だけ、ローカルで解決できない名前を許す） |
+| `scripts/llm/merge_ledgers.py` | 旧 `<var-dir>/llm-ledger.jsonl` を共有台帳へ統合（繰り返し可） |
 | `scripts/llm/compare.py` `review_long.py` `exp_summary.py` | 人手の値との並置、長い紹介文の根拠突き合わせ表、実験の費用・一致率の表 |
 
 ## 入力
@@ -26,7 +27,7 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 1. **第1段（triage、小型モデル）**: 全候補に対し、決まったコードの短い判定を返す。`v` 判定（p pass / s suspect / r reject / d deferred）、`kd` 理由の種別、`sk` サイト種別、`ad` 成人向け（y/n/u）、`sc` 範囲（s standalone / t service_top / u user_page）、`cf` 信頼度、`cat` カテゴリid（最大3）、`r` 理由（pass で信頼度が中以上なら空、そうでなければ短い一文）。
 2. **第2段（describe）**: 第1段で `pass` になった候補だけ。`dj`/`de` 短い紹介文、`lj`/`le` 長い紹介文（200〜400字目安）と `ev`（原文からの逐語引用2〜6件）、`tg` タグ、所在（`cc`/`rc`/`q`）。第2段だけ上位モデルにもできる（`--describe-model sonnet`）。
 
-出力は構造化出力（`output_config.format = json_schema`）で固定し、**件ごとに**検証する（キー、列挙、カテゴリidが木にあること、引用が原文の部分文字列であること、`deferred` と `user_page` の整合 など）。不正な件だけを1件ずつ再試行する（打ち切りなら `max_tokens` を増やす）。第1段・第2段の結果は `judge.py` の全項目形に正規化して保存する。`--stages full` は全項目を1回で返させる基準形。
+出力は構造化出力（`output_config.format = json_schema`）で固定し、**件ごとに**検証する（キー、列挙、カテゴリidが木にあること、`deferred` と `user_page` の整合、`verdict` と `kind` の対応（pass/deferred は none、reject は広告・量産・パーキング・スパムの種別、suspect は none 以外）、英語の長文の長さ上限、第1段で `ad` が y でないのに `aq` がある場合の拒否 など）。引用は、入力のうち値の部分（`url:` `title:` などのラベル・`(none)`・`<candidate>` タグ・ページ区切りを除く）に空白を1つへ正規化して照合し、語をつなげて一致させることはしない。不正な件だけを1件ずつ再試行する（打ち切りなら `max_tokens` を増やす）。`judge.py --escalate-model` の上位モデル再判定が失敗しても、最初の有効な結果は残し、失敗は `escalation_failed` に記録する。第1段・第2段の結果は `judge.py` の全項目形に正規化して保存する。`--stages full` は全項目を1回で返させる基準形。
 
 判定基準（指示文に入っている。正本は [listing-criteria.md](../concept/listing-criteria.md)）: `reject` は広告中心・量産（アフィリエイト目的等）・パーキング/売却・スパムだけ。個人/事業者/企業/大手/団体/学校/SNS本体/成人向けは理由にしない。`site_kind`（individual / business / organization / company / unknown）、`adult`、`site_scope` は属性として記録するだけ。共有サービス配下の個別ユーザーのページ（`user_page`）は `deferred`（保留）。成人向けの紹介文は中立・婉曲で、本文を再現しない。所在（国・区画）は本文に明記され、逐語引用がある場合だけ。不確かなら `null`。
 
@@ -34,7 +35,7 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 
 - 固定の英語指示文を `system` に置き、`cache_control` でプロンプトキャッシュに載せる（`--cache-ttl 1h` も可）。最小の長さは Haiku 5.5・Sonnet 5.5 とも 512 トークン（公式 prompt-caching、2026-11-13 確認）。
 - 結果は**件ごとの入力ハッシュ**でキャッシュ（`var/llm-cache/`）。まとめ数を変えても同じ件は再課金されない。
-- 出力キーは短いコードにし、`max_tokens` は件数に比例して絞る。思考トークンも出力として課金されるので、`--thinking-off`（Haiku は `disabled`、Sonnet は `between_tools`）と `--effort` で抑えられる（実測: 思考オフで出力トークンが約 1/3、[trials.md](trials.md#llm-判定工程の比較実験2026-11-14issue-48)）。
+- 出力キーは短いコードにし、`max_tokens` は件数に比例して絞る。思考トークンも出力として課金されるので、`--thinking-off`（Haiku は `disabled`、Sonnet は `between_tools`。`--effort xhigh/max` との併用は起動時にエラー）と `--effort` で抑えられる（実測: 思考オフで出力トークンが約 1/3、[trials.md](trials.md#llm-判定工程の比較実験2026-11-14issue-48)）。
 - 事前見積り: `--dry-run`（API を呼ばない、保守的な概算）と `--count-tokens`（`/v1/messages/count_tokens` で入力トークンを正確に数える。生成は課金されない）。
 - バッチ（`--mode batch`、Message Batches API、50%）。結果はポーリングで取得し、不正な件は同期で再試行する。
 
@@ -56,11 +57,14 @@ uv run python3 -m unittest discover tests               # キー不要の単体�
 
 ## キャッシュ・台帳・予算ガード
 
-- **台帳** `var/llm-ledger.jsonl`（追記のみ）: 呼び出しごとに input / output / cache作成 / cache読み取りのトークン、推定費用、秒数、件数。
-- **予算**: 呼び出し前に「入力の保守的な見積り + `max_tokens` 分の出力」を最悪費用として、`--budget-run`（既定2 USD）と `--budget-total`（既定90 USD、台帳の累積 + バッチの予約）を超えるなら停止（終了コード3）。バッチは投入時に最悪費用を予約し、結果取得で解放して実費を記録する。
+- **台帳** `~/.config/mise/llm-ledger.jsonl`（追記のみ、リポ外・鍵と同じ場所）: 呼び出しごとに input / output / cache作成 / cache読み取りのトークン、推定費用、秒数、件数。**`--var-dir` やワークツリーに依存しない固定パス**なので、全体予算 `--budget-total` は分断されない（`--ledger PATH` で明示したときだけ別の台帳）。読み書きは `<台帳>.lock` への `flock` の下で行い、並列実行でも予算チェックと予約が一体で通る。
+- **台帳が無いのに結果が残っている場合は停止**（`var-dir` の `llm-cache/` や `llm-batches/` が空でないのに台帳が無いと、使用済みが 0 円に見えるため）。古い台帳を統合するか、意図して空から始めるなら `--init-ledger`。台帳が壊れている（JSON として読めない、費用の欄が無い）場合も合計を推測せず停止する。
+- **以前の `<var-dir>/llm-ledger.jsonl` の統合**: `uv run python3 scripts/llm/merge_ledgers.py $(find var -name llm-ledger.jsonl)`（`--dry-run` で確認可）。同じ記録は二重に足さないので繰り返してよい。
+- **予算**: 呼び出し前に「入力の保守的な見積り + `max_tokens` 分の出力」を最悪費用として、`--budget-run`（既定2 USD）と `--budget-total`（既定90 USD、台帳の累積 + 予約）を超えるなら停止（終了コード3）。**単発もバッチも、呼ぶ前に最悪費用を台帳へ予約**し（チェックと書き込みは同じロック内）、実費を記録してから解放する。`max_tokens` を倍にする再試行は倍にした値で再チェックする。最悪費用には system のキャッシュ書き込み割増（5分 1.25 倍、1時間 2 倍）を含める。Haiku 5.5 は入力 100K トークン超が高単価帯（$0.50 / $2.50）なので、見積りが超えそうなら停止し（`--body-limit` / `--group` を下げる）、実費の計算は帯を切り替える。
+- **POST は自動再送しない**: タイムアウト・接続エラーの後に生成 POST やバッチ投入を再送すると二重課金・二重投入になりうる。再送するのは冪等な GET と `count_tokens` だけ（429/5xx の応答は全メソッドで再試行）。応答なしで終わった POST の予約は解放せず台帳に残す（課金されたかもしれない）。バッチで `custom_id` が突き合わない結果行も、課金されていれば台帳に記録して予約と整合させる。
 - **料金** は公式の料金表（<https://platform.claude.com/docs/en/about-claude/pricing>、2026-11-13確認）を `judge.py` の `PRICING` に設定値として持つ。Haiku 5.5 は 100K トークン以下の階層、バッチは50%。新モデルはここに足すまで使えない。
 - **残高の突き合わせ**: 台帳の累積と Console の残高の減りを比べる。台帳に載らない利用があれば差になる。
-- `var/` は `.gitignore`。結果JSON・キャッシュ・台帳はコミットしない。
+- リポ内の `/var/`（`.gitignore`）の結果JSON・キャッシュはコミットしない。台帳はリポ外。
 
 鍵の置き場所は `~/.config/mise/anthropic.env`（リポ外、権限600、値は書かない）。クレジットの期限は **2026-12-08 00:00 UTC**（繰り越しなし）。
 

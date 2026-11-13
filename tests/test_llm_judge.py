@@ -130,9 +130,12 @@ class ValidateTests(unittest.TestCase):
 
 class CostAndCacheTests(unittest.TestCase):
     def test_usage_cost(self):
-        u = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
-        self.assertAlmostEqual(judge.usage_cost("claude-haiku-5-5", u), 0.10 + 0.50)
-        self.assertAlmostEqual(judge.usage_cost("claude-sonnet-5-5", u, batch=True), (2 + 10) * 0.5)
+        u = {"input_tokens": 50_000, "output_tokens": 50_000}
+        self.assertAlmostEqual(judge.usage_cost("claude-haiku-5-5", u), 0.05 * 0.10 + 0.05 * 0.50)
+        self.assertAlmostEqual(judge.usage_cost("claude-sonnet-5-5", u, batch=True), 0.05 * (2 + 10) * 0.5)
+        # Haiku above 100K prompt tokens is billed at the higher tier
+        big = {"input_tokens": 200_000, "output_tokens": 10_000}
+        self.assertAlmostEqual(judge.usage_cost("claude-haiku-5-5", big), 0.2 * 0.50 + 0.01 * 2.50)
         u = {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 1_000_000,
              "cache_read_input_tokens": 1_000_000}
         self.assertAlmostEqual(judge.usage_cost("claude-sonnet-5-5", u), 2.50 + 0.10)
@@ -189,7 +192,8 @@ class BudgetTests(unittest.TestCase):
             led.record_call("r", "a", "claude-haiku-5-5", "single",
                             {"input_tokens": 5, "output_tokens": 6, "cache_creation_input_tokens": 7,
                              "cache_read_input_tokens": 8}, 0.01, 2.0)
-            row = json.loads(open(led.path).read())
+            with open(led.path, encoding="utf-8") as f:
+                row = json.loads(f.read())
             self.assertEqual((row["input_tokens"], row["output_tokens"], row["cache_creation_input_tokens"],
                               row["cache_read_input_tokens"]), (5, 6, 7, 8))
 
@@ -217,7 +221,8 @@ class DryRunTests(unittest.TestCase):
     def test_candidate_validation(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "x.jsonl")
-            open(p, "w").write('{"url": "https://e.org/"}\n')
+            with open(p, "w", encoding="utf-8") as f:
+                f.write('{"url": "https://e.org/"}\n')
             with self.assertRaises(SystemExit):
                 judge.read_candidates(p)
 
@@ -252,6 +257,7 @@ class AdapterTests(unittest.TestCase):
             self.assertNotIn("personal_score", json.dumps(rows))
             con = sqlite3.connect("file:" + db + "?mode=ro", uri=True)
             self.assertEqual(con.execute("select count(*) from frontier").fetchone()[0], 2)
+            con.close()
 
     def test_about_links(self):
         links = [("/profile.html", "プロフィール"), ("/blog/1", "最新記事の紹介"), ("https://other.example/about", "About"),
