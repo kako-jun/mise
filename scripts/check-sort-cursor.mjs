@@ -10,7 +10,7 @@ for (let i = 0; i < 300; i++) ins.run('s' + String(i).padStart(3, '0'), 'u' + i,
 const d = { prepare: sql => ({ bind: (...a) => ({ all: async () => ({ results: db.prepare(sql).all(...a) }), first: async () => db.prepare(sql).get(...a) }) }) };
 let failed = 0;
 for (const variant of ['現行の並び', 'bulk_import を先頭に足した並び']) {
-  if (variant !== '現行の並び') SORT_KEYS.unshift({ expr: 's.bulk_import', dir: 'ASC' });
+  if (variant !== '現行の並び') SORT_KEYS.unshift({ expr: 's.bulk_import', dir: 'ASC', type: 'number' });
   const ref = db.prepare(`SELECT s.id FROM sites s ${siteOrder()}`).all().map(x => x.id);
   for (const limit of [1, 7, 40, 100]) {
     const ids = []; let cur = null;

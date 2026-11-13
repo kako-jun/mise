@@ -189,18 +189,22 @@ function renderSite(target, site, showCategories=false) {
 // 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
 const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
 let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
-history.scrollRestoration='manual';
+// 行を消す処理はここ 1 か所（地球儀の解除など、行が消えるときの後始末をここに足す）。
+function clearListRows(ul) { ul.replaceChildren(); }
 const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
 function startList(opts) {
   if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
   if(activeList) activeList.stop();
-  if(!opts.params) { activeList=null; opts.ul.replaceChildren(); opts.foot.replaceChildren(); return; }
+  // 一覧があるときだけ自前で位置を復元する（manual）。一覧の無い画面（トップ・子カテゴリだけの階層）はブラウザ標準の復元（auto）に任せる。履歴の項目ごとの設定なので遷移のたびに切り替える。
+  history.scrollRestoration=opts.params ? 'manual' : 'auto';
+  if(!opts.params) { activeList=null; clearListRows(opts.ul); opts.foot.replaceChildren(); return; }
   activeList=createList(opts); activeList.start();
 }
+const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
 function createList(opts) {
   const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
   const foot=opts.foot, ul=opts.ul;
-  const saved=history.state && history.state.mise; if(saved && saved.key===opts.key) L.restore=saved;
+  const saved=history.state && history.state.mise; if(saved && saved.key===opts.key) { L.restore=saved; const stop=()=>{ L.userMoved=true; for(const ev of USER_MOVE) removeEventListener(ev,stop); }; for(const ev of USER_MOVE) addEventListener(ev,stop,{passive:true,once:true}); } // 復元中にユーザーが操作したら引き戻さない
   const status=document.createElement('p'), live=document.createElement('p'), btn=document.createElement('button');
   status.className='list-status'; live.className='visually-hidden'; live.setAttribute('role','status'); live.setAttribute('aria-live','polite');
   btn.type='button'; btn.className='list-more'; btn.addEventListener('click',()=>L.loadMore(true));
@@ -209,7 +213,7 @@ function createList(opts) {
     const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
     // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
     const hold=o.preserve && !L.items.length && (L.loading || L.error);
-    if(!hold) { ul.replaceChildren(); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    if(!hold) { clearListRows(ul); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
     const empty=!L.items.length && L.ended;
     status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : L.total!=null ? t('remaining')(Math.max(0,L.total-L.offset-L.items.length)) : '';
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
@@ -236,11 +240,11 @@ function createList(opts) {
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
     live.textContent=L.error ? t('listError') : L.ended && L.items.length ? t('listEnd')(L.total) : '';
-    if(L.restore && !L.error) { const w=L.restore; if(!L.ended && L.items.length<Math.min(w.loaded,400)) return L.loadMore(); L.restore=null; scrollTo(0,w.y); }
+    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.restore=null; else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.restore=null; scrollTo(0,w.y); } }
     if(!L.ended && !L.error && listIo) { listIo.unobserve(foot); listIo.observe(foot); }
   };
   L.start=()=>{
-    if(!opts.preserve) ul.replaceChildren();
+    if(!opts.preserve) clearListRows(ul);
     foot.replaceChildren(status,btn,live); status.textContent=t('loadingMore'); btn.hidden=true;
     // preserve のとき SSR の 1 ページ目とページ番号リンクは最初の応答まで残す。
     const ps=document.getElementById('site-pager'); if(ps && !opts.preserve) { ps.hidden=true; ps.replaceChildren(); }

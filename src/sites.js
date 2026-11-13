@@ -9,12 +9,17 @@ export const PAGE_SIZE = 40, MAX_LIMIT = 100;
 // dir は SQLite の NULL の並びに合わせる: ASC では NULL が先頭、DESC では NULL が末尾。
 export const SORT_KEYS = [
   // 新しい順（サイト自身の更新日、不明なら登録日。日時が読めない/NULL は DESC で末尾）
-  { expr: `datetime(COALESCE(s.source_updated_at, s.registered_at))`, dir: 'DESC' },
-  { expr: 's.id', dir: 'ASC' }, // 同値の安定化（必ず最後）
+  { expr: `datetime(COALESCE(s.source_updated_at, s.registered_at))`, dir: 'DESC', type: 'string' },
+  { expr: 's.id', dir: 'ASC', type: 'string' }, // 同値の安定化（必ず最後）
+  // type はカーソルの値の型（'string' | 'number'）。不一致は 400。
 ];
 export const siteOrder = () => `ORDER BY ${SORT_KEYS.map(k => `${k.expr} ${k.dir}`).join(', ')}`;
-// migration に書くインデックス（テーブル別名 `s.` は外す）。
-export const sortIndexSql = (name = 'idx_sites_sort') => `CREATE INDEX IF NOT EXISTS ${name} ON sites (${SORT_KEYS.map(k => `${k.expr.replace(/\bs\./g, '')} ${k.dir}`.replace(/ ASC$/, '')).join(', ')});`;
+// migration に書くインデックス（テーブル別名 `s.` は外す）。名前に定義のハッシュを含めるので、SORT_KEYS を変えると名前も変わり、
+// 旧インデックスと衝突（IF NOT EXISTS で作られずに残る）しない。新しい migration で新名の CREATE と旧名の DROP INDEX を書く。
+const indexCols = () => SORT_KEYS.map(k => `${k.expr.replace(/\bs\./g, '')} ${k.dir}`.replace(/ ASC$/, '')).join(', ');
+const fnv = str => { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
+export const sortIndexName = () => `idx_sites_sort_${fnv(indexCols())}`;
+export const sortIndexSql = () => `CREATE INDEX IF NOT EXISTS ${sortIndexName()} ON sites (${indexCols()});`;
 const keyCols = () => SORT_KEYS.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
 
 // ---- 入力の解釈（不正は null → 呼び出し側が 400/404） ----
@@ -26,14 +31,14 @@ export function decodeCursor(raw) {
   if (!raw) return { none: true };
   try {
     const b = atob(raw.replace(/-/g, '+').replace(/_/g, '/')), vals = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
-    const ok = Array.isArray(vals) && vals.length === SORT_KEYS.length && vals.every(v => v === null || (typeof v === 'string' && v.length <= 200) || (typeof v === 'number' && Number.isFinite(v)));
+    const ok = Array.isArray(vals) && vals.length === SORT_KEYS.length && vals.every((v, i) => v === null || (typeof v === SORT_KEYS[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
     return ok && vals.at(-1) !== null ? { vals } : null;
   } catch (_) { return null; }
 }
 // 全角半角・大文字小文字をそろえる（検索語と sites.search_text の両方に同じ処理を使う）
 export const normalizeSearch = s => String(s ?? '').normalize('NFKC').toLowerCase();
 export const searchText = s => normalizeSearch(`${s.name} ${s.description_ja} ${s.description_en ?? ''} ${s.url}`);
-const likeEscape = s => s.replace(/[\\%_]/g, ch => '\\' + ch);
+// instr で比較するので、LIKE のメタ文字のエスケープも長さの制限（D1 は LIKE のパターンが約50バイトを超えると too complex）も要らない。
 export const cleanQuery = raw => { const q = [...normalizeSearch(raw).trim()].slice(0, 100).join(''); return q || null; }; // コードポイント単位で切る
 
 // 「cursor の次」の条件。キーを辞書式に比較する（先頭から: 前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
@@ -54,7 +59,7 @@ function filters({ cc, category, q }) {
   const where = [], args = [];
   if (cc) { where.push('s.country_code = ?'); args.push(cc); }
   if (category) { where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)'); args.push(category); }
-  if (q) { where.push(`s.search_text LIKE ? ESCAPE '\\'`); args.push(`%${likeEscape(q)}%`); } // q は cleanQuery 済み
+  if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
   return { where, args };
 }
 

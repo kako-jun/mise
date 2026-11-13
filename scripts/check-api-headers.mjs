@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 自己検査（外部アクセスなし）: /api/* の Cache-Control が成功時だけ max-age、エラー時は no-store であること。
+// 自己検査（外部アクセスなし）: (1) /api/*（sites・picks・activity）の Cache-Control が成功時だけ max-age、エラー時（400/404/500）は no-store であること、
+// (2) 入力検証（不正な cursor・limit・page・category）のステータス、(3) 最新の並びインデックスの migration が現在の SORT_KEYS と一致していること。
 // 実行: node scripts/check-api-headers.mjs
 import { readFileSync } from 'node:fs';
 import app from '../src/index.js';
@@ -33,9 +34,10 @@ for (const [label, path, DB, status, cache] of cases) {
 }
 // 並びの定義（src/sites.js の SORT_KEYS）と、それを元にした式インデックスが migration に入っていること（定義だけ変えて migration を忘れるのを防ぐ）。
 import { readdirSync } from 'node:fs';
-const migrations = readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).map(f => readFileSync(new URL('../migrations/' + f, import.meta.url), 'utf8')).join('\n');
-const idx = sortIndexSql();
-const idxOk = migrations.includes(idx);
-console.log(`${idxOk ? 'OK  ' : 'NG  '}並びのインデックスが migration にある: ${idx}`);
+const files = readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).sort();
+const idxFiles = files.filter(f => readFileSync(new URL('../migrations/' + f, import.meta.url), 'utf8').includes('idx_sites_sort'));
+const latest = idxFiles.at(-1), idx = sortIndexSql();
+const idxOk = !!latest && readFileSync(new URL('../migrations/' + latest, import.meta.url), 'utf8').includes(idx);
+console.log(`${idxOk ? 'OK  ' : 'NG  '}最新の並びインデックスの migration (${latest}) に現在の SORT_KEYS の CREATE INDEX がある: ${idx}`);
 if (!idxOk) failed++;
 process.exit(failed ? 1 : 0);
