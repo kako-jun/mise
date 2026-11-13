@@ -112,7 +112,7 @@ html[data-theme="dark"] .picks { border-color: #376b77; background: rgba(14,38,4
 /* A quieter globe leaves the directory in the foreground. */
 #globe-background canvas { opacity: .30; filter: blur(1px); }
 html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightness(.45) saturate(1.8) blur(1px); }
-.logo { display: inline-flex; transform: scaleY(1.12); letter-spacing: 3px; color: #c95024 !important; text-shadow: none; }
+.logo { display: inline-flex; transform: scaleY(1.12); letter-spacing: 0; color: #c95024 !important; text-shadow: none; }
 .logo span:first-child { transform: scaleX(1.2); margin-right: 5px; color: #252d35; }
 .logo span:nth-child(2), .logo span:nth-child(4) { color: #cc6f32; }
 .logo span:nth-child(3) { color: #292f35; }
@@ -149,8 +149,7 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 
 .search-row { margin-bottom: 3px; }
 .recommend-row { margin: 0 0 18px; font-size: 12px; }
-.logo span:first-child { transform: scaleX(1.5); margin-left: 8px; margin-right: 12px; }
-.logo span:nth-child(3) { transform: scaleX(1.5); margin-left: 8px; margin-right: 12px; }
+.logo span:first-child { transform: scaleX(1.5); }
 .logo span { background-image: linear-gradient(135deg, #202831 0 30%, #b9460e 31% 57%, #8a5a37 58% 72%, #202831 73%); }
 html[data-theme="dark"] .logo span { background-image: linear-gradient(135deg, #e6e2da 0 30%, #ff9a55 31% 57%, #aa8067 58% 72%, #e6e2da 73%); }
 .logo-caption { font-weight: 400; }
