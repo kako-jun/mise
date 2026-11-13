@@ -12,6 +12,7 @@ CREATE TRIGGER sites_search_text_ai AFTER INSERT ON sites WHEN NEW.search_text I
   UPDATE sites SET search_text = lower(NEW.name || ' ' || NEW.description_ja || ' ' || COALESCE(NEW.description_en, '') || ' ' || NEW.url) WHERE id = NEW.id;
 END;
 -- 名前・紹介文・URL を直したときも暫定値で入れ直す（search_text の更新自体では再発火しない）。
-CREATE TRIGGER sites_search_text_au AFTER UPDATE OF name, description_ja, description_en, url ON sites BEGIN
+-- search_text も同時に変えた UPDATE（明示した値）は上書きしない。
+CREATE TRIGGER sites_search_text_au AFTER UPDATE OF name, description_ja, description_en, url ON sites WHEN NEW.search_text IS OLD.search_text BEGIN
   UPDATE sites SET search_text = lower(NEW.name || ' ' || NEW.description_ja || ' ' || COALESCE(NEW.description_en, '') || ' ' || NEW.url) WHERE id = NEW.id;
 END;

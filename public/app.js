@@ -204,7 +204,10 @@ const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
 function createList(opts) {
   const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
   const foot=opts.foot, ul=opts.ul;
-  const saved=history.state && history.state.mise; if(saved && saved.key===opts.key) { L.restore=saved; const stop=()=>{ L.userMoved=true; for(const ev of USER_MOVE) removeEventListener(ev,stop); }; for(const ev of USER_MOVE) addEventListener(ev,stop,{passive:true,once:true}); } // 復元中にユーザーが操作したら引き戻さない
+  const saved=history.state && history.state.mise; const onMove=()=>{ L.userMoved=true; };
+  // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
+  L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
+  if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
   const status=document.createElement('p'), live=document.createElement('p'), btn=document.createElement('button');
   status.className='list-status'; live.className='visually-hidden'; live.setAttribute('role','status'); live.setAttribute('aria-live','polite');
   btn.type='button'; btn.className='list-more'; btn.addEventListener('click',()=>L.loadMore(true));
@@ -223,7 +226,7 @@ function createList(opts) {
     prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
   };
   L.rerender=()=>{ L.render(); };
-  L.stop=()=>{ L.stopped=true; L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
+  L.stop=()=>{ L.stopped=true; L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
   // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
   L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
   L.loadMore=async (force)=>{
@@ -235,12 +238,12 @@ function createList(opts) {
       const first=!L.items.length && L.total==null;
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
       if(first) { L.render(); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
-    } catch (e) { if(L.stopped) return; L.error=true; L.restore=null; }
+    } catch (e) { if(L.stopped) return; L.error=true; L.endRestore(); }
     L.loading=false; if(L.stopped) return;
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
     live.textContent=L.error ? t('listError') : L.ended && L.items.length ? t('listEnd')(L.total) : '';
-    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.restore=null; else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.restore=null; scrollTo(0,w.y); } }
+    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.endRestore(); else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.endRestore(); scrollTo(0,w.y); } }
     if(!L.ended && !L.error && listIo) { listIo.unobserve(foot); listIo.observe(foot); }
   };
   L.start=()=>{
