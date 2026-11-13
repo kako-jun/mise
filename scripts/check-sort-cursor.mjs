@@ -2,7 +2,7 @@
 // 自己検査: カーソル方式のページングが、キーに NULL を含む行・キーを足した並びでも「全ページ連結 = 全件の並び」になること（node:sqlite のメモリ DB）。
 // src/sites.js の SORT_KEYS を足す/変えたあとの回帰検査（現行の並び = bulk_import 先頭。さらに仮のキー region_code を先頭に足した並びも試す）。
 import { DatabaseSync } from 'node:sqlite';
-import { SORT_KEYS, querySites, decodeCursor, siteOrder } from '../src/sites.js';
+import { SORT_KEYS, querySites, randomSites, decodeCursor, siteOrder } from '../src/sites.js';
 const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,search_text TEXT,bulk_import INTEGER);CREATE TABLE site_tags(site_id,label_ja,label_en);CREATE TABLE site_categories(site_id,category_id);`);
 const ins = db.prepare('INSERT INTO sites(id,url,name,description_ja,registered_at,source_updated_at,bulk_import) VALUES(?,?,?,?,?,?,?)');
@@ -22,4 +22,6 @@ for (const variant of ['現行の並び', '仮のキーをさらに先頭に足�
     if (!ok) failed++;
   }
 }
+// ピックアップに一括投入（bulk_import=1）が出ない
+for (let i = 0; i < 20; i++) { const picks = await randomSites(d, null, 3); if (picks.some(p => p.bulk_import === 1)) { console.log('NG  ピックアップに bulk_import=1 が混ざった'); failed++; break; } if (i === 19) console.log('OK  ピックアップは bulk_import=0 のみ (20回)'); }
 process.exit(failed ? 1 : 0);

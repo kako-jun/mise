@@ -2,6 +2,8 @@
 
 国の機関・独立行政法人・都道府県・市区町村の公式トップページを、LLM を使わず決定論で台帳化する（Issue #37、[発見ポリシー](discovery-policy.md)の層1）。**台帳 CSV が正本**で、D1 へ入れる SQL は台帳から生成する派生物にする（多重管理しない）。D1 への投入 SQL は `scripts/public_bodies_sql.py` が台帳から生成する（`migrations/0015_public_bodies.sql`）。本番 D1 への適用は [deploy.md](../operations/deploy.md) の手順で別途行う。件数などの進捗は書かず、`scripts/public_bodies_build.py` の出力と台帳を真実とする。
 
+> **J-LIS への依存（本番適用の前提・kako-jun 判断要）**: 掲載する約 1850 件のうち、J-LIS を除くと独立 2 出典（Wikidata・e-Gov）が揃わないものが約 1640 件（約 88%）ある（Wikidata＋J-LIS の照合が大半）。J-LIS の利用条件で照合にも使えないと分かると、これらは出典 1 つに落ちて掲載の根拠が足りなくなる。J-LIS の利用条件（第 1 段の読みは「営利目的は事前相談」。第 2 段は 403 で一次資料を再確認できていない）の判断が出るまで、本番へは適用しない。
+
 ## ファイル
 
 | パス | 内容 |
@@ -63,7 +65,11 @@
 | `other-org` / `parked` | 公的でない別組織への転送 / 売却・パーキング表示（title の語で検出） | `review.csv` へ戻し掲載しない |
 | `unverified` | タイムアウト・接続失敗・TLS 失敗・401/403/429・robots 禁止。本環境からの接続制限（IP 制限など）の可能性があり、閉鎖とは言えない | 台帳の `status` を `unverified-reach` にして**掲載しない**（安全側の既定）。掲載するなら理由をここに書いたうえで人が決める |
 
-`apply` は evidence を読んで台帳へ反映する（ネットワークなし・冪等）。`apply` の前に `public_bodies_resolve.py national` と `normalize` をかけておく（build → `resolve.py apply` → `resolve.py national` → `resolve.py normalize` → `reach.py fetch` → `reach.py apply` → `public_bodies_sql.py` の順）。JavaScript や meta refresh による転送、サイトが生きていても中身が古い・別物になっている場合は検出できない（トップの title を記録するので、次段で見る）。
+`apply` は evidence を読んで台帳へ反映する（ネットワークなし・冪等）。`apply` の前に `public_bodies_resolve.py national` と `normalize` をかけておく（build → `resolve.py apply` → `resolve.py national` → `resolve.py normalize` → `resolve.py overrides` → `reach.py fetch` → `reach.py apply` → `public_bodies_sql.py` の順）。JavaScript や meta refresh による転送、サイトが生きていても中身が古い・別物になっている場合は検出できない（トップの title を記録するので、次段で見る）。
+
+### URL の補正（overrides）
+
+`evidence/url-overrides.csv`（code, url, reason）は、build で選ばれた URL を直接直す・要確認から復帰させるための固定入力。J-LIS 由来のパス（`/genre/living` など）を Wikidata の公式サイト（`/`）に揃えたものと、吉岡町（Wikidata の旧ホスト `town.yoshioka.gunma.jp` が名前解決不可、新ホスト `town.yoshioka.lg.jp` は `.lg.jp`＝地方公共団体専用ドメインで、到達確認で title に団体名を確認して復帰）が入っている。補正した行は URL が変わるので `reach.py fetch` で到達確認し直す。
 
 ## リダイレクトによる要確認の解消
 
@@ -87,7 +93,7 @@ mismatch の多くは「旧ドメイン（J-LIS）と新ドメイン `.lg.jp`（
 | 総務省 全国地方公共団体コード | 総務省サイトの著作権ページ（https://www.soumu.go.jp/menu_kyotsuu/policy/tyosaku.html）が公共データ利用規約（第1.0版）を適用。[規約本文](https://www.digital.go.jp/resources/open_data/public_data_license_v1.0): 「複製、公衆送信、翻訳・変形等の翻案等、自由に利用できます」「商用利用も可能です」「利用する際は出典を記載」「編集・加工等して利用する場合は…編集・加工等を行ったこと及びその主体を記載」。CC BY 4.0 と互換 | 利用可。ページ下部に出典と加工の旨を日英で表示（`public/index.html` の footer、`public/app.js` の `credit`） |
 | e-Gov 政府機関関連情報 | https://www.e-gov.go.jp/terms: 「権利表記の記載がない限り『公共データ利用規約（第1.0版）』（PDL1.0）が適用」「出典を記載」「編集・加工した場合はその旨と主体を記載」。ロゴ等は対象外 | 同上 |
 | Wikidata | https://www.wikidata.org/wiki/Wikidata:Licensing: 構造化データは CC0（パブリックドメイン） | 利用可。出典表示は任意だが併記 |
-| J-LIS 全国自治体マップ検索 | 第1段で「出所明示で引用可・改変不可・営利目的は事前相談」と読んだ。**2026-11-14 時点で本環境から当該ページが 403 を返し、一次資料を再確認できていない** | **kako-jun 判断要**（Issue #37）。当面の方針: J-LIS は「他出典のホストと一致するか」の照合にだけ使い、掲載する URL は常に非 J-LIS の出典（e-Gov > Wikidata）か、サイト自身が返した最終 URL（到達確認）から取る。J-LIS 固有のデータ（名称・URL の一覧）は台帳に転載しない。条件の再確認と、営利扱いかどうかは未決 |
+| J-LIS 全国自治体マップ検索 | 第1段で「出所明示で引用可・改変不可・営利目的は事前相談」と読んだ。**2026-11-14 時点で本環境から当該ページが 403 を返し、一次資料を再確認できていない** | **kako-jun 判断要**（Issue #37）。当面の方針: J-LIS は「他出典のホストと一致するか」の照合にだけ使い、掲載する URL は常に非 J-LIS の出典（e-Gov > Wikidata）か、サイト自身が返した最終 URL（到達確認）から取る（build は J-LIS の URL を同じホストの他の候補が無いときだけ使う。テストが、自治体の掲載 URL のパスが Wikidata 自身のものを除いてすべて `/` であることを検査する）。J-LIS の生データが取れず build を再実行できない間の補正は `evidence/url-overrides.csv` と `resolve.py overrides` で行う。J-LIS 固有のデータ（名称・URL の一覧）は台帳に転載しない。条件の再確認と、営利扱いかどうかは未決 |
 
 PDL1.0 は出典記載に加え、加工した旨の記載を求める。台帳は出典を `sources` 列に持ち、ページ側の表示は footer の 1 行で足りると判断した（個別ページごとの表示は行っていない）。
 

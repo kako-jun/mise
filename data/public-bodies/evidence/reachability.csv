@@ -309,7 +309,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 053619,https://www.town.gojome.akita.jp/,allowed,200,0,https://www.town.gojome.akita.jp/,朝市と城のある町 五城目町,ok,2026-11-13T17:49:31Z
 053635,https://www.town.hachirogata.akita.jp/,allowed,200,0,https://www.town.hachirogata.akita.jp/,総合トップ｜八郎潟町,ok,2026-11-13T17:49:34Z
 053660,http://www.town.ikawa.akita.jp/,allowed,200,0,https://www.town.ikawa.akita.jp/,秋田県井川町公式ホームページ トップページ,ok,2026-11-13T17:49:36Z
-053686,https://www.vill.ogata.akita.jp/genre/living,allowed,200,0,https://www.vill.ogata.akita.jp/genre/living,総合トップ | 大潟村役場,ok,2026-11-13T17:49:40Z
+053686,https://www.vill.ogata.akita.jp/,allowed,200,0,https://www.vill.ogata.akita.jp/,,ok,2026-11-13T23:18:20Z
 054348,https://www.town.misato.akita.jp/,allowed,200,0,https://www.town.misato.akita.jp/,秋田県美郷町,ok,2026-11-13T17:49:43Z
 054631,https://www.town.ugo.lg.jp/,allowed,200,0,https://www.town.ugo.lg.jp/,緑と踊りと雪の町 羽後町,ok,2026-11-13T17:49:46Z
 054640,https://www.higashinaruse.com/,allowed,200,0,https://vill.higashinaruse.lg.jp/,東成瀬村役場,ok,2026-11-13T17:49:49Z
@@ -335,7 +335,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 063240,https://www.town.oe.yamagata.jp/,allowed,200,0,https://www.town.oe.yamagata.jp/,大江町,ok,2026-11-13T17:50:42Z
 063410,https://www.town.oishida.yamagata.jp/,allowed,200,0,https://www.town.oishida.yamagata.jp/,大石田町公式ウェブサイト,ok,2026-11-13T17:50:45Z
 063614,https://www.town.kaneyama.yamagata.jp/,allowed,200,0,https://www.town.kaneyama.yamagata.jp/,ホーム／四季奏でるまち。金山 - 山形県金山町公式ウェブサイト,ok,2026-11-13T17:50:48Z
-063622,https://town.mogami.lg.jp/top.php,allowed,200,0,https://town.mogami.lg.jp/top.php,トップページ｜最上町役場,ok,2026-11-13T17:50:50Z
+063622,https://town.mogami.lg.jp/,allowed,200,0,https://town.mogami.lg.jp/,最上町役場,ok,2026-11-13T23:18:22Z
 063631,https://www.town.funagata.yamagata.jp/,allowed,200,0,https://www.town.funagata.yamagata.jp/,縄文の女神と若鮎の里 山形県舟形町ホームページ,ok,2026-11-13T17:50:53Z
 063649,https://www.town.mamurogawa.yamagata.jp/,allowed,200,0,https://www.town.mamurogawa.yamagata.jp/,ホーム／真室川町公式ホームページ,ok,2026-11-13T17:50:55Z
 063657,https://www.vill.ohkura.yamagata.jp/,allowed,200,0,https://www.vill.ohkura.yamagata.jp/,ホーム／大蔵村,ok,2026-11-13T17:50:58Z
@@ -493,7 +493,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 102113,https://www.city.annaka.lg.jp/,allowed,200,0,https://www.city.annaka.lg.jp/,安中市ホームページ トップページ,ok,2026-11-13T17:59:12Z
 102121,https://www.city.midori.gunma.jp/,allowed,200,0,https://www.city.midori.gunma.jp/,群馬県みどり市,ok,2026-11-13T17:59:15Z
 103446,https://www.vill.shinto.gunma.jp/,allowed,200,0,https://www.vill.shinto.gunma.jp/,榛東村公式ホームページ,ok,2026-11-13T17:59:17Z
-103454,https://www.town.yoshioka.gunma.jp/,allowed,0,6,https://www.town.yoshioka.gunma.jp/,,dead,2026-11-13T17:59:18Z
+103454,https://www.town.yoshioka.lg.jp/,allowed,200,0,https://www.town.yoshioka.lg.jp/,ホーム|吉岡町ホームページ,ok,2026-11-13T23:18:24Z
 103667,http://www.uenomura.jp/,allowed,200,0,https://www.uenomura.jp/,上野村,ok,2026-11-13T17:59:21Z
 103675,https://www.town.kanna.gunma.jp/,allowed,200,0,https://www.town.kanna.gunma.jp/,ホーム／神流町,ok,2026-11-13T17:59:23Z
 103829,https://www.town.shimonita.lg.jp/,allowed,200,0,https://www.town.shimonita.lg.jp/,下仁田町ホームページ,ok,2026-11-13T17:59:26Z
@@ -787,7 +787,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 172073,https://www.city.hakui.lg.jp/,allowed,200,0,https://www.city.hakui.lg.jp/,ホーム／羽咋市公式ホームページ,ok,2026-11-13T18:12:19Z
 172090,https://www.city.kahoku.lg.jp/,allowed,200,0,https://www.city.kahoku.lg.jp/,かほく市トップ | 石川県かほく市公式サイト,ok,2026-11-13T18:12:22Z
 172103,https://www.city.hakusan.lg.jp/,allowed,200,0,https://www.city.hakusan.lg.jp/,白山市公式ホームページ,ok,2026-11-13T18:12:25Z
-172111,https://www.city.nomi.ishikawa.jp/,allowed,200,0,https://www.city.nomi.lg.jp/index.html,能美市,ok,2026-11-13T18:12:28Z
+172111,https://www.city.nomi.lg.jp/,allowed,200,0,https://www.city.nomi.lg.jp/index.html,能美市,ok,2026-11-13T23:18:27Z
 172120,https://www.city.nonoichi.lg.jp/,allowed,200,0,https://www.city.nonoichi.lg.jp/,野々市市ホームページ トップページ,ok,2026-11-13T18:12:31Z
 173240,https://www.town.kawakita.ishikawa.jp/,allowed,200,0,https://www.town.kawakita.ishikawa.jp/,川北町役場,ok,2026-11-13T18:12:34Z
 173614,https://www.town.tsubata.lg.jp/,allowed,200,0,https://www.town.tsubata.lg.jp/,津幡町ホームページ トップページ,ok,2026-11-13T18:12:36Z
@@ -816,7 +816,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 184837,https://www.town.ohi.fukui.jp/,allowed,200,0,https://www.town.ohi.fukui.jp/,おおい町公式ホームページ,ok,2026-11-13T18:13:44Z
 185019,https://www.town.fukui-wakasa.lg.jp/,allowed,200,0,https://www.town.fukui-wakasa.lg.jp/,ホーム／若狭町,ok,2026-11-13T18:13:47Z
 190004,https://www.pref.yamanashi.jp/,allowed,200,0,https://www.pref.yamanashi.jp/,山梨県公式ホームページ,ok,2026-11-13T18:13:49Z
-192015,https://www.city.kofu.yamanashi.jp/,allowed,200,0,https://www.city.kofu.lg.jp/index.html,ホーム／甲府市,ok,2026-11-13T18:13:52Z
+192015,https://www.city.kofu.lg.jp/,allowed,200,0,https://www.city.kofu.lg.jp/,ホーム／甲府市,ok,2026-11-13T23:18:29Z
 192023,https://www.city.fujiyoshida.yamanashi.jp/,allowed,200,0,https://www.city.fujiyoshida.yamanashi.jp/,富士吉田市公式ホームページ,ok,2026-11-13T18:13:55Z
 192040,https://www.city.tsuru.yamanashi.jp/,allowed,200,0,https://www.city.tsuru.yamanashi.jp/,ホーム／都留市,ok,2026-11-13T18:13:58Z
 192058,https://www.city.yamanashi.yamanashi.jp/,allowed,200,0,https://www.city.yamanashi.yamanashi.jp/,山梨市公式ホームページ トップページ,ok,2026-11-13T18:14:01Z
@@ -908,7 +908,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 204528,https://www.vill.chikuhoku.lg.jp/,allowed,200,0,https://www.vill.chikuhoku.lg.jp/,筑北村公式ホームページ,ok,2026-11-13T18:17:51Z
 204811,https://www.ikedamachi.net/,allowed,200,0,https://www.ikedamachi.net/,長野県・あづみ野・池田町,ok,2026-11-13T18:17:54Z
 204820,https://www.vill.matsukawa.nagano.jp/,allowed,200,0,https://www.vill.matsukawa.nagano.jp/,ホーム | 信州安曇野松川村,ok,2026-11-13T18:17:56Z
-204854,https://www.vill.hakuba.lg.jp/gyosei/,allowed,200,0,https://www.vill.hakuba.lg.jp/gyosei/,行政サイト／白馬村,ok,2026-11-13T18:17:59Z
+204854,https://www.vill.hakuba.lg.jp/,allowed,200,0,https://www.vill.hakuba.lg.jp/,ホーム／白馬村,ok,2026-11-13T23:18:31Z
 204862,https://www.vill.otari.nagano.jp/,allowed,200,0,https://www.vill.otari.nagano.jp/,ホーム／小谷村公式ホームページ,ok,2026-11-13T18:18:01Z
 205214,https://www.town.sakaki.nagano.jp/,allowed,200,0,https://www.town.sakaki.nagano.jp/,長野県坂城町（さかきまち）公式ホームページ トップページ,ok,2026-11-13T18:18:04Z
 205419,https://www.town.obuse.nagano.jp/,allowed,200,0,https://www.town.obuse.nagano.jp/,小布施町,ok,2026-11-13T18:18:06Z
@@ -1055,7 +1055,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 235636,https://www.vill.toyone.aichi.jp/,allowed,200,0,https://www.vill.toyone.aichi.jp/,ホーム／とよね村 Toyone Village Official Site,ok,2026-11-13T18:23:53Z
 240001,https://www.pref.mie.lg.jp/,allowed,200,0,https://www.pref.mie.lg.jp/,三重県,ok,2026-11-13T18:23:56Z
 242012,https://www.info.city.tsu.mie.jp/,allowed,200,0,https://www.info.city.tsu.mie.jp/,津市公式ウェブサイト－Official Website of Tsu City,ok,2026-11-13T18:24:01Z
-242021,https://www.city.yokkaichi.lg.jp/www/,allowed,200,0,https://www.city.yokkaichi.lg.jp/www/,トップページ - 四日市市役所,ok,2026-11-13T18:24:03Z
+242021,https://www.city.yokkaichi.lg.jp/,allowed,200,0,https://www.city.yokkaichi.lg.jp/www/index.html,トップページ - 四日市市役所,ok,2026-11-13T23:18:34Z
 242039,https://www.city.ise.mie.jp/,allowed,200,0,https://www.city.ise.mie.jp/,伊勢市公式ホームページ,ok,2026-11-13T18:24:06Z
 242047,https://www.city.matsusaka.mie.jp/,allowed,200,0,https://www.city.matsusaka.mie.jp/,お肉のまち 松阪市公式ホームページ トップページ,ok,2026-11-13T18:24:08Z
 242055,https://www.city.kuwana.lg.jp/,allowed,200,0,https://www.city.kuwana.lg.jp/,桑名市公式ホームページ,ok,2026-11-13T18:24:10Z
@@ -1071,7 +1071,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 243035,https://www.town.kisosaki.lg.jp/,allowed,200,0,https://www.town.kisosaki.lg.jp/,木曽岬町,ok,2026-11-13T18:24:41Z
 243248,https://www.town.toin.lg.jp/,allowed,200,0,https://www.town.toin.lg.jp/,ホーム／東員町ホームページ,ok,2026-11-13T18:24:43Z
 243418,https://www2.town.komono.mie.jp/,allowed,200,0,https://www2.town.komono.mie.jp/,菰野町公式ウェブサイト トップページ,ok,2026-11-13T18:24:45Z
-243434,https://www2.town.asahi.mie.jp/www/,allowed,200,0,https://www2.town.asahi.mie.jp/www/,朝日町トップページ,ok,2026-11-13T18:24:47Z
+243434,https://www2.town.asahi.mie.jp/,allowed,200,0,https://www2.town.asahi.mie.jp/www/index.html,朝日町トップページ,ok,2026-11-13T23:18:36Z
 243442,https://www.town.kawagoe.mie.jp/,allowed,200,0,https://www.town.kawagoe.mie.jp/,三重県川越町公式サイト,ok,2026-11-13T18:24:49Z
 244414,https://www.town.taki.mie.jp/,allowed,200,0,https://www.town.taki.mie.jp/,ホーム／多気町,ok,2026-11-13T18:24:52Z
 244422,https://www.town.meiwa.mie.jp/,allowed,200,0,https://www.town.meiwa.mie.jp/,ホーム／明和町ホームページ - 多気郡,ok,2026-11-13T18:24:54Z
@@ -1214,7 +1214,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 285013,https://www.town.sayo.lg.jp/,allowed,200,0,https://www.town.sayo.lg.jp/,���p�� �����z�[���y�[�W�b�J�ł���߂� �Ђƥ�܂�����R �����ւȂ� �����̋� ���p,ok,2026-11-13T18:29:56Z
 285854,https://www.town.mikata-kami.lg.jp/,allowed,200,0,https://www.town.mikata-kami.lg.jp/,ホーム／香美町ホームページ,ok,2026-11-13T18:29:58Z
 285862,https://www.town.shinonsen.hyogo.jp/,allowed,200,0,https://www.town.shinonsen.hyogo.jp/,新温泉町,ok,2026-11-13T18:30:04Z
-290009,https://www.pref.nara.jp/,allowed,200,0,https://www.pref.nara.lg.jp/index.html,奈良県公式ホームページ,ok,2026-11-13T18:30:06Z
+290009,https://www.pref.nara.lg.jp/,allowed,200,0,https://www.pref.nara.lg.jp/,奈良県公式ホームページ,ok,2026-11-13T23:18:38Z
 292010,https://www.city.nara.lg.jp/,allowed,200,0,https://www.city.nara.lg.jp/,奈良市ホームページ トップページ,ok,2026-11-13T18:30:08Z
 292028,https://www.city.yamatotakada.nara.jp/,allowed,200,0,https://www.city.yamatotakada.nara.jp/,ホーム／大和高田市,ok,2026-11-13T18:30:11Z
 292036,https://www.city.yamatokoriyama.lg.jp/,allowed,200,0,https://www.city.yamatokoriyama.lg.jp/,ホーム／大和郡山市,ok,2026-11-13T18:30:13Z
@@ -1622,7 +1622,7 @@ code,from_url,robots,http_status,curl_exit,final_url,title,verdict,checked_at
 433691,https://www.town.nagomi.lg.jp/,allowed,200,0,https://www.town.nagomi.lg.jp/,和水町,ok,2026-11-13T18:45:59Z
 434035,https://www.town.ozu.kumamoto.jp/,allowed,200,0,https://www.town.ozu.kumamoto.jp/,大津町ホームページ,ok,2026-11-13T18:46:01Z
 434043,https://www.town.kikuyo.lg.jp/,allowed,200,0,https://www.town.kikuyo.lg.jp/,菊陽町,ok,2026-11-13T18:46:04Z
-434230,https://www.town.minamioguni.lg.jp/top.html,allowed,200,0,https://www.town.minamioguni.lg.jp/top.html,熊本県阿蘇郡南小国町 公式ホームページ,ok,2026-11-13T18:46:07Z
+434230,https://www.town.minamioguni.lg.jp/,allowed,200,0,https://www.town.minamioguni.lg.jp/top.html,熊本県阿蘇郡南小国町 公式ホームページ,ok,2026-11-13T23:18:41Z
 434248,https://www.town.kumamoto-oguni.lg.jp/,allowed,200,0,https://www.town.kumamoto-oguni.lg.jp/,ホーム / 小国町,ok,2026-11-13T18:46:10Z
 434256,https://www.ubuyama-v.jp/,allowed,200,0,https://www.ubuyama-v.jp/,ホーム／産山村,ok,2026-11-13T18:46:12Z
 434281,https://www.town.takamori.kumamoto.jp/,allowed,0,6,https://www.town.takamori.kumamoto.jp/,,dead,2026-11-13T18:46:13Z
@@ -1804,10 +1804,10 @@ nat:2e75af64,https://www.jmets.ac.jp/,allowed,200,0,https://www.jmets.ac.jp/,ト
 nat:3193a5d4,https://www.courts.go.jp/,allowed,200,0,https://www.courts.go.jp/,裁判所 - Courts in Japan,ok,2026-11-13T18:54:08Z
 nat:346b4c2c,http://www.dnc.ac.jp/,allowed,200,0,https://www.dnc.ac.jp/,独立行政法人 大学入試センター,ok,2026-11-13T18:54:10Z
 nat:37d8ee7a,http://www.nise.go.jp/,allowed,200,0,https://www.nise.go.jp/,国立特別支援教育総合研究所 &#8211; 独立行政法人 国立特別支援教育総合研究所,ok,2026-11-13T18:54:13Z
-nat:3ca9b4a4,http://www.ncc.go.jp/jp/,allowed,200,0,https://www.ncc.go.jp/jp/index.html,国立研究開発法人 国立がん研究センター | 国立がん研究センター,ok,2026-11-13T18:54:15Z
+nat:3ca9b4a4,https://www.ncc.go.jp/jp/,allowed,200,0,https://www.ncc.go.jp/jp/index.html,国立研究開発法人 国立がん研究センター | 国立がん研究センター,ok,2026-11-13T23:18:44Z
 nat:3ece53f4,http://www.archives.go.jp/,allowed,200,0,https://www.archives.go.jp/,������������,ok,2026-11-13T18:54:17Z
 nat:3f6e5ffc,https://www.sangiin.go.jp/,allowed,200,0,https://www.sangiin.go.jp/,参議院,ok,2026-11-13T18:54:19Z
-nat:40e4798a,http://www.ncnp.go.jp/,allowed,200,0,https://www.ncnp.go.jp/index.php,国立研究開発法人 国立精神・神経医療研究センター National Center of Neurology and Psychiatry,ok,2026-11-13T18:54:22Z
+nat:40e4798a,https://www.ncnp.go.jp/,allowed,200,0,https://www.ncnp.go.jp/index.php,国立研究開発法人 国立精神・神経医療研究センター National Center of Neurology and Psychiatry,ok,2026-11-13T23:18:47Z
 nat:43dab8f6,https://www.ppc.go.jp/,allowed,200,0,https://www.ppc.go.jp/,個人情報保護委員会 - PPC ｜個人情報保護委員会,ok,2026-11-13T18:54:24Z
 nat:440b7e35,http://www.naltec.go.jp/,allowed,200,0,https://www.naltec.go.jp:443/,NALTEC 独立行政法人 自動車技術総合機構,ok,2026-11-13T18:54:27Z
 nat:4483fabe,https://www.mext.go.jp/,allowed,200,0,https://www.mext.go.jp/,文部科学省,ok,2026-11-13T18:54:29Z
@@ -1821,7 +1821,7 @@ nat:5b32ccff,http://www.niad.ac.jp/,allowed,200,0,https://www.niad.ac.jp/,独立
 nat:5c7920f2,https://www.yuchokampo.go.jp/,allowed,0,60,https://www.yuchokampo.go.jp/,,unverified,2026-11-13T18:54:45Z
 nat:61438e35,https://www.jcho.go.jp/,allowed,200,0,https://www.jcho.go.jp/,独立行政法人 地域医療機能推進機構 | 地域医療機能推進機構,ok,2026-11-13T18:54:48Z
 nat:64e6f6a2,https://www.nta.go.jp/,allowed,200,0,https://www.nta.go.jp/,国税庁,ok,2026-11-13T18:54:50Z
-nat:65e0f53a,http://www.rieti.go.jp/,allowed,200,0,https://www.rieti.go.jp/jp/index.html,RIETI - 独立行政法人経済産業研究所,ok,2026-11-13T18:54:52Z
+nat:65e0f53a,https://www.rieti.go.jp/,allowed,200,0,https://www.rieti.go.jp/jp/index.html,RIETI - 独立行政法人経済産業研究所,ok,2026-11-13T23:18:49Z
 nat:664fee29,https://www.cao.go.jp/,allowed,200,0,https://www.cao.go.jp/,内閣府ホームページ,ok,2026-11-13T18:54:54Z
 nat:676d9c67,http://www.jogmec.go.jp/,allowed,302,6,https://test.jogmec.go.jp/,,dead,2026-11-13T18:54:56Z
 nat:6794f47e,https://www.mod.go.jp/atla/,allowed,403,0,https://www.mod.go.jp/atla/,Just a moment...,unverified,2026-11-13T18:54:57Z

@@ -114,6 +114,15 @@ class Sql(unittest.TestCase):
         listed = list(listed)
         self.assertEqual(len({psql.norm(r['url']) for r in listed}), len(listed))
         for r in listed: self.assertEqual(common.clean_url(r['url']), r['url'], r['code'])
+    # 掲載 URL に J-LIS 由来のパスが無いこと。J-LIS の URL は照合にだけ使い、掲載するのは他出典かサイト自身が返した URL（docs/collection/public-bodies.md）。
+    # 自治体のトップは `/` が原則。パスがあるのは、Wikidata の公式サイト(P856)自身がそのパスを持つ次の2件だけ（raw の wikidata-p429.csv で確認済み）。
+    WIKIDATA_DEEP = {'015199': '/rishirifuji', '262137': '/www/'}
+    def test_no_jlis_derived_paths_in_listed_urls(self):
+        import urllib.parse
+        for r in csv.DictReader(open(LEDGER, encoding='utf-8')):
+            if r['status'] != 'active' or r['type'] not in ('都道府県', '市', '町', '村', '特別区'): continue
+            path = urllib.parse.urlsplit(r['url']).path
+            self.assertEqual(path if path else '/', self.WIKIDATA_DEEP.get(r['code'], '/'), r['code'] + ' ' + r['url'])
     def test_listed_rows_have_ok_reachability(self):
         ev = {e['code']: e for e in csv.DictReader(open(LEDGER.with_name('evidence') / 'reachability.csv', encoding='utf-8'))}
         for r in psql.listed(psql.load(LEDGER), False).values():

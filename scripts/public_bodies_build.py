@@ -179,9 +179,9 @@ def main():
             h = sorted(hosts[used[0]] & hosts[used[1]])[0]
             pick = None
             # 掲載用 URL: 同じホストの候補のうち https を優先し、同じ scheme なら手で整えられたリンク集(e-Gov > J-LIS > Wikidata)を優先
-            cands = [(not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'wikidata', 'jlis'))
+            cands = [(sname == 'jlis', not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'wikidata', 'jlis'))
                      for u in srcs.get(sname, []) if host_key(u) == h]
-            pick = clean_url(sorted(cands)[0][2])
+            pick = clean_url(sorted(cands)[0][3])  # J-LIS の URL は他に同じホストの候補が無いときだけ（J-LIS 由来のパスを掲載しない）
             tag = ';'.join(f'{ {"wikidata": "wikidata", "egov": "e-gov", "jlis": "j-lis"}[s] }@{ {"wikidata": fetch_day("wikidata-p429.csv"), "egov": fetch_day("egov-local-governments.html"), "jlis": jlis_date.get(c) or fetch_day("jlis-000.html")}[s] }' for s in used)
             tally['confirmed'] += 1
             ledger.append({'code': c, 'name_ja': e['name'], 'name_en': w.get('en', ''), 'reading_kana': e['kana'], 'type': t,

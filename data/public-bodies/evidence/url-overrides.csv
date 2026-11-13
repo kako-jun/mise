@@ -1,0 +1,8 @@
+code,url,reason
+053686,https://www.vill.ogata.akita.jp/,J-LIS 由来のパス /genre/living を掲載しない。Wikidata の公式サイトに揃える
+063622,https://town.mogami.lg.jp/,J-LIS 由来のパス /top.php を掲載しない。Wikidata の公式サイトに揃える
+204854,https://www.vill.hakuba.lg.jp/,J-LIS 由来のパス /gyosei/ を掲載しない。Wikidata の公式サイトに揃える
+242021,https://www.city.yokkaichi.lg.jp/,J-LIS 由来のパス /www/ を掲載しない。Wikidata の公式サイトに揃える
+243434,https://www2.town.asahi.mie.jp/,J-LIS 由来のパス /www/ を掲載しない。Wikidata の公式サイトに揃える
+434230,https://www.town.minamioguni.lg.jp/,J-LIS 由来のパス /top.html を掲載しない。Wikidata の公式サイトに揃える
+103454,https://www.town.yoshioka.lg.jp/,Wikidata の旧ホスト(town.yoshioka.gunma.jp)は名前解決不可。新ホストは .lg.jp(地方公共団体専用ドメイン)で到達確認し title に団体名を確認して復帰

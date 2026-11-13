@@ -84,8 +84,8 @@ export async function querySites(db, { cc = null, category = null, q = null, lim
   return out;
 }
 
-// ピックアップ用: 範囲内からランダムに n 件。
+// ピックアップ用: 範囲内からランダムに n 件。ピックアップは「発見」の表示なので、台帳などの一括投入（bulk_import=1）は除く。
 export async function randomSites(db, cc, n = 3) {
-  const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE (?1 IS NULL OR s.country_code = ?1) ORDER BY RANDOM() LIMIT ?2`).bind(cc, n).all();
+  const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) ORDER BY RANDOM() LIMIT ?2`).bind(cc, n).all();
   return results.map(shape);
 }

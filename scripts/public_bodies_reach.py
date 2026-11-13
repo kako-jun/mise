@@ -125,7 +125,8 @@ def do_apply():
         elif v == 'unverified':
             r['status'] = 'unverified-reach'
             why = 'robots禁止' if e['robots'] == 'disallowed' else 'curl=%s http=%s' % (e['curl_exit'], e['http_status'])
-            r['note'] = (r['note'] + ' ' if r['note'] else '') + f'到達未確認({why}、{day})。既定は掲載しない'
+            msg = f'到達未確認({why}、{day})。既定は掲載しない'
+            if msg not in r['note']: r['note'] = (r['note'] + ' ' if r['note'] else '') + msg
         else:  # dead / parked / other-org -> 要確認へ戻す
             review.append({'code': r['code'], 'name_ja': r['name_ja'], 'type': r['type'], 'prefecture': r['prefecture'], 'reason': f'unreachable:{v}',
                            'wikidata_urls': '', 'egov_url': r['url'], 'jlis_url': '', 'domain_class': r['domain_class'], 'wikidata_name': '',

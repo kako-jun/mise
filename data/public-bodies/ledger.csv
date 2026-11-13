@@ -447,7 +447,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 053619,五城目町,Gojōme-machi,ゴジョウメマチ,町,秋田県,https://www.town.gojome.akita.jp/,town.gojome.akita.jp,geo.jp,wikidata@2026-11-13;j-lis@2020-12-01;reach@2026-11-13,active,,,
 053635,八郎潟町,Hachirōgata-machi,ハチロウガタマチ,町,秋田県,https://www.town.hachirogata.akita.jp/,town.hachirogata.akita.jp,geo.jp,wikidata@2026-11-13;j-lis@2020-12-01;reach@2026-11-13,active,,,
 053660,井川町,Ikawa,イカワマチ,町,秋田県,https://www.town.ikawa.akita.jp/,town.ikawa.akita.jp,geo.jp,wikidata@2026-11-13;j-lis@2020-12-01;reach@2026-11-13,active,,,
-053686,大潟村,Ōgata-mura,オオガタムラ,村,秋田県,https://www.vill.ogata.akita.jp/genre/living,vill.ogata.akita.jp,geo.jp,wikidata@2026-11-13;j-lis@2020-12-01;reach@2026-11-13,active,,,
+053686,大潟村,Ōgata-mura,オオガタムラ,村,秋田県,https://www.vill.ogata.akita.jp/,vill.ogata.akita.jp,geo.jp,wikidata@2026-11-13;j-lis@2020-12-01;reach@2026-11-13,active,,,URL補正: https://www.vill.ogata.akita.jp/genre/living -> https://www.vill.ogata.akita.jp/（J-LIS 由来のパス /genre/living を掲載しない。Wikidata の公式サイトに揃える）
 054011,仁賀保町,,ニカホマチ,,秋田県,,,,soumu-kaisei@2026-11-13,merged,2005-10-01,052141,新設合併
 054020,金浦町,,コノウラマチ,,秋田県,,,,soumu-kaisei@2026-11-13,merged,2005-10-01,052141,合併後はにかほ市
 054038,象潟町,,キサカタマチ,,秋田県,,,,soumu-kaisei@2026-11-13,merged,2005-10-01,052141,合併後はにかほ市
@@ -486,7 +486,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 063240,大江町,Ōe-machi,オオエマチ,町,山形県,https://www.town.oe.yamagata.jp/,town.oe.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
 063410,大石田町,Ōishida-machi,オオイシダマチ,町,山形県,https://www.town.oishida.yamagata.jp/,town.oishida.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
 063614,金山町,Kaneyama,カネヤママチ,町,山形県,https://www.town.kaneyama.yamagata.jp/,town.kaneyama.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
-063622,最上町,Mogami,モガミマチ,町,山形県,https://town.mogami.lg.jp/top.php,town.mogami.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
+063622,最上町,Mogami,モガミマチ,町,山形県,https://town.mogami.lg.jp/,town.mogami.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,URL補正: https://town.mogami.lg.jp/top.php -> https://town.mogami.lg.jp/（J-LIS 由来のパス /top.php を掲載しない。Wikidata の公式サイトに揃える）
 063631,舟形町,Funagata,フナガタマチ,町,山形県,https://www.town.funagata.yamagata.jp/,town.funagata.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
 063649,真室川町,Mamurogawa,マムロガワマチ,町,山形県,https://www.town.mamurogawa.yamagata.jp/,town.mamurogawa.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
 063657,大蔵村,Okura,オオクラムラ,村,山形県,https://www.vill.ohkura.yamagata.jp/,vill.ohkura.yamagata.jp,geo.jp,wikidata@2026-11-13;j-lis@2019-01-15;reach@2026-11-13,active,,,
@@ -744,6 +744,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 103420,小野上村,,オノガミムラ,,群馬県,,,,soumu-kaisei@2026-11-13,merged,2006-02-20,102083,合併後は渋川市
 103438,伊香保町,,イカホマチ,,群馬県,,,,soumu-kaisei@2026-11-13,merged,2006-02-20,102083,合併後は渋川市
 103446,榛東村,Shintō-mura,シントウムラ,村,群馬県,https://www.vill.shinto.gunma.jp/,vill.shinto.gunma.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,
+103454,吉岡町,,,町,群馬県,https://www.town.yoshioka.lg.jp/,town.yoshioka.lg.jp,lg.jp,wikidata@2026-11-13;override@2026-11-14;reach@2026-11-13,active,,,要確認から復帰: Wikidata の旧ホスト(town.yoshioka.gunma.jp)は名前解決不可。新ホストは .lg.jp(地方公共団体専用ドメイン)で到達確認し title に団体名を確認して復帰
 103616,新町,,シンマチ,,群馬県,,,,soumu-kaisei@2026-11-13,merged,2006-01-23,102024,合併後は高崎市
 103624,鬼石町,,オニシマチ,,群馬県,,,,soumu-kaisei@2026-11-13,merged,2006-01-01,,編入合併 / 後継団体コード未特定（要確認）
 103632,吉井町,,ヨシイマチ,,群馬県,,,,soumu-kaisei@2026-11-13,merged,2009-06-01,102024,合併後は高崎市
@@ -1398,7 +1399,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 204820,松川村,Matsukawa,マツカワムラ,村,長野県,https://www.vill.matsukawa.nagano.jp/,vill.matsukawa.nagano.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,
 204838,八坂村,,ヤサカムラ,,長野県,,,,soumu-kaisei@2026-11-13,merged,2006-01-01,202126,合併後は大町市
 204846,美麻村,,ミアサムラ,,長野県,,,,soumu-kaisei@2026-11-13,merged,2006-01-01,202126,合併後は大町市
-204854,白馬村,Hakuba,ハクバムラ,村,長野県,https://www.vill.hakuba.lg.jp/gyosei/,vill.hakuba.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,
+204854,白馬村,Hakuba,ハクバムラ,村,長野県,https://www.vill.hakuba.lg.jp/,vill.hakuba.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,URL補正: https://www.vill.hakuba.lg.jp/gyosei/ -> https://www.vill.hakuba.lg.jp/（J-LIS 由来のパス /gyosei/ を掲載しない。Wikidata の公式サイトに揃える）
 204862,小谷村,Otari,オタリムラ,村,長野県,https://www.vill.otari.nagano.jp/,vill.otari.nagano.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,
 205214,坂城町,Sakaki,サカキマチ,町,長野県,https://www.town.sakaki.nagano.jp/,town.sakaki.nagano.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,
 205419,小布施町,Obuse,オブセマチ,町,長野県,https://www.town.obuse.nagano.jp/,town.obuse.nagano.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-08-10;reach@2026-11-13,active,,,
@@ -1662,7 +1663,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 236233,渥美町,,アツミチョウ,,愛知県,,,,soumu-kaisei@2026-11-13,merged,2005-10-01,232319,合併後は田原市
 240001,三重県,Mie Prefecture,ミエケン,都道府県,三重県,https://www.pref.mie.lg.jp/,pref.mie.lg.jp,lg.jp,wikidata@2026-11-13;e-gov@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 242012,津市,Tsu,ツシ,市,三重県,https://www.info.city.tsu.mie.jp/,info.city.tsu.mie.jp,other.jp,wikidata@2026-11-13;e-gov@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
-242021,四日市市,Yokkaichi,ヨッカイチシ,市,三重県,https://www.city.yokkaichi.lg.jp/www/,city.yokkaichi.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
+242021,四日市市,Yokkaichi,ヨッカイチシ,市,三重県,https://www.city.yokkaichi.lg.jp/,city.yokkaichi.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,URL補正: https://www.city.yokkaichi.lg.jp/www/ -> https://www.city.yokkaichi.lg.jp/（J-LIS 由来のパス /www/ を掲載しない。Wikidata の公式サイトに揃える）
 242039,伊勢市,Ise,イセシ,市,三重県,https://www.city.ise.mie.jp/,city.ise.mie.jp,geo.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 242047,松阪市,Matsusaka,マツサカシ,市,三重県,https://www.city.matsusaka.mie.jp/,city.matsusaka.mie.jp,geo.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 242055,桑名市,Kuwana,クワナシ,市,三重県,https://www.city.kuwana.lg.jp/,city.kuwana.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
@@ -1679,7 +1680,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 243035,木曽岬町,Kisosaki,キソサキチョウ,町,三重県,https://www.town.kisosaki.lg.jp/,town.kisosaki.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 243248,東員町,Tōin-chō,トウインチョウ,町,三重県,https://www.town.toin.lg.jp/,town.toin.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 243418,菰野町,Komono,コモノチョウ,町,三重県,https://www2.town.komono.mie.jp/,www2.town.komono.mie.jp,other.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
-243434,朝日町,Asahi,アサヒチョウ,町,三重県,https://www2.town.asahi.mie.jp/www/,www2.town.asahi.mie.jp,other.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
+243434,朝日町,Asahi,アサヒチョウ,町,三重県,https://www2.town.asahi.mie.jp/,www2.town.asahi.mie.jp,other.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,URL補正: https://www2.town.asahi.mie.jp/www/ -> https://www2.town.asahi.mie.jp/（J-LIS 由来のパス /www/ を掲載しない。Wikidata の公式サイトに揃える）
 243442,川越町,Kawagoe,カワゴエチョウ,町,三重県,https://www.town.kawagoe.mie.jp/,town.kawagoe.mie.jp,geo.jp,wikidata@2026-11-13;j-lis@2014-04-01;reach@2026-11-13,active,,,
 243817,河芸町,,カワゲチョウ,,三重県,,,,soumu-kaisei@2026-11-13,merged,2006-01-01,242012,合併後は津市
 243825,芸濃町,,ゲイノウチョウ,,三重県,,,,soumu-kaisei@2026-11-13,merged,2006-01-01,242012,合併後は津市
@@ -2650,7 +2651,7 @@ code,name_ja,name_en,reading_kana,type,prefecture,url,host,domain_class,sources,
 434043,菊陽町,Kikuyō-machi,キクヨウマチ,町,熊本県,https://www.town.kikuyo.lg.jp/,town.kikuyo.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,
 434051,合志町,,コウシマチ,,熊本県,,,,soumu-kaisei@2026-11-13,merged,2006-02-27,432164,新設合併
 434078,西合志町,,ニシゴウシマチ,,熊本県,,,,soumu-kaisei@2026-11-13,merged,2006-02-27,432164,合併後は合志市
-434230,南小国町,Minamioguni,ミナミオグニマチ,町,熊本県,https://www.town.minamioguni.lg.jp/top.html,town.minamioguni.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,
+434230,南小国町,Minamioguni,ミナミオグニマチ,町,熊本県,https://www.town.minamioguni.lg.jp/,town.minamioguni.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,URL補正: https://www.town.minamioguni.lg.jp/top.html -> https://www.town.minamioguni.lg.jp/（J-LIS 由来のパス /top.html を掲載しない。Wikidata の公式サイトに揃える）
 434248,小国町,Oguni,オグニマチ,町,熊本県,https://www.town.kumamoto-oguni.lg.jp/,town.kumamoto-oguni.lg.jp,lg.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,
 434256,産山村,Ubuyama,ウブヤマムラ,村,熊本県,https://www.ubuyama-v.jp/,ubuyama-v.jp,other.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,
 434329,西原村,Nishihara,ニシハラムラ,村,熊本県,https://www.vill.nishihara.kumamoto.jp/,vill.nishihara.kumamoto.jp,geo.jp,wikidata@2026-11-13;j-lis@2022-06-21;reach@2026-11-13,active,,,

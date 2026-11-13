@@ -115,6 +115,36 @@ def do_normalize():
         for r in sorted(ledger, key=lambda r: r['code']): w.writerow(r)
     print(f'URL を整えた {n} 件')
 
+OVERRIDES = ROOT / 'evidence' / 'url-overrides.csv'
+
+def do_overrides():
+    """evidence/url-overrides.csv(code,url,reason)の URL を台帳に直接反映する(J-LIS の生データが取れず build を再実行できない間の補正)。
+    台帳にある行は URL を差し替える。要確認にあって台帳に無い行は、台帳へ復帰させる(sources は『wikidata + 到達確認』)。冪等。
+    差し替えた行は reach.py fetch / apply で到達確認し直す(URL が変わっているので未確認として扱われる)。"""
+    import public_bodies_build as B
+    ov = list(csv.DictReader(open(OVERRIDES, encoding='utf-8')))
+    ledger = list(csv.DictReader(open(ROOT / 'ledger.csv', encoding='utf-8')))
+    review = list(csv.DictReader(open(ROOT / 'review.csv', encoding='utf-8')))
+    by = {r['code']: r for r in ledger}; n = 0
+    for o in ov:
+        h = host_key(o['url'])
+        if o['code'] in by:
+            r = by[o['code']]
+            if r['url'] != o['url']:
+                r['note'] = (r['note'] + ' ' if r['note'] else '') + f'URL補正: {r["url"]} -> {o["url"]}（{o["reason"]}）'
+                r['url'], r['host'], r['domain_class'] = o['url'], h, B.domain_class(h); n += 1
+        else:
+            rv = next(x for x in review if x['code'] == o['code'])
+            ledger.append({'code': rv['code'], 'name_ja': rv['name_ja'], 'name_en': '', 'reading_kana': '', 'type': rv['type'], 'prefecture': rv['prefecture'],
+                           'url': o['url'], 'host': h, 'domain_class': B.domain_class(h), 'sources': 'wikidata@2026-11-13;override@2026-11-14',
+                           'status': 'active', 'status_date': '', 'successor_code': '', 'note': f'要確認から復帰: {o["reason"]}'})
+            review = [x for x in review if x['code'] != o['code']]; n += 1
+    for name, rows, fields in (('ledger.csv', ledger, B.FIELDS), ('review.csv', review, B.REVIEW_FIELDS)):
+        with open(ROOT / name, 'w', encoding='utf-8', newline='') as f:
+            w = csv.DictWriter(f, fieldnames=fields, lineterminator='\n'); w.writeheader()
+            for r in sorted(rows, key=lambda r: r['code']): w.writerow(r)
+    print(f'URL 補正 {n} 件')
+
 def do_national():
     """build 済みの台帳に、国の機関・独立行政法人の URL 単位の照合を適用する。
     ledger の URL(パス込み)が evidence/wikidata-gojp.csv の公式サイト(P856)と一致しない行は要確認(single:egov)へ戻す。
@@ -145,4 +175,4 @@ def do_national():
     print(f'要確認へ戻した国の機関 {demoted} 件 / ledger {len(keep)} 行 / review {len(review)} 行')
 
 if __name__ == '__main__':
-    {'fetch': do_fetch, 'apply': do_apply, 'national': do_national, 'normalize': do_normalize}[sys.argv[1] if len(sys.argv) > 1 else 'apply']()
+    {'fetch': do_fetch, 'apply': do_apply, 'national': do_national, 'normalize': do_normalize, 'overrides': do_overrides}[sys.argv[1] if len(sys.argv) > 1 else 'apply']()

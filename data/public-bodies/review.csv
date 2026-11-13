@@ -14,7 +14,6 @@ code,name_ja,type,prefecture,reason,wikidata_urls,egov_url,jlis_url,domain_class
 043028,七ヶ宿町,町,宮城県,single:wikidata,https://town.shichikashuku.miyagi.jp/,,,geo.jp,七ヶ宿町,
 052094,鹿角市,市,秋田県,mismatch,https://www.city.kazuno.akita.jp/,,https://www.city.kazuno.lg.jp/index.html,geo.jp,鹿角市,
 073687,南会津町,町,福島県,mismatch,http://www.minamiaizu.org/,,https://www.town.minamiaizu.lg.jp/,other,南会津町,
-103454,吉岡町,町,群馬県,unreachable:dead,,https://www.town.yoshioka.gunma.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.town.yoshioka.gunma.jp/
 112330,北本市,市,埼玉県,mismatch,http://www.city.kitamoto.saitama.jp/,,https://www.city.kitamoto.lg.jp/,lg.jp,北本市,
 122211,八千代市,市,千葉県,unreachable:dead,,https://www.city.yachiyo.chiba.jp/,,geo.jp,,到達確認 2026-11-13: http=0 curl=6 最終=https://www.city.yachiyo.chiba.jp/
 124435,御宿町,町,千葉県,unreachable:dead,,https://www.town.onjuku.chiba.jp/,,geo.jp,,到達確認 2026-11-13: http=503 curl=0 最終=https://www.town.onjuku.chiba.jp/
