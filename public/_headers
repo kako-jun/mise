@@ -2,3 +2,7 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+# ファイル名にバージョンを含む(-v1)ので長期キャッシュ。書体を替えるときは名前を変える
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable

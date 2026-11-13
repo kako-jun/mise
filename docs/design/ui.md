@@ -58,6 +58,8 @@
 
 大文字の太い縦長ゴシック体 `MISE`。三毛猫模様のグラデーション。ホバー・フォーカスで模様の境界がなだらかにぼける（`@property --blur` による補間。`prefers-reduced-motion` では即時。`@property` 非対応のブラウザでは補間されず、ホバーで即時にぼける。`@supports` の分岐はない）。M/S の横伸ばしはインラインスクリプトで初回描画前に適用し、通常幅の瞬間を見せない。タイトル下に発音記号 `/ˈmiːseɪ/` を小さく出す。
 
+書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。ライセンス全文は `public/licenses/`。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
+
 ## アクセシビリティ
 
 - 見出し: ページ先頭に視覚的に隠した `<h1>`（言語に合わせて翻訳）。パンくずは `<nav>`、作者リンクも `<nav>`。`aria-label` は言語切替で `data-i18n-label` により日英が切り替わる。
