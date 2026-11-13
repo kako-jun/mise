@@ -219,9 +219,6 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 html.logo-ready .logo span { opacity: 1; animation: none; }
 @keyframes logo-fallback { to { opacity: 1; } }
 
-#pick-pause { float: right; padding: 2px 8px; font-size: 11px; }
-#pick-pause[hidden] { display: none; }
-
 /* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。現在の範囲は下線と濃さで示し、色の塊（ピル）は使わない。 */
 .scope-nav { display: flex; justify-content: center; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 10px auto 2px; max-width: 100%; font: 11px/1.5 monospace; color: #087b90; }
 .scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 14px; margin: 0; padding: 0; list-style: none; }
