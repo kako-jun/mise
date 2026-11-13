@@ -81,7 +81,7 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 1. 規模拡大: `--sample-every` を下げる。取得は 1 日数百ホスト程度の低速を維持する。
 2. 広告中心・量産の特徴量を実データで検証して足す（affiliate/購入導線リンクの量、同一テンプレートの量産）。
 3. 保留（`deferred`）の基準（#50）。
-4. 台帳の `candidate` を JSON/SQL に出す書き出し（D1 投入前の形）と、申請・拒否リスト（[ideas/requests.md](../ideas/requests.md)）の除外。
+4. 台帳の `candidate` を JSON/SQL に出す書き出し（D1 投入前の形）と、拒否リスト（[ideas/requests.md](../ideas/requests.md)）の除外。なお推薦の申請は `scripts/requests/import_requests.py` が frontier に `source='request'` で追記する（[operations/requests.md](../operations/requests.md)）。
 5. 紹介文・スパム一次判定・種別・成人向けの確定: 手元からの LLM バッチ（[ideas/llm-judging.md](../ideas/llm-judging.md)）。入力は `title` / `description` / `text_head` のみ。
 6. 発見元の追加: Wayback/CT による個別補完、公開リンク集。リンク数順の優先度付けにはグラフの edges/ranks（巨大）が必要で、範囲取得の方法を別途調べる。
 7. cron 登録（[operations/jobs.md](../operations/jobs.md)）。

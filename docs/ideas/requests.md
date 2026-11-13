@@ -1,10 +1,10 @@
 # 申請の未実装部分（構想）
 
-Issue #4・#29。**受付・保存・拒否リストの台帳は実装済み**（正本: [operations/requests.md](../operations/requests.md)）。ここには未実装の部分だけを置く。
+Issue #4・#29。**受付・保存・拒否リストの台帳・手元スクリプトでの取り込みは実装済み**（正本: [operations/requests.md](../operations/requests.md)）。ここには未実装の部分だけを置く。
 
 ## 未実装
 
-- 承認の反映の自動化（現状は管理者が SQL と台帳を手で更新する）。
+- 取り下げ・訂正の掲載への反映の自動化（現状は人が「人が見る候補」を見て手で更新する。推薦の取り込みは実装済み: `scripts/requests/import_requests.py`）。
 - 発見パイプライン（`scripts/pipeline/`）が D1 の `blocked_hosts` を読んで、拒否リストのホストを再収集しない接続。現状はパイプライン側のローカル拒否リスト（`scripts/pipeline/blocklist/`）と別。
 - 巡回時の robots.txt Disallow・noindex の検出から `blocked_hosts` への自動登録。
 - 管理画面（認証つき）。当面は `wrangler d1 execute` で足りる。

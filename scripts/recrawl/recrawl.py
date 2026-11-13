@@ -388,6 +388,14 @@ def confirm(db, key, reason, now=None):
     return r['site_id']
 
 
+def request_candidates(path):
+    """取り下げ・訂正の申請(scripts/requests/import_requests.py が出す JSON Lines)。人が見る一覧に併記する。"""
+    p = Path(path)
+    if not p.exists():
+        return []
+    return [json.loads(l) for l in p.read_text(encoding='utf-8').splitlines() if l.strip()]
+
+
 def candidates(db):
     return db.execute("SELECT site_id,url,name,state,flag,consecutive_failures,first_failure_at,last_checked_at,last_ok_at,last_kind,last_http_status,last_error,last_final_url,note "
                       "FROM sites WHERE state IN ('needs_review','hide_candidate') OR flag IS NOT NULL ORDER BY (state='hide_candidate') DESC, consecutive_failures DESC, site_id").fetchall()
@@ -415,7 +423,8 @@ def main(argv=None):
     p = sub.add_parser('import', help='掲載済みサイトの JSON を取り込む'); p.add_argument('files', nargs='*')
     p = sub.add_parser('run', help='期限が来たサイトを優先度順に再巡回'); p.add_argument('--limit', type=int, default=50)
     p.add_argument('--workers', type=int, default=3); p.add_argument('--host-wait', type=float, default=HOST_WAIT)
-    sub.add_parser('candidates', help='要確認・非表示候補の一覧(人が見る)').add_argument('--json', action='store_true')
+    p = sub.add_parser('candidates', help='要確認・非表示候補の一覧(人が見る)。取り下げ・訂正の申請も併記'); p.add_argument('--json', action='store_true')
+    p.add_argument('--requests-file', default=str(ROOT / 'var' / 'requests' / 'review.jsonl'))
     p = sub.add_parser('confirm', help='flag 付き(転送・内部アドレス)の要確認を人が確認して解除する'); p.add_argument('key', help='site_id または url'); p.add_argument('--reason', required=True)
     p = sub.add_parser('sql', help='site_checks 向けの SQL を出力'); p.add_argument('--out')
     p = sub.add_parser('changes', help='タイトル・本文ハッシュの変化の記録'); p.add_argument('--limit', type=int, default=50)
@@ -432,11 +441,14 @@ def main(argv=None):
                 print(f'警告: {e}', file=sys.stderr); sys.exit(2)
         elif a.cmd == 'candidates':
             rows = candidates(db)
+            reqs = request_candidates(a.requests_file)
             if a.json:
-                print(json.dumps([dict(r) for r in rows], ensure_ascii=False, indent=2))
+                print(json.dumps([dict(r) for r in rows] + reqs, ensure_ascii=False, indent=2))
             for r in ([] if a.json else rows):
                 print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
-            if not rows and not a.json:
+            for q in ([] if a.json else reqs):
+                print(f"[{q['state']}] {q.get('site_id') or '掲載なし'} {q['url']} 申請#{q['request_id']} 理由: {q['reason']}")
+            if not rows and not reqs and not a.json:
                 print('候補なし')
         elif a.cmd == 'confirm':
             try:
