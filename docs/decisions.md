@@ -69,6 +69,6 @@ kako-jun の方針・合意を、日付と出典 Issue つきで 1 か所に集�
 | 日付 | 決定 | 出典 | 状態 |
 |---|---|---|---|
 | 2026-11 | Cloudflare Workers + Hono + D1、HTML/CSS/JavaScript（UI フレームワークなし）、Three.js。Astro は採用しない | #1 | 実装済 |
-| 2026-11-13 | 公開サイトは `mise.llll-ll.com`（Custom Domain）。デプロイは当面手動 | #7 | 実装済（その後 Workers Builds 連携済み。設定値は未確認、deploy.md 参照） |
+| 2026-11-13 | 公開サイトは `mise.llll-ll.com`（Custom Domain）。デプロイは当面手動 | #7 | 実装済（その後 Workers Builds 連携済み。本番の設定値は確認済み、deploy.md 参照） |
 | 2026-11-13 | 公開 RSS・外部向け公開 API は設けない方針 | 旧 architecture.md（出典 Issue は特定できず） | 方針（`/api` はブラウザ用で、直接呼べる） |
 | 2026-11-13 | セキュリティヘッダ（CSP はインラインスクリプトのハッシュ方式・強制）、`/api/*` は短い Cache-Control、`/api/sites` は LEFT JOIN（未分類を検索に出す） | #13 | 実装済（[architecture.md](design/architecture.md#セキュリティヘッダ)） |
