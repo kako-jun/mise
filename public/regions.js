@@ -1,6 +1,6 @@
 // ISO 3166-2 第1階層の区画 -> 名前(日英)と代表座標。scripts/collect-regions.py が生成する（手で編集しない）。
 // 出典: Wikidata (CC0) の P300(ISO 3166-2)・P625(座標)・ja/enラベル。取得日 2026-11-13。対象国 JP,US,GB,DE,FR,KR,CN,AU,CA,BR,IN,IT,RU。件数 384。
-// 座標またはenラベルが無い区画は含めない（欠損 0 件: ）。
+// 解散扱い（P576あり）の項目、および座標またはen/mulラベルが無い項目は含めない（座標・ラベル欠損 0 件: なし。ISO の件数と一致しない国がある: 例 KR は17件中15件。KR-29・KR-46 は解散扱いで除外され、該当区画のサイトは国旗のみ表示）。
 window.MISE_REGIONS = {
   'AU-ACT':{ja:'オーストラリア首都特別地域',en:'Australian Capital Territory',lat:-35.45,lon:148.98},
   'AU-NSW':{ja:'ニューサウスウェールズ州',en:'New South Wales',lat:-32.0,lon:147.0},
