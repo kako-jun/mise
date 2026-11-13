@@ -26,7 +26,7 @@
 
 `src/security.js` が定義し、Worker の全応答に付ける: `Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`。静的ファイルには `public/_headers` で nosniff と Referrer-Policy を付ける（CSP は文書だけに意味があるため）。
 
-- HTML（`/` と範囲ページ）の CSP は `script-src 'self'` に、`index.html` のインライン `<script>`（実行されるもの。JSON-LD のデータブロックは対象外）の sha256 を足したもの。ハッシュは `seo.js` がアセットの HTML から毎回計算するので、インラインスクリプトを編集してもハッシュの更新は要らない。`unsafe-inline` は使わない。`style-src 'self'`（HTML にインライン style なし。JS からの CSSOM 操作は対象外）、`img-src 'self' data:`、`connect-src 'self'`、`manifest-src 'self'`、`frame-ancestors 'none'`、`object-src 'none'`、`base-uri 'none'`。
+- HTML（`/` と範囲ページ）の CSP は `script-src 'self'` に、`index.html` のインライン `<script>`（実行されるもの。JSON-LD のデータブロックは対象外）の sha256 を足したもの。ハッシュは `seo.js` がアセットの HTML から毎回計算するので、インラインスクリプトを編集してもハッシュの更新は要らない。`unsafe-inline` は使わない。`style-src 'self'`（HTML にインライン style なし。JS からの CSSOM 操作は対象外）、`img-src 'self' data:`、`connect-src 'self'`、`manifest-src 'self'`、`worker-src 'self'`、`frame-ancestors 'none'`、`object-src 'none'`、`base-uri 'none'`。
 - HTML 以外の応答は `default-src 'none'`。
 - 外部の画像・スクリプト・フォントを足すときは `security.js` の許可も足す。本番では Cloudflare の HTML 加工でハッシュが合わなくなることがあるため、デプロイ後は [deploy.md](../operations/deploy.md#csp-を含むデプロイ後の確認手順) の手順で確認する。新しい CSP を試すときは `CSP_REPORT_ONLY` を `true` にして、コンソールの違反を確認してから強制に戻す。
 
@@ -34,9 +34,12 @@
 
 ホーム画面に追加でき、standalone で起動する。構成は 3 点だけ。
 
-- **manifest**: `public/manifest.webmanifest`（`<link rel="manifest">` で参照）。`start_url` は `/`（既定範囲の日本）、`theme_color` はロゴの赤 `#c90018`。アイコンは `public/icons/` の `icon-192.png`・`icon-512.png`・`icon-maskable-512.png`（赤地に白の `M`。正本は `mise-icon.svg`、PNG は書き出した生成物）。`.webmanifest` は静的配信させるため `wrangler.jsonc` の `run_worker_first` の除外に入れ、`_headers` で `Content-Type: application/manifest+json`・`no-cache` を付ける。CSP には `manifest-src 'self'` を足してある。
+- **manifest**: `public/manifest.webmanifest`（`<link rel="manifest">` で参照）。`start_url` は `/`（既定範囲の日本）。**色はページの背景に揃える**: manifest の `theme_color`・`background_color` は `#ffffff`、`index.html` の `theme-color` はライト `#ffffff`・ダーク `#07141c`（`media="(prefers-color-scheme: …)"`。manifest にダーク指定はないので standalone のタイトルバーはライト固定。画面内のテーマ切替には追従しない）。アイコンは `public/pwa/`（サイトのファビコン置き場 `public/icons/` と分ける）: `icon-180.png`（apple-touch-icon）・`icon-192.png`・`icon-512.png`・`icon-maskable-512.png`（maskable は M を中央 76% に縮小）。正本は `mise-icon.svg`（赤地に白の太い `M`。**文字でなく path** なのでフォントに依存しない）で、PNG は `node scripts/build-pwa-icons.mjs`（playwright と Chromium が必要）で書き出した生成物。ロゴの書体を統一する作業が入ったら、SVG の path を差し替えて同じコマンドで PNG を作り直す。`.webmanifest` は静的配信させるため `wrangler.jsonc` の `run_worker_first` の除外に入れ、`_headers` で `Content-Type: application/manifest+json`・`no-cache` を付ける。CSP には `manifest-src 'self'` と `worker-src 'self'`（古いブラウザで `default-src 'none'` に落ちて SW 登録が弾かれるのを防ぐ）を足してある。
 - **service worker**: `public/sw.js`（`index.html` の load 後に登録、失敗しても画面は使える）。**キャッシュを持たない**。ページ移動（navigate）がネットワークで失敗したときだけ、sw.js に埋め込んだ「オフラインです」（日英併記・503）を返す。HTML・API・静的ファイルは常にネットワーク経由で、`/api/*` の `Cache-Control`（[API](#api)）は従来どおり。オフライン画面は SW が作る応答なので、CSP（`style-src 'unsafe-inline'` のみ・script 不許可）もその応答に自分で付ける。別ファイルにしないのは、静的 HTML を置くと Worker の経路で 404 になる・CSP が配信経路ごとにずれるのを避けるため。
+- **ナビゲーションプリロード**: `activate` で有効化し、起動時の SW 待ちでページ移動が遅れないようにする（応答の保存ではなくネットワーク応答そのもの）。
 - **更新**: `skipWaiting` + `clients.claim` で新しい SW を即時有効化する。キャッシュが無いので古い画面が残らない（`activate` で既存の Cache Storage も消す）。`sw.js` と manifest は `_headers` で `Cache-Control: no-cache`（更新確認を遅らせない）。
+
+配信設定は `npm run check` の `scripts/check-pwa.mjs` が検査する（`_headers`・`wrangler.jsonc`・CSP・manifest とアイコンの寸法・theme-color の一致。静的ファイルは Worker を通らないため設定ファイルそのものを読む）。
 
 オフラインでアプリを使えるようにしない（古いカテゴリ・サイトを現行と誤認させない）。将来オフライン閲覧を足す場合は、日付・「古い可能性」の表示と更新方針を決めてから。
 

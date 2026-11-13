@@ -75,7 +75,7 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 実装は [architecture.md](../design/architecture.md#pwa)。ローカルで確認できるのは manifest の取得・SW 登録・オフライン表示（開発サーバーを止めてページ移動する）まで。デプロイ後に本番 HTTPS（`mise.llll-ll.com`）で次を確認する。
 
-- `/manifest.webmanifest` が 200・`application/manifest+json`、`/sw.js` が 200・`Cache-Control: no-cache`（Cloudflare を通っても変わらないこと）。
+- `/manifest.webmanifest` が 200・`application/manifest+json`、`/sw.js` が 200・`Cache-Control: no-cache`（ローカル設定の整合は `npm run check` が検査）（Cloudflare を通っても変わらないこと）。
 - DevTools の Application で manifest にエラーがなく、SW が activated で Cache Storage が空であること。
 - PC の Chrome でインストールでき、スマホ（Android Chrome・iOS Safari）でホーム画面に追加できて、アイコン（maskable の切り抜き含む）が崩れず standalone で起動すること。
 - 機内モードで起動すると「オフラインです」が出て、復帰後に通常表示へ戻ること。

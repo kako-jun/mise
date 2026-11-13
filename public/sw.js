@@ -13,9 +13,14 @@ self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil((async () => {
   // 過去にキャッシュを作る版があっても残さない。
   for (const k of await caches.keys()) await caches.delete(k);
+  // 起動時の SW 待ちでナビゲーションが遅れないよう preload を使う（キャッシュではなくネットワーク応答そのもの）
+  if (self.registration.navigationPreload) await self.registration.navigationPreload.enable();
   await self.clients.claim();
 })()));
 self.addEventListener('fetch', e => {
   if (e.request.mode !== 'navigate') return; // それ以外は SW を通さず通常のネットワーク処理
-  e.respondWith(fetch(e.request).catch(() => new Response(OFFLINE_HTML, { status: 503, headers: OFFLINE_HEADERS })));
+  e.respondWith((async () => {
+    try { return (await e.preloadResponse) || await fetch(e.request); }
+    catch { return new Response(OFFLINE_HTML, { status: 503, headers: OFFLINE_HEADERS }); }
+  })());
 });

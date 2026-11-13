@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "wrangler dev --local",
     "db:migrate": "wrangler d1 migrations apply mise --local",
-    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check public/cat.js && node --check src/security.js && node --check public/countries.js && node --check public/regions.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js && node --check public/sw.js && node --check scripts/capture-thumbnails.mjs && node --check scripts/check-api-headers.mjs && node --check scripts/check-prod-csp.mjs && node scripts/check-api-headers.mjs",
+    "check": "node --check src/index.js && node --check src/seo.js && node --check public/app.js && node --check public/cat.js && node --check src/security.js && node --check public/countries.js && node --check public/regions.js && node --check src/client/globe.js && node --check scripts/build-globe.mjs && node --check public/globe.js && node --check public/sw.js && node --check scripts/capture-thumbnails.mjs && node --check scripts/check-api-headers.mjs && node --check scripts/check-prod-csp.mjs && node scripts/check-api-headers.mjs && node --check scripts/check-pwa.mjs && node --check scripts/build-pwa-icons.mjs && node scripts/check-pwa.mjs",
     "build:globe": "node scripts/build-globe.mjs"
   },
   "repository": {

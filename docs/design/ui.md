@@ -52,7 +52,7 @@
 
 ## アプリとして追加（PWA）
 
-ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。仕組みは [architecture.md](architecture.md#pwa)。
+ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">` で赤地に白の `M` になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
 
 ## 言語
 
