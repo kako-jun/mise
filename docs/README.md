@@ -27,6 +27,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | **collection/** 収集 | |
 | [collection/discovery-policy.md](collection/discovery-policy.md) | 発見・確認の方針（robots、レビュー、定期処理の考え方） |
 | [collection/pipeline.md](collection/pipeline.md) | 独立サイトの発見パイプライン（frontier 台帳・決定論フィルタ） |
+| [collection/llm-judge.md](collection/llm-judge.md) | LLM 判定工程（Claude API、手元実行）。2段階・N件まとめ・予算ガード・使い方 |
 | [collection/recrawl.md](collection/recrawl.md) | 登録済みサイトの再巡回（状態遷移・変更検出・要確認の候補リスト） |
 | [collection/public-bodies.md](collection/public-bodies.md) | 官公庁・自治体の名簿（公式サイト台帳） |
 | [collection/procedures.md](collection/procedures.md) | 恒常的な収集手順（スクリプトの再実行方法・書式） |
@@ -49,7 +50,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | 地球儀 | `src/client/globe.js` → `public/globe.js`（生成） |
 | 国・区画の表 | `public/countries.js`、`public/regions.js`（生成） |
 | データベース | `migrations/` |
-| 収集・台帳・パイプライン | `scripts/`、`data/` |
+| 収集・台帳・パイプライン | `scripts/`、`data/`（LLM 判定は `scripts/llm/`） |
 
 ## 旧パスの対応
 
