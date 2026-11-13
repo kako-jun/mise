@@ -7,7 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
-- 現在のアプリに本番 secret は無い（`src/` は `DB` と `ASSETS` のみ使う）。
+- 必須の secret は `INTAKE_SALT`（申請の IP ハッシュの塩。未設定だと申請の受付が 503 で止まる。[requests.md](requests.md)）。設定は [秘密情報](#秘密情報)。
 
 ## ローカル
 
@@ -16,6 +16,7 @@ npm install
 npm run db:migrate   # ローカル D1 に migrations を適用（--local）
 npm run dev          # wrangler dev --local
 npm run check        # 構文確認（node --check）+ API ヘッダ自己検査
+npm test             # 申請の検証・SSRF 対策・拒否リストの単体テスト
 npm run build:globe  # src/client/globe.js から public/globe.js を生成
 ```
 
@@ -88,3 +89,13 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。
 - PWA（Issue #10）は実装済みだが、実スマホ・本番 HTTPS での確認は未実施（上の「PWA の確認手順」）。
+
+## 秘密情報
+
+`INTAKE_SALT`（申請の IP ハッシュの塩）は、**値をリポジトリ・ログ・Issue に書かない**。十分長いランダム文字列を作って Worker の secret に入れる（本番 Worker とプレビューの両方）:
+
+```sh
+openssl rand -hex 32 | npx wrangler secret put INTAKE_SALT          # 本番
+```
+
+ローカルは `.dev.vars`（`.gitignore` 済み）に `INTAKE_SALT=任意の文字列` を置く。塩を変えると既存の `ip_hash` は新しいハッシュと一致しなくなる（レート制限の履歴が切れるだけで害はない）。

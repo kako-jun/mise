@@ -17,6 +17,7 @@
 | `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
 | `GET /api/sites?scope=` | 掲載サイト全件（範囲で絞る。`country_code` が NULL のサイトは `all` にだけ出る）。`site_categories` と `LEFT JOIN` するため、カテゴリ未所属のサイトも `category_id = NULL` で返る（画面では「未分類」として検索に出る。カテゴリ一覧には出ない）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
 | `GET /api/activity?scope=` | 掲載総数と直近 7 日の日別登録数（HUD 用。範囲内だけ） |
+| `POST /api/requests` | 申請（推薦・取り下げ・訂正）の受付のみ。同一オリジンの JSON。常に `no-store`。仕様・レート制限は [operations/requests.md](../operations/requests.md) |
 | `GET /` `/:scope/` `/:scope` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。サイトが 1 件も無い国・不正な値は 404、大文字は小文字へ 301 |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
