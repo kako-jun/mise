@@ -4,8 +4,8 @@ const storage = { get(key) { try { return localStorage.getItem(key); } catch (_)
 let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' },
-  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'KNOWN REGISTRATIONS / UTC', crawlUnknown:'CRAWL HISTORY: NOT RECORDED', historyCaveat:'EXCLUDES UNKNOWN DATES', totalLabel:'SITES', unknownLabel:'DATE UNKNOWN', unavailable:'UNAVAILABLE' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', scaleSr:n=>`1■は約${n}件`, totalLabel:'SITES', unavailable:'UNAVAILABLE' },
+  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', scaleSr:n=>`1 square is about ${n} sites`, totalLabel:'SITES', unavailable:'UNAVAILABLE' }
 };
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
@@ -53,23 +53,25 @@ $('#theme-toggle').addEventListener('click', () => { const theme=document.docume
 window.addEventListener('mise-fly-japan',()=>logActivity('fly japan'));
 
 
+const HISTORY_MAX_SQUARES = 12;
 function renderStats() {
   $('#site-total').textContent = `${t('totalLabel')}: ${activityStats ? activityStats.total : t('unavailable')}`;
-  $('#unknown-dates').textContent = `${t('unknownLabel')}: ${activityStats ? activityStats.unknown_dates : t('unavailable')}`;
   const bars=$('#history-bars'); bars.replaceChildren();
   if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
+  const maxCount=Math.max(0,...days.values()), scale=Math.max(1,Math.ceil(maxCount/HISTORY_MAX_SQUARES));
   bars.style.setProperty('--count-digits', String(Math.max(1,...Array.from(days.values(),n=>String(n).length))));
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
-    const item=document.createElement('div'); item.className='history-day'; item.setAttribute('aria-label',`${day}: ${count}`);
+    const item=document.createElement('div'); item.className='history-day'; const sr=document.createElement('span'); sr.className='visually-hidden'; sr.textContent=`${day}: ${count}`;
     const label=document.createElement('span'); label.className='history-date'; label.textContent=date.toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'});
     const squares=document.createElement('span'); squares.className='history-squares'; squares.setAttribute('aria-hidden','true');
-    for(let n=0;n<count;n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
+    for(let n=0;n<Math.ceil(count/scale);n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
     const number=document.createElement('span'); number.className='history-count'; number.textContent=String(count);
-    item.append(label,number,squares); bars.append(item);
+    label.setAttribute('aria-hidden','true'); number.setAttribute('aria-hidden','true'); item.append(sr,label,number,squares); bars.append(item);
   }
+  if(scale>1) { const note=document.createElement('div'); note.className='history-scale'; const vis=document.createElement('span'); vis.setAttribute('aria-hidden','true'); vis.textContent=`1■≈${scale}`; const ssr=document.createElement('span'); ssr.className='visually-hidden'; ssr.textContent=t('scaleSr')(scale); note.append(vis,ssr); bars.append(note); }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
 function link(label, path, callback) {
