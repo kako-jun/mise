@@ -14,14 +14,14 @@ Node.js と npm が必要。
 npm install
 npm run db:migrate   # ローカル D1 に migrations を適用
 npm run dev          # 表示されたローカル URL を開く
-npm run check        # 構文確認
+npm run check        # 構文確認 + API ヘッダ自己検査
 ```
 
 収集・台帳のスクリプトは `uv run python3` で実行する（[docs/collection/procedures.md](docs/collection/procedures.md)）。
 
 ## 本番
 
-Cloudflare Workers + D1 に手動でデプロイしている。手順は [docs/operations/deploy.md](docs/operations/deploy.md)。
+Cloudflare Workers + D1。main へのマージで Workers Builds が自動デプロイし、migration はマージ前に手動で適用する。手順は [docs/operations/deploy.md](docs/operations/deploy.md)。
 
 ## ドキュメント
 
