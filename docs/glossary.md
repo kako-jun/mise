@@ -10,7 +10,7 @@ mise の docs・Issue・コードで使う語の定義。新しい語を足す�
 | 層1 / 層2 | 収集の分担。層1=官公庁・自治体（名簿から作る。[public-bodies.md](collection/public-bodies.md)）、層2=それ以外の独立サイト（[pipeline.md](collection/pipeline.md)） |
 | 候補 | 決定論の収集・フィルタを通過したが、まだ掲載していないホスト。掲載ではない |
 | 掲載 | D1 に登録され、画面・API・sitemap に出ている状態 |
-| 範囲（scope） | 国をディレクトリ全体にかける考え方。カテゴリの木は1つで、国は絞り込み軸。**構想**（[ideas/scope-and-search.md](ideas/scope-and-search.md)） |
+| 範囲（scope） | 国をディレクトリ全体にかける考え方。カテゴリの木は1つで、国は絞り込み軸。URL は `/jp/` `/us/` `/all/`。実装済み（[design/ui.md](design/ui.md#範囲国)） |
 | 運営者の所在国 / 区画 | `sites.country_code`（ISO 3166-1 alpha-2）/ `sites.region_code`（ISO 3166-2 第1階層）。公開情報で確認できたものだけ入れる |
 
 ## 収集
