@@ -72,8 +72,8 @@ export async function renderIndex(c, assetResponse) {
   }).join('');
   let siteItems = '';
   if (path.length) {
-    const { results } = await c.env.DB.prepare('SELECT s.name, s.url, s.description_ja FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ORDER BY s.id').bind(path.at(-1)).all();
-    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a> — ${esc(s.description_ja)} (Japanese)</li>`).join('');
+    const { results } = await c.env.DB.prepare('SELECT s.name, s.url, s.description_ja, s.description_en FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ORDER BY s.id').bind(path.at(-1)).all();
+    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a> — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
   }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });

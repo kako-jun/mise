@@ -14,7 +14,7 @@
     "page_http_status": 200,
     "observed_title": "ELM by ChaN",
     "observed_meta_description": "Electronics projects and related informations for electronics enthusiasts.",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-genbu",
@@ -32,7 +32,7 @@
     "page_http_status": 200,
     "observed_title": "玄松子の記憶",
     "observed_meta_description": "神社参拝「記憶」、御朱印収集、神紋調査、式内社、総社、一之宮、官幣社・国幣社、祭神記、神社知識などなど",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-kofun-map",
@@ -50,7 +50,7 @@
     "page_http_status": 200,
     "observed_title": "古墳マップ",
     "observed_meta_description": "日本全国の古墳の投稿型情報サイトです。古墳の地図・形・大きさなどのデータを詳しくまとめています。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-zukan-bouz",
@@ -67,7 +67,7 @@
     "page_http_status": 200,
     "observed_title": "市場魚貝類図鑑　ぼうずコンニャク",
     "observed_meta_description": "水産物関連著作を多数執筆する藤原昌高(ぼうずコンニャク)がWEBで提供する魚貝類図鑑。圧倒的な情報量(基本情報から味・お勧めの料理法・加工品・歴史・方言等まで)で掲載種は2500種以上。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-stellarscenes",
@@ -85,7 +85,7 @@
     "page_http_status": 200,
     "observed_title": "Stellar Scenes",
     "observed_meta_description": "彗星，星雲星団，星座，天の川，月など，2000点以上を収録した天体写真集です。各写真には解説もつけました。夜空に拡がる美しい星達の姿をお楽しみ下さい。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-sora-can",
@@ -103,7 +103,7 @@
     "page_http_status": 200,
     "observed_title": "宇宙（そら）のキャンバス\t  天体写真 / 天体写真撮影ノウハウ",
     "observed_meta_description": "「宇宙（そら）のキャンバス」へ　ようこそ！　宇宙（そら）というキャンバスに描かれている星雲・星団などをデジタルカメラや冷却ＣＣＤカメラで撮影することをライフワークとしています。撮影した写真の整理をすべく、本ホームページを開設しました。撮影システムや撮影技術がヘタで、又、整理も雑ではありますが、お立ち寄り願います。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-hoshi-izanai",
@@ -120,7 +120,7 @@
     "page_http_status": 200,
     "observed_title": "星への誘い",
     "observed_meta_description": "星への誘い・宇宙・天文・星に関する初心者向けサイトです",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-elecroom-avr",
@@ -137,7 +137,7 @@
     "page_http_status": 200,
     "observed_title": "電子工作の部屋 AVR",
     "observed_meta_description": null,
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-denshi-muscat",
@@ -154,7 +154,7 @@
     "page_http_status": 200,
     "observed_title": "電子マスカット【電子工作･エレクトロニクス工作】",
     "observed_meta_description": "電子工作・エレクトロニクス工作の製作記事を紹介する電子マスカット。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-kyotani-hobby",
@@ -171,7 +171,7 @@
     "page_http_status": 200,
     "observed_title": "京谷豊のページへようこそ！",
     "observed_meta_description": "京谷豊のページへようこそ！\n電子工作、クルマ関連工作、パチンコ液晶の応用・・・・　などなど、\n「趣味として楽しめる工作」を目指しています！",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-susutawari",
@@ -188,7 +188,7 @@
     "page_http_status": 200,
     "observed_title": "Made by Susutawari",
     "observed_meta_description": null,
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-mlum-factory",
@@ -206,7 +206,7 @@
     "page_http_status": 200,
     "observed_title": "みゃん☆みゃん☆ふぁくとりぃ",
     "observed_meta_description": null,
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-naruken",
@@ -223,7 +223,7 @@
     "page_http_status": 200,
     "observed_title": "naruken なる研",
     "observed_meta_description": "なる研です。",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-hana300",
@@ -240,7 +240,7 @@
     "page_http_status": 200,
     "observed_title": "季節の花300",
     "observed_meta_description": "1997年から個人で発信している花図鑑。定点観測300種、1～12月の花、色分け（白黄赤青紫）、トケイソウの開花動画、万葉集など240首、誕生日の花、木へん・草かんむり・魚へんの漢字、など",
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-tanken-com",
@@ -257,7 +257,7 @@
     "page_http_status": 200,
     "observed_title": "探検コム",
     "observed_meta_description": null,
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   },
   {
     "id": "collected-arch-hiroshima",
@@ -275,6 +275,6 @@
     "page_http_status": 200,
     "observed_title": "arch-hiroshima –",
     "observed_meta_description": null,
-    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く"
   }
 ]
