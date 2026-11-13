@@ -1,0 +1,28 @@
+name: 申請(推薦・取り下げ・訂正) / Request (add, remove or correct)
+description: 掲載の取り下げ・訂正を依頼する(サイトの申請フォームが使えないとき) / Ask to remove or correct a listing (when the on-site form is unavailable)
+title: "申請: (サイトの URL)"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **この Issue は公開されます。メールアドレスなどの個人情報は書かないでください。**
+        依頼は依頼であり、叶うとは限りません。管理者が確認するまで掲載の状態は変わりません。
+        本人確認は、サイトに公開されている運営者の連絡手段などで、この Issue の外で行います。
+        This issue is public: do not post personal information such as email addresses. A request is only a request and may not be granted; nothing changes until an administrator has reviewed it. Identity is confirmed outside this issue, e.g. through the contact method published on your site.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 種類 / Kind
+      options: ["取り下げ / Remove", "訂正 / Correct", "推薦 / Add"]
+    validations: { required: true }
+  - type: input
+    id: url
+    attributes:
+      label: サイトの URL / Site URL
+      placeholder: https://example.com/
+    validations: { required: true }
+  - type: textarea
+    id: details
+    attributes:
+      label: 理由・詳細 / Reason and details
+    validations: { required: false }

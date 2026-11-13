@@ -24,6 +24,13 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `country_code` | 運営者の所在国（ISO 3166-1 alpha-2 大文字 2 文字、CHECK で形式を縛る） | 0011 |
 | `region_code` | 運営者の所在県・州（ISO 3166-2 第 1 階層、例 `JP-13`）。`country_code` が必須で先頭 2 文字が一致すること（CHECK） | 0013 |
 
+### インデックスと検索用列（0018）
+
+- `idx_sites_sort_<ハッシュ>`: 一覧の既定の並びの式インデックス(名前の末尾は列定義のハッシュ。`SORT_KEYS` を変えると名前が変わるので、新しい migration で新名の CREATE と旧名の `DROP INDEX` を書く。`npm run check` が「最新の migration に現在の定義がある」ことを検査する)。**並びの定義は `src/sites.js` の `SORT_KEYS` 1 か所**で、`ORDER BY`・カーソルのキー列・「次のページ」の比較条件・インデックスはそこから生成する。並びのキーを足す/変えるとき（例: 官公庁台帳 #71 で先頭に足した `bulk_import`。旧 `idx_sites_sort_2489145a` は 0019 で DROP し `idx_sites_sort_9b34c1ec` を作った）は、`SORT_KEYS` を直し、`sortIndexSql()` が出す `CREATE INDEX` を新しい migration に書く（`npm run check` が一致を検査する）。画面に出す列が増えるなら `COLUMNS` にも足す。カーソルはキー値の配列なので形式は変わらない。
+- **`SORT_KEYS` を変えたときのチェックリスト**: (1) 新しい migration に `sortIndexSql()` の新名の `CREATE INDEX` と、旧名の `DROP INDEX` を書く。(2) `mise-preview` にも適用する。旧名の DROP 漏れは自動検出できないので手で確かめる。
+- `idx_site_categories_category`: `(category_id, site_id)`。カテゴリ別一覧・件数の逆引き。
+- `sites.search_text`: 検索用の正規化済みテキスト（名前・日英の紹介文・URL を NFKC + 小文字化）。`/api/sites?q=` はこの列を `instr()` で引く。migration は暫定値（SQL の `lower()` = ASCII のみ）を入れ、INSERT 時と、名前・紹介文・URL の UPDATE 時のトリガも同じ暫定値を入れる（`search_text` を明示して渡した INSERT/UPDATE は上書きしない）。比較は `instr()`（LIKE は D1 でパターンが約 50 バイトを超えると too complex になるため使わない）。全角半角・非 ASCII の大小を正しく扱うには、サイトを足した/直した後に `node scripts/refresh-search-text.mjs --local|--remote` で埋め直す。 `instr()` は全件スキャンなので、サイト数が今より一桁増えたら FTS などの索引方式を見直す。
+
 ### `categories` / `site_categories` / `site_tags`
 
 - `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。
@@ -44,7 +51,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 ### 制約と注意
 
-- `GET /api/sites` は `site_categories` と `JOIN` するため、カテゴリ未所属のサイトは API にも検索にも出ない。
+- カテゴリ未所属のサイトも `GET /api/sites`（`category` 指定なし）と検索には出る（`category_ids` が空配列。画面では「未分類」）。カテゴリ別の一覧には出ない。
 - 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
 
 ## 将来案（未実装）
@@ -75,7 +82,7 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 
 ### 状態遷移・申請
 
-掲載の状態（`listed` / `down` / `long_down` / `suspect` …）と申請（`add` / `remove` / `correct`）のデータは未設計。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
+掲載の状態（`listed` / `down` / `long_down` / `suspect` …）のデータは未設計。申請は `requests`、拒否リストは `blocked_hosts`（[operations/requests.md](../operations/requests.md)）。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
 
 ## 未決事項
 

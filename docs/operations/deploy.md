@@ -7,7 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
-- 現在のアプリに本番 secret は無い（`src/` は `DB` と `ASSETS` のみ使う）。
+- 必須の secret は `INTAKE_SALT`（申請の IP ハッシュの塩。未設定だと申請の受付が 503 で止まる。[requests.md](requests.md)）。設定は [秘密情報](#秘密情報)。
 
 ## ローカル
 
@@ -16,6 +16,7 @@ npm install
 npm run db:migrate   # ローカル D1 に migrations を適用（--local）
 npm run dev          # wrangler dev --local
 npm run check        # 構文確認（node --check）+ API ヘッダ自己検査
+npm test             # 申請の検証・SSRF 対策・拒否リストの単体テスト
 npm run build:globe  # src/client/globe.js から public/globe.js を生成
 ```
 
@@ -32,6 +33,11 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 手動での再デプロイや緊急時は `npx wrangler deploy` を使う。
 
 - 本番 DB への適用は取り返しがつかないため、migration の内容とローカルでの確認結果を見てから行う。スキーマ変更は、適用後も旧 Worker が動き続けられる後方互換の形にする。
+- **0018（`sites.search_text`）を適用した後**は、検索用の列を NFKC + 小文字化で埋め直す。migration の暫定値は ASCII の小文字化だけで、全角半角や非 ASCII の大小は埋め直すまで合わない。サイトを migration で足した後も同じ。本番 → プレビューの順に実行する（`--db` は `mise` / `mise-preview` のみ。`--local` は `mise` 専用）:
+  ```
+  node scripts/refresh-search-text.mjs --remote --db mise
+  node scripts/refresh-search-text.mjs --remote --db mise-preview
+  ```
 - 適用済みの migration は書き換えない。データの修正は新しい番号の migration で行う。番号は他の作業と衝突しないよう、最新を確認してから振る。
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
@@ -71,9 +77,30 @@ PLAYWRIGHT_DIR=<playwright の入った node_modules> CHROMIUM=<chrome の実行
 
 `/api/*` の `Cache-Control` は成功応答（400 未満）だけ `public, max-age=30`。エラー応答は `no-store`。自己検査は `node scripts/check-api-headers.mjs`。
 
+## PWA の確認手順
+
+実装は [architecture.md](../design/architecture.md#pwa)。ローカルで確認できるのは manifest の取得・SW 登録・オフライン表示（開発サーバーを止めてページ移動する）まで。デプロイ後に本番 HTTPS（`mise.llll-ll.com`）で次を確認する。
+
+- `/manifest.webmanifest` が 200・`application/manifest+json`、`/sw.js` が 200・`Cache-Control: no-cache`（ローカル設定の整合は `npm run check` が検査）（Cloudflare を通っても変わらないこと）。
+- DevTools の Application で manifest にエラーがなく、SW が activated で Cache Storage が空であること。
+- PC の Chrome でインストールでき、スマホ（Android Chrome・iOS Safari）でホーム画面に追加できて、アイコン（maskable の切り抜き含む）が崩れず standalone で起動すること。
+- 機内モードで起動すると「オフラインです」が出て、復帰後に通常表示へ戻ること。
+- SW を変えるデプロイ後、再訪問で新しい `sw.js` に切り替わること（`skipWaiting` + `clients.claim`）。
+
 ## 未整備
 
 - Workers Builds の GitHub 連携は設定済み（main へのマージで本番へ自動デプロイされ、PR ブランチでは preview ビルドが走る）。ダッシュボードで確認済み（2026-11-14）: Git リポジトリ `kako-jun/mise`、プロダクションブランチ `main`、ルートディレクトリ `/`。本番ビルドの Build コマンドは「なし」、Deploy コマンドは `npx wrangler deploy`。したがって main へのマージは migration を適用せず Worker だけをデプロイする（migration は事前に手動適用）。プレビュー（ブランチ）側は Build コマンドなし・プレビューコマンド `npx wrangler preview`・ルート `/` で、プレビュー URL は無効（上の「プレビュービルド」参照）。
 - migration は自動適用されない。新しい migration を含む PR を main にマージすると、スキーマが旧いまま新 Worker が本番に出る恐れがある。**先に本番へ migration を適用してから、その後マージする**（後方互換の形にする。上の「本番へのデプロイ」参照）。
 - 失敗時の通知は未整備。ロールバックは上の手順（`wrangler rollback`）。
 - アクセシビリティの指摘は Issue #13 を参照。
+- PWA（Issue #10）は実装済みだが、実スマホ・本番 HTTPS での確認は未実施（上の「PWA の確認手順」）。
+
+## 秘密情報
+
+`INTAKE_SALT`（申請の IP ハッシュの塩）は、**値をリポジトリ・ログ・Issue に書かない**。十分長いランダム文字列を作って Worker の secret に入れる（本番 Worker とプレビューの両方）:
+
+```sh
+openssl rand -hex 32 | npx wrangler secret put INTAKE_SALT          # 本番
+```
+
+ローカルは `.dev.vars`（`.gitignore` 済み）に `INTAKE_SALT=任意の文字列` を置く。塩を変えると既存の `ip_hash` は新しいハッシュと一致しなくなる（レート制限の履歴が切れるだけで害はない）。

@@ -15,8 +15,10 @@
 |---|---|
 | `GET /api/scopes` | 範囲として選べる国（サイトが 1 件以上ある国、件数の多い順）と全体の件数。`{total, countries:[{code, count}]}` |
 | `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
-| `GET /api/sites?scope=` | 掲載サイト全件（範囲で絞る。`country_code` が NULL のサイトは `all` にだけ出る）。`site_categories` と `LEFT JOIN` するため、カテゴリ未所属のサイトも `category_id = NULL` で返る（画面では「未分類」として検索に出る。カテゴリ一覧には出ない）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
+| `GET /api/sites?scope=&category=&q=&limit=&cursor=&page=` | サイトの 1 ページ分（`{ items, next_cursor, total }`）。カーソル方式: `limit`（既定 40、1〜100。100 超は 100 に丸め、0・負数・数字以外は 400）と、前の応答の `next_cursor`（並びのキー値の配列を JSON → base64url にした不透明な文字列。不正は 400）。`next_cursor` が `null` なら末尾。`total` は先頭の応答（`cursor` なし）にだけ入る件数（COUNT）。`category` はそのカテゴリ直下（存在しない id は 404）、`q` は名前・紹介文・URL の部分一致（検索はサーバー側。NFKC + 小文字化、100 文字まで）。`page`（1〜999999、範囲外は 400）は開始位置の指定で `cursor` が無いときだけ有効（`?page=N` の直リンク用）。範囲で絞る（`country_code` が NULL のサイトは `all` にだけ出る）。各サイトに所属カテゴリ `category_ids`（空配列は「未分類」）。実装は `src/sites.js`（SSR と共有）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
+| `GET /api/picks?scope=` | ピックアップ用に範囲内からランダム 3 件（`/api/sites` と同じ形） |
 | `GET /api/activity?scope=` | 掲載総数と直近 7 日の日別登録数（HUD 用。範囲内だけ） |
+| `POST /api/requests` | 申請（推薦・取り下げ・訂正）の受付のみ。同一オリジンの JSON。常に `no-store`。仕様・レート制限は [operations/requests.md](../operations/requests.md) |
 | `GET /` `/:scope/` `/:scope` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。サイトが 1 件も無い国・不正な値は 404、大文字は小文字へ 301 |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
@@ -26,9 +28,22 @@
 
 `src/security.js` が定義し、Worker の全応答に付ける: `Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`。静的ファイルには `public/_headers` で nosniff と Referrer-Policy を付ける（CSP は文書だけに意味があるため）。
 
-- HTML（`/` と範囲ページ）の CSP は `script-src 'self'` に、`index.html` のインライン `<script>`（実行されるもの。JSON-LD のデータブロックは対象外）の sha256 を足したもの。ハッシュは `seo.js` がアセットの HTML から毎回計算するので、インラインスクリプトを編集してもハッシュの更新は要らない。`unsafe-inline` は使わない。`style-src 'self'`（HTML にインライン style なし。JS からの CSSOM 操作は対象外）、`img-src 'self' data:`、`connect-src 'self'`、`frame-ancestors 'none'`、`object-src 'none'`、`base-uri 'none'`。
+- HTML（`/` と範囲ページ）の CSP は `script-src 'self'` に、`index.html` のインライン `<script>`（実行されるもの。JSON-LD のデータブロックは対象外）の sha256 を足したもの。`index.html` のインラインスクリプトは、テーマ用・初期言語判定用（`i18n-pending`、中身は静的）・globe/Service Worker の読込・ロゴ用で、いずれも中身は静的。ハッシュは `seo.js` がアセットの HTML から毎回計算するので、インラインスクリプトを編集してもハッシュの更新は要らない。`unsafe-inline` は使わない。`style-src 'self'`（HTML にインライン style なし。JS からの CSSOM 操作は対象外）、`img-src 'self' data:`、`connect-src 'self'`、`font-src 'self'`（自己ホストのロゴ書体用）、`manifest-src 'self'`、`worker-src 'self'`、`frame-ancestors 'none'`、`object-src 'none'`、`base-uri 'none'`。
 - HTML 以外の応答は `default-src 'none'`。
 - 外部の画像・スクリプト・フォントを足すときは `security.js` の許可も足す。本番では Cloudflare の HTML 加工でハッシュが合わなくなることがあるため、デプロイ後は [deploy.md](../operations/deploy.md#csp-を含むデプロイ後の確認手順) の手順で確認する。新しい CSP を試すときは `CSP_REPORT_ONLY` を `true` にして、コンソールの違反を確認してから強制に戻す。
+
+## PWA
+
+ホーム画面に追加でき、standalone で起動する。構成は 3 点だけ。
+
+- **manifest**: `public/manifest.webmanifest`（`<link rel="manifest">` で参照）。`start_url` は `/`（既定範囲の日本）。**色は既定のライト背景に揃えて固定**: manifest の `theme_color`・`background_color` と `index.html` の `theme-color` はすべて `#ffffff`。このアプリは OS の配色設定に追従せず、既定はライトでアプリ内トグル（`localStorage`）でだけダークになるため、`prefers-color-scheme` によるダーク指定は外した（OS ダークのユーザーが白いページに暗いバーを見る不一致を避ける）。アプリをダークにしたときもバーは白のまま（許容。JS で meta を書き換えて追従する案は、必要になったら足す）。オフライン画面も同じくライト固定。アイコンは `public/pwa/`（サイトのファビコン置き場 `public/icons/` と分ける）: `icon-180.png`（apple-touch-icon）・`icon-192.png`・`icon-512.png`・`icon-maskable-512.png`（maskable は M を中央 76% に縮小）。正本は `mise-icon.svg`（赤地に白の `M`。**文字でなく path** なのでフォントに依存しない）で、`M` はロゴと同じ自己ホストの Anton サブセット（`public/fonts/anton-mise-v1.woff2`）のグリフ輪郭を fontTools（`brotli` も要る）で取り出して、512 の中央・高さ 260 に収めたもの。PNG は `node scripts/build-pwa-icons.mjs`（playwright と Chromium が必要）で書き出した生成物。ロゴの書体を替えたら、SVG の path を取り直して同じコマンドで PNG を作り直す。`.webmanifest` は静的配信させるため `wrangler.jsonc` の `run_worker_first` の除外に入れ、`_headers` で `Content-Type: application/manifest+json`・`no-cache` を付ける。CSP には `manifest-src 'self'` と `worker-src 'self'`（古いブラウザで `default-src 'none'` に落ちて SW 登録が弾かれるのを防ぐ）を足してある。
+- **service worker**: `public/sw.js`（`index.html` の load 後に登録、失敗しても画面は使える）。**キャッシュを持たない**。ページ移動（navigate）がネットワークで失敗したときだけ、sw.js に埋め込んだ「オフラインです」（日英併記・503）を返す（このとき失敗した読み込みのエラーがコンソールに出るのは設計上のもので異常ではない）。HTML・API・静的ファイルは常にネットワーク経由で、`/api/*` の `Cache-Control`（[API](#api)）は従来どおり。オフライン画面は SW が作る応答なので、CSP（`style-src 'unsafe-inline'` のみ・script 不許可）もその応答に自分で付ける。別ファイルにしないのは、静的 HTML を置くと Worker の経路で 404 になる・CSP が配信経路ごとにずれるのを避けるため。
+- **ナビゲーションプリロード**: `activate` で有効化し、起動時の SW 待ちでページ移動が遅れないようにする（応答の保存ではなくネットワーク応答そのもの）。
+- **更新**: `skipWaiting` + `clients.claim` で新しい SW を即時有効化する。キャッシュが無いので古い画面が残らない（`activate` で既存の Cache Storage も消す）。`sw.js` と manifest は `_headers` で `Cache-Control: no-cache`（更新確認を遅らせない）。
+
+配信設定は `npm run check` の `scripts/check-pwa.mjs` が検査する（`_headers`・`wrangler.jsonc`・CSP・manifest とアイコンの寸法・theme-color の一致。静的ファイルは Worker を通らないため設定ファイルそのものを読む）。
+
+オフラインでアプリを使えるようにしない（古いカテゴリ・サイトを現行と誤認させない）。将来オフライン閲覧を足す場合は、日付・「古い可能性」の表示と更新方針を決めてから。
 
 ## 地球儀
 

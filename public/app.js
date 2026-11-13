@@ -1,16 +1,26 @@
 const $ = selector => document.querySelector(selector);
-let pickPaused = false, categories = [], sites = [], currentPath = [], currentSearch = null, pickedIds = [], pickIndex = 0, picksVisible = false, picksHovered = false, activityStats = null;
+let categories = [], pickedSites = [], currentPath = [], currentSearch = null, pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字）または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国（サイトが 1 件以上ある国）と件数。
 const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
-let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
+// 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html data-initial-lang> を使う（判定は二重に持たない）。
+const initialLanguage = () => {
+  const saved = storage.get('mise-language');
+  if (saved === 'ja' || saved === 'en') return saved;
+  return document.documentElement.dataset.initialLang === 'ja' ? 'ja' : 'en';
+  // index.html の先頭スクリプトが決めた値（保険タイマーが lang を en に戻しても、遅れて動いた app.js は ja にできる）
+};
+let language = initialLanguage();
+const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, credit:'官公庁・自治体の掲載は、総務省「全国地方公共団体コード」、デジタル庁 e-Gov「政府機関関連情報」(公共データ利用規約 第1.0版)、Wikidata(CC0)をもとに、地方公共団体情報システム機構「全国自治体マップ検索」で照合し、MISE が編集・加工したものです。', concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', pickPause:'一時停止', pickResume:'再開', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国', lessScopes:'閉じる' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, credit:'Government and municipal sites: based on MIC “National Local Government Codes”, Digital Agency e-Gov “Government Directory” (Public Data License 1.0) and Wikidata (CC0), cross-checked with J-LIS “Map Search”; compiled and processed by MISE.', concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', pickPause:'Pause', pickResume:'Resume', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'More', lessScopes:'Less' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, credit:'官公庁・自治体の掲載は、総務省「全国地方公共団体コード」、デジタル庁 e-Gov「政府機関関連情報」(公共データ利用規約 第1.0版)、Wikidata(CC0)をもとに、地方公共団体情報システム機構「全国自治体マップ検索」で照合し、MISE が編集・加工したものです。', concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, prevPage:'‹ 前のページ' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, credit:'Government and municipal sites: based on MIC “National Local Government Codes”, Digital Agency e-Gov “Government Directory” (Public Data License 1.0) and Wikidata (CC0), cross-checked with J-LIS “Map Search”; compiled and processed by MISE.', concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, prevPage:'‹ Previous page' }
 };
+Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(訂正は必須)', reqContact:'連絡先(メールまたは https の URL。必須)', reqPrivacy:'連絡先は、サイトの外で申請を確認するためだけに使い、決定の 90 日後に削除します。', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。確認には時間がかかります。連絡先に返信が届くとは限りません。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_contact:'連絡先はメールアドレスか https の URL にしてください。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'訂正は、直したい内容を書いてください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。急ぐ場合は、下の GitHub の Issue からも依頼できます。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqAlt:'このフォームが使えないときは、GitHub の Issue からも依頼できます:', reqAltLink:'取り下げ・訂正の依頼', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
+Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required for corrections)', reqContact:'Contact (email or https URL; required)', reqPrivacy:'The contact is used only to confirm the request outside this site, and is deleted 90 days after the decision.', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received. Review takes time, and a reply is not guaranteed.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_contact:'Contact must be an email address or an https URL.', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please describe what should be corrected.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later. If it is urgent, you can also use the GitHub issue link below.', reqErr_too_large:'The input is too large. Please shorten it.', reqAlt:'If this form does not work, you can also ask through a GitHub issue:', reqAltLink:'Removal or correction request', reqErr_other:'Could not send. Please try again later.' });
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
@@ -26,16 +36,21 @@ function updateTitle() {
   const place = currentScope === 'all' ? null : scopeName(currentScope);
   document.title = cur.length ? `${cur.map(name).join(' › ')}${place ? ` (${place})` : ''} — MISE` : place ? `MISE — ${place}: ${t('tagline')}` : `MISE — ${t('tagline')}`;
 }
-function applyLanguage() {
+// データ取得前でも描ける静的部分。初回の英語→日本語のちらつきを、API 応答を待たずに抑える。
+function applyStaticLanguage() {
   document.documentElement.lang = language;
-  updateTitle();
+  window.__miseReady = true;
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   document.querySelectorAll('[data-i18n-label]').forEach(el => { const value=t(el.dataset.i18nLabel); el.setAttribute('aria-label',value); if(el.hasAttribute('title')) el.title=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
-  updatePickPause();
+  renderReqStatus();
   updateExternalToggle();
   $('#language-toggle').title=t('lang'); $('#language-toggle').setAttribute('aria-label',t('lang'));
   renderLog();
+}
+function applyLanguage() {
+  applyStaticLanguage();
+  updateTitle();
   renderStats();
   renderScopeNav();
   if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false);
@@ -161,7 +176,7 @@ function renderSite(target, site, showCategories=false) {
   if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
-    const ids=[...new Set(sites.filter(s=>s.id===site.id).map(s=>s.category_id))].filter(id=>id!=null);
+    const ids=(site.category_ids||[]).filter(id=>categories.some(c=>c.id===id));
     if(!ids.length) row.append(t('uncategorized'));
     ids.forEach((id,index)=>{
       if(index) row.append(' / ');
@@ -172,89 +187,190 @@ function renderSite(target, site, showCategories=false) {
   }
   target.append(li);
 }
-function showDirectory(path, updateHistory=true) {
+
+// ---- 一覧のページング（カーソル方式 API + スクロールで追加読み込み。docs/design/ui.md） ----
+// 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
+const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
+let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
+// 行を消す処理はここ 1 か所（地球儀の解除など、行が消えるときの後始末をここに足す）。
+function clearListRows(ul) { ul.replaceChildren(); }
+const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
+function startList(opts) {
+  if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
+  if(activeList) activeList.stop();
+  // 一覧があるときだけ自前で位置を復元する（manual）。一覧の無い画面（トップ・子カテゴリだけの階層）はブラウザ標準の復元（auto）に任せる。履歴の項目ごとの設定なので遷移のたびに切り替える。
+  history.scrollRestoration=opts.params ? 'manual' : 'auto';
+  if(!opts.params) { activeList=null; clearListRows(opts.ul); opts.foot.replaceChildren(); return; }
+  activeList=createList(opts); activeList.start();
+}
+const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
+function createList(opts) {
+  const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
+  const foot=opts.foot, ul=opts.ul;
+  const saved=history.state && history.state.mise; const onMove=()=>{ L.userMoved=true; };
+  // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
+  L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
+  if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
+  const status=document.createElement('p'), live=document.createElement('p'), btn=document.createElement('button');
+  status.className='list-status'; live.className='visually-hidden'; live.setAttribute('role','status'); live.setAttribute('aria-live','polite');
+  btn.type='button'; btn.className='list-more'; btn.addEventListener('click',()=>L.loadMore(true));
+  const prev=document.createElement('p'); prev.className='list-prev';
+  L.render=()=>{
+    const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
+    // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
+    const hold=o.preserve && !L.items.length && (L.loading || L.error);
+    if(!hold) { clearListRows(ul); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    const empty=!L.items.length && L.ended;
+    status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : L.total!=null ? t('remaining')(Math.max(0,L.total-L.offset-L.items.length)) : '';
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
+    if(empty) foot.replaceChildren(); else foot.replaceChildren(status,btn,live);
+    if(hold) return;
+    if(ps) { ps.hidden=true; ps.replaceChildren(); }
+    prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
+  };
+  L.rerender=()=>{ L.render(); };
+  L.stop=()=>{ L.stopped=true; L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
+  // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
+  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
+  L.loadMore=async (force)=>{
+    if(L.loading || L.stopped || (L.ended && !force)) return;
+    L.loading=true; L.error=false; status.textContent=t('loadingMore'); btn.hidden=true; L.ctl=new AbortController();
+    try {
+      const r=await fetch(L.url(),{signal:L.ctl.signal}); if(!r.ok) throw Error('API');
+      const d=await r.json(); if(L.stopped) return;
+      const first=!L.items.length && L.total==null;
+      L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
+      if(first) { L.render(); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
+    } catch (e) { if(L.stopped) return; L.error=true; L.endRestore(); }
+    L.loading=false; if(L.stopped) return;
+    status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
+    live.textContent=L.error ? t('listError') : L.ended && L.items.length ? t('listEnd')(L.total) : '';
+    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.endRestore(); else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.endRestore(); scrollTo(0,w.y); } }
+    if(!L.ended && !L.error && listIo) { listIo.unobserve(foot); listIo.observe(foot); }
+  };
+  L.start=()=>{
+    if(!opts.preserve) clearListRows(ul);
+    foot.replaceChildren(status,btn,live); status.textContent=t('loadingMore'); btn.hidden=true;
+    // preserve のとき SSR の 1 ページ目とページ番号リンクは最初の応答まで残す。
+    const ps=document.getElementById('site-pager'); if(ps && !opts.preserve) { ps.hidden=true; ps.replaceChildren(); }
+    L.loadMore();
+  };
+  return L;
+}
+let saveTimer=0;
+addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
+addEventListener('pagehide',saveListState);
+function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
+function showDirectory(path, updateHistory=true, preserveSsr=false) {
   currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
-  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
+  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);}));
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
   for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';p.textContent=categories.filter(x=>x.parent_id===c.id).map(name).join(' ');div.append(p);} box.append(div); }
-  const direct=sites.filter(s=>s.category_id===path.at(-1)); direct.forEach(s=>renderSite(siteBox,s));
   $('#picks').hidden=false; renderPick();
-  $('#sample-label').hidden=!direct.length; $('#directory-empty').hidden=!!children.length || !!direct.length || !path.length;
+  const pageNo=path.length ? pageFromLocation() : 1;
+  startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
+    onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
+  if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
 function renderPick() {
-  const list=$('#pick-list'); list.replaceChildren();
-  if(!pickedIds.length) return;
-  const site=sites.find(s=>s.id===pickedIds[pickIndex % pickedIds.length]);
-  if(site) renderSite(list,site,true);
+  const list=$('#pick-list');
+  // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
+  const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
+  if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
+  list.replaceChildren();
+  if(!pickedSites.length) return;
+  renderSite(list,pickedSites[pickIndex % pickedSites.length],true);
+  if(focusIdx>=0){ const nl=list.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
 }
 const picks=$('#picks');
-new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks);
-picks.addEventListener('pointerenter',()=>{picksHovered=true;});
-picks.addEventListener('pointerleave',()=>{picksHovered=false;});
-function updatePickPause() { const b=$('#pick-pause'); b.textContent=t(pickPaused?'pickResume':'pickPause'); b.setAttribute('aria-pressed',String(pickPaused)); b.hidden=pickedIds.length<2; }
-$('#pick-pause').addEventListener('click',()=>{pickPaused=!pickPaused;updatePickPause();});
+if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
 setInterval(()=>{
-  if(pickedIds.length<2 || pickPaused || picks.hidden || !picksVisible || document.hidden || picksHovered || picks.contains(document.activeElement) || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  pickIndex=(pickIndex+1)%pickedIds.length;
+  if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  pickIndex=(pickIndex+1)%pickedSites.length;
   renderPick();
 },8000);
 function showResults(query) {
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
-  const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
-  $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
+  $('#result-title').textContent=query?t('results')(query):t('all'); $('#empty').hidden=true;
+  startList({ key:`${currentScope}|?q|${query}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query}, startPage:1, showCategories:true,
+    onTotal:total=>{ $('#empty').hidden=!!total; } });
 }
 function updateSearch() {
   const q=$('#query').value.trim();
   if(q) showResults(q); else showDirectory(currentPath, false);
 }
+let reqStatus = null;
+let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
-$('#query').addEventListener('compositionend',()=>{composing=false;updateSearch();});
-$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearch();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
+$('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
+$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);});
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
+function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
+$('#request-form').addEventListener('submit',async e=>{
+  e.preventDefault(); const f=e.currentTarget, st=$('#req-status'), btn=$('#req-submit');
+  const show=(key,state)=>{reqStatus={key,state};renderReqStatus();};
+  btn.disabled=true; show('reqSending','info');
+  try {
+    const res=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:f.type.value,url:f.url.value,reason:f.reason.value,contact:f.contact.value,website:f.website.value})});
+    if(res.ok){ show('reqOk','ok'); f.url.value=''; f.reason.value=''; }
+    else { const j=await res.json().catch(()=>({})); show(t('reqErr_'+j.error)?'reqErr_'+j.error:(res.status===429?'reqErr_rate_limited':'reqErr_other'),'error'); }
+  } catch(_) { show('reqErr_other','error'); }
+  finally { btn.disabled=false; }
+});
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
+// 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
+const countryLabel = code => { const e=window.MISE_COUNTRIES?.[code]?.[language]; if(e) return e; try { return new Intl.DisplayNames([language],{type:'region'}).of(code)||code; } catch (_) { return code; } };
+const scopeAria = (label,count) => language==='ja' ? `${label} ${count}件` : `${label}, ${count} ${Number(count)===1?'site':'sites'}`;
+const codeIcon = code => { const el=document.createElement('span'); el.className='scope-code'; el.setAttribute('aria-hidden','true'); el.textContent=code; return el; };
 function scopeItem(code, label, count, icon) {
   const li=document.createElement('li'), a=document.createElement('a');
   a.className='scope-item'; a.href=`/${code}/`; if(code===currentScope) a.setAttribute('aria-current','page');
   if(icon instanceof Node) a.append(icon); else a.insertAdjacentHTML('beforeend',icon);
-  const n=document.createElement('span'); n.className='scope-name'; n.textContent=label;
+  a.setAttribute('aria-label',scopeAria(label,count)); a.title=label;
   const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
-  a.append(n,c);
+  a.append(c);
   a.addEventListener('click',e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); chooseScope(code); });
   li.append(a); return li;
 }
 function renderScopeNav() {
   const nav=$('#scope-nav'); if(!nav) return;
-  const key=document.createElement('span'); key.className='scope-key'; key.setAttribute('aria-hidden','true'); key.textContent='SCOPE';
+  // 作り直すとフォーカスが BODY に落ちるので、範囲ナビ内にあったなら同じ項目へ戻す。
+  const fa=document.activeElement, hadFocus=nav.contains(fa), focusMore=hadFocus && fa.classList?.contains('scope-more');
   const list=document.createElement('ul'); list.className='scope-list';
   list.append(scopeItem('all',t('allWorld'),scopes.total,SCOPE_ICON));
   const extras=[];
   scopes.countries.forEach((r,i)=>{
-    const code=r.code.toLowerCase(), info=window.MISE_COUNTRIES?.[r.code];
+    const code=r.code.toLowerCase();
     let icon='';
-    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>{img.hidden=true;}); icon=img; }
-    const li=scopeItem(code,info?.[language]??r.code,r.count,icon);
+    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>img.replaceWith(codeIcon(r.code))); icon=img; }
+    else icon=codeIcon(r.code);
+    const li=scopeItem(code,countryLabel(r.code),r.count,icon);
     if(i>=INLINE_SCOPES) { li.hidden=!scopesExpanded && code!==currentScope; extras.push(li); }
     list.append(li);
   });
-  const parts=[key,list];
+  const parts=[list];
   if(extras.length) {
     if(extras.some(li=>li.querySelector('[aria-current]'))) { scopesExpanded=true; extras.forEach(li=>{li.hidden=false;}); }
     const more=document.createElement('button'); more.type='button'; more.className='scope-more'; more.setAttribute('aria-expanded',String(scopesExpanded));
-    more.textContent=scopesExpanded?t('lessScopes'):`${t('moreScopes')} (${extras.length})`;
+    const label=scopesExpanded?t('lessScopes'):t('moreScopes'); // 文字は出さず、アイコン(⋯ / ▴)+ aria-label + title
+    more.setAttribute('aria-label',label); more.title=label;
+    more.innerHTML=scopesExpanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>';
     more.addEventListener('click',()=>{ scopesExpanded=!scopesExpanded; renderScopeNav(); });
     parts.push(more);
   }
   nav.replaceChildren(...parts);
+  if(hadFocus) (focusMore ? nav.querySelector('.scope-more') : nav.querySelector('[aria-current]'))?.focus();
   $('#home-link').href=categoryUrl([]);
   // 地球儀へ「選べる国」と現在の範囲を伝える（目印の点と、背景クリックで国を選ぶ判定に使う）。
   window.MISE_SCOPE={ current:currentScope, countries:scopes.countries.map(r=>({code:r.code,lat:window.MISE_COUNTRIES?.[r.code]?.lat,lon:window.MISE_COUNTRIES?.[r.code]?.lon})) };
@@ -264,9 +380,9 @@ function renderScopeNav() {
 function loadScopeData(scope) {
   if(!scopeCache.has(scope)) {
     const q=`?scope=${encodeURIComponent(scope)}`;
-    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/sites${q}`),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
-      if(!a.ok||!b.ok) throw Error('API');
-      return { categories:await a.json(), sites:await b.json(), stats:stats && stats.ok ? await stats.json() : null };
+    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/picks${q}`).catch(()=>null),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
+      if(!a.ok) throw Error('API');
+      return { categories:await a.json(), picks:b && b.ok ? await b.json() : [], stats:stats && stats.ok ? await stats.json() : null };
     });
     scopeCache.set(scope,p); p.catch(()=>scopeCache.delete(scope));
   }
@@ -276,10 +392,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; sites=data.sites; activityStats=data.stats;
-  const ids=[...new Set(sites.map(s=>s.id))];
-  for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}
-  pickedIds=ids.slice(0,3); pickIndex=0;
+  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0;
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。
@@ -298,12 +411,14 @@ window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code|
 function restoreLocation() {
   const q=new URLSearchParams(location.search).get('q');
   if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
+  const first=!restoredOnce; restoredOnce=true;
   $('#query').value='';
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
   if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));
-  showDirectory(path,false);
+  showDirectory(path,false,first);
 }
+let restoredOnce=false;
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
   const scope=scopeFromLocation();
@@ -313,10 +428,12 @@ window.addEventListener('popstate',async()=>{
 (async()=>{
   try {
     currentScope=scopeFromLocation();
+    applyStaticLanguage();
     const [, sc]=await Promise.all([switchData(currentScope), fetch('/api/scopes').then(r=>r.ok?r.json():null).catch(()=>null)]);
     if(sc) scopes=sc;
     restoreLocation(); applyLanguage();
   } catch (_) { if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error'); }
+  finally { endI18nPending(); }
 })();
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）

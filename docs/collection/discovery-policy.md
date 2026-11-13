@@ -13,13 +13,13 @@
 - 信頼できる既存のディレクトリ、公開リンク集、推薦、すでに確認したサイトの外部リンク、Common Crawl のホストグラフなどを起点とし、取得元と発見日時を候補ごとに記録する。リンクを発見したことは掲載承認を意味しない。「アーカイブに無いサイトは無い」とは仮定しない。
 - URL の正規化と既存レコード・候補との重複検査を行う。http/https・リダイレクト・canonical を確認し、安易なドメイン統合で別ブログを潰さない。
 - HTTP 取得前に robots.txt を確認し、明示した User-Agent、サイト別の低い同時実行数と間隔、容量・深さの上限を設ける。禁止、レート制限、エラー時は停止または再試行待ちにする。URL 候補経由の内部 IP・リダイレクトも制限する。運営者が自サイトに出す意思表示（robots.txt の Disallow、noindex 等）は申請ではなく収集時の遵守事項として尊重する。
-- メタデータ抽出・紹介文・分類・所在地は候補として出典を残し、未確認を明示してレビュー後に公開する。取り下げ・訂正の窓口は構想（[ideas/requests.md](../ideas/requests.md)）。
+- メタデータ抽出・紹介文・分類・所在地は候補として出典を残し、未確認を明示してレビュー後に公開する。取り下げ・訂正・推薦の窓口は [operations/requests.md](../operations/requests.md)（受付のみ。承認の反映と巡回側の拒否リスト接続は [ideas/requests.md](../ideas/requests.md)）。
 - 自治体の公式サイトは対象とする。公的機関の信頼できる一覧と独立した 2 つ以上の出典の一致でのみ採用する（[public-bodies.md](public-bodies.md)）。確認できない場合は公式扱い・自動掲載しない。
 - 共有サービス配下の個別ユーザー領域の扱いは未決（Issue #50）。
 
 ## 再巡回
 
-掲載サイトの到達不能は削除でなく状態遷移で扱う方針（Issue #2・#53）。実装は未着手で、構想は [ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)。
+掲載サイトの到達不能は削除でなく状態遷移で扱う方針（Issue #2・#53）。第1段（手元スクリプトの再巡回・状態遷移・候補リスト）は [recrawl.md](recrawl.md) に実装済み。構想は [ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)。
 
 ## 定期処理
 
