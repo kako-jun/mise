@@ -1,11 +1,12 @@
 -- US batch 1 (#43); per-site evidence (source, UTC check time, robots, country evidence) is in data/collection-batch-us1.json.
--- country_code is set only where the operator's location is stated on a public page; region_code is intentionally not set (column not yet present).
+-- country_code is set only where the operator's location is stated on a public page; region_code is intentionally not set (states are recorded only as region_evidence in the data file).
 INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-sacred-texts','https://sacred-texts.com/','Internet Sacred Text Archive','宗教・神話・民間伝承・秘教に関する文書を、宗教や主題別に閲覧できるインターネット聖典アーカイブ。','An online archive of sacred texts, mythology, folklore and esoteric writings, browsable by religion or subject.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-sacred-texts','society-religion');
 UPDATE sites SET last_crawled_at='2026-11-13T06:50:10Z' WHERE id='collected-sacred-texts';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-sacred-texts','聖典','Sacred texts');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-sacred-texts','神話','Mythology');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-astropix','https://www.astropix.com/','AstroPix','ジェリー・ロドリガスによる、天体写真の撮影のコツと画像処理の技法を紹介するサイト。','A site by Jerry Lodriguss with tips and techniques for astrophotography and image processing.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+UPDATE sites SET country_code='US' WHERE id='collected-sacred-texts';
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-astropix','https://www.astropix.com/','AstroPix','Jerry Lodrigussによる、天体写真の撮影のコツと画像処理の技法を紹介するサイト。','A site by Jerry Lodriguss with tips and techniques for astrophotography and image processing.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-astropix','arts-photography');
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-astropix','science-astronomy');
 UPDATE sites SET last_crawled_at='2026-11-13T06:50:17Z' WHERE id='collected-astropix';
@@ -16,24 +17,26 @@ INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-s
 UPDATE sites SET last_crawled_at='2026-11-13T06:50:34Z' WHERE id='collected-silentera';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-silentera','サイレント映画','Silent films');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-silentera','レビュー','Reviews');
+UPDATE sites SET country_code='US' WHERE id='collected-silentera';
 INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-mushroomexpert','https://www.mushroomexpert.com/','MushroomExpert.Com','1300種以上のキノコのページと同定キーを掲載するキノコのサイト。','A mushroom site with pages on over 1,300 mushrooms and identification keys.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-mushroomexpert','science-biology');
 UPDATE sites SET last_crawled_at='2026-11-13T06:47:49Z' WHERE id='collected-mushroomexpert';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-mushroomexpert','キノコ','Mushrooms');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-mushroomexpert','同定キー','Identification keys');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-kottke','https://kottke.org/','kottke.org','ジェイソン・コットキによる、1998年から続く芸術・科学・技術・デザイン・映画・文化についての日々のリンクと論評。','Jason Kottke''s daily links and commentary on art, science, technology, design, film and culture since 1998.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-kottke','https://kottke.org/','kottke.org','Jason Kottkeによる、1998年から続く芸術・科学・技術・デザイン・映画・文化についての日々のリンクと論評。','Jason Kottke''s daily links and commentary on art, science, technology, design, film and culture since 1998.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-kottke','arts-humanities');
 UPDATE sites SET last_crawled_at='2026-11-13T06:48:03Z' WHERE id='collected-kottke';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-kottke','ブログ','Blog');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-kottke','リンク集','Link blog');
 UPDATE sites SET country_code='US' WHERE id='collected-kottke';
 UPDATE sites SET source_updated_at='2026-11-13', source_updated_evidence_url='https://kottke.org/sitemap.xml' WHERE id='collected-kottke'; -- sitemap-lastmod
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-beej','https://beej.us/','Beej''s Web Page','ブライアン・「ビージ・ジョーゲンソン」・ホールの個人ページ。学習用の Beej''s Guides や技術ブログなどへのリンクがある。','Brian ''Beej Jorgensen'' Hall''s personal home page, with links to his learning guides (Beej''s Guides), a tech blog and more.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-beej','https://beej.us/','Beej''s Web Page','Brian "Beej Jorgensen" Hallの個人ページ。学習用の Beej''s Guides や技術ブログなどへのリンクがある。','Brian ''Beej Jorgensen'' Hall''s personal home page, with links to his learning guides (Beej''s Guides), a tech blog and more.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-beej','computers-software');
 UPDATE sites SET last_crawled_at='2026-11-13T06:48:15Z' WHERE id='collected-beej';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-beej','プログラミング','Programming');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-beej','個人サイト','Personal site');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-righto','https://www.righto.com/','Ken Shirriff''s blog','コンピュータの歴史、ヴィンテージコンピュータの修復、ICのリバースエンジニアリングなどを扱うケン・シリフのブログ。','Ken Shirriff''s blog on computer history, restoring vintage computers, IC reverse engineering and more.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+UPDATE sites SET country_code='US' WHERE id='collected-beej';
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-righto','https://www.righto.com/','Ken Shirriff''s blog','コンピュータの歴史、ヴィンテージコンピュータの修復、ICのリバースエンジニアリングなどを扱うKen Shirriffのブログ。','Ken Shirriff''s blog on computer history, restoring vintage computers, IC reverse engineering and more.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-righto','science-engineering');
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-righto','science-computing');
 UPDATE sites SET last_crawled_at='2026-11-13T06:48:26Z' WHERE id='collected-righto';
@@ -56,7 +59,8 @@ INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-m
 UPDATE sites SET last_crawled_at='2026-11-13T06:51:14Z' WHERE id='collected-mesoweb';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-mesoweb','メソアメリカ','Mesoamerica');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-mesoweb','マヤ','Maya');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-stevemorse','https://www.stevemorse.org/','One-Step Webpages by Stephen P. Morse','スティーブン・P・モースによる、移民記録・国勢調査・出生死亡などの記録の検索や、暦・地図・外国文字などの変換に使えるツール集。','Stephen P. Morse''s One-Step tools for finding immigration records, census records and vital records, and for dealing with calendars, maps, foreign alphabets and other applications.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+UPDATE sites SET country_code='US' WHERE id='collected-mesoweb';
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-stevemorse','https://www.stevemorse.org/','One-Step Webpages by Stephen P. Morse','Stephen P. Morseによる、移民記録・国勢調査・出生死亡などの記録の検索や、暦・地図・外国文字などの変換に使えるツール集。','Stephen P. Morse''s One-Step tools for finding immigration records, census records and vital records, and for dealing with calendars, maps, foreign alphabets and other applications.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-stevemorse','reference-libraries');
 UPDATE sites SET last_crawled_at='2026-11-13T06:52:28Z' WHERE id='collected-stevemorse';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-stevemorse','系図調査','Genealogy');
@@ -66,9 +70,10 @@ INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-h
 UPDATE sites SET last_crawled_at='2026-11-13T06:55:17Z' WHERE id='collected-historicbridges';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-historicbridges','橋','Bridges');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-historicbridges','歴史的建造物','Historic structures');
-INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-nutritionfacts','https://nutritionfacts.org/','NutritionFacts.org','医師マイケル・グレガーが、最新の栄養研究を分かりやすい動画・ブログ記事・ポッドキャストで届けるサイト。','A site by Dr. Michael Greger delivering the latest nutrition research in easy-to-understand videos, blog posts and podcasts.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+INSERT OR IGNORE INTO sites (id,url,name,description_ja,description_en,registered_at) VALUES ('collected-nutritionfacts','https://nutritionfacts.org/','NutritionFacts.org','医師Michael Gregerが、最新の栄養研究を分かりやすい動画・ブログ記事・ポッドキャストで届けるサイト。','A site by Dr. Michael Greger delivering the latest nutrition research in easy-to-understand videos, blog posts and podcasts.',strftime('%Y-%m-%dT%H:%M:%SZ','now'));
 INSERT OR IGNORE INTO site_categories (site_id,category_id) VALUES ('collected-nutritionfacts','health-nutrition');
 UPDATE sites SET last_crawled_at='2026-11-13T06:50:46Z' WHERE id='collected-nutritionfacts';
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-nutritionfacts','栄養','Nutrition');
 INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) VALUES ('collected-nutritionfacts','動画','Videos');
+UPDATE sites SET country_code='US' WHERE id='collected-nutritionfacts';
 UPDATE sites SET source_updated_at='2026-11-12', source_updated_evidence_url='https://nutritionfacts.org/sitemap_index.xml' WHERE id='collected-nutritionfacts'; -- sitemap-lastmod
