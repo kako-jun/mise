@@ -5,7 +5,10 @@
   const FRESH_BOOST = 1.5;       // 更新が新しいサイトの出やすさの上乗せ。0=完全ランダム、大きいほど新しい順に近づく
   const FRESH_HALF_LIFE_DAYS = 60; // 更新から何日で優遇が半分になるか
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
-  const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか
+  const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
+  const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
+  const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
+  const SEEN_KEY = 'mise-seen-v1'; // 端末内保存(localStorage)。{v:1, sites:{サイトID: 初めて見た日時ISO}}
   // -------------------------------------------------------------------------------------
 
   const $ = (s, r = document) => r.querySelector(s);
@@ -13,8 +16,10 @@
     sget(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }, sset(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} } };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
-    ja: { directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
-    en: { directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
+    ja: { seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
+      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
+    en: { seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
+      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
   };
   let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
   let newTab = storage.get('mise-external-new-tab') === 'true';
@@ -30,6 +35,7 @@
   const state = { scope: params.get('scope') === 'jp' ? 'jp' : 'all', cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
 
   let categories = [], all = [], list = [], current = 0, cards = [];
+  const dwell = new Map();
   let root, scroller, bar, counter, observer, globeTimer = 0, lastPlace = '';
 
   // ---- データ整形 ----
@@ -172,6 +178,75 @@
     const sec = document.createElement('section'); sec.className = 'f-card f-end'; const b = document.createElement('div'); b.className = 'f-end-body'; const h = document.createElement('h2'); h.textContent = t('empty'); b.append(h); sec.append(b); return sec;
   }
 
+
+  // ---- 見たサイトの累計(#58)。端末内のみ。重複なし・単調増加・ストリークなし ----
+  let seen = { v: 1, sites: {} };
+  function loadSeen() {
+    try { const d = JSON.parse(storage.get(SEEN_KEY) || 'null'); if (d && d.v === 1 && d.sites && typeof d.sites === 'object') seen = { v: 1, sites: Object.fromEntries(Object.entries(d.sites).filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && !Number.isNaN(Date.parse(v)))) }; } catch (_) {}
+  }
+  const seenCount = () => Object.keys(seen.sites).length;
+  const nextMilestone = n => MILESTONES.find(m => m > n) || null;
+  function markSeen(site) {
+    if (!site || seen.sites[site.id]) return;
+    seen.sites[site.id] = new Date().toISOString(); storage.set(SEEN_KEY, JSON.stringify(seen));
+    const n = seenCount(); updateSeenBadge();
+    if (!reduced.matches) { const num = $('.f-seen-num'); num && num.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.35)' }, { transform: 'scale(1)' }], { duration: 380, easing: 'ease-out' }); }
+    if (MILESTONES.includes(n)) { const kit = $('.f-kittens'); if (kit) { kit.innerHTML = kittensHtml(); const last = kit.lastElementChild;
+      if (last && !reduced.matches) { const a = last.animate([{ opacity: 0, transform: 'translateY(-14px) rotate(-20deg)' }, { opacity: 1, transform: 'translateY(2px)' }, { transform: 'translateY(0)' }], { duration: 700, easing: 'ease-out' }); addEventListener('pointerdown', () => a.finish(), { once: true }); } } }
+    if ($('.f-panel') && !$('.f-panel').hidden) renderPanel();
+  }
+  const kittenSvg = i => `<svg class="f-kitten" viewBox="0 0 16 16" width="14" height="14"><path fill="${i % 2 ? '#252c30' : '#df7f3e'}" d="M2 1.5 6 4 3 6.5z"/><path fill="${i % 2 ? '#df7f3e' : '#252c30'}" d="M14 1.5 10 4l3 2.5z"/><path d="M3 5.5h10v6.5c0 1.5-1.6 2.5-5 2.5s-5-1-5-2.5z" fill="#fff3df"/><path d="M3 5.5h4.5l-1 4H3z" fill="${i % 2 ? '#252c30' : '#df7f3e'}"/><circle cx="6" cy="9.5" r=".9" fill="#17252b"/><circle cx="10" cy="9.5" r=".9" fill="#17252b"/></svg>`;
+  // 節目に届いた数だけ子猫が並ぶ(10件で1匹、50件で2匹…)。保存データからの導出なので別管理しない
+  const kittensHtml = () => MILESTONES.filter(m => m <= seenCount()).map((m, i) => kittenSvg(i)).join('');
+  function updateSeenBadge() {
+    const btn = $('.f-seen'); if (!btn) return; const n = seenCount(), m = nextMilestone(n);
+    $('.f-seen-num', btn).textContent = String(n).padStart(6, '0'); btn.title = btn.ariaLabel = t('seenTitle')(n);
+    const bar = $('.f-seen-bar i', btn); if (bar) { const prev = [0, ...MILESTONES].filter(x => x <= n).pop(); bar.style.width = m ? `${Math.round((n - prev) / (m - prev) * 100)}%` : '100%'; }
+  }
+  function monthKey(iso) { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
+  function breakdown(list, label) {
+    const ul = mk('ul', 'f-bd'); const max = Math.max(1, ...list.map(x => x[1]));
+    for (const [k, v] of list) { const li = mk('li'); const name = mk('span', 'f-bd-k'); name.textContent = label(k); const track = mk('span', 'f-bd-t', { 'aria-hidden': 'true' }); const i = mk('i'); i.style.width = `${v / max * 100}%`; track.append(i); const num = mk('span', 'f-bd-v'); num.textContent = v; li.append(name, track, num); ul.append(li); }
+    return ul;
+  }
+  function renderPanel() {
+    const panel = $('.f-panel'); const n = seenCount(), m = nextMilestone(n); panel.replaceChildren();
+    const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${n}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.textContent = '×'; x.addEventListener('click', closePanel); head.append(h, x);
+    const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(m - n)} (${m})` : t('topMilestone');
+    panel.append(head, note);
+    const byId = new Map(all.map(s => [s.id, s]));
+    const months = new Map(), countries = new Map(), cats = new Map();
+    for (const [id, iso] of Object.entries(seen.sites)) {
+      months.set(monthKey(iso), (months.get(monthKey(iso)) || 0) + 1);
+      const s = byId.get(id); if (!s) continue;
+      countries.set(s.country_code || '', (countries.get(s.country_code || '') || 0) + 1);
+      for (const r of s.roots) cats.set(r, (cats.get(r) || 0) + 1);
+    }
+    const sortDesc = mp => [...mp].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+    const sec = (title, node) => { const h3 = mk('h3'); h3.textContent = title; panel.append(h3, node); };
+    sec(t('byMonth'), breakdown([...months].sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, 6), k => k));
+    if (countries.size) sec(t('byCountry'), breakdown(sortDesc(countries).slice(0, 6), k => (window.MISE_COUNTRIES && window.MISE_COUNTRIES[k] ? window.MISE_COUNTRIES[k][language] : t('noCountry'))));
+    if (cats.size) sec(t('byCat'), breakdown(sortDesc(cats).slice(0, 6), k => { const c = categories.find(x => x.id === k); return c ? c[language === 'ja' ? 'name_ja' : 'name_en'] : k; }));
+    const acts = mk('div', 'f-panel-acts');
+    const ex = mk('button', '', { type: 'button' }); ex.textContent = t('exportJson');
+    ex.addEventListener('click', () => { const a = mk('a', '', { download: 'mise-seen.json', href: URL.createObjectURL(new Blob([JSON.stringify(seen, null, 1)], { type: 'application/json' })) }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); });
+    const im = mk('button', '', { type: 'button' }); im.textContent = t('importJson');
+    const file = mk('input', 'f-file', { type: 'file', accept: 'application/json,.json', hidden: '' });
+    im.addEventListener('click', () => file.click());
+    file.addEventListener('change', async () => {
+      const msg = $('.f-panel-msg');
+      try {
+        const d = JSON.parse(await file.files[0].text()); if (!d || d.v !== 1 || typeof d.sites !== 'object') throw Error('bad');
+        let add = 0; for (const [k, v] of Object.entries(d.sites)) { if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) continue; if (!seen.sites[k] || v < seen.sites[k]) { if (!seen.sites[k]) add++; seen.sites[k] = v; } }
+        storage.set(SEEN_KEY, JSON.stringify(seen)); updateSeenBadge(); renderPanel(); $('.f-panel-msg').textContent = t('importOk')(add);
+      } catch (_) { msg.textContent = t('importBad'); }
+    });
+    acts.append(ex, im, file); const msg = mk('p', 'f-panel-msg', { role: 'status' }); const foot = mk('p', 'f-panel-note'); foot.textContent = t('seenNote');
+    panel.append(acts, msg, foot);
+  }
+  function openPanel() { const p = $('.f-panel'); p.hidden = false; $('.f-seen').setAttribute('aria-expanded', 'true'); renderPanel(); }
+  function closePanel() { const p = $('.f-panel'); if (p.hidden) return; p.hidden = true; $('.f-seen').setAttribute('aria-expanded', 'false'); $('.f-seen').focus(); }
+
   // ---- 骨格 ----
   function mk(tag, cls, attrs = {}) { const e = document.createElement(tag); if (cls) e.className = cls; for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
   function segment(name, options, value, onPick) {
@@ -193,7 +268,12 @@
     th.addEventListener('click', () => { const v = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = v; storage.set('mise-theme', v); });
     const lg = mk('button', 'f-icon', { type: 'button', 'aria-label': t('lang'), title: t('lang') }); lg.textContent = '文';
     lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); renderList(id); updateCounter(); });
-    row1.append(logo, counter0(), space, dir, ext, th, lg);
+    const sb = mk('button', 'f-seen', { type: 'button', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
+    sb.innerHTML = '<span class="f-seen-label" aria-hidden="true">SEEN</span> <span class="f-seen-num" aria-hidden="true"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span>';
+    sb.addEventListener('click', () => ($('.f-panel').hidden ? openPanel() : closePanel()));
+    const kit = mk('span', 'f-kittens', { 'aria-hidden': 'true' }); kit.innerHTML = kittensHtml();
+    const row0 = mk('div', 'f-row f-row0'); row0.append(counter0(), mk('span', 'f-grow'), sb);
+    row1.append(logo, kit, space, dir, ext, th, lg);
 
     const row2 = mk('div', 'f-row f-filters');
     row2.append(segment('scope', [['all', t('all')], ['jp', t('japan')]], state.scope, v => { state.scope = v; refilter(); }));
@@ -202,7 +282,8 @@
     for (const c of categories.filter(c => !c.parent_id)) { const n = new Set(all.filter(s => s.roots.has(c.id)).map(s => s.id)).size; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
     sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
     row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
-    bar.append(row1, row2);
+    const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
+    bar.append(row0, row1, row2, panel); updateSeenBadge();
   }
   function syncUrl() {
     const u = new URL(location.href); u.search = ''; u.searchParams.set('view', 'feed');
@@ -232,7 +313,9 @@
     cards[i].scrollIntoView({ behavior: instant || reduced.matches ? 'auto' : 'smooth', block: 'start' });
     return cards[i];
   }
-  function step(d, focus) { const c = go(current + d); if (c && focus) c.focus({ preventScroll: true }); }
+  // 連打でも取りこぼさないよう、スクロールが落ち着く前は「向かっている先」を基準にする
+  let navTarget = null, navTimer = 0;
+  function step(d, focus) { const base = navTarget ?? current; navTarget = Math.max(0, Math.min(cards.length - 1, base + d)); clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(navTarget); if (c && focus) c.focus({ preventScroll: true }); }
   function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; p.disabled = current <= 0; n.disabled = !cards.length || current >= cards.length - 1; }
 
   // ---- 地球連動 ----
@@ -261,19 +344,29 @@
     root.append(bar, scroller, nav, hint); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); document.body.append(root);
     observer = new IntersectionObserver(entries => {
       for (const e of entries) if (e.isIntersecting) {
-        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx);
+        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null;
         updateCounter(); updateButtons(); fly(idx === 'end' ? null : list[current]);
       }
+      for (const e of entries) {
+        const idx = e.target.dataset.index; if (idx === 'end') continue;
+        clearTimeout(dwell.get(e.target));
+        if (e.isIntersecting) dwell.set(e.target, setTimeout(() => { if (!document.hidden) markSeen(list[Number(idx)]); }, SEEN_DWELL_MS));
+      }
     }, { root: scroller, threshold: IN_VIEW_THRESHOLD });
+    loadSeen();
     addEventListener('keydown', e => {
+      if (e.key === 'Escape' && $('.f-panel') && !$('.f-panel').hidden) { closePanel(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
       if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); step(1, true); }
       else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); step(-1, true); }
     });
     addEventListener('pagehide', () => window.dispatchEvent(new CustomEvent('mise-fly-release')));
-    Promise.all([fetch('/api/categories'), fetch('/api/sites')]).then(async ([a, b]) => {
+    // モック専用: public/_mock-thumbs/(git 管理外)に撮影試験のサムネと manifest があれば thumb_url / thumb_lqip を補う。無ければ従来の代替絵。本番では /api/sites が thumb_url を返す想定
+    const mockThumbs = fetch('/_mock-thumbs/manifest.json').then(r => r.ok ? r.json() : null).catch(() => null);
+    Promise.all([fetch('/api/categories'), fetch('/api/sites'), mockThumbs]).then(async ([a, b, man]) => {
       if (!a.ok || !b.ok) throw Error('API');
       categories = await a.json(); all = build(await b.json());
+      if (man && Array.isArray(man.sites)) { const byId = new Map(man.sites.filter(x => x.ok).map(x => [x.id, x])); for (const s of all) { const m = byId.get(s.id); if (m) { s.thumb_url = `/_mock-thumbs/${encodeURIComponent(s.id)}.webp`; s.thumb_lqip = m.placeholder; } } }
       if (!categories.some(c => c.id === state.cat && !c.parent_id)) state.cat = '';
       renderBar(); renderList(); updateCounter(); scroller.focus({ preventScroll: true });
       // globe.js は load 後に遅延読込されるため、最初のカードの向き移動を一度だけ遅れて再送する

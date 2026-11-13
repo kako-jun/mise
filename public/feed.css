@@ -16,7 +16,7 @@ html.feed-mode body { margin: 0; overflow: hidden; }
 }
 html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; --btn: #82ddea; --line: rgba(130,221,234,.22); --cal-base: #d8c8ae; --cal-orange: #b8652f; --cal-dark: #1b2024; }
 #feed [hidden] { display: none; }
-#feed .f-bar { position: fixed; z-index: 3; top: 0; left: 0; right: 0; box-sizing: border-box; padding: 6px 12px 8px; background: var(--bar-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+#feed .f-bar { position: fixed; z-index: 4; top: 0; left: 0; right: 0; box-sizing: border-box; padding: 6px 12px 8px; background: var(--bar-bg); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 #feed .f-row { display: flex; align-items: center; gap: 8px; max-width: 520px; margin: 0 auto; min-height: 34px; }
 #feed .f-grow { flex: 1; }
 #feed .f-logo, #feed .f-logo:visited { font: 700 17px/1 Georgia, serif; letter-spacing: .12em; color: #c95024; text-decoration: none; }
@@ -107,3 +107,34 @@ html[data-theme="dark"] .f-select option { background: #0e262e; }
 #feed .f-select { min-width: 0; flex: 0 1 150px; }
 #feed .f-counter { margin-left: 4px; }
 @media (max-width: 699px) { #feed .f-nav button, #feed .f-nav button:hover { background: rgba(8,14,18,.45); color: #fff; } #feed .f-select { flex-basis: 120px; } #feed .f-seg button { padding: 5px 7px; } }
+
+/* 見たサイトの累計(#58)。一番右上のスコア表示。左上HUDと同じ等幅の大文字 */
+#feed .f-row0 { min-height: 16px; font: 10px/1 monospace; letter-spacing: .06em; color: var(--btn); }
+#feed .f-row0 .f-counter { margin: 0; opacity: .6; text-align: left; }
+#feed .f-seen, #feed .f-seen:hover { position: relative; padding: 2px 0 4px; border: 0; background: transparent; color: var(--btn); font: inherit; cursor: pointer; text-align: right; }
+#feed .f-seen:hover { opacity: .75; }
+#feed .f-seen-num { display: inline-block; font-variant-numeric: tabular-nums; color: var(--bar-fg); transform-origin: right center; }
+#feed .f-seen-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px; background: var(--line); }
+#feed .f-seen-bar i { display: block; height: 100%; background: #c95024; width: 0; transition: width .4s ease; }
+#feed .f-kittens { display: inline-flex; gap: 2px; margin-left: 2px; align-items: flex-end; }
+#feed .f-kitten { display: block; }
+#feed .f-panel { position: absolute; right: 10px; top: 100%; width: min(340px, calc(100vw - 20px)); max-height: calc(100dvh - var(--bar-h) - 16px); overflow-y: auto; box-sizing: border-box; margin-top: 6px; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bar-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); font-size: 13px; line-height: 1.5; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+#feed .f-panel[hidden] { display: none; }
+@media (min-width: 700px) { #feed .f-panel { right: calc(50% - 260px); } }
+#feed .f-panel-head { display: flex; justify-content: space-between; align-items: center; }
+#feed .f-panel h2 { margin: 0; font: 600 14px/1.3 monospace; letter-spacing: .06em; }
+#feed .f-panel h3 { margin: 12px 0 4px; font: 600 11px/1.3 monospace; letter-spacing: .08em; opacity: .7; }
+#feed .f-panel-x, #feed .f-panel-x:hover { border: 0; background: transparent; color: var(--btn); font-size: 20px; line-height: 1; padding: 0 4px; cursor: pointer; }
+#feed .f-panel-note { margin: 4px 0 0; font-size: 12px; opacity: .7; }
+#feed .f-bd { list-style: none; margin: 0; padding: 0; }
+#feed .f-bd li { display: grid; grid-template-columns: 7.5em 1fr 2.2em; gap: 8px; align-items: center; font-size: 12px; line-height: 1.8; }
+#feed .f-bd-k { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#feed .f-bd-t { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+#feed .f-bd-t i { display: block; height: 100%; background: #c95024; }
+#feed .f-bd-v { text-align: right; font-variant-numeric: tabular-nums; opacity: .8; }
+#feed .f-panel-acts { display: flex; gap: 8px; margin-top: 14px; }
+#feed .f-panel-acts button, #feed .f-panel-acts button:hover { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--btn); font-size: 12px; cursor: pointer; }
+#feed .f-panel-msg { margin: 6px 0 0; font-size: 12px; min-height: 1em; }
+#feed .f-file { display: none; }
+@media (max-width: 699px) { #feed .f-row { gap: 4px; } #feed .f-icon { width: 30px; } }
+#feed .f-panel, #feed .f-panel * { text-align: left; } #feed .f-bd-v { text-align: right; }
