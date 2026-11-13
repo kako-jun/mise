@@ -1,0 +1,280 @@
+[
+  {
+    "id": "collected-elm-chan",
+    "url": "https://elm-chan.org/",
+    "name": "ELM by ChaN",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T01:49:42Z",
+    "robots_url": "https://elm-chan.org/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "ELM by ChaN",
+    "observed_meta_description": "Electronics projects and related informations for electronics enthusiasts.",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-genbu",
+    "url": "https://www.genbu.net/",
+    "name": "玄松子の記憶",
+    "categories": [
+      "society-religion",
+      "local-japan"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T01:49:47Z",
+    "robots_url": "https://www.genbu.net/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "玄松子の記憶",
+    "observed_meta_description": "神社参拝「記憶」、御朱印収集、神紋調査、式内社、総社、一之宮、官幣社・国幣社、祭神記、神社知識などなど",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-kofun-map",
+    "url": "https://kofun.info/",
+    "name": "古墳マップ",
+    "categories": [
+      "social-science-archaeology",
+      "local-japan"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T01:50:10Z",
+    "robots_url": "https://kofun.info/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "古墳マップ",
+    "observed_meta_description": "日本全国の古墳の投稿型情報サイトです。古墳の地図・形・大きさなどのデータを詳しくまとめています。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-zukan-bouz",
+    "url": "https://www.zukan-bouz.com/",
+    "name": "市場魚貝類図鑑　ぼうずコンニャク",
+    "categories": [
+      "science-biology"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T01:50:16Z",
+    "robots_url": "https://www.zukan-bouz.com/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "市場魚貝類図鑑　ぼうずコンニャク",
+    "observed_meta_description": "水産物関連著作を多数執筆する藤原昌高(ぼうずコンニャク)がWEBで提供する魚貝類図鑑。圧倒的な情報量(基本情報から味・お勧めの料理法・加工品・歴史・方言等まで)で掲載種は2500種以上。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-stellarscenes",
+    "url": "https://stellarscenes.net/",
+    "name": "Stellar Scenes",
+    "categories": [
+      "science-astronomy",
+      "arts-photography"
+    ],
+    "discovery_source": "asahi-net 天文リンク集 https://www.asahi-net.or.jp/~vd7m-kndu/rink.htm",
+    "checked_at": "2026-11-13T01:57:23Z",
+    "robots_url": "https://stellarscenes.net/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "Stellar Scenes",
+    "observed_meta_description": "彗星，星雲星団，星座，天の川，月など，2000点以上を収録した天体写真集です。各写真には解説もつけました。夜空に拡がる美しい星達の姿をお楽しみ下さい。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-sora-can",
+    "url": "https://sora-can.com/",
+    "name": "宇宙（そら）のキャンバス",
+    "categories": [
+      "science-astronomy",
+      "arts-photography"
+    ],
+    "discovery_source": "asahi-net 天文リンク集 https://www.asahi-net.or.jp/~vd7m-kndu/rink.htm",
+    "checked_at": "2026-11-13T01:57:27Z",
+    "robots_url": "https://sora-can.com/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "宇宙（そら）のキャンバス\t  天体写真 / 天体写真撮影ノウハウ",
+    "observed_meta_description": "「宇宙（そら）のキャンバス」へ　ようこそ！　宇宙（そら）というキャンバスに描かれている星雲・星団などをデジタルカメラや冷却ＣＣＤカメラで撮影することをライフワークとしています。撮影した写真の整理をすべく、本ホームページを開設しました。撮影システムや撮影技術がヘタで、又、整理も雑ではありますが、お立ち寄り願います。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-hoshi-izanai",
+    "url": "https://www.asahi-net.or.jp/~dy7s-ynym/",
+    "name": "星への誘い",
+    "categories": [
+      "science-astronomy"
+    ],
+    "discovery_source": "asahi-net 天文リンク集 https://www.asahi-net.or.jp/~vd7m-kndu/rink.htm / WebSearch 結果",
+    "checked_at": "2026-11-13T01:57:30Z",
+    "robots_url": "https://www.asahi-net.or.jp/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "星への誘い",
+    "observed_meta_description": "星への誘い・宇宙・天文・星に関する初心者向けサイトです",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-elecroom-avr",
+    "url": "https://www.ne.jp/asahi/shared/o-family/ElecRoom/ElecMAIN.htm",
+    "name": "電子工作の部屋 AVR",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "WebSearch「個人サイト 電子工作 マイコン 解説 自作 長年運営」の結果",
+    "checked_at": "2026-11-13T01:57:34Z",
+    "robots_url": "https://www.ne.jp/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "電子工作の部屋 AVR",
+    "observed_meta_description": null,
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-denshi-muscat",
+    "url": "https://www.zea.jp/audio/",
+    "name": "電子マスカット",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "ELM by ChaN のリンクページ https://elm-chan.org/links.html",
+    "checked_at": "2026-11-13T01:57:05Z",
+    "robots_url": "https://www.zea.jp/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "電子マスカット【電子工作･エレクトロニクス工作】",
+    "observed_meta_description": "電子工作・エレクトロニクス工作の製作記事を紹介する電子マスカット。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-kyotani-hobby",
+    "url": "http://www.kyotani-hobby.com/",
+    "name": "京谷豊のページ",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "ELM by ChaN のリンクページ https://elm-chan.org/links.html",
+    "checked_at": "2026-11-13T01:57:09Z",
+    "robots_url": "http://www.kyotani-hobby.com/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "京谷豊のページへようこそ！",
+    "observed_meta_description": "京谷豊のページへようこそ！\n電子工作、クルマ関連工作、パチンコ液晶の応用・・・・　などなど、\n「趣味として楽しめる工作」を目指しています！",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-susutawari",
+    "url": "https://susutawari.org/",
+    "name": "Made by Susutawari",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "ELM by ChaN のリンクページ https://elm-chan.org/links.html",
+    "checked_at": "2026-11-13T01:56:58Z",
+    "robots_url": "https://susutawari.org/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "Made by Susutawari",
+    "observed_meta_description": null,
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-mlum-factory",
+    "url": "https://www.mlum-factory.com/",
+    "name": "みゃん☆みゃん☆ふぁくとりぃ",
+    "categories": [
+      "science-engineering",
+      "computers-software"
+    ],
+    "discovery_source": "ELM by ChaN のリンクページ https://elm-chan.org/links.html（リンク先 elfin.sakuratan.com から転送）",
+    "checked_at": "2026-11-13T01:56:43Z",
+    "robots_url": "https://www.mlum-factory.com/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "みゃん☆みゃん☆ふぁくとりぃ",
+    "observed_meta_description": null,
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-naruken",
+    "url": "http://naruken.cweb.tk/",
+    "name": "naruken なる研",
+    "categories": [
+      "science-engineering"
+    ],
+    "discovery_source": "ELM by ChaN のリンクページ https://elm-chan.org/links.html",
+    "checked_at": "2026-11-13T01:57:19Z",
+    "robots_url": "http://naruken.cweb.tk/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "naruken なる研",
+    "observed_meta_description": "なる研です。",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-hana300",
+    "url": "https://www.hana300.com/",
+    "name": "季節の花300",
+    "categories": [
+      "science-biology"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T02:00:49Z",
+    "robots_url": "https://www.hana300.com/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "季節の花300",
+    "observed_meta_description": "1997年から個人で発信している花図鑑。定点観測300種、1～12月の花、色分け（白黄赤青紫）、トケイソウの開花動画、万葉集など240首、誕生日の花、木へん・草かんむり・魚へんの漢字、など",
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-tanken-com",
+    "url": "https://tanken.com/",
+    "name": "探検コム",
+    "categories": [
+      "arts-humanities"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T02:00:35Z",
+    "robots_url": "https://tanken.com/robots.txt",
+    "robots_http_status": 404,
+    "robots_decision": "allowed (robots.txt なし=規則なしとして扱う)",
+    "page_http_status": 200,
+    "observed_title": "探検コム",
+    "observed_meta_description": null,
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  },
+  {
+    "id": "collected-arch-hiroshima",
+    "url": "https://arch-hiroshima.net/",
+    "name": "arch-hiroshima",
+    "categories": [
+      "arts-architecture",
+      "local-japan"
+    ],
+    "discovery_source": "候補作成者の既知サイト（公開出典なし。取得結果のみを根拠に確認）",
+    "checked_at": "2026-11-13T02:00:41Z",
+    "robots_url": "https://arch-hiroshima.net/robots.txt",
+    "robots_http_status": 200,
+    "robots_decision": "allowed (robots.txt を確認し、MiseResearchBot に対しトップページ取得は禁止されていない)",
+    "page_http_status": 200,
+    "observed_title": "arch-hiroshima –",
+    "observed_meta_description": null,
+    "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文"
+  }
+]
