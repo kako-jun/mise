@@ -78,7 +78,7 @@ function scopeNavHtml(scopes, scope) {
     const flag = flagUrl(r.code);
     items.push(item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : ''));
   }
-  return `<span class="scope-key" aria-hidden="true">SCOPE</span><ul class="scope-list">${items.join('')}</ul>`;
+  return `<ul class="scope-list">${items.join('')}</ul>`;
 }
 
 // 範囲ページ（/ , /jp/ , /us/ , /all/）の HTML を、URL（?category= / ?q=）に応じたメタ情報と JS なしで読める本文に書き換える。
