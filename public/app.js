@@ -5,11 +5,12 @@ const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
-// 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html lang> を使う（判定は二重に持たない）。
+// 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html data-initial-lang> を使う（判定は二重に持たない）。
 const initialLanguage = () => {
   const saved = storage.get('mise-language');
   if (saved === 'ja' || saved === 'en') return saved;
-  return document.documentElement.lang === 'ja' ? 'ja' : 'en';
+  return document.documentElement.dataset.initialLang === 'ja' ? 'ja' : 'en';
+  // index.html の先頭スクリプトが決めた値（保険タイマーが lang を en に戻しても、遅れて動いた app.js は ja にできる）
 };
 let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
@@ -36,7 +37,7 @@ function updateTitle() {
 // データ取得前でも描ける静的部分。初回の英語→日本語のちらつきを、API 応答を待たずに抑える。
 function applyStaticLanguage() {
   document.documentElement.lang = language;
-  updateTitle();
+  window.__miseReady = true;
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   document.querySelectorAll('[data-i18n-label]').forEach(el => { const value=t(el.dataset.i18nLabel); el.setAttribute('aria-label',value); if(el.hasAttribute('title')) el.title=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
@@ -47,6 +48,7 @@ function applyStaticLanguage() {
 }
 function applyLanguage() {
   applyStaticLanguage();
+  updateTitle();
   renderStats();
   renderScopeNav();
   if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false);
