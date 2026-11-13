@@ -6,6 +6,7 @@
 使い方: uv run python3 scripts/public_bodies_fetch.py
 """
 import datetime, hashlib, json, pathlib, re, subprocess, sys, time, urllib.parse
+from public_bodies_common import anchors, clean_url
 
 UA = 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)'
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
@@ -23,12 +24,24 @@ WIKIDATA_QUERY = '''SELECT ?item ?code ?site ?rank ?ja ?en ?kana ?end ?succ ?suc
   OPTIONAL { ?item wdt:P1814 ?kana }
   OPTIONAL { ?item wdt:P576 ?end }
   OPTIONAL { ?item wdt:P1366 ?succ . OPTIONAL { ?succ wdt:P429 ?succcode } }
-}'''
-# 国の機関・独立行政法人の公式サイトを持つ Wikidata 項目（host 逆引きの第2出典用）
-WIKIDATA_GOJP_QUERY = '''SELECT ?item ?site ?ja WHERE {
-  ?item wdt:P856 ?site . FILTER(CONTAINS(STR(?site), ".go.jp"))
-  OPTIONAL { ?item rdfs:label ?ja FILTER(lang(?ja)="ja") }
-}'''
+} ORDER BY ?code ?item ?site ?succ'''
+# 国の機関・独立行政法人の第2出典（e-Gov のホストを Wikidata の公式サイト(P856)で逆引き）。
+# 全件走査の FILTER(CONTAINS(...)) はタイムアウトや部分結果で結果が揺れたため、
+# e-Gov の各 URL から作った候補 URL（scheme・www 有無・末尾スラッシュの違い）を VALUES で完全一致検索する。
+def gojp_query():
+    urls = set()
+    for f in ('egov-ministries-and-agencies.html', 'egov-parliament-and-court.html', 'egov-IAAs.html'):
+        for _, u in anchors(f):
+            sp = urllib.parse.urlsplit(clean_url(u))
+            h = (sp.hostname or '').lower()
+            bare = h[4:] if h.startswith('www.') else h
+            paths = {'', '/', sp.path.rstrip('/'), sp.path.rstrip('/') + '/'}
+            for scheme in ('http', 'https'):
+                for host in (bare, 'www.' + bare, h):
+                    for path in paths: urls.add(f'{scheme}://{host}{path}')
+    values = ' '.join(f'<{u}>' for u in sorted(urls))
+    return ('SELECT ?item ?site ?ja WHERE { VALUES ?site { ' + values + ' } ?item wdt:P856 ?site . '
+            'OPTIONAL { ?item rdfs:label ?ja FILTER(lang(?ja)="ja") } } ORDER BY ?item ?site')
 
 def curl(url, out=None, data=None, headers=()):
     cmd = ['curl', '--silent', '--show-error', '--location', '--max-time', '180', '--user-agent', UA,
@@ -47,7 +60,48 @@ def curl(url, out=None, data=None, headers=()):
     lm = re.search(rb'(?im)^last-modified:\s*(.+?)\r?$', last_headers)
     return code, blob, (lm.group(1).decode() if lm else None)
 
+def sparql(name, query, manifest, min_rows, dest=None):
+    """WDQS は 504 や部分結果で揺れる。最大3回試し、行数が下限未満なら取り込まず中止する。"""
+    for attempt in range(3):
+        try:
+            code, body, lm = curl('https://query.wikidata.org/sparql', data='query=' + query, headers=['Accept: text/csv'])
+        except subprocess.CalledProcessError:
+            code, body = 0, b''
+        rows = body.count(b'\n') - 1
+        if code == 200 and rows >= min_rows: break
+        print(f'{name}: 試行{attempt + 1} HTTP {code} rows={rows}（下限 {min_rows}）。待って再試行', file=sys.stderr)
+        time.sleep(20 * (attempt + 1))
+    else:
+        raise SystemExit(f'{name}: 行数が下限未満のまま。揺れた結果は取り込まない')
+    return get_bytes(name, body, lm, 'https://query.wikidata.org/sparql', manifest, dest)
+
+def get_bytes(name, body, lm, url, manifest, dest=None):
+    d = dest or RAW
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_bytes(body)
+    manifest[name] = {'url': url, 'fetched_at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+                      'last_modified': lm, 'bytes': len(body), 'rows': body.count(b'\n') - 1, 'sha256': hashlib.sha256(body).hexdigest()}
+    time.sleep(SLEEP)
+    return body
+
+_ROBOTS = {}
+def allowed(url):
+    """出典サイトの robots.txt を host ごとに1回だけ取得して確認する。取得できない(400/404等)ときは規則なし扱い。"""
+    import urllib.robotparser
+    sp = urllib.parse.urlsplit(url); host = f'{sp.scheme}://{sp.netloc}'
+    if host not in _ROBOTS:
+        rp = urllib.robotparser.RobotFileParser()
+        try:
+            code, body, _ = curl(host + '/robots.txt')
+        except subprocess.CalledProcessError:
+            code, body = 0, b''
+        if code == 200 and not body.lstrip().startswith(b'<'): rp.parse(body.decode('utf-8', errors='replace').splitlines())
+        else: rp.parse([])
+        _ROBOTS[host] = rp; time.sleep(SLEEP)
+    return _ROBOTS[host].can_fetch(UA, url)
+
 def get(url, name, manifest, **kw):
+    if not allowed(url): raise SystemExit(f'{url}: robots.txt で禁止されているため取得しない')
     code, body, lm = curl(url, **kw)
     if code != 200: raise SystemExit(f'{url}: HTTP {code}')
     RAW.mkdir(parents=True, exist_ok=True)
@@ -67,8 +121,9 @@ def main():
         get('https://www.soumu.go.jp' + path, key, manifest)
     for key in ('local-governments', 'ministries-and-agencies', 'parliament-and-court', 'IAAs'):
         get(f'{EGOV}{key}.html', f'egov-{key}.html', manifest)
-    get('https://query.wikidata.org/sparql', 'wikidata-p429.csv', manifest, data='query=' + WIKIDATA_QUERY, headers=['Accept: text/csv'])
-    get('https://query.wikidata.org/sparql', 'wikidata-gojp.csv', manifest, data='query=' + WIKIDATA_GOJP_QUERY, headers=['Accept: text/csv'])
+    sparql('wikidata-p429.csv', WIKIDATA_QUERY, manifest, min_rows=1900)
+    # 第2出典の根拠は commit する（Wikidata は実行時点の内容で変わるため、台帳の再現は evidence/ を固定入力にする）
+    sparql('wikidata-gojp.csv', gojp_query(), manifest, min_rows=60, dest=ROOT / 'evidence')
     index = get(JLIS_INDEX, 'jlis-index.html', manifest).decode('utf-8', errors='replace')
     pages = sorted(set(re.findall(r'href="(/spd/map-search/[a-z]+/cms_[0-9]+\.html)"', index)))
     for i, p in enumerate(pages):

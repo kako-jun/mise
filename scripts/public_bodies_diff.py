@@ -5,7 +5,8 @@
   新設        新しい団体コードが現れた
   廃止/合併   status が active から merged/abolished に変わった（後継コードを併記）
   名称変更    同じ団体コードで name_ja が変わった
-  URL変更     同じ団体コードで host が変わった（旧URL→新URL。移転は人が確認）
+  URL変更(host) 同じ団体コードで host が変わった（旧URL→新URL。移転は人が確認）
+  URL変更(url)  host は同じで url 列（scheme・パス）が変わった（http→https など）
   消失        旧台帳にあった行が新台帳に無い（削除せず状態を変える方針なので異常。要調査）
   確認状態    ledger（掲載可）と review（要確認）の間の移動 ※ --old-review/--new-review を渡した場合
 使い方:
@@ -31,7 +32,9 @@ def diff(old, new):
         if o['name_ja'] != n['name_ja']:
             out.append(('名称変更', c, n['name_ja'], o['name_ja'], n['name_ja'], ''))
         if o['host'] != n['host'] and (o['host'] or n['host']):
-            out.append(('URL変更', c, n['name_ja'], o['url'], n['url'], f"host {o['host']} -> {n['host']}"))
+            out.append(('URL変更(host)', c, n['name_ja'], o['url'], n['url'], f"host {o['host']} -> {n['host']}"))
+        elif o['url'] != n['url']:  # ホストは同じで scheme(http→https)・パスなどが変わった
+            out.append(('URL変更(url)', c, n['name_ja'], o['url'], n['url'], 'host は同じ。scheme・パス等の変更'))
     for c, o in sorted(old.items()):
         if c not in new: out.append(('消失', c, o['name_ja'], o['status'], '', '台帳から行が消えた。要調査'))
     return out

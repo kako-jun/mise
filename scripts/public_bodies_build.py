@@ -11,6 +11,7 @@
 """
 import csv, datetime, hashlib, json, pathlib, re, sys, unicodedata, urllib.parse, collections, html
 import openpyxl
+from public_bodies_common import host_key, clean_url, anchors
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
 RAW = ROOT / 'raw'
@@ -19,21 +20,12 @@ FIELDS = ['code', 'name_ja', 'name_en', 'reading_kana', 'type', 'prefecture', 'u
 REVIEW_FIELDS = ['code', 'name_ja', 'type', 'prefecture', 'reason', 'wikidata_urls', 'egov_url', 'jlis_url',
                  'domain_class', 'wikidata_name', 'note']
 
-def host_key(u):
-    if not u: return ''
-    p = urllib.parse.urlsplit(u.strip() if '//' in u else '//' + u.strip())
-    h = (p.hostname or '').lower().rstrip('.')
-    return h[4:] if h.startswith('www.') else h
-
 def domain_class(h):
     if h.endswith('.lg.jp'): return 'lg.jp'
     if h.endswith('.go.jp'): return 'go.jp'
     if re.match(r'^(city|town|vill|pref|metro)\.[a-z0-9-]+\.[a-z0-9-]+\.jp$', h) or re.match(r'^(pref|metro)\.[a-z0-9-]+\.jp$', h): return 'geo.jp'
     if h.endswith('.jp'): return 'other.jp'
     return 'other'
-
-def clean_url(u):
-    return re.sub(r'/index\.(html?|php)$', '/', u.strip())
 
 def code6(v):
     return str(int(v)).zfill(6) if not isinstance(v, str) else v.strip().zfill(6)
@@ -66,25 +58,34 @@ def load_soumu(manifest):
     return cur, wards, asof
 
 def load_kaisei():
-    """改正一覧表: 欠番(廃止)行を {旧コード: 名称・都道府県・施行日・事由・同じ改正ブロックの新設コード} で返す。
-    ブロック = 施行日が書かれた行から次の施行日行の直前まで。"""
+    """改正一覧表: 廃止(欠番)された団体を {旧コード: 名称・都道府県・施行日・事由・同じ改正ブロックの新設コード} で返す。
+    - 区分(欠番/新設)・施行日・事由は「〃」や空欄が上の行の継続なので前方補完する。
+    - 事由「合併後は」と合併先名が次の行に分かれているものは連結する。
+    - ブロック = 施行日が書かれた行から次の施行日行の直前まで。"""
     ws = openpyxl.load_workbook(RAW / 'soumu-kaisei.xlsx', read_only=True).worksheets[0]
-    out, pref, date, reason, block = {}, None, None, None, 0
+    out, pref, date, reason, block, kind = {}, None, None, None, 0, None
+    pending = []  # 事由が「合併後は」だけで合併先名が次行にある旧コード
     created = collections.defaultdict(list)
     for r in list(ws.iter_rows(values_only=True))[4:]:
         if r[4]: pref = r[4]
         d = excel_date(r[13]) if r[13] not in (None, '〃') else None
         if d: date = d; block += 1
-        if r[12] not in (None, '〃') and not isinstance(r[12], (int, float, datetime.datetime)): reason = r[12]
-        if r[5] and r[8] == '欠番' and r[6]:
-            out[code6(r[5])] = {'pref': pref, 'name': r[6], 'kana': hira2kata(r[7]), 'date': date, 'reason': reason, 'block': block}
-        if r[8] == '新設' and r[9] not in (None, '〃', '削除'):
+        if r[8] not in (None, '〃'): kind = r[8]
+        cell = r[12] if isinstance(r[12], str) else None
+        if cell and cell != '〃':
+            if pending and not re.search(r'合併|設置|移行|変更|編入|分割|復帰|廃止|制施行', cell):
+                for c in pending: out[c]['reason'] = '合併後は' + cell
+                reason = '合併後は' + cell; pending = []
+            else:
+                reason = cell
+        if r[5] and kind == '欠番' and r[6]:
+            c = code6(r[5])
+            out[c] = {'pref': pref, 'name': str(r[6]).strip().replace('\u3000', ''), 'kana': hira2kata(r[7]), 'date': date, 'reason': reason, 'block': block}
+            if reason == '合併後は': pending.append(c)
+        if kind == '新設' and r[9] not in (None, '〃', '削除') and r[5] is None:
             created[block].append(code6(r[9]))
     for v in out.values(): v['created'] = created.get(v['block'], [])
     return out
-
-def kaisei_reason_for(code, rows, reason_map):
-    return reason_map.get(code, '')
 
 # ---- Wikidata ----
 def load_wikidata():
@@ -98,21 +99,11 @@ def load_wikidata():
 
 def load_wikidata_gojp():
     by_host = collections.defaultdict(set)
-    for r in csv.DictReader(open(RAW / 'wikidata-gojp.csv', encoding='utf-8')):
+    for r in csv.DictReader(open(ROOT / 'evidence' / 'wikidata-gojp.csv', encoding='utf-8')):
         by_host[host_key(r['site'])].add(r['ja'] or r['item'].rsplit('/', 1)[-1])
     return by_host
 
 # ---- e-Gov ----
-def anchors(path):
-    t = (RAW / path).read_text(encoding='utf-8')
-    out = []
-    for u, n in re.findall(r'<a [^>]*href="(https?://[^"]*)"[^>]*>(.*?)</a>', t, re.S):
-        n = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', n))).strip()
-        u = u.strip()
-        if 'e-gov.go.jp' in u or 'j-lis.go.jp' in u or not n: continue
-        out.append((n, u))
-    return out
-
 # ---- J-LIS ----
 def load_jlis(manifest):
     out, skip = [], ('j-lis', 'jpki', 'lg-waps', 'kojinbango', 'harp.lg.jp')
@@ -186,10 +177,10 @@ def main():
             common = set.intersection(*[hosts[s] for s in used]) if len(used) > 1 else set()
             h = sorted(hosts[used[0]] & hosts[used[1]])[0]
             pick = None
-            for s in ('egov', 'jlis', 'wikidata'):  # 掲載用 URL は手で整えられたリンク集を優先
-                for u in srcs.get(s, []):
-                    if host_key(u) == h: pick = clean_url(u); break
-                if pick: break
+            # 掲載用 URL: 同じホストの候補のうち https を優先し、同じ scheme なら手で整えられたリンク集(e-Gov > J-LIS > Wikidata)を優先
+            cands = [(not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'jlis', 'wikidata'))
+                     for u in srcs.get(sname, []) if host_key(u) == h]
+            pick = clean_url(sorted(cands)[0][2])
             tag = ';'.join(f'{ {"wikidata": "wikidata", "egov": "e-gov", "jlis": "j-lis"}[s] }@{ {"wikidata": fetch_day("wikidata-p429.csv"), "egov": fetch_day("egov-local-governments.html"), "jlis": jlis_date.get(c) or fetch_day("jlis-000.html")}[s] }' for s in used)
             tally['confirmed'] += 1
             ledger.append({'code': c, 'name_ja': e['name'], 'name_en': w.get('en', ''), 'reading_kana': e['kana'], 'type': t,
@@ -216,8 +207,12 @@ def main():
         m = re.search(r'合併後は(.+)$', k['reason'] or '')
         if m:  # 「合併後は袋井市」: 同じ都道府県の現行名簿から名前で引く
             succ = [x for x in name_to_codes.get(m[1].strip(), []) if cur[x]['pref'] == k['pref']]
+        if not succ and k['reason'] in name_to_codes:  # 事由が合併先名だけ（「花巻市」）
+            succ = [x for x in name_to_codes[k['reason']] if cur[x]['pref'] == k['pref']]
         if not succ:  # 同じ改正ブロックで新設された団体のうち現行名簿にあるもの
-            succ = [x for x in k['created'] if x in cur_codes and cur[x]['pref'] == k['pref']]
+            cand = [x for x in k['created'] if x in cur_codes and cur[x]['pref'] == k['pref']]
+            same = [x for x in cand if cur[x]['name'] == k['name']]  # 同名の新設があれば（コード改定）それだけ
+            succ = same or cand
         succ = sorted(set(succ))
         merged = '合併' in (k['reason'] or '')
         srcs = ['soumu-kaisei@' + fetch_day('soumu-kaisei.xlsx')] + (['wikidata@' + fetch_day('wikidata-p429.csv')] if w.get('end') else [])
