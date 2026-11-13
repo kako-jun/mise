@@ -86,9 +86,13 @@ def site_kind(host, title, description):
     text = (title or '') + (description or '')
     marks = blocklist('site_kind_markers.txt')
     labels = host.split('.')
-    if any(m.lower() in text.lower() for m in marks['団体']) or (len(labels) >= 2 and labels[-2] in ('or', 'gr')):
+    if any(m.lower() in text.lower() for m in marks['団体']):
         return '団体'
-    if any(m in text for m in marks['企業']) or (len(labels) >= 2 and labels[-2] == 'co'):
+    if any(m in text for m in marks['企業']):
+        return '企業'
+    if len(labels) >= 2 and labels[-2] in ('or', 'gr'):
+        return '団体'
+    if len(labels) >= 2 and labels[-2] == 'co':
         return '企業'
     return '不明'
 

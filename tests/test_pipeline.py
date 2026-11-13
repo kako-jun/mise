@@ -67,6 +67,7 @@ class Kind(unittest.TestCase):
         self.assertEqual(features.site_kind('x.or.jp', '', ''), '団体')
         self.assertEqual(features.site_kind('x.jp', 'NPO法人あいう', ''), '団体')
         self.assertEqual(features.site_kind('x.jp', '株式会社あいう', ''), '企業')
+        self.assertEqual(features.site_kind('x.or.jp', '株式会社あいう', ''), '企業')
         self.assertEqual(features.site_kind('x.jp', '私のページ', ''), '不明')
 
     def test_small_business_not_rejected(self):
