@@ -9,3 +9,7 @@
 /manifest.webmanifest
   Cache-Control: no-cache
   Content-Type: application/manifest+json
+
+# ファイル名にバージョンを含む(-v1)ので長期キャッシュ。書体を替えるときは名前を変える
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
