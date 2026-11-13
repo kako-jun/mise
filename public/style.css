@@ -241,3 +241,6 @@ html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 .category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }
+
+/* 日本語判定の初回、app.js の初期化まで翻訳対象を不可視にする（レイアウトは動かさない） */
+.i18n-pending [data-i18n], .i18n-pending #scope-nav, .i18n-pending #directory, .i18n-pending #breadcrumbs { visibility: hidden; }
