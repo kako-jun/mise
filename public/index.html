@@ -7,7 +7,7 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <link rel="stylesheet" href="style.css?v=22">
 <script src="app.js?v=21" defer></script>
-<script type="module" src="globe.js?v=4"></script>
+<script>addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("./globe.js?v=5")));</script>
 <script src="cat.js?v=5" defer></script>
 </head>
 <body>

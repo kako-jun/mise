@@ -14,7 +14,7 @@ mise は、個人や企業のサイトをカテゴリからたどって発見で
 - APIとサーバー側処理は **Cloudflare Workers + Hono**。
 - データベースは **Cloudflare D1**。
 - 画面は **HTML / CSS / JavaScript**。UIフレームワークは使わない。
-- 3D表現には **Three.js** を使う。
+- 3D表現には **Three.js** を使う。ソースは `src/client/globe.js`、three 本体は `vendor/three.module.js`（同梱）。`npm run build:globe`（esbuild で minify・tree-shake）が `public/globe.js` を生成するので、globe を変えたら再ビルドして生成物もコミットする（直接編集しない）。`land-110m.geojson` は `scripts/slim-land.mjs` で軽量化済み（小数2桁・property除去）。globe.js はページの load 後に遅延読込し、タブ非表示中は描画を止める。
 - **Astro は現時点では採用しない**。
 
 ## 現在の試作
