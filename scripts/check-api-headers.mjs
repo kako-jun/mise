@@ -25,7 +25,7 @@ const cases = [
   ['D1 故障 /api/sites', '/api/sites', badDb, 500, 'no-store'],
   ['存在しない /api/nope', '/api/nope', okDb, 404, 'no-store'],
   // POST /api/requests は成功・失敗とも no-store(GET の max-age を引きずらない)
-  ['POST 受理 /api/requests', '/api/requests', okDb, 202, 'no-store', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'add', url: 'https://example.com/', contact: 'a@example.com' }) }, { INTAKE_SALT: 's' }],
+  ['POST 受理 /api/requests', '/api/requests', okDb, 202, 'no-store', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'add', url: 'https://example.com/', reason: 'r' }) }, { INTAKE_SALT: 's' }],
   ['POST 不正 /api/requests', '/api/requests', okDb, 400, 'no-store', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: '{}' }, { INTAKE_SALT: 's' }],
   ['POST 塩なし /api/requests', '/api/requests', okDb, 503, 'no-store', { method: 'POST', headers: { Origin: 'http://localhost', 'Content-Type': 'application/json' }, body: '{}' }],
 ];

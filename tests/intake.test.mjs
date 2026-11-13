@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, normalizeContact, validateRequest, ipHash, ipPrefix, blockCandidates, isBlocked, matchPath, decodeUnreserved, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
+import { normalizeUrl, validateRequest, ipHash, ipPrefix, blockCandidates, isBlocked, matchPath, decodeUnreserved, readLimited, sameOrigin, receiveRequest, LIMITS } from '../src/intake.js';
 
 test('normalizeUrl: 正規化', () => {
   assert.deepEqual(normalizeUrl('Example.COM/foo/?a=1#x'), { ok: true, url: 'https://example.com/foo', host: 'example.com', path: '/foo', key: 'example.com/foo' });
@@ -10,17 +10,13 @@ test('normalizeUrl: SSRF になりうる宛先・形式を拒否', () => {
   for (const bad of ['http://127.0.0.1/', 'http://localhost/', 'https://10.0.0.1/', 'http://[::1]/', 'http://2130706433/', 'http://0x7f.1/', 'https://intranet/', 'https://a.local/', 'https://a.internal/', 'https://user:pw@example.com/', 'https://example.com:8443/', 'ftp://example.com/', 'javascript:alert(1)', 'file:///etc/passwd', 'https://exa mple.com/', '', 'https://' + 'a'.repeat(600) + '.com'])
     assert.equal(normalizeUrl(bad).ok, false, bad);
 });
-test('normalizeContact: メールか https URL のみ', () => {
-  assert.equal(normalizeContact('me@example.com'), 'me@example.com');
-  assert.equal(normalizeContact('https://www.facebook.com/profile.php?id=123'), 'https://www.facebook.com/profile.php?id=123'); // クエリを保つ
-  for (const bad of ['', 'x', 'http://example.com/', 'a b@example.com', '<a@b.com>', 'https://example.com/a"b', 'https://example.com/a b', "https://example.com/'", 'https://example.com/<x>', 'javascript:alert(1)', 'a'.repeat(250) + '@example.com']) assert.equal(normalizeContact(bad), null, bad);
-});
 test('validateRequest: 正常・異常', () => {
-  const ok = { type: 'add', url: 'https://example.com/', contact: 'me@example.com' };
+  const ok = { type: 'add', url: 'https://example.com/', reason: 'r' };
   assert.equal(validateRequest(ok).ok, true);
   assert.equal(validateRequest({ ...ok, type: 'x' }).error, 'invalid_type');
-  assert.equal(validateRequest({ ...ok, contact: '' }).error, 'invalid_contact');
-  assert.equal(validateRequest({ ...ok, type: 'correct' }).error, 'reason_required');
+  for (const type of ['add', 'remove', 'correct']) for (const reason of [undefined, '', '  \n ']) assert.equal(validateRequest({ ...ok, type, reason }).error, 'reason_required', type);
+  assert.equal(validateRequest({ ...ok, reason: '理由' }).ok, true);
+  assert.equal('contact' in validateRequest({ ...ok, reason: 'x', contact: 'me@example.com' }).value, false);
   assert.equal(validateRequest({ ...ok, reason: 'x'.repeat(LIMITS.reason + 1) }).error, 'reason_too_long');
   assert.equal(validateRequest({ ...ok, reason: '<script>alert(1)</script>' }).error, 'invalid_reason');
   assert.equal(validateRequest({ ...ok, website: 'bot' }).error, 'spam');
@@ -80,7 +76,7 @@ const ctx = (body, db, { origin = 'https://mise.example', ct = 'application/json
   req: { raw: new Request('https://mise.example/api/requests', { method: 'POST', headers: { Origin: origin, 'Content-Type': ct, 'CF-Connecting-IP': ip }, body: typeof body === 'string' ? body : JSON.stringify(body) }) },
   env: { DB: db, INTAKE_SALT: salt },
 });
-const good = { type: 'add', url: 'https://example.com/', contact: 'me@example.com' };
+const good = { type: 'add', url: 'https://example.com/', reason: 'r' };
 const ins = d => d.calls.find(c => /INSERT/.test(c.sql));
 test('receiveRequest: 受理 / 検証 / 向き', async () => {
   assert.equal((await receiveRequest(ctx(good, fakeDb()))).status, 202);
@@ -105,30 +101,30 @@ test('receiveRequest: 同一URLでも別IPなら握りつぶさず保存(重複�
   const a = fakeDb(), b = fakeDb();
   await receiveRequest(ctx({ ...good, type: 'remove' }, a, { ip: '203.0.113.1' }));
   await receiveRequest(ctx({ ...good, type: 'remove', contact: 'real@example.com' }, b, { ip: '203.0.113.2' }));
-  assert.match(ins(a).sql, /NOT EXISTS \(SELECT 1 FROM requests WHERE ip_hash=\?8 AND type=\?1 AND normalized_key=\?5/);
-  assert.notEqual(ins(a).args[7], ins(b).args[7]);
-  assert.equal(ins(b).args[6], 'real@example.com');
+  assert.match(ins(a).sql, /NOT EXISTS \(SELECT 1 FROM requests WHERE ip_hash=\?7 AND type=\?1 AND normalized_key=\?5/);
+  assert.notEqual(ins(a).args[6], ins(b).args[6]);
+  assert.ok(!ins(b).args.includes('real@example.com')); // 送られてきた contact は無視して保存しない
 });
 test('receiveRequest: 全体上限は推薦と取り下げ・訂正で別枠', async () => {
   const a = fakeDb(), r = fakeDb();
   await receiveRequest(ctx(good, a)); await receiveRequest(ctx({ ...good, type: 'remove' }, r));
-  assert.deepEqual([ins(a).args[11], ins(a).args[12], ins(a).args[14]], [1, LIMITS.addPerDay, LIMITS.netPerDay]);
-  assert.deepEqual([ins(r).args[11], ins(r).args[12]], [0, LIMITS.otherPerDay]);
+  assert.deepEqual([ins(a).args[10], ins(a).args[11], ins(a).args[13]], [1, LIMITS.addPerDay, LIMITS.netPerDay]);
+  assert.deepEqual([ins(r).args[10], ins(r).args[11]], [0, LIMITS.otherPerDay]);
 });
 test('receiveRequest: ハニーポットは保存しない', async () => {
   const h = fakeDb();
   assert.equal((await receiveRequest(ctx({ ...good, website: 'x' }, h))).status, 202);
   assert.equal(h.calls.length, 0);
 });
-test('receiveRequest: 拒否リスト済みへの推薦は rejected で連絡先を保存しない(親ドメイン・www. も照合)', async () => {
+test('receiveRequest: 拒否リスト済みへの推薦は rejected で記録する(親ドメイン・www. も照合)', async () => {
   const d = fakeDb({ blocked: true });
   assert.equal((await receiveRequest(ctx({ ...good, url: 'https://www.sub.example.com/x' }, d))).status, 202);
   const q = d.calls.find(c => /blocked_hosts/.test(c.sql));
   assert.deepEqual(q.args, ['sub.example.com', 'example.com']);
-  assert.equal(ins(d).args[1], 'rejected'); assert.equal(ins(d).args[6], null); assert.equal(ins(d).args[8], 'blocklisted');
+  assert.equal(ins(d).args[1], 'rejected'); assert.equal(ins(d).args[7], 'blocklisted');
   const d2 = fakeDb({ blocked: true });
   await receiveRequest(ctx({ ...good, type: 'remove' }, d2));
-  assert.equal(ins(d2).args[1], 'pending'); assert.equal(ins(d2).args[6], 'me@example.com');
+  assert.equal(ins(d2).args[1], 'pending'); assert.equal(ins(d2).args[7], null);
 });
 
 test('normalizeUrl: スキーム省略+ポート、%7E と ~、ゼロ幅文字', () => {
@@ -161,9 +157,17 @@ test('receiveRequest: パス型の拒否はそのパス配下だけ rejected', a
   const d2 = fakeDb({ blocked: rows }); await receiveRequest(ctx({ ...good, url: 'https://ameblo.jp/bar' }, d2));
   assert.equal(ins(d2).args[1], 'pending');
 });
-test('receiveRequest: 重複判定は連絡先も含む(連絡先違いは別行)', async () => {
-  const d = fakeDb(); await receiveRequest(ctx(good, d));
-  assert.match(ins(d).sql, /contact IS \?7 AND status='pending'/);
+test('receiveRequest: 重複判定は同IPハッシュ+同種別+同キーだけ(contact を含まない)', async () => {
+  const d = fakeDb(); await receiveRequest(ctx({ ...good, contact: 'a@b.com' }, d));
+  assert.match(ins(d).sql, /normalized_key=\?5 AND status='pending'/);
+  assert.doesNotMatch(ins(d).sql, /contact/);
+  assert.ok(!ins(d).args.includes('a@b.com'));
+});
+test('receiveRequest: reason なしは全種別 400', async () => {
+  for (const type of ['add', 'remove', 'correct']) {
+    const d = fakeDb(); const r = await receiveRequest(ctx({ type, url: 'https://example.com/' }, d));
+    assert.deepEqual([r.status, r.body.error], [400, 'reason_required']); assert.equal(d.calls.length, 0);
+  }
 });
 
 test('パス型の拒否のすり抜け(//foo, %2F, ;x, %20, 末尾.)を畳んで防ぐ', () => {
@@ -179,11 +183,9 @@ test('パス型の拒否のすり抜け(//foo, %2F, ;x, %20, 末尾.)を畳ん�
   assert.equal(matchPath('/a%2Fb;x/c.'), '/a/b/c');
   assert.equal(normalizeUrl('https://ameblo.jp//foo/').key, normalizeUrl('https://ameblo.jp/foo').key);
 });
-test('共有ホスティングの追加分と見えない文字・連絡先の長さ・長い ::ffff:', () => {
+test('共有ホスティングの追加分と見えない文字・長い ::ffff:', () => {
   for (const h of ['x.hateblo.jp', 'x.jugem.jp', 'x.exblog.jp', 'x.seesaa.net', 'x.hatenadiary.org']) assert.deepEqual(blockCandidates(h), [h], h);
   for (const ch of ['\u00ad', '\u061c', '\u180e', '\u2061', '\u2064', '\u200b', '\ufeff']) assert.equal(normalizeUrl(`exa${ch}mple.com`).url, 'https://example.com');
-  assert.equal(normalizeContact('https://example.com/' + 'a'.repeat(170)), 'https://example.com/' + 'a'.repeat(170));
-  assert.equal(normalizeContact('https://example.com/' + 'a'.repeat(150) + '\u00e9'.repeat(9)), null); // 文字数 200 以内でも href(%エンコード)が 200 を超える
   assert.equal(ipPrefix('0:0:0:0:0:ffff:203.0.113.9'), '203.0.113.9');
   assert.equal(ipPrefix('0000:0:0:0:0:ffff:cb00:7109'), '203.0.113.9');
 });
