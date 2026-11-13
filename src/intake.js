@@ -1,7 +1,7 @@
 // 申請(推薦 add / 取り下げ remove / 訂正 correct)の受付。Issue #4・#29、docs/operations/requests.md。
 // サーバーは申請されたURLを取りに行かない(SSRF の余地を作らない)。検証は文字列だけで行う。
 export const TYPES = ['add', 'remove', 'correct'];
-export const LIMITS = { body: 8192, url: 500, reason: 1000, contact: 200, perHour: 3, perDay: 10, netPerDay: 30, addPerDay: 300, otherPerDay: 100 };
+export const LIMITS = { body: 8192, url: 500, reason: 1000, perHour: 3, perDay: 10, netPerDay: 30, addPerDay: 300, otherPerDay: 100 };
 
 // 共有ホスティング(ユーザーごとのサブドメイン)。拒否リストはここでは完全一致(+その配下)だけで、親(github.io 等)には広げない。
 export const SHARED_SUFFIXES = ['github.io', 'gitlab.io', 'pages.dev', 'netlify.app', 'vercel.app', 'workers.dev', 'blogspot.com', 'hateblo.jp', 'hatenablog.jp', 'hatenadiary.com', 'hatenadiary.org', 'jimdofree.com', 'seesaa.net', 'livedoor.blog', 'blog.jp', 'jugem.jp', 'exblog.jp', 'wordpress.com', 'tumblr.com', 'web.app', 'firebaseapp.com', 'herokuapp.com', 'fc2.com', 'hatenablog.com', 'hatenadiary.jp', 'wixsite.com', 'weebly.com', 'sakura.ne.jp', 'neocities.org', 'glitch.me'];
@@ -70,18 +70,7 @@ export function isBlocked(rows, host, path) {
   return rows.some(r => !r.path_prefix || (r.host === h && (path === r.path_prefix || path.startsWith(`${r.path_prefix}/`))));
 }
 
-const EMAIL = /^[^\s@<>"',;:()\[\]\\]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
-// 連絡先はメールアドレスか https の URL(SNS のプロフィール等)。URL は URL として検証し、元の href(クエリを含む)を保存する。
-// profile.php?id=123 のようにクエリが意味を持つため normalizeUrl の出力は使わない(宛先の検査にだけ使う)。比較キーには使わない。
-export function normalizeContact(input) {
-  const c = clean(input);
-  if (!c || c.length > LIMITS.contact) return null;
-  if (EMAIL.test(c)) return c;
-  if (/[<>"'\s]/.test(c) || !/^https:\/\//i.test(c) || !normalizeUrl(c).ok) return null;
-  try { const h = new URL(c).href; return h.length > LIMITS.contact ? null : h; } catch { return null; }
-}
-
-// body: 任意のパース済みJSON。戻り値 { ok, value:{type,url,host,path,key,reason,contact} } | { ok:false, error }
+// body: 任意のパース済みJSON。戻り値 { ok, value:{type,url,host,path,key,reason} } | { ok:false, error }
 export function validateRequest(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_body' };
   if (body.website) return { ok: false, error: 'spam' }; // ハニーポット(人間には見えない欄)
@@ -90,11 +79,9 @@ export function validateRequest(body) {
   if (!u.ok) return u;
   const reason = clean(body.reason);
   if (reason.length > LIMITS.reason) return { ok: false, error: 'reason_too_long' };
-  if (body.type === 'correct' && !reason) return { ok: false, error: 'reason_required' };
+  if (!reason) return { ok: false, error: 'reason_required' };
   if (/<\/?[a-z!?]/i.test(reason)) return { ok: false, error: 'invalid_reason' }; // HTML のタグらしいものは受けない("a < b" は可)
-  const contact = normalizeContact(body.contact);
-  if (!contact) return { ok: false, error: 'invalid_contact' };
-  return { ok: true, value: { type: body.type, url: u.url, host: u.host, path: u.path, key: u.key, reason: reason || null, contact } };
+  return { ok: true, value: { type: body.type, url: u.url, host: u.host, path: u.path, key: u.key, reason } };
 }
 
 // IPv4 射影アドレス(::ffff:a.b.c.d / ::ffff:xxxx:xxxx)は IPv4 にする。
@@ -154,11 +141,11 @@ export async function receiveRequest(c) {
   let json; try { json = JSON.parse(text); } catch { return { status: 400, body: { error: 'invalid_body' } }; }
   const v = validateRequest(json);
   if (!v.ok) return v.error === 'spam' ? { status: 202, body: { status: 'pending' } } : { status: 400, body: { error: v.error } }; // ハニーポットは成功に見せる
-  const { type, url, host, path, key, reason, contact } = v.value;
+  const { type, url, host, path, key, reason } = v.value;
   const db = c.env.DB;
   const ip = req.headers.get('CF-Connecting-IP');
   const hash = await ipHash(ip, salt), net = await ipHash(ip, salt, 3);
-  // 拒否リスト済み(ホスト全体は登録ドメイン配下を含む。パス型はそのパス配下)への推薦は rejected で記録し、連絡先は保存しない。
+  // 拒否リスト済み(ホスト全体は登録ドメイン配下を含む。パス型はそのパス配下)への推薦は rejected で記録する。
   // 取り下げ・訂正は拒否リストにあっても pending で記録する。
   let blocked = false;
   if (type === 'add') {
@@ -166,22 +153,21 @@ export async function receiveRequest(c) {
     const { results } = await db.prepare(`SELECT host, path_prefix FROM blocked_hosts WHERE host IN (${cands.map((_, i) => `?${i + 1}`).join(',')})`).bind(...cands).all();
     blocked = isBlocked(results || [], host, path);
   }
-  // 同一 URL の申請は(別人の可能性があるので)全件保存する。同一 IP ハッシュ+同種別+同一キー+同一連絡先の未処理の再送だけを重複とみなす
-  // (連絡先が違えば別行。本物の運営者が連絡先を直して送り直せる)。
+  // 同一 URL の申請は(別人の可能性があるので)全件保存する。同一 IP ハッシュ+同種別+同一キーの未処理の再送だけを重複とみなす。
   // 重複・レート制限の判定は INSERT と同時に行う(競合しても上限を超えない)。IP 単位: 1時間3件・24時間10件。
   // 同一 /48(IPv6)は 24 時間 30 件。全体: 推薦は 24 時間 300 件、取り下げ・訂正は別枠で 24 時間 100 件。
   const r = await db.prepare(
-    `INSERT INTO requests (type,status,url,host,normalized_key,reason,contact,ip_hash,note,decided_at,net_hash)
-     SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,CASE WHEN ?2='rejected' THEN datetime('now') END,?14
-     WHERE NOT EXISTS (SELECT 1 FROM requests WHERE ip_hash=?8 AND type=?1 AND normalized_key=?5 AND contact IS ?7 AND status='pending')
-       AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?8 AND created_at >= datetime('now','-1 hour')) < ?10
-       AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?8 AND created_at >= datetime('now','-1 day')) < ?11
-       AND (SELECT COUNT(*) FROM requests WHERE net_hash=?14 AND created_at >= datetime('now','-1 day')) < ?15
-       AND (SELECT COUNT(*) FROM requests WHERE (type='add') = ?12 AND created_at >= datetime('now','-1 day')) < ?13`
-  ).bind(type, blocked ? 'rejected' : 'pending', url, host, key, reason, blocked ? null : contact, hash, blocked ? 'blocklisted' : null,
+    `INSERT INTO requests (type,status,url,host,normalized_key,reason,ip_hash,note,decided_at,net_hash)
+     SELECT ?1,?2,?3,?4,?5,?6,?7,?8,CASE WHEN ?2='rejected' THEN datetime('now') END,?13
+     WHERE NOT EXISTS (SELECT 1 FROM requests WHERE ip_hash=?7 AND type=?1 AND normalized_key=?5 AND status='pending')
+       AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?7 AND created_at >= datetime('now','-1 hour')) < ?9
+       AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?7 AND created_at >= datetime('now','-1 day')) < ?10
+       AND (SELECT COUNT(*) FROM requests WHERE net_hash=?13 AND created_at >= datetime('now','-1 day')) < ?14
+       AND (SELECT COUNT(*) FROM requests WHERE (type='add') = ?11 AND created_at >= datetime('now','-1 day')) < ?12`
+  ).bind(type, blocked ? 'rejected' : 'pending', url, host, key, reason, hash, blocked ? 'blocklisted' : null,
     LIMITS.perHour, LIMITS.perDay, type === 'add' ? 1 : 0, type === 'add' ? LIMITS.addPerDay : LIMITS.otherPerDay, net, LIMITS.netPerDay).run();
   if (r.meta?.changes) return { status: 202, body: { status: 'pending' } };
   // 挿入されなかった: 同一 IP の再送なら成功に見せ、そうでなければレート超過。
-  const dup = await db.prepare(`SELECT 1 AS x FROM requests WHERE ip_hash=?1 AND type=?2 AND normalized_key=?3 AND contact IS ?4 AND status='pending' LIMIT 1`).bind(hash, type, key, blocked ? null : contact).first();
+  const dup = await db.prepare(`SELECT 1 AS x FROM requests WHERE ip_hash=?1 AND type=?2 AND normalized_key=?3 AND status='pending' LIMIT 1`).bind(hash, type, key).first();
   return dup ? { status: 202, body: { status: 'pending' } } : { status: 429, body: { error: 'rate_limited' } };
 }

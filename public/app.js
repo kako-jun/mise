@@ -6,6 +6,7 @@ let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeTok
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
 // 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html data-initial-lang> を使う（判定は二重に持たない）。
+let keepRequestOpen = false;
 const initialLanguage = () => {
   const saved = storage.get('mise-language');
   if (saved === 'ja' || saved === 'en') return saved;
@@ -19,8 +20,8 @@ const words = {
   ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, prevPage:'‹ 前のページ' },
   en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, prevPage:'‹ Previous page' }
 };
-Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(訂正は必須)', reqContact:'連絡先(メールまたは https の URL。必須)', reqPrivacy:'連絡先は、サイトの外で申請を確認するためだけに使い、決定の 90 日後に削除します。', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。確認には時間がかかります。連絡先に返信が届くとは限りません。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_contact:'連絡先はメールアドレスか https の URL にしてください。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'訂正は、直したい内容を書いてください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。急ぐ場合は、下の GitHub の Issue からも依頼できます。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqAlt:'このフォームが使えないときは、GitHub の Issue からも依頼できます:', reqAltLink:'取り下げ・訂正の依頼', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
-Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required for corrections)', reqContact:'Contact (email or https URL; required)', reqPrivacy:'The contact is used only to confirm the request outside this site, and is deleted 90 days after the decision.', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received. Review takes time, and a reply is not guaranteed.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_contact:'Contact must be an email address or an https URL.', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please describe what should be corrected.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later. If it is urgent, you can also use the GitHub issue link below.', reqErr_too_large:'The input is too large. Please shorten it.', reqAlt:'If this form does not work, you can also ask through a GitHub issue:', reqAltLink:'Removal or correction request', reqErr_other:'Could not send. Please try again later.' });
+Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
+Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
@@ -53,7 +54,8 @@ function applyLanguage() {
   updateTitle();
   renderStats();
   renderScopeNav();
-  if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false);
+  keepRequestOpen = true; // 言語切替の再描画では申請フォームの開閉を変えない
+  try { if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false); } finally { keepRequestOpen = false; }
 }
 // サイトURLは http/https だけをリンクにする（javascript: 等は表に出さない）。
 const safeHttpUrl = value => { try { const u=new URL(value); return u.protocol==='http:'||u.protocol==='https:' ? u.href : null; } catch (_) { return null; } };
@@ -285,6 +287,7 @@ addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(sa
 addEventListener('pagehide',saveListState);
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
+  if(!keepRequestOpen) setRequestOpen(false);
   currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
@@ -318,6 +321,7 @@ setInterval(()=>{
   renderPick();
 },8000);
 function showResults(query) {
+  if(!keepRequestOpen) setRequestOpen(false);
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
   $('#result-title').textContent=query?t('results')(query):t('all'); $('#empty').hidden=true;
   startList({ key:`${currentScope}|?q|${query}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query}, startPage:1, showCategories:true,
@@ -340,15 +344,23 @@ function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textConte
 $('#request-form').addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.currentTarget, st=$('#req-status'), btn=$('#req-submit');
   const show=(key,state)=>{reqStatus={key,state};renderReqStatus();};
-  btn.disabled=true; show('reqSending','info');
+  if(btn.getAttribute('aria-disabled')==='true') return; // 二重送信ガード(disabled にするとフォーカスが外れて Esc が効かなくなる)
+  btn.setAttribute('aria-disabled','true'); show('reqSending','info');
   try {
-    const res=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:f.type.value,url:f.url.value,reason:f.reason.value,contact:f.contact.value,website:f.website.value})});
+    const res=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:f.type.value,url:f.url.value,reason:f.reason.value,website:f.website.value})});
     if(res.ok){ show('reqOk','ok'); f.url.value=''; f.reason.value=''; }
     else { const j=await res.json().catch(()=>({})); show(t('reqErr_'+j.error)?'reqErr_'+j.error:(res.status===429?'reqErr_rate_limited':'reqErr_other'),'error'); }
   } catch(_) { show('reqErr_other','error'); }
-  finally { btn.disabled=false; }
+  finally { btn.removeAttribute('aria-disabled'); }
 });
-$('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
+// 申請フォームの開閉。開いている間はカテゴリ一覧(パンくず・カテゴリ)を隠す(CSS の .req-open。再描画されても取り残されない)。
+function setRequestOpen(open, focus) {
+  const m=$('#recommend'), link=$('#recommend-link');
+  m.hidden=!open; link.setAttribute('aria-expanded',String(open)); document.documentElement.classList.toggle('req-open',open);
+  if(focus) (open?$('#req-type'):link).focus();
+}
+$('#recommend-link').addEventListener('click',e=>{e.preventDefault();setRequestOpen($('#recommend').hidden,true);});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !e.defaultPrevented && !$('#recommend').hidden){ e.preventDefault(); setRequestOpen(false,true); } });
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
 // 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
@@ -424,7 +436,7 @@ async function chooseScope(scope) {
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
   const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
-  renderScopeNav(); renderStats(); applyLanguage();
+  renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage();
   globeForScope(scope);
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。

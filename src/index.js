@@ -40,7 +40,7 @@ app.get('/api/activity', async c => {
   return c.json({total:totals.total, known_daily:results});
 });
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md
-const NOJS = `<!doctype html><meta charset="utf-8"><title>MISE</title><p>この窓口は JavaScript が必要です。代わりに <a href="https://github.com/kako-jun/mise/issues/new?template=removal-request.yml">GitHub の Issue</a> から依頼できます。</p><p>This form needs JavaScript. You can use a <a href="https://github.com/kako-jun/mise/issues/new?template=removal-request.yml">GitHub issue</a> instead.</p>`;
+const NOJS = `<!doctype html><meta charset="utf-8"><title>MISE</title><p>JavaScript を有効にして送信してください。</p><p>Please enable JavaScript to send this form.</p>`;
 app.post('/api/requests', async c => {
   // JS なしのフォーム送信(ブラウザの遷移)には JSON でなく簡単な HTML を返す。
   if ((c.req.header('Accept') || '').includes('text/html') && !(c.req.header('Content-Type') || '').toLowerCase().startsWith('application/json')) return c.html(NOJS, 415);
