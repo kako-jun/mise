@@ -29,6 +29,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | [collection/pipeline.md](collection/pipeline.md) | 独立サイトの発見パイプライン（frontier 台帳・決定論フィルタ） |
 | [collection/public-bodies.md](collection/public-bodies.md) | 官公庁・自治体の名簿（公式サイト台帳） |
 | [collection/procedures.md](collection/procedures.md) | 恒常的な収集手順（スクリプトの再実行方法・書式） |
+| [collection/thumbnails.md](collection/thumbnails.md) | サムネイル撮影の試験（設計・作法・結果。試験用スクリプトのみ実装済み） |
 | [collection/trials.md](collection/trials.md) | 試行の記録（日付つきの観測。数字はここだけ） |
 | **operations/** 運用 | |
 | [operations/deploy.md](operations/deploy.md) | 本番環境、デプロイ、マイグレーション |
@@ -46,3 +47,17 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | 国・区画の表 | `public/countries.js`、`public/regions.js`（生成） |
 | データベース | `migrations/` |
 | 収集・台帳・パイプライン | `scripts/`、`data/` |
+
+## 旧パスの対応
+
+docs の再構成（Issue #57）で移動・統合したファイルの対応。適用済みの migration やコード内の古いコメントに旧パスが残っている場合はここで引く。
+
+| 旧 | 新 |
+|---|---|
+| `docs/architecture.md` | 技術構成・国旗と地球 = [design/architecture.md](design/architecture.md)、並び・ピックアップ・HUD・NEW・ファビコン = [design/ui.md](design/ui.md)、SEO = [design/seo.md](design/seo.md)、構想・マスコット = [concept/overview.md](concept/overview.md) |
+| `docs/site-schema.md` | [design/data-model.md](design/data-model.md)（「運営者の所在国」「運営者の所在区画」の節を含む）。スクリーンショット構想 = [ideas/browser-and-thumbnails.md](ideas/browser-and-thumbnails.md) |
+| `docs/discovery-policy.md` | [collection/discovery-policy.md](collection/discovery-policy.md)（分類の節は [concept/listing-criteria.md](concept/listing-criteria.md)） |
+| `docs/collection-trial.md` | 恒常手順 = [collection/procedures.md](collection/procedures.md)、日付つき記録 = [collection/trials.md](collection/trials.md) |
+| `docs/independent-sites-pipeline.md`（旧 `personal-sites-pipeline.md`） | [collection/pipeline.md](collection/pipeline.md) |
+| `docs/public-bodies.md` | [collection/public-bodies.md](collection/public-bodies.md) |
+| `docs/thumbnails.md` | [collection/thumbnails.md](collection/thumbnails.md) |

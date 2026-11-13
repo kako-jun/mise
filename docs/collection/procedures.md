@@ -6,7 +6,7 @@
 
 - User-Agent は `MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)`（区画表の Wikidata 取得のみ別の UA）。
 - robots.txt を先に確認する。200 なら規則を読み、404/410 は規則なし、それ以外の取得失敗・リダイレクト・401/403・5xx は取得せず記録して止める。noindex・サイズ超過も取得・登録を中止する。
-- 1 サイト数リクエストまで。サイト間・リクエスト間に 2 秒以上空け、直列で行う。リダイレクトは同一ホスト内に限る。内部 IP は拒否する。
+- 1 サイト数リクエストまで。サイト間・リクエスト間に待機を入れ、直列で行う（`collect-sample.py` は 1 秒、`collect-source-updated.py`・`check-embeddable.py` は 2 秒、官公庁の名簿取得は 1 秒、パイプラインは 1.5 秒）。リダイレクトは同一ホスト内に限る。内部 IP は拒否する。
 - 推測で埋めない。取れないものは `NULL`。
 - 大量発見・定期巡回は [pipeline.md](pipeline.md) と [operations/jobs.md](../operations/jobs.md)。ここのスクリプトは固定の対象に対する単発の取得用で、任意 URL の大量収集には使わない。
 
@@ -30,6 +30,7 @@
 | `scripts/collect-source-updated.py` | 掲載サイトの更新日を根拠付きで取得 | `uv run python3 scripts/collect-source-updated.py > data/source-updated.json` |
 | `scripts/check-embeddable.py` | トップページが iframe で埋め込めるかをヘッダだけで判定 | `uv run python3 scripts/check-embeddable.py > data/embeddability.json` |
 | `scripts/collect-regions.py` | 区画表 `public/regions.js` を生成 | `uv run python3 scripts/collect-regions.py` |
+| `scripts/capture-thumbnails.mjs` | サムネイル撮影の試験（Node、playwright が別途必要） | [thumbnails.md](thumbnails.md#実行) |
 | `scripts/pipeline/run.py` | 独立サイトの発見パイプライン | [pipeline.md](pipeline.md#実行方法) |
 | `scripts/public_bodies_*.py` | 官公庁の名簿 | [public-bodies.md](public-bodies.md) |
 
