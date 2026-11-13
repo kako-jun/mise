@@ -1,0 +1,30 @@
+# ドメイン売却/パーキング/初期ページの検出文字列（小文字、本文・title に含まれるか）。
+# 出典: 運用者の観察に基づく手作業の編集。
+このドメインは売り物
+このドメインは販売
+ドメインは売却
+domain is for sale
+domain for sale
+this domain is for sale
+this domain may be for sale
+buy this domain
+the domain has expired
+ドメインパーキング
+parked domain
+parkingcrew
+sedo.com
+afternic
+お名前.com
+取得したドメイン
+ご契約ありがとうございます
+サーバーの初期ページ
+welcome to nginx
+apache2 default page
+it works!
+index of /
+under construction
+coming soon
+このサイトは現在準備中
+このページは現在準備中
+ページが見つかりません
+ホームページは準備中

@@ -1,0 +1,25 @@
+# 成人向けのマーカー。ホスト名はトークン一致(- と . で分割)、本文は部分一致。
+# 出典: 運用者の一般知識による手作業の編集。
+[host]
+porn
+sex
+xxx
+adult
+fuzoku
+hentai
+ero
+eroge
+av
+nuki
+delivery-health
+hitodzuma
+deai
+[text]
+アダルト
+18歳未満
+18禁
+成人向け
+出会い系
+風俗
+無修正
+エロ動画

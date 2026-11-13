@@ -1,0 +1,33 @@
+# 広告・アフィリエイト配信ドメイン（接尾辞一致）。取得後の広告タグ比率の計算と、ホスト名自体の除外に使う。
+# 出典: 運用者の一般知識による手作業の編集（主要な広告ネットワーク名のみ。網羅ではない）。
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+adsbygoogle.js
+amazon-adsystem.com
+i-mobile.co.jp
+a8.net
+valuecommerce.com
+afi-b.com
+accesstrade.net
+moshimo.com
+rakuten.co.jp
+linksynergy.com
+microad.jp
+microad.co.jp
+nend.net
+adstir.com
+fluct.jp
+impact-ad.jp
+criteo.com
+taboola.com
+outbrain.com
+popin.cc
+adingo.jp
+genieesspv.jp
+geniee.jp
+ad-stir.com
+ads.yahoo.co.jp
+yads.c.yimg.jp
+yimg.jp
+admax.jp

@@ -1,3 +1,5 @@
 /node_modules
 node_modules/
 .wrangler/
+/var/
+__pycache__/
