@@ -1,7 +1,8 @@
 /node_modules
 node_modules/
 .wrangler/
-
+/var/
 __pycache__/
 *.pyc
 /public/_mock-thumbs/
+var/

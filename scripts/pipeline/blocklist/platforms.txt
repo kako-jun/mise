@@ -1,0 +1,46 @@
+# 共有サービス（ブログ/SNS/ショップ/ホスティング/ISP）のドメイン（接尾辞一致）。
+# 扱い: サービス本体（apex と www）は載せてよい。配下の個人サブドメイン（ユーザー名.jugem.jp 等）は拒否ではなく保留(deferred)。
+#   保留した個人領域をどう扱うか（個別に載せるか）の基準は別Issueで決める。
+# 出典: 運用者（kako-jun）の日本のウェブの一般知識による手作業の編集。外部リストの複製ではない。網羅でもない。
+ameblo.jp
+livedoor.jp
+livedoor.blog
+livedoor.biz
+hatenablog.com
+hatenablog.jp
+hateblo.jp
+hatenadiary.jp
+hatenadiary.com
+note.com
+note.jp
+jugem.jp
+exblog.jp
+fc2.com
+seesaa.net
+goo.ne.jp
+shop-pro.jp
+stores.jp
+base.shop
+thebase.in
+themedia.jp
+shopinfo.jp
+localinfo.jp
+storeinfo.jp
+therestaurant.jp
+theshop.jp
+owst.jp
+xsrv.jp
+main.jp
+wixsite.com
+blogspot.com
+wordpress.com
+github.io
+netlify.app
+vercel.app
+pages.dev
+cocolog-nifty.com
+nifty.com
+biglobe.ne.jp
+ocn.ne.jp
+so-net.ne.jp
+dion.ne.jp
