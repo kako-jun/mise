@@ -88,12 +88,15 @@ try {
   earth.add(new THREE.LineSegments(gridGeometry, gridMaterial));
   scene.add(new THREE.AmbientLight(0xffffff, 2));
   const light = new THREE.DirectionalLight(0xffffff, 1.2); light.position.set(-3, 3, 5); scene.add(light);
-  // The texture's longitude around Japan is 138° east.
-  const japanRotation = 2.22;
   earth.rotation.y = 0;
   let targetRotation = 0, targetTilt = 0, targetDistance = 6.6;
   let flying = false;
-  function fly() { targetRotation = japanRotation; targetTilt = 0.62; targetDistance = 1.94; flying = true; peek = false; peekHeld = false; }
+  // 日本（経度138・緯度36）を国連動と同じ aimAt で求める。距離1.94まで寄る。
+  function fly() {
+    const aim = aimAt(138, 36), TAU = Math.PI * 2;
+    targetRotation = aim.rotation + TAU * Math.round((earth.rotation.y - aim.rotation) / TAU);
+    targetTilt = aim.tilt; targetDistance = 1.94; flying = true; peek = false; peekHeld = false;
+  }
   function reset() { targetRotation = 0; targetTilt = 0; targetDistance = 6.6; flying = false; peek = false; peekHeld = false; }
   // 国への向き移動（旗のホバー/タップ）。flying は立てない: 無操作 IDLE_RESUME_MS 後に既定の向き・距離へ戻り自動回転が再開する。
   // peekHeld=true の間（ホバー/フォーカス中）は戻らない。mise-fly-release か、ホールドなしのイベントで解除。

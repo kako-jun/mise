@@ -14,6 +14,6 @@
 
 ## 国（運営者の所在国）
 
-収集の書式に `country_code`（ISO 3166-1 alpha-2。不明は `null`）と根拠 `country_evidence` を加えた。運営者の所在国を、トップページ・運営者情報・作者紹介などの記載で確認する（ドメイン・言語・ホスティングだけでは決めない）。第1弾の既存25サイトでは、sample-1〜7（作者自身のサイトと日本の機関・団体）と、記載で日本と確認できた3サイト（古墳マップ・ぼうずコンニャク・Stellar Scenes）を `JP` とし、残りは確認できず `null`（旗なし）。投入は `migrations/0011_country_code.sql`。確認できたら `UPDATE` で追加する。旗は表（`public/countries.js`）と `public/flags/` にある国だけ表示する。
+収集の書式に `country_code`（ISO 3166-1 alpha-2。不明は `null`）と根拠 `country_evidence` を加えた。運営者の所在国を、トップページ・運営者情報・作者紹介などの記載で確認する（ドメイン・言語・ホスティングだけでは決めない）。第1弾の既存25サイトでは、sample-1〜4（作者自身のサイト。根拠は所有者情報のみで、サイト上の公開記載による確認ではない。収集JSONにも `country_evidence` は無い）、sample-5〜7（日本の機関・団体）と、記載で日本と確認できた3サイト（古墳マップ・ぼうずコンニャク・Stellar Scenes）を `JP` とし、残りは確認できず `null`（旗なし）。投入は `migrations/0011_country_code.sql`。確認できたら `UPDATE` で追加する。旗は表（`public/countries.js`）と `public/flags/` にある国だけ表示する。
 
 今後の収集では、紹介文を日本語（`description_ja`）と英語（`description_en`）の両方で同時に作る。英語は日本語に書かれた事実だけを自然な1文に訳し、情報を足さず、固有名詞は原語または一般的なローマ字表記にする。既存の0005・0009は書き換えず、英語は `migrations/0010_description_en.sql` で後から投入した。

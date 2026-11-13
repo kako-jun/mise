@@ -1,7 +1,9 @@
 // 国コード(ISO 3166-1 alpha-2) -> 名前(日英)と代表座標(緯度経度。首都または国の中心付近)。
 // 地球の向き移動（globe.js）と旗の alt/aria-label（app.js）が共有する単一の表。
 // 国を足すときはここに1行と、旗SVG public/flags/<小文字コード>.svg（flag-icons の 4x3、MIT）を足す。
-// 旗SVGが無い国は旗を出さない。
+// 旗SVGが無い国は旗を出さない。旗を足したら下の MISE_FLAGS にも国コードを足す。
+// 旗SVG（public/flags/）がある国。ここに無い国は旗要素を作らない（404を出さない）。
+window.MISE_FLAGS = ['AU','BR','CA','CN','DE','FR','GB','IN','IT','JP','KR','RU','US'];
 window.MISE_COUNTRIES = {
   JP:{ja:'日本',en:'Japan',lat:36,lon:138}, US:{ja:'アメリカ合衆国',en:'United States',lat:39,lon:-98},
   GB:{ja:'イギリス',en:'United Kingdom',lat:54,lon:-2}, DE:{ja:'ドイツ',en:'Germany',lat:51,lon:10},

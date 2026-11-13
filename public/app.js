@@ -84,7 +84,7 @@ function categoryPath(id) {
 // 旗の画像は必要になった国のものだけ /flags/ から読み、無ければ旗ごと隠す。
 function countryFlag(site) {
   const code=site.country_code, info=window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(code||'') ? window.MISE_COUNTRIES[code] : null;
-  if(!info) return null;
+  if(!info || !(window.MISE_FLAGS||[]).includes(code)) return null;
   const label=`${info.ja} / ${info.en}`;
   const span=document.createElement('span'); span.className='site-flag'; span.setAttribute('role','img'); span.setAttribute('aria-label',label); span.title=label; span.dataset.country=code;
   const img=document.createElement('img'); img.alt=''; img.src=`/flags/${code.toLowerCase()}.svg`; img.loading='lazy'; img.decoding='async';
@@ -100,15 +100,16 @@ function flyToCountry(code,hold) {
   logActivity(`look ${code}`);
 }
 function bindGlobeHover(row,flag,code) {
-  let timer=0;
-  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>flyToCountry(code,true),HOVER_DELAY_MS); };
-  const stop=()=>{ if(timer) { clearTimeout(timer); timer=0; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
+  let timer=0, flown=false;
+  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToCountry(code,true); },HOVER_DELAY_MS); };
+  // 地球を動かしていない（300ms未満で離れた）ときは release を出さない。
+  const stop=()=>{ clearTimeout(timer); timer=0; if(flown) { flown=false; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
   row.addEventListener('pointerenter',e=>{ if(e.pointerType!=='touch') start(); });
   row.addEventListener('pointerleave',e=>{ if(e.pointerType!=='touch') stop(); });
   row.addEventListener('focusin',start);
   row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
   // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
-  flag.addEventListener('click',()=>{ clearTimeout(timer); flyToCountry(code,false); });
+  flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToCountry(code,false); });
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
