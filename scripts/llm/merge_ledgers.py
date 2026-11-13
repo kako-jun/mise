@@ -45,6 +45,8 @@ def main(argv=None):
             with open(a.into, "a", encoding="utf-8") as f:
                 for line in add:
                     f.write(line + "\n")
+                f.flush()
+                os.fsync(f.fileno())
     added = sum(r["cost_usd"] for r in map(json.loads, add) if r["kind"] == "call")
     msg = f"{'would add' if a.dry_run else 'added'} {len(add)} record(s) (calls worth ${added:.4f}) from {len(a.sources)} ledger(s)"
     if not a.dry_run:

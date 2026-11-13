@@ -203,22 +203,45 @@ def render_candidate(c, body_limit=BODY_LIMIT):
 
 # ------------------------------------------------------------------- validation
 def _norm(s):
-    """Whitespace runs -> one space (strict enough that words are not glued together)."""
-    return re.sub(r"\s+", " ", s).strip()
+    """Whitespace runs -> one space; then no space next to a non-ASCII character or inside punctuation
+    ("support ." == "support.", "日本 語" == "日本語") because HTML text joins leave such spaces. Spaces between
+    two ASCII words stay significant, so words are not glued together."""
+    s = re.sub(r"\s+", " ", s).strip()
+    out = []
+    for i, ch in enumerate(s):
+        if ch == " " and 0 < i < len(s) - 1:
+            prev, nxt = s[i - 1], s[i + 1]
+            if ord(prev) > 127 or ord(nxt) > 127 or nxt in ".,;:!?)]}" or prev in "([{":
+                continue
+        out.append(ch)
+    return "".join(out)
 
 
 _LABEL = re.compile(r"^(url|title|meta_description|lang|features|body_excerpt):[ \t]*", re.I)
-_STRUCTURE = re.compile(r"^(\(none\)|</?candidate[^>]*>|--- page: .* ---)$")
+_PAGE_SEP = re.compile(r"^--- page: .* ---$")
 
 
 def quote_source(text):
-    """The part of the rendered candidate that a quote may come from: the values only. The field labels
-    (url:, title:, ...), "(none)" placeholders, <candidate> tags and page separators are scaffolding that
-    the model must not be able to quote as if the site had said it."""
-    out = []
+    """The part of the rendered candidate that a quote may come from: the values only. In the header
+    (everything before the "body_excerpt:" line) the field labels (url:, title:, ...), "(none)" placeholders
+    and <candidate> tags are scaffolding that the model must not be able to quote as if the site had said it.
+    In the body only the tags and the "--- page: URL ---" separators written by fetch_about are dropped;
+    a body line that happens to start with "title:" is the site's own text and stays."""
+    out, header = [], True
     for line in text.splitlines():
-        line = _LABEL.sub("", line.strip())
-        if line and not _STRUCTURE.match(line):
+        line = line.strip()
+        if re.match(r"^</?candidate[^>]*>$", line) or _PAGE_SEP.match(line):
+            continue
+        if header:
+            if line == "body_excerpt:":
+                header = False
+                continue
+            line = _LABEL.sub("", line)
+            if line == "(none)":
+                continue
+        elif line == "(none)" and not out:
+            continue
+        if line:
             out.append(line)
     return _norm("\n".join(out))
 
@@ -406,6 +429,11 @@ class Cache:
         os.replace(tmp, self._p(key))
 
 
+def new_run_id():
+    """Unique per process, so parallel runs started in the same second get different reservation tags."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-p{os.getpid()}"
+
+
 class BudgetExceeded(Exception):
     pass
 
@@ -527,9 +555,19 @@ class Ledger:
         self.open[tag] = usd
 
     def release(self, tag, usd=None):
-        usd = self.open.pop(tag, usd)
-        if usd:
-            self.append({"kind": "release", "batch": tag, "usd": usd})
+        """Release what is still open for `tag` on the LEDGER (reserved minus released so far), so releasing
+        twice, or after a crash between releasing and settling, changes nothing the second time."""
+        self.open.pop(tag, None)
+        with self._lock():
+            net = 0.0
+            for r in self._lines():
+                if r["kind"] == "reserve" and r.get("batch") == tag:
+                    net += r["usd"]
+                elif r["kind"] == "release" and r.get("batch") == tag:
+                    net -= r["usd"]
+            net = round(net, 6)
+            if net > 0:
+                self._append_nolock({"kind": "release", "batch": tag, "usd": net})
 
     @contextlib.contextmanager
     def hold(self, usd, tag, model=None):
@@ -543,14 +581,26 @@ class Ledger:
             raise
         self.release(tag)
 
-    def record_call(self, run_id, cand_id, model, mode, usage, cost, seconds, note=""):
-        self.run_spent += cost
-        self.append({"kind": "call", "run": run_id, "id": cand_id, "model": model, "mode": mode,
-                     "input_tokens": usage.get("input_tokens", 0),
-                     "output_tokens": usage.get("output_tokens", 0),
-                     "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0) or 0,
-                     "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0) or 0,
-                     "cost_usd": round(cost, 6), "seconds": round(seconds, 2), "note": note})
+    def record_call(self, run_id, cand_id, model, mode, usage, cost, seconds, note="", key=None):
+        """`key` (batch results: "<batch_id>:<custom_id>") makes the record idempotent: a call already on
+        the ledger with the same key is not written (or counted) again."""
+        rec = {"kind": "call", "run": run_id, "id": cand_id, "model": model, "mode": mode,
+               "input_tokens": usage.get("input_tokens", 0),
+               "output_tokens": usage.get("output_tokens", 0),
+               "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0) or 0,
+               "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0) or 0,
+               "cost_usd": round(cost, 6), "seconds": round(seconds, 2), "note": note}
+        if key is None:
+            self.run_spent += cost
+            self.append(rec)
+            return True
+        rec["key"] = key
+        with self._lock():
+            if any(r["kind"] == "call" and r.get("key") == key for r in self._lines()):
+                return False
+            self.run_spent += cost
+            self._append_nolock(rec)
+        return True
 
 
 def worst_case(model, system, user_text, max_tokens, batch=False, cache_ttl="5m"):
@@ -636,6 +686,21 @@ def build_params(model, system, schema, user_text, max_tokens, effort, cache_ttl
 
 
 # ------------------------------------------------------------------------- runs
+def read_state(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def write_state(path, obj):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
 def custom_id_for(cand_id):
     return re.sub(r"[^A-Za-z0-9_-]", "_", cand_id)[:64]
 
@@ -649,7 +714,7 @@ class Judge:
         self.schema = build_schema(cats)
         self.cache = Cache(args.cache_dir)
         self.ledger = Ledger(args.ledger, args.budget_run, args.budget_total)
-        self.run_id = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.run_id = new_run_id()
 
     def user_text(self, cand):
         return render_candidate(cand, self.args.body_limit)
@@ -658,7 +723,7 @@ class Judge:
         return input_hash(model, self.system, self.schema, self.user_text(cand),
                           self.args.max_tokens, self.args.effort)
 
-    def finish(self, model, cand, msg, mode, seconds, batch=False):
+    def finish(self, model, cand, msg, mode, seconds, batch=False, key=None):
         """Validate a message; record usage; returns (result|None, problem|None)."""
         usage = msg.get("usage", {})
         cost = usage_cost(model, usage, batch)
@@ -667,7 +732,7 @@ class Judge:
             errs = validate_output(obj, self.valid_ids, self.user_text(cand))
             problem = "; ".join(errs) if errs else None
         self.ledger.record_call(self.run_id, cand["id"], model, mode, usage, cost, seconds,
-                                note=problem or "")
+                                note=problem or "", key=key)
         return (obj if problem is None else None), problem, usage, cost
 
     def judge_one(self, model, cand):
@@ -735,6 +800,10 @@ class Judge:
             raise SystemExit("candidate ids collide after sanitising for batch custom_id")
         if resume:
             batch_id = resume
+            st0 = read_state(os.path.join(state_dir, batch_id + ".json"))
+            if st0 and st0.get("settled"):
+                raise SystemExit(f"batch {batch_id} is already settled (results recorded, reservation released); "
+                                 "nothing to resume. Re-run without --batch-resume to submit again.")
         else:
             todo, results = [], []
             for c in cands:
@@ -761,9 +830,9 @@ class Judge:
                 self.ledger.release(tag)  # the API answered with an error: nothing was queued
                 raise
             batch_id = batch["id"]
-            with open(os.path.join(state_dir, batch_id + ".json"), "w", encoding="utf-8") as f:
-                json.dump({"model": model, "reserved_usd": round(est, 6), "tag": tag,
-                           "ids": [c["id"] for c in todo]}, f)
+            write_state(os.path.join(state_dir, batch_id + ".json"),
+                        {"model": model, "reserved_usd": round(est, 6), "tag": tag, "ids": [c["id"] for c in todo],
+                         "settled": False})
             print(f"submitted batch {batch_id} ({len(reqs)} requests, reserved ${est:.4f})", file=sys.stderr)
         # poll
         t0 = time.time()
@@ -776,10 +845,7 @@ class Judge:
         seconds = time.time() - t0
         raw = http("GET", st["results_url"] if st.get("results_url") else f"{API}/batches/{batch_id}/results", raw=True)
         meta_path = os.path.join(state_dir, batch_id + ".json")
-        meta = {"reserved_usd": 0, "model": model}
-        if os.path.exists(meta_path):
-            with open(meta_path, encoding="utf-8") as f:
-                meta = json.load(f)
+        meta = read_state(meta_path) or {"reserved_usd": 0, "model": model}
         model = meta.get("model", model)
         out = []
         per = seconds / max(1, len(raw.splitlines()))
@@ -794,13 +860,15 @@ class Judge:
                 if res.get("type") == "succeeded":
                     usage = res["message"].get("usage", {})
                     self.ledger.record_call(self.run_id, "unmatched:" + str(row["custom_id"])[:80], model, "batch",
-                                            usage, usage_cost(model, usage, True), per, note="unmatched custom_id")
+                                            usage, usage_cost(model, usage, True), per, note="unmatched custom_id",
+                                            key=f"{batch_id}:{row['custom_id']}")
                 continue
             if res["type"] != "succeeded":
                 out.append({"id": cand["id"], "model": model, "output": None, "error": res["type"],
                             "cost_usd": 0.0, "seconds": per, "attempts": 1, "cached": False})
                 continue
-            obj, problem, usage, cost = self.finish(model, cand, res["message"], "batch", per, batch=True)
+            obj, problem, usage, cost = self.finish(model, cand, res["message"], "batch", per, batch=True,
+                                                    key=f"{batch_id}:{row['custom_id']}")
             r = {"id": cand["id"], "model": model, "output": obj, "usage": usage, "cost_usd": cost,
                  "seconds": per, "attempts": 1, "cached": False}
             if obj is None:
@@ -810,6 +878,8 @@ class Judge:
             out.append(r)
         if meta.get("reserved_usd"):
             self.ledger.release(meta.get("tag", batch_id), meta["reserved_usd"])
+        if os.path.exists(meta_path):  # the settled mark: the results are recorded, the reservation is released
+            write_state(meta_path, dict(meta, settled=True))
         return out
 
 

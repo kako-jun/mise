@@ -12,9 +12,14 @@
 | `scripts/llm/judge.py` | 共通部（指示文・スキーマ・検証・キャッシュ・台帳・予算ガード・API）と、1件ずつ全項目を返す基準実装 |
 | `scripts/llm/export_sites.py` | 既掲載サイト（`migrations/` を in-memory SQLite に適用）と `data/` の取得結果から入力JSONLと、比較用の人手の値を書き出す。新規アクセスなし |
 | `scripts/llm/export_candidates.py` | 発見パイプラインの frontier（`state='candidate'`）を読み取り専用で入力JSONLにする |
-| `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助。名前を解決して**全アドレスが公開アドレス**でなければ取得しない（プロキシ設定がある環境だけ、ローカルで解決できない名前を許す） |
+| `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助。名前を解決して**全アドレスが公開アドレス**でなければ取得せず（解決できない名前も拒否）、curl は `--resolve` でチェック済みアドレスに固定する（チェック後の再解決＝DNS リバインディングを防ぐ）。本文テキストはインライン要素の間に空白を足さない（`support</a>.` が `support .` にならない） |
 | `scripts/llm/merge_ledgers.py` | 旧 `<var-dir>/llm-ledger.jsonl` を共有台帳へ統合（繰り返し可） |
+| `scripts/llm/ledger_release.py` | 開いたままの予約の一覧と手動解放 |
 | `scripts/llm/compare.py` `review_long.py` `exp_summary.py` | 人手の値との並置、長い紹介文の根拠突き合わせ表、実験の費用・一致率の表 |
+
+## 取得の限界（fetch_about.py）
+
+プロキシ経由で外に出る環境（curl が `https_proxy` などを使う PC）では、接続するのはプロキシで、名前を解決するのもプロキシ側になる。手元で名前を解決して全アドレスが公開であることは確認するが、`--resolve` による固定は効かず、チェックとプロキシの解決が食い違う余地は残る。プロキシ設定がある場合、`fetch_about.py` は起動時に警告を出す。**取得対象は手元で明示した少数のサイトのリストに限る**運用を守り、不特定のURLを渡さない。プロキシ無しの環境ではアドレス固定が効く。
 
 ## 入力
 
@@ -37,7 +42,7 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 - 結果は**件ごとの入力ハッシュ**でキャッシュ（`var/llm-cache/`）。まとめ数を変えても同じ件は再課金されない。
 - 出力キーは短いコードにし、`max_tokens` は件数に比例して絞る。思考トークンも出力として課金されるので、`--thinking-off`（Haiku は `disabled`、Sonnet は `between_tools`。`--effort xhigh/max` との併用は起動時にエラー）と `--effort` で抑えられる（実測: 思考オフで出力トークンが約 1/3、[trials.md](trials.md#llm-判定工程の比較実験2026-11-14issue-48)）。
 - 事前見積り: `--dry-run`（API を呼ばない、保守的な概算）と `--count-tokens`（`/v1/messages/count_tokens` で入力トークンを正確に数える。生成は課金されない）。
-- バッチ（`--mode batch`、Message Batches API、50%）。結果はポーリングで取得し、不正な件は同期で再試行する。
+- バッチ（`--mode batch`、Message Batches API、50%）。結果はポーリングで取得し、不正な件は同期で再試行する。投入前に状態ファイル `var/llm-batches/` を書き、**同じコマンドの再実行（pipeline.py）または `judge.py --batch-resume <id>` で続きから取得**する（ポーリング失敗・Ctrl-C で予約と有料結果を失わない）。精算済み（結果の記録と予約の解放が済んだ）バッチの resume は拒否され、台帳は変わらない。結果行の費用は `<batch_id>:<custom_id>` で冪等に記録し、予約の解放も台帳上の残りだけを解放するので、途中で落ちて再実行しても合計は増減しない。応答なしで終わった投入（バッチが存在するか不明）は再投入せず停止する。Console で確認のうえ、存在しなければ `scripts/llm/ledger_release.py <tag>`（`--list` で開いた予約を表示）で手動解放する。
 
 ## 使い方
 
@@ -62,7 +67,8 @@ uv run python3 -m unittest discover tests               # キー不要の単体�
 - **以前の `<var-dir>/llm-ledger.jsonl` の統合**: `uv run python3 scripts/llm/merge_ledgers.py $(find var -name llm-ledger.jsonl)`（`--dry-run` で確認可）。同じ記録は二重に足さないので繰り返してよい。
 - **予算**: 呼び出し前に「入力の保守的な見積り + `max_tokens` 分の出力」を最悪費用として、`--budget-run`（既定2 USD）と `--budget-total`（既定90 USD、台帳の累積 + 予約）を超えるなら停止（終了コード3）。**単発もバッチも、呼ぶ前に最悪費用を台帳へ予約**し（チェックと書き込みは同じロック内）、実費を記録してから解放する。`max_tokens` を倍にする再試行は倍にした値で再チェックする。最悪費用には system のキャッシュ書き込み割増（5分 1.25 倍、1時間 2 倍）を含める。Haiku 5.5 は入力 100K トークン超が高単価帯（$0.50 / $2.50）なので、見積りが超えそうなら停止し（`--body-limit` / `--group` を下げる）、実費の計算は帯を切り替える。
 - **POST は自動再送しない**: タイムアウト・接続エラーの後に生成 POST やバッチ投入を再送すると二重課金・二重投入になりうる。再送するのは冪等な GET と `count_tokens` だけ（429/5xx の応答は全メソッドで再試行）。応答なしで終わった POST の予約は解放せず台帳に残す（課金されたかもしれない）。バッチで `custom_id` が突き合わない結果行も、課金されていれば台帳に記録して予約と整合させる。
-- **料金** は公式の料金表（<https://platform.claude.com/docs/en/about-claude/pricing>、2026-11-13確認）を `judge.py` の `PRICING` に設定値として持つ。Haiku 5.5 は 100K トークン以下の階層、バッチは50%。新モデルはここに足すまで使えない。
+- **料金** は公式の料金表（<https://platform.claude.com/docs/en/about-claude/pricing>、2026-11-13確認）を `judge.py` の `PRICING`（Haiku 5.5 は **100K トークン以下**の階層。入力 $0.10 / 出力 $0.50 / キャッシュ書き込み 5分 $0.125・1時間 $0.20 / 読み $0.01、per 1M）と `PRICING_LONG`（**100K 超**の高単価帯）に設定値として持つ。バッチは50%。新モデルはここに足すまで使えない。
+- **100K 超の高単価帯の単価**: 入力 $0.50 / 出力 $2.50 は料金表の値。キャッシュの単価は表で確認していない**導出値**で、標準の倍率（書き込み 5分 1.25 倍 = $0.625、1時間 2 倍 = $1.00、読み 0.1 倍 = $0.05、いずれも入力 $0.50 に対する倍率）を当てている（100K 以下の帯でも同じ倍率が成り立つことは上の値で確認できる）。実際に超える場合は Console の請求で突き合わせる。最悪費用の見積りが 100K を超えそうな時点で停止するので、通常はこの帯に入らない。
 - **残高の突き合わせ**: 台帳の累積と Console の残高の減りを比べる。台帳に載らない利用があれば差になる。
 - リポ内の `/var/`（`.gitignore`）の結果JSON・キャッシュはコミットしない。台帳はリポ外。
 

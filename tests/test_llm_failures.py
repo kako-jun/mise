@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts", "llm"))
 
 import fetch_about  # noqa: E402
 import judge  # noqa: E402
+import ledger_release  # noqa: E402
 import merge_ledgers  # noqa: E402
 import pipeline  # noqa: E402
 from test_llm_judge import CATS, IDS, SOURCE, des, good, tri  # noqa: E402
@@ -267,6 +268,119 @@ class LedgerTests(Base):
         self.assertEqual(len(self.rows()), 2)
 
 
+class BatchResume(Base):
+    """--batch-resume must be safe to repeat: the ledger total neither shrinks nor grows after the first settle."""
+
+    def judge_with_batch(self):
+        a = JudgeFailurePaths.judge_obj(self)
+        return a
+
+    def ended(self):
+        def status(m, u, b):
+            return {"processing_status": "ended", "results_url": "https://x/r"}
+        return status
+
+    def rows_text(self):
+        ok = {"custom_id": "a", "result": {"type": "succeeded", "message": msg(good())}}
+        return json.dumps(ok)
+
+    def total(self):
+        return judge.Ledger(self.ledger_path, 9, 9).total()
+
+    def test_resume_of_a_settled_batch_is_refused_and_changes_nothing(self):
+        j = self.judge_with_batch()
+        self.patch_http(Fake([{"id": "msgbatch_5"}, self.ended(), self.rows_text()]))
+        with contextlib.redirect_stderr(io.StringIO()):
+            j.run_batch(HAIKU, [CAND])
+        after_first = self.total()
+        self.assertGreater(after_first, 0)
+        n_rows = len(self.rows())
+        for _ in range(2):
+            self.patch_http(Fake([self.ended(), self.rows_text()]))
+            j2 = self.judge_with_batch()
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as cm:
+                j2.run_batch(HAIKU, [CAND], resume="msgbatch_5")
+            self.assertIn("already settled", str(cm.exception))
+            self.assertAlmostEqual(self.total(), after_first)
+            self.assertEqual(len(self.rows()), n_rows)
+
+    def test_replaying_an_unsettled_batch_does_not_double_record(self):
+        """Crash after the results were recorded but before the settled mark: resume twice, total stays put."""
+        j = self.judge_with_batch()
+        self.patch_http(Fake([{"id": "msgbatch_6"}, self.ended(), self.rows_text()]))
+        with contextlib.redirect_stderr(io.StringIO()):
+            j.run_batch(HAIKU, [CAND])
+        settled = self.total()
+        state = os.path.join(self.tmp.name, "llm-batches", "msgbatch_6.json")
+        st = judge.read_state(state)
+        self.assertTrue(st["settled"])
+        for _ in range(2):
+            judge.write_state(state, dict(st, settled=False))  # simulate the crash
+            self.patch_http(Fake([self.ended(), self.rows_text()]))
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.judge_with_batch().run_batch(HAIKU, [CAND], resume="msgbatch_6")
+            self.assertAlmostEqual(self.total(), settled)
+        self.assertEqual(sum(1 for r in self.rows() if r["kind"] == "call"), 1)
+        self.assertEqual(sum(1 for r in self.rows() if r["kind"] == "release"), 1)
+
+    def test_release_is_idempotent(self):
+        led = judge.Ledger(self.ledger_path, 9, 9)
+        led.reserve(0.5, "t1")
+        led.release("t1")
+        led.release("t1")
+        led.release("t1", 0.5)
+        self.assertAlmostEqual(led.total(), 0.0)
+
+    def test_pipeline_batch_resumes_after_a_failed_poll_without_resubmitting(self):
+        self.args.mode = "batch"
+        ok = {"custom_id": "triage-0", "result": {"type": "succeeded", "message": msg({"r": [tri()]})}}
+
+        def poll_dies(m, u, b):
+            raise SystemExit("network error on GET")
+        fake1 = Fake([{"id": "msgbatch_7"}, poll_dies])
+        self.patch_http(fake1)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        reserved = self.total()
+        self.assertGreater(reserved, 0)  # still reserved, not lost
+        fake2 = Fake([self.ended(), json.dumps(ok)])
+        self.patch_http(fake2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            done = pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        self.assertIn("a", done)
+        self.assertTrue(all(r[0] == "GET" for r in fake2.requests))  # no second POST /batches
+        self.assertLess(self.total(), reserved)  # actual cost replaced the reservation
+        left = ledger_release.open_reservations(judge.Ledger(self.ledger_path, 9, 9))
+        self.assertEqual(left, {})
+
+    def test_pipeline_unknown_submit_blocks_resubmission_and_manual_release_works(self):
+        self.args.mode = "batch"
+
+        def lost(*a):
+            raise judge.AmbiguousRequest("network error")
+        self.patch_http(Fake([lost]))
+        with self.assertRaises(judge.AmbiguousRequest):
+            pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        fake = Fake([])
+        self.patch_http(fake)
+        with self.assertRaises(SystemExit) as cm:
+            pipeline.Pipeline(self.args, CATS).run_stage("triage", HAIKU, [(CAND, None, None)])
+        self.assertIn("unknown whether a batch exists", str(cm.exception))
+        self.assertEqual(fake.requests, [])
+        led = judge.Ledger(self.ledger_path, 9, 9)
+        tag = next(iter(ledger_release.open_reservations(led)))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(ledger_release.main([tag, "--ledger", self.ledger_path]), 0)
+        self.assertAlmostEqual(led.total(), 0.0)
+
+    def test_run_ids_differ_between_processes(self):
+        with mock.patch("os.getpid", return_value=111):
+            a = judge.new_run_id()
+        with mock.patch("os.getpid", return_value=222):
+            b = judge.new_run_id()
+        self.assertNotEqual(a, b)
+
+
 class JudgeFailurePaths(Base):
     def judge_obj(self):
         a = judge.make_parser().parse_args(["unused.jsonl"])
@@ -395,12 +509,22 @@ class QuoteAndEnumChecks(unittest.TestCase):
         self.assertEqual(self.check(ev("Example")), [])  # the value itself is fine
 
     def test_whitespace_is_normalised_but_words_are_not_glued(self):
-        src = "<candidate>\nurl: https://e.org/\nbody_excerpt:\n東京都に\n事務所がある\n</candidate>"
+        src = "<candidate>\nurl: https://e.org/\nbody_excerpt:\nwe run\nthe small shop support .\n東京都に 事務所がある\n</candidate>"
 
         def loc(q):
             return lambda o: o.update(location={"country_code": "JP", "region_code": "JP-13", "evidence_quote": q})
-        self.assertEqual(self.check(loc("東京都に 事務所がある"), src), [])
-        self.assertTrue(self.check(loc("東京都に事務所がある"), src))
+        self.assertEqual(self.check(loc("we run the small shop support."), src), [])  # "support ." (HTML join) == "support."
+        self.assertEqual(self.check(loc("東京都に事務所がある"), src), [])  # no space next to non-ASCII
+        self.assertTrue(self.check(loc("we runthe small shop"), src))  # ASCII words are never glued together
+
+    def test_body_line_starting_with_a_label_is_the_sites_own_text(self):
+        src = "<candidate>\nurl: https://e.org/\ntitle: T\nbody_excerpt:\ntitle: Our history\n</candidate>"
+        o = good()
+        o.update(location={"country_code": None, "region_code": None, "evidence_quote": None})
+        o.update(adult={"value": "yes", "evidence_quote": "title: Our history"})
+        self.assertEqual(judge.validate_output(o, IDS, src), [])
+        o.update(adult={"value": "yes", "evidence_quote": "title: T"})  # the header label is scaffolding
+        self.assertTrue(judge.validate_output(o, IDS, src))
 
     def test_verdict_kind_combinations(self):
         def vk(v, k, scope="standalone"):
@@ -441,13 +565,63 @@ class SafeHost(unittest.TestCase):
         self.assertFalse(fetch_about.safe_host("localhost"))
         self.assertFalse(fetch_about.safe_host("intranet"))
 
-    def test_lookup_failure_is_unsafe_without_proxy(self):
-        env = {k: "" for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "ALL_PROXY", "all_proxy")}
-        with mock.patch.dict(os.environ, env), mock.patch("socket.getaddrinfo", side_effect=socket.gaierror):
-            self.assertFalse(fetch_about.safe_host("nx.example.com"))
-        with mock.patch.dict(os.environ, dict(env, https_proxy="http://proxy:8080")), \
-                mock.patch("socket.getaddrinfo", side_effect=socket.gaierror):
-            self.assertTrue(fetch_about.safe_host("nx.example.com"))
+    def test_lookup_failure_is_refused_even_behind_a_proxy(self):
+        for env in ({}, {"https_proxy": "http://proxy:8080"}):
+            with mock.patch.dict(os.environ, env), mock.patch("socket.getaddrinfo", side_effect=socket.gaierror):
+                self.assertFalse(fetch_about.safe_host("internal-only.example.com"))
+
+    def test_curl_is_pinned_to_the_checked_address(self):
+        import urllib.parse
+        u = "https://example.com:8443/x"
+        cmd = fetch_about.curl_command(u, urllib.parse.urlsplit(u), ["93.184.216.34"])
+        self.assertEqual(cmd[cmd.index("--resolve") + 1], "example.com:8443:93.184.216.34")
+        self.assertEqual(cmd[-1], u)
+        cmd6 = fetch_about.curl_command("http://example.com/", urllib.parse.urlsplit("http://example.com/"), ["2606:4700::1"])
+        self.assertEqual(cmd6[cmd6.index("--resolve") + 1], "example.com:80:[2606:4700::1]")
+        lit = fetch_about.curl_command("http://93.184.216.34/", urllib.parse.urlsplit("http://93.184.216.34/"), ["93.184.216.34"])
+        self.assertNotIn("--resolve", lit)
+
+    def test_fetch_refuses_before_running_curl_when_a_name_resolves_private(self):
+        with self.resolve("10.0.0.1"), mock.patch("subprocess.run") as run:
+            with self.assertRaises(ValueError):
+                fetch_about.fetch("https://rebind.example.com/")
+        run.assert_not_called()
+
+    def test_html_text_join_keeps_inline_markup_tight(self):
+        _, text = fetch_about.parse("<html><body><p>This site is made possible by member <a href='/s'>support</a>.</p>"
+                                    "<p>Next</p>日本<b>語</b>のページ</body></html>")
+        self.assertIn("member support.", text)
+        self.assertIn("日本語のページ", text)
+        self.assertIn(". Next", text)  # block boundaries still separate
+
+
+class StoredExperimentRevalidation(unittest.TestCase):
+    """The saved results of the 2026-11-14 experiment (arms A-F) must still pass the strict checker.
+    var/ is not in git: the test is skipped where the files are absent."""
+
+    def test_all_arms_pass(self):
+        root = os.path.dirname(HERE)
+        inp = os.path.join(root, "var", "exp-in.jsonl")
+        arms = [os.path.join(root, "var", "exp", n) for n in (
+            "A-full-n1.json", "B-two-n1.json", "C-two-n5.json", "D-two-n10.json",
+            "E-two-n5-nothink.json", "F-two-n5-sonnet.json")]
+        if not os.path.exists(inp) or not all(os.path.exists(a) for a in arms):
+            self.skipTest("var/exp results not present on this machine")
+        with open(inp, encoding="utf-8") as f:
+            cands = {json.loads(x)["id"]: json.loads(x) for x in f if x.strip()}
+        bad = []
+        for path in arms:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            for r in data["results"]:
+                out = r.get("output")
+                if not out or "error" in r:
+                    continue
+                # a triage-only output has no descriptions; validate_output accepts that shape
+                errs = judge.validate_output(out, IDS, judge.render_candidate(cands[r["id"]], 9000))
+                if errs:
+                    bad.append((os.path.basename(path), r["id"], errs))
+        self.assertEqual(bad, [])
 
 
 if __name__ == "__main__":

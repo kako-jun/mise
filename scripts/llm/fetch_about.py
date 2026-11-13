@@ -33,35 +33,53 @@ WEAK_WORDS = ["概要", "紹介", "について", "団体"]
 SKIP_EXT = re.compile(r"\.(pdf|jpe?g|png|gif|zip|lzh|exe|mp[34]|xml|rss|css|js)$", re.I)
 
 
+def public_addresses(host):
+    """The addresses `host` resolves to, only if ALL of them are public; otherwise None.
+    A name that does not resolve is refused (also behind a proxy: a name only the proxy can resolve, such
+    as an internal one, must not pass)."""
+    try:
+        return [str(ipaddress.ip_address(host))] if ipaddress.ip_address(host).is_global else None
+    except ValueError:
+        pass
+    if host.lower() == "localhost" or "." not in host:
+        return None
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return None
+    addrs = sorted({i[4][0].split("%")[0] for i in infos})
+    return addrs if addrs and all(ipaddress.ip_address(a).is_global for a in addrs) else None
+
+
+def safe_host(host):
+    return public_addresses(host) is not None
+
+
 def _via_proxy():
     return any(os.environ.get(k) for k in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY", "ALL_PROXY", "all_proxy"))
 
 
-def safe_host(host):
-    """Public hosts only. A name is resolved and EVERY address must be global (a public-looking name that
-    resolves to 127.0.0.1 / 10.x / 169.254.x is refused). Where a proxy is configured the proxy resolves
-    names, so a failed local lookup is not treated as unsafe (a successful one is still checked)."""
+def curl_command(url, parts, addrs):
+    """curl pinned to the address that was checked (no second DNS lookup, so no DNS rebinding between the
+    check and the connection). Behind a proxy the proxy connects, so --resolve cannot pin anything there:
+    see docs/collection/llm-judge.md (fetch only an explicit list of sites)."""
+    cmd = ["curl", "-s", "-S", "--max-time", "15", "--max-filesize", str(MAXBODY), "-A", UA, "-D", "-"]
     try:
-        return ipaddress.ip_address(host).is_global
+        ipaddress.ip_address(parts.hostname)
     except ValueError:
-        pass
-    if host.lower() == "localhost" or "." not in host:
-        return False
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        return _via_proxy()
-    addrs = {i[4][0].split("%")[0] for i in infos}
-    return bool(addrs) and all(ipaddress.ip_address(a).is_global for a in addrs)
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        a = addrs[0]
+        cmd += ["--resolve", f"{parts.hostname}:{port}:{'[' + a + ']' if ':' in a else a}"]
+    return cmd + [url]
 
 
 def fetch(url):
     p = urllib.parse.urlsplit(url)
-    if p.scheme not in ("http", "https") or not p.hostname or not safe_host(p.hostname):
+    addrs = public_addresses(p.hostname) if p.scheme in ("http", "https") and p.hostname else None
+    if not addrs:
         raise ValueError("unsafe url")
     time.sleep(WAIT)
-    r = subprocess.run(["curl", "-s", "-S", "--max-time", "15", "--max-filesize", str(MAXBODY), "-A", UA, "-D", "-", url],
-                       check=True, capture_output=True)
+    r = subprocess.run(curl_command(url, p, addrs), check=True, capture_output=True)
     raw = r.stdout
     while True:  # skip proxy preamble / 1xx blocks; the real response is the last header block
         head, sep, rest = raw.partition(b"\r\n\r\n")
@@ -104,6 +122,13 @@ def get(url, rules, hops=2):
     raise ValueError("too many redirects")
 
 
+# Text is joined with "" and a space is added only at block boundaries, so inline markup
+# ("<a>support</a>.") does not leave "support ." and a quote copied from the page stays verbatim.
+BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "tr", "td", "th", "table", "section", "article", "header", "footer",
+              "nav", "main", "aside", "h1", "h2", "h3", "h4", "h5", "h6", "dd", "dt", "dl", "blockquote", "pre",
+              "title", "form", "hr", "figure", "figcaption"}
+
+
 class Page(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -111,6 +136,8 @@ class Page(html.parser.HTMLParser):
         self._href, self._atext = None, []
 
     def handle_starttag(self, tag, attrs):
+        if tag in BLOCK_TAGS:
+            self.text.append(" ")
         a = {k: (v or "") for k, v in attrs}
         if tag == "meta" and a.get("name", "").lower() in ("robots", "miseresearchbot") and "noindex" in a.get("content", "").lower():
             self.noindex = True
@@ -120,6 +147,8 @@ class Page(html.parser.HTMLParser):
             self._href, self._atext = a["href"], []
 
     def handle_endtag(self, tag):
+        if tag in BLOCK_TAGS:
+            self.text.append(" ")
         if tag in ("script", "style", "noscript", "template") and self.skip:
             self.skip -= 1
         if tag == "a" and self._href is not None:
@@ -139,7 +168,7 @@ def parse(body):
         p.feed(body)
     except Exception:
         pass
-    return p, re.sub(r"\s+", " ", " ".join(p.text)).strip()
+    return p, re.sub(r"\s+", " ", "".join(p.text)).strip()
 
 
 def about_links(base_url, links, limit=2):
@@ -200,6 +229,9 @@ def enrich(c):
 
 def main(argv):
     src, dst = argv
+    if _via_proxy():
+        print("WARNING: a proxy is configured; the proxy resolves and connects, so the address pinning of the "
+              "public-address check does not apply. Fetch only an explicit, hand-picked list of sites.", file=sys.stderr)
     done = []
     for line in pathlib.Path(src).read_text(encoding="utf-8").splitlines():
         if not line.strip():
