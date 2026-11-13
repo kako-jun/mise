@@ -14,7 +14,7 @@ class Hosts(unittest.TestCase):
     def test_prefilter(self):
         for host, want in [('www.city.kanazawa.ishikawa.jp', 'government'), ('example.go.jp', 'government'), ('foo.lg.jp', 'government'),
                            ('toyota.co.jp', 'major_org'), ('u.ac.jp', 'institution_domain'), ('blog.example.jp', 'subdomain'),
-                           ('ameblo.jp', 'platform'), ('foo-clinic.jp', None), ('example.co.jp', None), ('sample-porn.jp', 'adult_host'),
+                           ('ameblo.jp', 'platform'), ('foo-clinic.jp', None), ('example.co.jp', None), ('sample-porn.jp', None),
                            ('example.com', 'not_jp'), ('hyuki.jp', None), ('www.hyuki.ne.jp', None), ('1.2.3.4', 'invalid_host')]:
             self.assertEqual(hostnames.prefilter(host), want, host)
 
@@ -66,6 +66,16 @@ class Kind(unittest.TestCase):
     def test_small_business_not_rejected(self):
         f = features.extract('x.jp', '<html lang=ja><title>株式会社あいう 工務店</title>' + 'ご相談はお気軽に。' * 40, {})
         self.assertEqual(features.judge(f), ('candidate', None))
+
+
+class Adult(unittest.TestCase):
+    def test_adult_is_attribute_not_rejection(self):
+        html = '<html lang=ja><head><title>同人サークルのページ</title><meta name="rating" content="adult"></head><body>' + 'ここは個人の創作サークルです。' * 30 + '年齢確認 18歳以上' + '</body></html>'
+        f = features.extract('circle.jp', html, {})
+        self.assertEqual(features.judge(f), ('candidate', None))
+        self.assertEqual(features.adult_attr({**f, 'host': 'circle.jp'}), 'yes')
+        g = features.extract('x.jp', Judge.PAGE, {})
+        self.assertEqual(features.adult_attr({**g, 'host': 'x.jp'}), 'unknown')
 
 
 class Robots(unittest.TestCase):

@@ -100,12 +100,15 @@ def prefilter(host, jp_only=True):
         return 'major_org'  # 大手企業・大手メディア（種リスト。残りは LLM 工程の結果を run.py reject で取り込む）
     if suffix_match(host, blocklist('ad_domains.txt')['']):
         return 'ad_domain'
-    if host_tokens(host) & set(blocklist('adult_markers.txt')['host']):
-        return 'adult_host'
     name = reg.split('.')[0]
     if len(name) > 30 or re.search(r'\d{6,}', name) or name.count('-') >= 4:
         return 'spam_like_name'  # 量産ドメインの形
     return None
+
+
+def adult_host_hint(host):
+    """ホスト名のトークンに成人向けの手がかりがあるか（属性 adult の一次判定用。拒否には使わない）。"""
+    return bool(host_tokens(host) & set(blocklist('adult_markers.txt')['host']))
 
 
 def priority(host):

@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   flags          TEXT,                     -- JSON: noindex, parking, adult 等のマーカー
   text_head      TEXT,                     -- 本文冒頭（最大300字）
   personal_score INTEGER,                  -- 手作り感の語の出現数（並べ替えの目安のみ。判定に使わない）
+  adult          TEXT,                     -- yes|no|unknown。属性のみ（拒否に使わない）。決定論は yes/unknown まで、no は後段
   site_kind      TEXT                      -- 個人|事業|団体|企業|不明（属性。拒否には使わない。決定論で分かる範囲のみ）
 );
 CREATE INDEX IF NOT EXISTS frontier_state_next ON frontier (state, next_fetch_at, priority DESC);

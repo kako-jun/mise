@@ -4,7 +4,7 @@ import json
 import re
 import urllib.parse
 
-from hostnames import blocklist, suffix_match
+from hostnames import adult_host_hint, blocklist, suffix_match
 
 # 判定の閾値（誤判定の傾向を見て調整する。docs/personal-sites-pipeline.md 参照）
 MIN_TEXT_LEN = 200          # 可視テキストの最小文字数
@@ -19,7 +19,7 @@ KANA = re.compile(r'[぀-ヿ]')
 class Page(html.parser.HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.lang = None; self.title = ''; self.desc = None; self.robots = []
+        self.lang = None; self.title = ''; self.desc = None; self.robots = []; self.rating = []
         self.text = []; self.skip = 0; self.in_title = False
         self.refs = []   # (tag, url)
         self.ins_ads = 0
@@ -31,6 +31,7 @@ class Page(html.parser.HTMLParser):
         elif tag == 'meta':
             n = a.get('name', '').lower()
             if n == 'description': self.desc = a.get('content')
+            elif n == 'rating': self.rating.append(a.get('content', ''))
             elif n in ('robots', 'miseresearchbot'): self.robots.append(a.get('content', ''))
         elif tag in ('script', 'iframe'):
             if a.get('src'): self.refs.append((tag, a['src']))
@@ -68,6 +69,7 @@ def extract(host, text, headers):
     flags = {
         'noindex': bool(re.search(r'noindex|\bnone\b', rob)),
         'parking': next((m for m in blocklist('parking_markers.txt')[''] if m in low), None),
+        'adult_rating': any(re.search(r'adult|mature|rta-5042|restricted', x, re.I) for x in p.rating),
         'adult_text': next((m for m in blocklist('adult_markers.txt')['text'] if m in low), None),
     }
     return {
@@ -90,6 +92,13 @@ def site_kind(host, title, description):
     return '不明'
 
 
+def adult_attr(row):
+    """成人向け属性の決定論の一次判定: 'yes'（rating メタ/RTA・年齢確認等の文言・ホスト名の手がかり）か 'unknown'。
+    拒否には使わない。'no' は決定論では断定せず、後段(LLM #48)に委ねる。"""
+    f = json.loads(row['flags'] or '{}')
+    return 'yes' if f.get('adult_rating') or f.get('adult_text') or adult_host_hint(row['host']) else 'unknown'
+
+
 def judge_http(status):
     """HTTP状態のみでの判定。None=続行 / (state, reason)"""
     if status is None: return ('failed', 'no_response')
@@ -106,7 +115,6 @@ def judge(row):
     if (row['text_len'] or 0) < MIN_TEXT_LEN: return ('rejected', 'thin_content')
     if (row['kana_count'] or 0) < MIN_KANA: return ('rejected', 'not_japanese')
     if not row['title']: return ('rejected', 'no_title')
-    if f.get('adult_text'): return ('rejected', 'adult')
     if row['ad_hits'] >= AD_HITS_REJECT or (row['ad_hits'] >= AD_HITS_THIN and row['text_len'] < THIN_TEXT):
         return ('rejected', 'ad_heavy')
     return ('candidate', None)
