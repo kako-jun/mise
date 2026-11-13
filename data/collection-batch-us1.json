@@ -110,7 +110,7 @@
     "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く",
     "country_code": "US",
     "country_evidence": "About ページに運営者本人の記述「I currently live in Vermont with my two kids」（https://kottke.org/about）",
-    "region_evidence": "州の記載は確認できず",
+    "region_evidence": "Vermont（https://kottke.org/about に本人の記述「I currently live in Vermont with my two kids」。region_code への入力は保留）",
     "source_updated_at": "2026-11-13",
     "source_updated_kind": "sitemap-lastmod",
     "source_updated_note": null
@@ -225,7 +225,7 @@
     "observed_meta_description": null,
     "description_basis": "meta description があればそれ、なければトップページ本文の確認結果に基づく1文。description_ja と description_en は同じ事実だけを書く",
     "country_code": "US",
-    "country_evidence": "運営者紹介ページに「maintained in cooperation with the Ancient Cultures Institute, a 501(c)(3) non-profit foundation」（米国の税法上の非営利団体。https://www.mesoweb.com/about/about.html）。所在州の記載は確認できず",
+    "country_evidence": "運営者紹介ページに「This site is maintained in cooperation with the Ancient Cultures Institute, a 501(c)(3) non-profit foundation」とある（https://www.mesoweb.com/about/about.html）。運営者本人の所在の記述ではなく、協力団体が米国の税法上の非営利団体（501(c)(3)）であることを根拠にしており、根拠は弱い。所在州の記載は確認できず",
     "region_evidence": "州の記載は確認できず",
     "source_updated_at": null,
     "source_updated_kind": null,
