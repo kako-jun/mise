@@ -1,6 +1,8 @@
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
-const DEFAULT_DESC = '広告や大手サイト多めの検索に疲れた人へ。まだ知らない独立サイトを見つける、ディレクトリ型検索エンジン MISE。';
+// 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
+const DEFAULT_TITLE = 'MISE — A directory search engine for today.';
+const DEFAULT_DESC = 'For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
@@ -47,31 +49,31 @@ export async function renderIndex(c, assetResponse) {
   const current = categories.find(x => x.id === path.at(-1));
   const isSearch = !!url.searchParams.get('q')?.trim();
 
-  let title = 'MISE — 今だからこそ、ディレクトリ型検索エンジン。';
+  let title = DEFAULT_TITLE;
   let desc = DEFAULT_DESC;
   if (current) {
-    const names = path.map(id => categories.find(x => x.id === id).name_ja);
+    const names = path.map(id => categories.find(x => x.id === id).name_en);
     title = `${names.join(' › ')} — MISE`;
-    desc = `MISE の「${names.join(' › ')}」カテゴリ（${current.site_count}サイト）。まだ知らない独立サイトを探せます。`;
+    desc = `${names.join(' › ')} on MISE: ${current.site_count} ${current.site_count === 1 ? 'site' : 'sites'}. Discover independent websites you have yet to find.`;
   }
   const canonical = ORIGIN + categoryHref(isSearch ? [] : path);
 
   // 本文（JS が起動すると置き換わる）
   const children = categories.filter(x => x.parent_id === (path.at(-1) ?? null));
   const crumbs = path.length
-    ? `<a href="/">トップ</a>` + path.map((id, i) => {
-        const name = esc(categories.find(x => x.id === id).name_ja);
+    ? `<a href="/">Home</a>` + path.map((id, i) => {
+        const name = esc(categories.find(x => x.id === id).name_en);
         return ' › ' + (i === path.length - 1 ? name : `<a href="${esc(categoryHref(path.slice(0, i + 1)))}">${name}</a>`);
       }).join('')
     : '';
   const cats = children.map(ch => {
-    const sub = path.length ? '' : `<p class="sub">${esc(categories.filter(x => x.parent_id === ch.id).map(x => x.name_ja).join(' '))}</p>`;
-    return `<div class="category"><h2><a href="${esc(categoryHref([...path, ch.id]))}">${esc(ch.name_ja)} (${ch.site_count})</a></h2>${sub}</div>`;
+    const sub = path.length ? '' : `<p class="sub">${esc(categories.filter(x => x.parent_id === ch.id).map(x => x.name_en).join(' '))}</p>`;
+    return `<div class="category"><h2><a href="${esc(categoryHref([...path, ch.id]))}">${esc(ch.name_en)} (${ch.site_count})</a></h2>${sub}</div>`;
   }).join('');
   let siteItems = '';
   if (path.length) {
     const { results } = await c.env.DB.prepare('SELECT s.name, s.url, s.description_ja FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ORDER BY s.id').bind(path.at(-1)).all();
-    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a> — ${esc(s.description_ja)}</li>`).join('');
+    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a> — ${esc(s.description_ja)} (Japanese)</li>`).join('');
   }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
