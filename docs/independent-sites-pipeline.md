@@ -4,9 +4,9 @@ Issue #39（#2 の層2）の第1段。個人・小さな事業者・企業・協
 
 ## 載せる基準と拒否の理由
 
-mise は個人に限らず、小さな事業者・企業の公式サイト・EC・店・団体・大手のサイトも載せる。**拒否するのは次だけ**: 広告中心（広告のためのページ）、量産（アフィリエイト目的等）、パーキング/売却/初期ページ、スパム、技術的に取れないもの（robots 拒否・noindex・HTTP エラー・日本語でない・本文が極端に薄い）、官公庁（層1で別に扱う）。「商業的」「大手」「成人向け」「組織」であること自体は拒否の理由にしない。
+mise は個人に限らず、小さな事業者・企業の公式サイト・EC・店・団体・大手のサイトも載せる。**拒否するのは次だけ**: 広告中心（広告のためのページ）、量産（アフィリエイト目的等）、パーキング/売却/初期ページ、スパム、技術的に取れないもの（robots 拒否・noindex・HTTP エラー・日本語でない・本文が極端に薄い）、官公庁の本体（層1で別に扱う）。「商業的」「大手」「成人向け」「組織」「大学・学校」であること自体は拒否の理由にしない。公立学校など自治体の配下のサイトは、層1の自治体トップとは別の独立サイトとして扱う（重複は URL/ホストの正規化で判定する）。
 
-属性（拒否に使わない。台帳に記録する）: `site_kind`（個人|事業|団体|企業|不明。決定論で分かる範囲のみ、基本は後段のLLM工程で埋める）、`adult`（yes|no|unknown）。共有サービス（ブログ・ショップ・ISP 等）は**本体のトップは載せ**、配下の個別ユーザー領域は拒否でなく**保留(`deferred`)**にして基準の決定を #50 に委ねる。
+属性（拒否に使わない。台帳に記録する）: `site_kind`（個人|事業|団体|企業|不明。決定論で分かる範囲のみ、基本は後段のLLM工程で埋める）、`adult`（yes|no|unknown。決定論は、meta の rating/RTA、強い手がかり〔年齢確認・18歳未満・18禁・R-18・成人向け〕1つ、または弱い語〔アダルト・風俗・出会い系 等とホスト名の手がかり〕2種類以上で yes、他は unknown。弱い語の単独一致では決めない）。共有サービス（ブログ・ショップ・ISP 等）は**本体のトップは載せ**、配下の個別ユーザー領域は拒否でなく**保留(`deferred`)**にして基準の決定を #50 に委ねる。
 
 ## 構成
 
@@ -45,9 +45,9 @@ mise は個人に限らず、小さな事業者・企業の公式サイト・EC�
 
 ## フィルタ
 
-**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`institution_domain`（`.ac.jp`/`.ed.jp`/`.ad.jp`。大学・学校。**扱いは未決**で当面除外）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または台帳内で同じ登録ドメイン配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（共有サービスの利用者領域とみなす推定）。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
+**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または台帳内で同じ登録ドメイン配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（共有サービスの利用者領域とみなす推定）。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
 
-**取得後（`features.judge`）**: 取得できない/HTTP状態（`http_404` 等。5xx・429 は `failed`）、`noindex`（X-Robots-Tag と meta robots）、`parking_or_default_page`（売却・パーキング・サーバ初期ページ。`Under construction` / `coming soon` などの弱い語は、title に含まれるか可視テキストが 500 字未満の時だけ有効）、`thin_content`（可視テキスト 200 字未満）、`not_japanese`（かな 20 字未満）、`no_title`、`ad_heavy`（広告タグ 5 以上、または 2 以上かつ本文 1500 字未満）。通過したものが `candidate`。語による拒否（会社・法人・成人向け・大手など）は使わない。
+**取得後（`features.judge`）**: 取得できない/HTTP状態（`http_404` 等。5xx・429 は `failed`）、`noindex`（X-Robots-Tag と meta robots）、`parking_or_default_page`（売却・パーキング・サーバ初期ページ。`Under construction` / `coming soon` などの弱い語は **title に出た時だけ**有効。本文だけに出る場合は無視し、本文が薄ければ `thin_content` が拾う）、`thin_content`（可視テキスト 200 字未満）、`not_japanese`（かな 20 字未満）、`no_title`、`ad_heavy`（広告・アフィリエイト参照が 3 以上かつ「本文 300 字あたり 1 つ以上」＝広告が本文より多い、または 15 以上の量産テンプレ級。広告を載せた個人ブログは通す）。通過したものが `candidate`。語による拒否（会社・法人・成人向け・大手など）は使わない。
 
 ## 取得作法
 
@@ -87,36 +87,35 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 
 2026-11-13 に実サイトで小規模試験を実施し、基準の訂正後に**取得済みデータから再判定**した（新規アクセスなし）。発見は Common Crawl ホストグラフ（パート37、`.jp` 1,373,242 件中 1/1000 抽出 = 1,347 件）と既掲載サイトの外部リンク（18 シード中 15 を取得、55 件）で、台帳は計 1,402 件。優先度順の 450 ホストを実取得（並列3、ホスト間隔 1.5 秒）。
 
-取得前（1,402 件）: 保留 `deferred` 468（共有サービス配下）、`government` 7、`spam_like_name` 1、残り 926（うち 450 を取得、476 は未取得の `queued`）。
+取得前（1,402 件）: 保留 `deferred` 468（共有サービス配下）、`government` 7、`spam_like_name` 1、残り 926（うち 450 を取得、476 は未取得の `queued`。`.ac.jp` 等の除外撤去で増えた分は未取得）。
 
 取得した 450 ホストの結果:
 
 | 結果 | 件数 |
 |---|---|
-| candidate（候補） | 244（54%。取得できたホスト 320 に対し 76%） |
+| candidate（候補） | 247（55%。取得できたホスト 320 に対し 77%） |
 | failed（`dns` 73、`robots_unavailable` 31、`connect` 4、`http_500` 1） | 109 |
 | blocked_by_robots | 21 |
-| rejected `thin_content` | 43 |
-| rejected `noindex` 8 / `parking_or_default_page` 7 / `http_403` 4 / `http_404` 4 / `redirect_offsite` 4 / `ad_heavy` 3 / `not_japanese` 3 | 33 |
+| rejected `thin_content` | 46 |
+| rejected `noindex` 8 / `parking_or_default_page` 4 / `http_403` 4 / `http_404` 4 / `redirect_offsite` 4 / `not_japanese` 3 | 27 |
 
-候補 244 件の属性: `site_kind` は 不明 152 / 団体 49 / 企業 43（決定論で分かる範囲のみ。個人/事業は後段）。`adult` は unknown 242 / yes 2。
+`ad_heavy` は 0 件（広告つき個人ブログを通す規則に直した結果。規則の動作は合成データのテストでのみ確認しており、実データでの「広告中心」の検出例はまだ無い）。候補 247 件の属性: `site_kind` は 不明 155 / 団体 49 / 企業 43（決定論で分かる範囲のみ。個人/事業は後段）。`adult` は unknown 246 / yes 1。
 
-候補サンプル 20 件（host 順に等間隔）: aiko-welfare.or.jp、ichigu.or.jp、iwataice.jp、k-ibusuki-j.site.kagoshima.jp、kbeautyon.jp、konohospital.or.jp、liberamente.jp、mamosearch.jp、mito-med.or.jp、nagahamasci.or.jp、nolleys-mall.jp、okino-hp.or.jp、phronesis-m.jp、rieg.jp、sankei.jp、sendai-akita.jp、skytosun.jp、staffy.jp、syuhai.jp、totopa.jp。社会福祉法人・医師会・商工会・研究所・EC・店・動物病院・新聞社・派遣会社・居酒屋が並び、いずれも載せてよい独立サイトとして妥当。
+候補サンプル 20 件（host 順に等間隔）: aiko-welfare.or.jp、ichigu.or.jp、iwataganka.jp、jslsm.or.jp、kazai-hoken.jp、kokubunjilc.jp、laluz.jp、macross.jp、midoriko.jp、mtfuji.jp、nis-ssp.jp、ohashi-tosou.jp、pasone.jp、repari.jp、san-coop.jp、seitaisou.jp、sizu.me、sportsota.or.jp、suzukiagry.jp、tomotrek.jp。社会福祉法人・学会・ライオンズクラブ・眼科・動物病院・保険・塗装・アニメ公式・バンド・大学の研究センターなどが並び、いずれも載せてよい独立サイト。
 
 誤判定の傾向（要見直し）:
-- `ad_heavy` 3 件は iskw226.jp（個人ブログ）、lallwendy36.jp、vista2nd.jp（模型・写真の日記）で、広告タグは 5〜7 個。広告を載せた個人ブログを「広告中心」として落としている可能性があり、閾値（5）が低い。広告タグの数だけでなく本文量との比、affiliate リンクの量産といった特徴を足して「広告中心・量産」に絞る必要がある（量産の検出は今は `spam_like_name` 1 件のみで弱い）。
-- `parking_or_default_page` 7 件のうち manabumiwa.jp（個人サイト）は可視テキストが 54 字しかなく、`under construction` を含むため弱い語で落ちた。本文が極端に短い独立サイトは、準備中ページと区別できない。kakuninsan.jp などは「ページが見つかりません」の本物。
-- `adult=yes` の 2 件のうち setolaw.jp（誹謗中傷対策の法律事務所）は成人向けではなく、本文の「出会い系」という語を拾った誤検出（もう1件は mid-track.jp で「18歳未満」）。属性なので候補には影響しないが、精度は低い（`no` は決定論では出さない）。
-- `institution_domain`（.ac.jp 等）の除外は kako-jun の指示の範囲外で当面の暫定。公立学校のサイト（k-ibusuki-j.site.kagoshima.jp）が候補に通っており、公的機関の扱い（層1との境界）は未決。
-- `thin_content` 43 件のうち、トップが JS 描画・フレーム・画像のみの独立サイトを取りこぼしている可能性がある。
+- 「広告中心・量産」の検出が弱い。広告密度（本文あたりの広告数）と数の上限だけで、アフィリエイト目的の量産テンプレ（同一構造の大量ページ、購入導線の量）は見ていない。実データでの検証が必要。
+- 本文が極端に短い独立サイト（manabumiwa.jp は 54 字）は `thin_content` で落ちる。準備中ページとの区別は本文だけではつかない。取りこぼしの可能性があり、保留にするかは次段の判断。
+- `thin_content` 46 件のうち、トップが JS 描画・フレーム・画像のみの独立サイトを取りこぼしている可能性がある。
+- `adult=yes` は 1 件（mid-track.jp、「18歳未満」）。語の単独一致をやめたため setolaw.jp 型の誤検出は消えたが、「18歳未満」のような強い手がかりも一般サイトに出うる。精度は未検証で、`no` は決定論では出さない。
 - 共有サービス配下の保留 468 件は未取得で、台帳内に同一ドメイン配下のホストが 3 件以上ある推定を含む（誤保留の可能性）。基準は #50。
 - `dns` 失敗が多い（グラフは「リンクされた」ホスト名であり生存の証明ではない）。`robots_unavailable` 31 件は再試行の対象。
 
 ## 次段の提案
 
 1. 規模拡大: `--sample-every` を下げる。取得は1日数百ホスト程度の低速を維持し、数週間で回す。
-2. 広告中心・量産の特徴量を足す（広告タグと本文量の比、affiliate/購入導線リンクの量、同一テンプレートの量産）。`ad_heavy` の閾値見直し。
-3. 保留(`deferred`)の基準（#50）、学校・公的機関の境界。
+2. 広告中心・量産の特徴量を実データで検証して足す（affiliate/購入導線リンクの量、同一テンプレートの量産）。
+3. 保留(`deferred`)の基準（#50）。
 4. 台帳の `candidate` を JSON/SQL に出す書き出し（D1 投入前の形）と、#29/#4 の申請・拒否リストの除外。
 5. 紹介文・スパム一次判定・種別(`site_kind`)・成人向け(`adult`)の確定: 手元のローカルLLMでバッチ（#2 の設計方針、#48）。入力は `title`/`description`/`text_head` のみ。
 6. 発見元の追加: Wayback/CT による個別補完、公開リンク集。リンク数順の優先度付けはグラフの edges/ranks（巨大）が必要で、範囲取得の方法を別途調べる。

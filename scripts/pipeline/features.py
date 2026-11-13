@@ -9,10 +9,10 @@ from hostnames import adult_host_hint, blocklist, suffix_match
 # 判定の閾値（誤判定の傾向を見て調整する。docs/independent-sites-pipeline.md 参照）
 MIN_TEXT_LEN = 200          # 可視テキストの最小文字数
 MIN_KANA = 20               # 日本語らしさ: かな文字数
-AD_HITS_REJECT = 5          # 広告タグ数がこれ以上なら除外
-AD_HITS_THIN = 2            # 広告2つ以上かつ本文が THIN_TEXT 未満なら除外
-THIN_TEXT = 1500
-WEAK_PARKING_TEXT = 500      # 弱いパーキング語は本文がこれ未満の時だけ有効
+# 広告中心: 広告つき個人ブログは通す。広告が本文より多い(本文 AD_CHARS 字あたり広告1つ以上)か、広告・アフィリエイトの数が量産テンプレ級の時だけ落とす
+AD_MIN_HITS = 3             # これ未満の広告数では落とさない
+AD_CHARS = 300              # 広告数 × AD_CHARS > 本文文字数 なら「広告が本文より多い」
+AD_TEMPLATE_HITS = 15       # この数以上の広告/アフィリエイト参照は量産テンプレとみなす
 PERSONAL_WORDS = ['個人', '趣味', '日記', '管理人', '自作', 'ブログ', '雑記', '備忘', '作品', '研究', 'ホームページ', '私の', '僕の', '自己紹介', 'リンク集', 'welcome']
 KANA = re.compile(r'[぀-ヿ]')
 
@@ -71,7 +71,9 @@ def extract(host, text, headers):
         'noindex': bool(re.search(r'noindex|\bnone\b', rob)),
         'parking': next((m for m in blocklist('parking_markers.txt')[''] + blocklist('parking_markers.txt')['weak'] if m in low), None),
         'adult_rating': any(re.search(r'adult|mature|rta-5042|restricted', x, re.I) for x in p.rating),
-        'adult_text': next((m for m in blocklist('adult_markers.txt')['text'] if m in low), None),
+        # 成人向け属性: 単独の語では決めない。強い手がかり(年齢確認・18禁等)1つか、弱い語2種類以上
+        'adult_text': next((m for m in blocklist('adult_markers.txt')['strong'] if m in low), None),
+        'adult_weak': sum(1 for m in blocklist('adult_markers.txt')['weak'] if m in low),
     }
     return {
         'title': re.sub(r'\s+', ' ', p.title).strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],
@@ -101,7 +103,9 @@ def adult_attr(row):
     """成人向け属性の決定論の一次判定: 'yes'（rating メタ/RTA・年齢確認等の文言・ホスト名の手がかり）か 'unknown'。
     拒否には使わない。'no' は決定論では断定せず、後段(LLM #48)に委ねる。"""
     f = json.loads(row['flags'] or '{}')
-    return 'yes' if f.get('adult_rating') or f.get('adult_text') or adult_host_hint(row['host']) else 'unknown'
+    weak = (f.get('adult_weak') or 0) + (1 if adult_host_hint(row['host']) else 0)
+    strong = f.get('adult_text') in blocklist('adult_markers.txt')['strong']   # 旧い台帳の弱い語は強い手がかりとして扱わない
+    return 'yes' if f.get('adult_rating') or strong or weak >= 2 else 'unknown'
 
 
 def judge_http(status):
@@ -118,13 +122,14 @@ def judge(row):
     if f.get('noindex'): return ('rejected', 'noindex')
     m = f.get('parking')
     if m:
-        # 弱いマーカー（Under construction 等）は個人サイトの本文にも普通に出るので、title か短い本文に限る
+        # 弱いマーカー（Under construction 等）は個人サイトの本文にも普通に出るので、title に出た時だけ有効
         weak = m in blocklist('parking_markers.txt')['weak']
-        if not weak or m in (row['title'] or '').lower() or (row['text_len'] or 0) < WEAK_PARKING_TEXT:
-            return ('rejected', 'parking_or_default_page')
+        if not weak or m in (row['title'] or '').lower():
+            return ('rejected', 'parking_or_default_page')   # 弱い語が本文だけなら無視(本文が薄ければ thin_content が拾う)
     if (row['text_len'] or 0) < MIN_TEXT_LEN: return ('rejected', 'thin_content')
     if (row['kana_count'] or 0) < MIN_KANA: return ('rejected', 'not_japanese')
     if not row['title']: return ('rejected', 'no_title')
-    if row['ad_hits'] >= AD_HITS_REJECT or (row['ad_hits'] >= AD_HITS_THIN and row['text_len'] < THIN_TEXT):
+    hits = row['ad_hits'] or 0
+    if hits >= AD_TEMPLATE_HITS or (hits >= AD_MIN_HITS and hits * AD_CHARS > (row['text_len'] or 0)):
         return ('rejected', 'ad_heavy')
     return ('candidate', None)

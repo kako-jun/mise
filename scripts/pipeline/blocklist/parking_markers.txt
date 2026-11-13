@@ -21,7 +21,7 @@ afternic
 welcome to nginx
 apache2 default page
 [weak]
-# 個人サイトの本文にも普通に出る語。title に含まれるか、可視テキストが短い(500字未満)時だけ有効
+# 個人サイトの本文にも普通に出る語。title に含まれる時だけ有効（本文だけなら無視。本文が薄ければ thin_content）
 it works!
 index of /
 under construction

@@ -92,8 +92,6 @@ def prefilter(host, jp_only=True):
         return 'government'  # 層1（#2）で別に扱う
     if second in PREFECTURES and len(labels) >= 4 and labels[-4] in GOV_LABELS:
         return 'government'
-    if second in ('ac', 'ed', 'ad'):
-        return 'institution_domain'
     reg = registrable(host)
     # 共有サービス（ブログ/SNS/ショップ/ホスティング）: 本体(apex・www)は載せてよい。配下の個人サブドメインは保留。
     for e in blocklist('platforms.txt')['']:

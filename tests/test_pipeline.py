@@ -16,7 +16,7 @@ class Hosts(unittest.TestCase):
 
     def test_prefilter(self):
         for host, want in [('www.city.kanazawa.ishikawa.jp', 'government'), ('example.go.jp', 'government'), ('foo.lg.jp', 'government'),
-                           ('toyota.co.jp', None), ('u.ac.jp', 'institution_domain'), ('blog.example.jp', None),
+                           ('toyota.co.jp', None), ('u.ac.jp', None), ('k.ed.jp', None), ('blog.example.jp', None),
                            ('blog.ameblo.jp', 'shared_service_user'), ('ameblo.jp', None), ('foo-clinic.jp', None), ('example.co.jp', None), ('sample-porn.jp', None),
                            ('example.com', 'not_jp'), ('hyuki.jp', None), ('www.hyuki.ne.jp', None), ('1.2.3.4', 'invalid_host')]:
             self.assertEqual(hostnames.prefilter(host), want, host)
@@ -57,6 +57,13 @@ class Judge(unittest.TestCase):
     def test_thin(self):
         self.assertEqual(self.judged('<html><title>あいうえお</title>こんにちは</html>'), ('rejected', 'thin_content'))
 
+    def test_ad_blog_passes_but_ad_dominated_page_rejected(self):
+        ads = lambda n: '<script src="https://pagead2.googlesyndication.com/x.js"></script>' * n
+        blog = self.PAGE.replace('こんにちは、ここは管理人の雑記帳です。', 'こんにちは、ここは管理人の雑記帳です。' * 12)   # 本文が長い個人ブログ
+        self.assertEqual(self.judged(blog.replace('</body>', ads(7) + '</body>')), ('candidate', None))
+        self.assertEqual(self.judged(self.PAGE.replace('</body>', ads(4) + '</body>')), ('rejected', 'ad_heavy'))   # 本文より広告が多い
+        self.assertEqual(self.judged(blog.replace('</body>', ads(15) + '</body>')), ('rejected', 'ad_heavy'))        # テンプレ級
+
     def test_ads(self):
         ads = '<script src="https://pagead2.googlesyndication.com/x.js"></script>' * 5
         self.assertEqual(self.judged(self.PAGE.replace('</body>', ads + '</body>')), ('rejected', 'ad_heavy'))
@@ -81,6 +88,10 @@ class Adult(unittest.TestCase):
         f = features.extract('circle.jp', html, {})
         self.assertEqual(features.judge(f), ('candidate', None))
         self.assertEqual(features.adult_attr({**f, 'host': 'circle.jp'}), 'yes')
+        legal = features.extract('x.jp', Judge.PAGE.replace('個人の日記', '出会い系サイトの誹謗中傷のご相談'), {})
+        self.assertEqual(features.adult_attr({**legal, 'host': 'law.jp'}), 'unknown')   # 弱い語の単独一致では yes にしない
+        two = features.extract('x.jp', Judge.PAGE.replace('個人の日記', 'アダルト 風俗'), {})
+        self.assertEqual(features.adult_attr({**two, 'host': 'x.jp'}), 'yes')
         g = features.extract('x.jp', Judge.PAGE, {})
         self.assertEqual(features.adult_attr({**g, 'host': 'x.jp'}), 'unknown')
 
@@ -272,7 +283,7 @@ class Parking(unittest.TestCase):
         f = features.extract('x.jp', '<html lang=ja><title>Under Construction</title>' + self.BODY + '</html>', {})
         self.assertEqual(features.judge(f), ('rejected', 'parking_or_default_page'))
         f = features.extract('x.jp', '<html lang=ja><title>ぼくのページ</title>coming soon この文章は短い。' + 'あ' * 30 + '</html>', {})
-        self.assertEqual(features.judge({**f, 'text_len': 300}), ('rejected', 'parking_or_default_page'))
+        self.assertEqual(features.judge(f), ('rejected', 'thin_content'))   # 本文だけの弱い語は parking にしない
 
     def test_strong_marker_always_rejected(self):
         f = features.extract('x.jp', f'<html lang=ja><title>x</title>{self.BODY} このドメインは売り物です</html>', {})
