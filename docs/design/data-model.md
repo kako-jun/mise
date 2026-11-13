@@ -44,7 +44,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 ### 制約と注意
 
 - `GET /api/sites` は `site_categories` と `JOIN` するため、カテゴリ未所属のサイトは API にも検索にも出ない。
-- 官公庁の台帳（`data/public-bodies/`）と frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
+- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
 
 ## 将来案（未実装）
 
