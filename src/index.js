@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, SITE_ORDER, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
+import { receiveRequest } from './intake.js';
 const app = new Hono();
 app.use('*', async (c, next) => {
   await next();
@@ -9,7 +10,7 @@ app.use('*', async (c, next) => {
 });
 // /api/* はブラウザ用。更新が速やかに反映されるよう短いキャッシュだけ許す（docs/design/architecture.md）。
 // 成功応答だけ。4xx/5xx（D1 の一時的な失敗など）は no-store にして、エラーをキャッシュさせない。
-app.use('/api/*', async (c, next) => { await next(); c.res.headers.set('Cache-Control', c.res.status < 400 ? 'public, max-age=30' : 'no-store'); });
+app.use('/api/*', async (c, next) => { await next(); c.res.headers.set('Cache-Control', c.req.method === 'GET' && c.res.status < 400 ? 'public, max-age=30' : 'no-store'); });
 // D1 失敗などの例外は 500 にして握りつぶさない（上のミドルウェアが no-store を付ける）。
 app.onError((e, c) => c.text('Internal Server Error', 500));
 // 範囲（?scope=jp|us|…|all。省略は all）。不正な値は 400（no-store）。カテゴリの件数・サイト・活動はすべて範囲内だけを数える。
@@ -28,6 +29,8 @@ app.get('/api/activity', async c => {
   const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });
+// 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md
+app.post('/api/requests', async c => { const r = await receiveRequest(c); return c.json(r.body, r.status); });
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 // 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
 const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);

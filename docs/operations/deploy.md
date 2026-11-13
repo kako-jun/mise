@@ -7,7 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
-- 現在のアプリに本番 secret は無い（`src/` は `DB` と `ASSETS` のみ使う）。
+- 本番 secret は必須のものは無い（`src/` は `DB` と `ASSETS` を使う）。任意で `INTAKE_SALT`（申請の IP ハッシュの塩。[operations/requests.md](requests.md)）。
 
 ## ローカル
 
@@ -16,6 +16,7 @@ npm install
 npm run db:migrate   # ローカル D1 に migrations を適用（--local）
 npm run dev          # wrangler dev --local
 npm run check        # 構文確認（node --check）+ API ヘッダ自己検査
+npm test             # 申請の検証・SSRF 対策・拒否リストの単体テスト
 npm run build:globe  # src/client/globe.js から public/globe.js を生成
 ```
 

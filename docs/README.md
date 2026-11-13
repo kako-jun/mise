@@ -33,6 +33,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | [collection/trials.md](collection/trials.md) | 試行の記録（日付つきの観測。数字はここだけ） |
 | **operations/** 運用 | |
 | [operations/deploy.md](operations/deploy.md) | 本番環境、デプロイ、マイグレーション |
+| [operations/requests.md](operations/requests.md) | 申請（推薦・取り下げ・訂正）の受付 API、レート制限、管理レビューの手順、連絡先の保持期間 |
 | [operations/jobs.md](operations/jobs.md) | 定期処理、LLM の鍵・クレジット・予算、巡回作法 |
 | **ideas/** 構想（未実装・検証中） | |
 | [ideas/README.md](ideas/README.md) | 構想の一覧と状態 |

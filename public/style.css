@@ -38,7 +38,17 @@ button:hover { background: #d7f0f3; }
 button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid #007f98; outline-offset: 2px; }
 
 .recommend { width: 560px; max-width: 100%; margin: 22px auto; text-align: center; font-size: 11px; }
+.recommend[hidden] { display: none; }
 .recommend h2 { font-size: 13px; margin-bottom: 3px; }
+.request-form { display: grid; gap: 4px; text-align: left; margin-top: 8px; }
+.request-form label { margin-top: 6px; }
+.request-form input, .request-form select, .request-form textarea { padding: 6px 8px; border: 1px solid #94b5be; border-radius: 6px; background: rgba(255, 255, 255, .94); color: #12272c; font: inherit; box-sizing: border-box; width: 100%; }
+.request-form button { justify-self: start; margin-top: 8px; }
+.req-trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.req-status[data-state="error"] { color: #b00020; }
+.req-note { color: inherit; opacity: .85; }
+html[data-theme="dark"] .request-form input, html[data-theme="dark"] .request-form select, html[data-theme="dark"] .request-form textarea { background: #0d2430; color: #effaff; border-color: #3d6674; }
+html[data-theme="dark"] .req-status[data-state="error"] { color: #ff9aa8; }
 .recommend p { margin-top: 3px; }
 .preferences { position: absolute; top: 6px; right: 160px; margin: 0; }
 .preferences button { padding: 4px 8px; font-size: 11px; }
