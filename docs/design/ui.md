@@ -50,9 +50,13 @@
 
 元サイトで確認したものをローカル配信する（`sites.favicon_path`、`public/icons/`）。未取得・失敗時は何も表示せず、表示時に第三者のサーバーへ問い合わせない。
 
+## アプリとして追加（PWA）
+
+ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">` で赤地に白の `M` になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
+
 ## 言語
 
-既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語になる。ブラウザ言語での自動判定はしない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
+初期言語は、`localStorage` の `mise-language`（`ja` / `en`）があればそれを最優先し、無ければ `navigator.languages`（なければ `navigator.language`）の先頭が `ja` で始まるときだけ日本語、それ以外は英語（`app.js` の `initialLanguage`）。言語を切り替えると `mise-language` に保存される。サーバー側（SSR・`<html lang>`）は Accept-Language で出し分けず常に英語のまま（同一 URL で言語を変えると SEO 設計（`seo.md` の hreflang・canonical）と CDN キャッシュ（Vary）を壊すため）。判定は `index.html` の `<head>` の同期インラインスクリプトが行い、ja 判定時は `<html lang="ja">` にして `i18n-pending` クラスを付け、翻訳対象（`[data-i18n]`・`#scope-nav`・`#directory`・`#breadcrumbs`）を `visibility:hidden` で初期化まで不可視にする（レイアウトは動かさない）。`app.js` は初回の `applyLanguage()` 後（取得失敗時も）にクラスを外し、保険として 3 秒でも外れる（その時点で `app.js` が未実行なら `<html lang>` は `en` に戻り、`app.js` が遅れて動けば `data-initial-lang` から再び日本語になる）。初期言語の判定は `localStorage` の読み取り失敗（サイトデータのブロック等）と分けて行い、読めなくてもブラウザ言語で判定する。`app.js` の起動直後の静的適用では `<title>` を触らない（SSR の title を保つ）。英語判定ではクラスを付けず挙動は変わらない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
 
 ## ロゴ
 
@@ -63,7 +67,7 @@
 ## アクセシビリティ
 
 - 見出し: ページ先頭に視覚的に隠した `<h1>`（言語に合わせて翻訳）。パンくずは `<nav>`、作者リンクも `<nav>`。`aria-label` は言語切替で `data-i18n-label` により日英が切り替わる。
-- 検索バー: 幅 700px 以下（スマホ）では行いっぱい（最大 480px）に広げ、高さ 44px 以上・文字 16px（iOS Safari が focus でズームしない下限）。それより広い画面は従来どおり幅 280px。
+- 検索バー: 幅 700px 以下ではコンテンツ幅いっぱい（最大 480px）に広げ、701px 以上は従来どおり幅 280px（700→701px の段差は breakpoint として許容）。タッチ端末（`pointer: coarse`）は横向きなど幅に関わらず高さ 44px 以上・文字 16px（iOS Safari が focus でズームしない下限）。キーボード表示時の位置（visualViewport）と実 iOS は未確認。
 - 検索結果のライブ領域は `#result-title` だけ（1 文字ごとの再描画で全リストを読み上げさせない）。
 - 外部リンク設定ボタン（`#external-toggle`）の状態は、不透明度でなくリング（押下時）とドットで示す。色は白背景で 4.95:1、ダークで約 12:1（実測）。操作ボタンのホバーは不透明度でなく背景の淡い色で示す。
 - サイトの URL は `http:` / `https:` だけをリンクにする（それ以外はテキストのみ）。

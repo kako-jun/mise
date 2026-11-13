@@ -244,5 +244,10 @@ html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 .category.is-empty { opacity: .6; }
 .category.is-empty:hover, .category.is-empty:focus-within { opacity: .8; }
 html.globe-hot, html.globe-hot body { cursor: pointer; }
-/* スマホ: 検索バーは行いっぱい (#79)。16px 未満だと iOS Safari が focus でズームする */
+/* 検索バー (#79)。16px 未満だと iOS Safari が focus でズームするため、タッチ端末は幅によらず 16px・高さ 44px。
+   700px 以下(スマホ縦)は行いっぱい(最大 480px)に広げる。700→701px で幅が段差になるのは breakpoint として許容 */
+@media (pointer: coarse) { .search-row input[type="search"] { min-height: 44px; font-size: 16px; } }
 @media (max-width: 700px) { .search-row form { flex: 1 1 auto; max-width: 480px; } .search-row input[type="search"] { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 16px; } }
+
+/* 日本語判定の初回、app.js の初期化まで翻訳対象を不可視にする（レイアウトは動かさない） */
+.i18n-pending [data-i18n], .i18n-pending #scope-nav, .i18n-pending #directory, .i18n-pending #breadcrumbs { visibility: hidden; }
