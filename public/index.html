@@ -29,10 +29,10 @@
 <link rel="stylesheet" href="/style.css?v=36">
 <script src="/countries.js?v=3" defer></script>
 <script src="/regions.js?v=1" defer></script>
-<script src="/app.js?v=32" defer></script>
+<script src="/app.js?v=33" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
-addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=11").catch(() => {})));
+addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=12").catch(() => {})));
 addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); });
 </script>
 <script src="/cat.js?v=5" defer></script>
