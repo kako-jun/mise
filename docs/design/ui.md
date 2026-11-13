@@ -31,7 +31,7 @@
 
 ## ピックアップ
 
-トップで、掲載サイトから最大 3 件をランダムに選び、1 件ずつ 8 秒ごとに表示する。画面外・非表示タブ・フォーカス中・ポインター上・アニメーション軽減設定では自動切替を止める。見出しの横の「一時停止 / 再開」ボタン（`#pick-pause`、2 件以上のときだけ表示）で、キーボード・タッチでも止められる。ファビコンは一覧と同じものを表示する。将来 NEW や確認可能な更新頻度を選出に使う構想があるが、十分な更新履歴や信頼できる日時が揃うまで使わない。人気や閲覧数は使わない。
+トップで、掲載サイトから最大 3 件をランダムに選び、1 件ずつ 8 秒ごとに表示する。画面外・非表示タブ・アニメーション軽減設定（`prefers-reduced-motion: reduce`）では自動切替をしない（軽減設定では最初の 1 件のまま。リロードで別の 3 件）。一時停止/再開の UI は設けない（kako-jun の指示。WCAG 2.2.2 の停止手段は満たさないことを受容、[decisions.md](../decisions.md)）。入れ替え時、フォーカス中のリンクは新しい行の同位置へ戻し、地球儀の国ホバーのホールドは解除する。ファビコンは一覧と同じものを表示する。将来 NEW や確認可能な更新頻度を選出に使う構想があるが、十分な更新履歴や信頼できる日時が揃うまで使わない。人気や閲覧数は使わない。
 
 ## NEW タグ
 
@@ -50,17 +50,24 @@
 
 元サイトで確認したものをローカル配信する（`sites.favicon_path`、`public/icons/`）。未取得・失敗時は何も表示せず、表示時に第三者のサーバーへ問い合わせない。
 
+## アプリとして追加（PWA）
+
+ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">` で赤地に白の `M` になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
+
 ## 言語
 
-既定は英語。`localStorage` の `mise-language` が `ja` のときだけ日本語になる。ブラウザ言語での自動判定はしない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
+初期言語は、`localStorage` の `mise-language`（`ja` / `en`）があればそれを最優先し、無ければ `navigator.languages`（なければ `navigator.language`）の先頭が `ja` で始まるときだけ日本語、それ以外は英語（`app.js` の `initialLanguage`）。言語を切り替えると `mise-language` に保存される。サーバー側（SSR・`<html lang>`）は Accept-Language で出し分けず常に英語のまま（同一 URL で言語を変えると SEO 設計（`seo.md` の hreflang・canonical）と CDN キャッシュ（Vary）を壊すため）。判定は `index.html` の `<head>` の同期インラインスクリプトが行い、ja 判定時は `<html lang="ja">` にして `i18n-pending` クラスを付け、翻訳対象（`[data-i18n]`・`#scope-nav`・`#directory`・`#breadcrumbs`）を `visibility:hidden` で初期化まで不可視にする（レイアウトは動かさない）。`app.js` は初回の `applyLanguage()` 後（取得失敗時も）にクラスを外し、保険として 3 秒でも外れる（その時点で `app.js` が未実行なら `<html lang>` は `en` に戻り、`app.js` が遅れて動けば `data-initial-lang` から再び日本語になる）。初期言語の判定は `localStorage` の読み取り失敗（サイトデータのブロック等）と分けて行い、読めなくてもブラウザ言語で判定する。`app.js` の起動直後の静的適用では `<title>` を触らない（SSR の title を保つ）。英語判定ではクラスを付けず挙動は変わらない。サイトの紹介文は `description_en`（英語）と `description_ja` を持ち、英語表示で `description_en` が無いサイトだけ日本語に「(Japanese)」を添える（SSR と `app.js` で同じ扱い）。
 
 ## ロゴ
 
 大文字の太い縦長ゴシック体 `MISE`。三毛猫模様のグラデーション。ホバー・フォーカスで模様の境界がなだらかにぼける（`@property --blur` による補間。`prefers-reduced-motion` では即時。`@property` 非対応のブラウザでは補間されず、ホバーで即時にぼける。`@supports` の分岐はない）。M/S の横伸ばしはインラインスクリプトで初回描画前に適用し、通常幅の瞬間を見せない。タイトル下に発音記号 `/ˈmiːseɪ/` を小さく出す。
 
+書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。woff2 が 2.5 秒以内に届かない低速回線では、そこで見切って現在の書体で先に測って横伸ばしを済ませ（Chromium は block を約 3 秒で打ち切り代替書体を出すため）、到着後にもう一度測り直す。ライセンス全文は `public/licenses/`。woff2 は `uv run --with fonttools --with brotli python3 -m fontTools.subset <ttf> --text=<文字> --flavor=woff2 --layout-features='*' --name-IDs='*'` で作る（Noto Serif は先に `fontTools.varLib.instancer` で `wght=400 wdth=100` に固定）。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
+
 ## アクセシビリティ
 
 - 見出し: ページ先頭に視覚的に隠した `<h1>`（言語に合わせて翻訳）。パンくずは `<nav>`、作者リンクも `<nav>`。`aria-label` は言語切替で `data-i18n-label` により日英が切り替わる。
+- 検索バー: 幅 700px 以下ではコンテンツ幅いっぱい（最大 480px）に広げ、701px 以上は従来どおり幅 280px（700→701px の段差は breakpoint として許容）。タッチ端末（`pointer: coarse`）は横向きなど幅に関わらず高さ 44px 以上・文字 16px（iOS Safari が focus でズームしない下限）。キーボード表示時の位置（visualViewport）と実 iOS は未確認。
 - 検索結果のライブ領域は `#result-title` だけ（1 文字ごとの再描画で全リストを読み上げさせない）。
 - 外部リンク設定ボタン（`#external-toggle`）の状態は、不透明度でなくリング（押下時）とドットで示す。色は白背景で 4.95:1、ダークで約 12:1（実測）。操作ボタンのホバーは不透明度でなく背景の淡い色で示す。
 - サイトの URL は `http:` / `https:` だけをリンクにする（それ以外はテキストのみ）。
