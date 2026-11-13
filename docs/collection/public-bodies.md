@@ -54,10 +54,12 @@
 
 mismatch の多くは「旧ドメイン（J-LIS）と新ドメイン `.lg.jp`（Wikidata）」の型。`public_bodies_resolve.py fetch` が mismatch 各団体の出典 URL へ robots.txt を確認したうえで 1 URL 1 リクエスト（1.5 秒待機・直列・リダイレクト最大 5 回）でアクセスし、HTTP 200 かつ**最終 URL のホストが別の出典のホストと一致**したときだけ、`apply` が台帳へ昇格する（`sources` に `j-lis+redirect@日付` のように残す）。行き先が一致しない（出典の誤り・別サイト）、取得できない、503 などは要確認のまま。JavaScript や meta refresh による転送は見ない。build を再実行すると台帳・要確認は出典から作り直されるので、**build の後に必ず `apply` をかける**（evidence があれば取得せず再現できる）。昇格した行は `name_en` と `reading_kana` が空。
 
+**未確認**: raw が無い環境で build → `apply` の全工程を再現して台帳が同一になることは確認していない（出典の再取得で内容が変わりうるため）。行政区由来で昇格した浦和区は、独立性の確認が市サイトのホスト一致にとどまる。
+
 ## D1 への投入と追従
 
-- 投入範囲: `status=active` の都道府県・市・町・村・特別区・国の機関・独立行政法人。カテゴリは既存の `government-government-agencies`（政府 > 政府機関）で、新カテゴリは作らない。`country_code=JP`。`region_code` は団体コードの上 2 桁から決定論で付与し（`JP-13` など）、国の機関・独立行政法人には付けない。タグは種別と都道府県。紹介文は「○○県○○市の公式サイト。」の定型（英語は台帳の `name_en` があるものだけ。無いものは NULL で、画面は日本語にフォールバックする）。`last_crawled_at`・`source_updated_at` は未設定（トップページ未取得）、`registered_at` は未指定でトリガーが投入時刻を入れる。
-- 政令市の行政区は既定で投入しない（市サイトの配下で、出典の裏付けも弱い。掲載単位は Issue #37 で要判断）。含めるときは `--include-wards`。
+- 投入範囲: `status=active` の都道府県・市・町・村・特別区・国の機関・独立行政法人。カテゴリは既存の `government-government-agencies`（政府 > 政府機関）で、新カテゴリは作らない。`country_code=JP`。`region_code` は団体コードの上 2 桁から決定論で付与し（`JP-13` など）、国の機関・独立行政法人には付けない。タグは種別と都道府県。紹介文は「○○県○○市の公式サイト。」の定型（英語は台帳の `name_en` があるものだけ。無いものは NULL で、画面は日本語にフォールバックする）。`last_crawled_at`・`source_updated_at` は未設定（トップページ未取得）、`registered_at` は台帳の出典確認日で、`bulk_import=1`（0015 で追加する列）を付けて直近登録の集計・ACTIVITY・NEW タグ・既定の並びの先頭から外す（一括投入が HUD を埋めないため）。
+- 政令市の行政区は既定で投入しない。理由: (1) 区のサイトは市サイトの配下のパスで、ホストが市と同じため独立 2 出典の一致が弱い証拠になる、(2) 区を載せると同じ市サイトが 1 市あたり複数件になり一覧を水増しする、(3) 掲載単位（市のみか区も載せるか）は未決。維持する。含めるときは `--include-wards`。台帳には行政区も残る（さいたま市浦和区はリダイレクトで昇格したが、この方針で投入されない）。
 - id は `pb-<団体コード>`。URL が既に別の掲載サイトにある団体は INSERT しない（重複掲載しない）。
 - 初回: `uv run python3 scripts/public_bodies_sql.py > migrations/0015_public_bodies.sql`。`test_public_bodies.py` が、コミット済み migration が台帳から再現できることを検査する（台帳だけ変えると落ちる）。
 - 台帳が変わったとき（月次の差分で新設・合併・廃止・名称変更・URL 移転を確認して台帳を確定した後）: 適用済みの migration は書き換えず、適用時点の台帳を `git show <commit>:data/public-bodies/ledger.csv` で取り出して `public_bodies_sql.py --since 旧台帳.csv > migrations/00NN_public_bodies_update.sql` で差分 migration を作る。新設は INSERT、active でなくなったもの（合併・廃止・要確認への降格）は掲載から DELETE、名称・URL の変更は UPDATE。

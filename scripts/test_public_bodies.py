@@ -65,16 +65,18 @@ class Ledger(unittest.TestCase):
 
 def lrow(**kw):
     base = {'code': '011002', 'name_ja': "札幌市", 'name_en': 'Sapporo', 'type': '市', 'prefecture': '北海道', 'url': 'https://www.city.sapporo.jp/',
-            'status': 'active'}
+            'status': 'active', 'sources': 'wikidata@2026-11-13;e-gov@2026-11-12'}
     base.update(kw); return base
 PREF = lrow(code='010006', name_ja='北海道', name_en='Hokkaido', type='都道府県', prefecture='北海道', url='https://www.pref.hokkaido.lg.jp/')
 
 class Sql(unittest.TestCase):
     def test_insert_local_and_national(self):
         sql = psql.generate([PREF, lrow(), lrow(code='nat:abc', name_ja='人事院', name_en='', type='国の機関', prefecture='', url='https://www.jinji.go.jp/')])
-        self.assertIn("'pb-011002'", sql); self.assertIn("'JP','JP-01'", sql)
+        self.assertIn("'pb-011002'", sql); self.assertIn("1,'JP-01'", sql)
         self.assertIn('Official website of Sapporo, Hokkaido, Japan.', sql)
         self.assertIn("'pb-nat-abc'", sql); self.assertNotIn("'JP-nat", sql)
+        self.assertIn("'2026-11-13T00:00:00Z',1", sql); self.assertIn('ADD COLUMN bulk_import', sql)
+        self.assertNotIn('ADD COLUMN', psql.generate([PREF, lrow()], [PREF]))
         self.assertIn("NOT EXISTS (SELECT 1 FROM sites WHERE url='https://www.city.sapporo.jp/')", sql)
     def test_skips_wards_inactive_and_quotes(self):
         rows = [PREF, lrow(code='011011', type='行政区', name_ja='札幌市中央区'), lrow(code='012025', status='merged'), lrow(code='013001', name_ja="O'x")]

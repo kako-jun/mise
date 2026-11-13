@@ -17,6 +17,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `description_en` | 英語の一文紹介、NULL 可。日本語に書かれた事実だけを訳し、情報を足さない | 0010 |
 | `favicon_path` | 元サイトで確認したファビコンのローカルパス | 0002 |
 | `registered_at` | mise への登録日時。INSERT 時に DB のトリガが記録する | 0003, 0006 |
+| `bulk_import` | 台帳などからの一括投入の印（1）。直近登録の集計（`/api/activity`）・NEW タグ・既定の並びの先頭から外す。この場合の `registered_at` は出典の確認日 | 0015 |
 | `last_crawled_at` | 最後に取得に成功した日時 | 0007 |
 | `source_updated_at` | 元サイトの更新日（`YYYY-MM-DD`）。確認できた場合のみ | 0012 |
 | `source_updated_evidence_url` | 更新日の根拠 URL | 0012 |

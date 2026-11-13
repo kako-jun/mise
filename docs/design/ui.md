@@ -35,7 +35,7 @@
 
 ## NEW タグ
 
-登録日時（`sites.registered_at`）から 30 日未満のサイトに NEW を付ける（期間は仮。未決）。登録日時が不明なサイトには付けない。新規 INSERT 時は DB のトリガ（migration 0006）が時刻を記録する。
+登録日時（`sites.registered_at`）から 30 日未満のサイトに NEW を付ける（期間は仮。未決）。登録日時が不明なサイト、一括投入（`bulk_import=1`）のサイトには付けない。直近登録のグラフ・ACTIVITY（`/api/activity`）も `bulk_import=1` を数えない。一覧の並びは一括投入を後ろにする。新規 INSERT 時は DB のトリガ（migration 0006）が時刻を記録する。
 
 ## HUD
 

@@ -19,13 +19,13 @@ app.get('/api/categories', async c => { const sc = scopeOf(c); return sc ? c.jso
 // LEFT JOIN: カテゴリ未所属のサイトも category_id = NULL で返す（画面では「未分類」として検索に出る）。
 app.get('/api/sites', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
-  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s LEFT JOIN site_categories sc ON s.id = sc.site_id WHERE (?1 IS NULL OR s.country_code = ?1) ${SITE_ORDER}`).bind(sc.cc).all();
+  const { results } = await c.env.DB.prepare(`SELECT s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, sc.category_id FROM sites s LEFT JOIN site_categories sc ON s.id = sc.site_id WHERE (?1 IS NULL OR s.country_code = ?1) ${SITE_ORDER}`).bind(sc.cc).all();
   return c.json(results);
 });
 app.get('/api/activity', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
   const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites WHERE (?1 IS NULL OR country_code = ?1)`).bind(sc.cc).first();
-  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
+  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));

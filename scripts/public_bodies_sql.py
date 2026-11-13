@@ -58,11 +58,16 @@ def tags(r, pen):
 def region(r):
     return 'JP-' + r['code'][:2] if re.fullmatch(r'\d{6}', r['code']) and 1 <= int(r['code'][:2]) <= 47 else None
 
+def confirmed_at(r):
+    """registered_at: 台帳の sources にある出典確認日の最新(YYYY-MM-DD)。投入時刻ではなく、出典で確認した日。"""
+    days = re.findall(r'@(\d{4}-\d{2}-\d{2})', r['sources'])
+    return (max(days) if days else '1970-01-01') + 'T00:00:00Z'
+
 def insert_sql(r, pen):
     ja, en = describe(r, pen)
     reg = region(r)
-    cols = "id,url,name,description_ja,description_en,country_code" + (",region_code" if reg else "")
-    vals = f"{q(site_id(r['code']))},{q(r['url'])},{q(r['name_ja'])},{q(ja)},{q(en) if en else 'NULL'},'JP'" + (f",{q(reg)}" if reg else "")
+    cols = "id,url,name,description_ja,description_en,country_code,registered_at,bulk_import" + (",region_code" if reg else "")
+    vals = f"{q(site_id(r['code']))},{q(r['url'])},{q(r['name_ja'])},{q(ja)},{q(en) if en else 'NULL'},'JP',{q(confirmed_at(r))},1" + (f",{q(reg)}" if reg else "")
     # URL が既にあるサイトと重複する場合は何も入れない(後続の category/tag は id で結合するので空振りになる)
     return f"INSERT INTO sites ({cols}) SELECT {vals} WHERE NOT EXISTS (SELECT 1 FROM sites WHERE url={q(r['url'])});"
 
@@ -85,7 +90,9 @@ def generate(rows, old_rows=None, include_wards=False):
     changed = [new[c] for c in sorted(new) if c in old and (new[c]['name_ja'], new[c]['url']) != (old[c]['name_ja'], old[c]['url'])]
     out = ['-- 官公庁・自治体の公式サイト(Issue #37)。data/public-bodies/ledger.csv から scripts/public_bodies_sql.py が生成した派生物。手で編集しない。',
            '-- 根拠は台帳の sources 列(独立した2出典以上の一致)。紹介文は定型で、トップページの内容は読んでいない。last_crawled_at・source_updated_at は未設定。',
+           '-- registered_at は出典の確認日。bulk_import=1 は一括投入の印で、直近登録の集計・ACTIVITY・NEW タグ・既定の並びの先頭から外す(ALTER は初回のみ)。',
            f'-- 新設/追加 {len(added)} 件' + (f' / 掲載から外す {len(removed)} 件 / 名称・URL変更 {len(changed)} 件' if old_rows is not None else '') + '。']
+    if old_rows is None: out.append("ALTER TABLE sites ADD COLUMN bulk_import INTEGER NOT NULL DEFAULT 0 CHECK (bulk_import IN (0, 1));")
     for r in added: out.append(insert_sql(r, pen))
     if added: out += child_sql(added, pen)
     for r in changed:

@@ -150,7 +150,7 @@ function renderSite(target, site, showCategories=false) {
   }
   const content=document.createElement('div'); content.className='site-content'; content.append(a);
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
-  if(Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
+  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
   content.append(p);
   const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site); }
   const meta=document.createElement('p'); meta.className='site-meta';

@@ -1,5 +1,5 @@
-// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/design/ui.md).
-export const SITE_ORDER = `ORDER BY (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
+// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/design/ui.md). 一括投入(bulk_import=1)は後ろに並べる。
+export const SITE_ORDER = `ORDER BY s.bulk_import, (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
 import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
 // 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
 import '../public/countries.js';
