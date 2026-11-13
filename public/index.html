@@ -6,6 +6,9 @@
 <title>MISE — A directory search engine for today.</title>
 <meta name="description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/pwa/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/pwa/icon-180.png">
 <link rel="canonical" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="en" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="x-default" href="https://mise.llll-ll.com/">
@@ -21,13 +24,16 @@
 <meta name="twitter:description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"MISE","url":"https://mise.llll-ll.com/","inLanguage":["en","ja"],"potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://mise.llll-ll.com/?q={search_term_string}"},"query-input":"required name=search_term_string"}}</script>
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
-<link rel="stylesheet" href="/style.css?v=30">
+<script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
+<link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css?v=34">
 <script src="/countries.js?v=3" defer></script>
 <script src="/regions.js?v=1" defer></script>
-<script src="/app.js?v=27" defer></script>
+<script src="/app.js?v=30" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=11").catch(() => {})));
+addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}); });
 </script>
 <script src="/cat.js?v=5" defer></script>
 </head>
@@ -43,7 +49,8 @@ addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => 
     <script>
 // ロゴの M/S 横伸ばしを最速で実測適用する(#35)。適用前は style.css で不可視(領域は確保)、完了で html.logo-ready を付けて表示。失敗しても CSS の遅延アニメで必ず表示される。
 window.__miseLogo = () => { try { const l = [...document.querySelectorAll('.logo span')]; if (l.length < 4) return; const m = l[0].offsetWidth, s = l[2].offsetWidth; if (!m || !s) return; const sc = [1.5, 1, 1.5 * m / s, 1], gap = 8; l.forEach((e, k) => { const x = (sc[k] - 1) * e.offsetWidth / 2 + gap / 2; e.style.transform = `scaleX(${sc[k]})`; e.style.margin = `0 ${x}px`; }); document.documentElement.classList.add('logo-ready'); } catch (_) {} };
-window.__miseLogo();
+// 書体(自己ホスト Anton)の読込後に実測する。低速回線では 2.5 秒で見切って現在の書体で先に測り(Chromium は block を 3 秒で打ち切り代替書体を出すため、その前に横伸ばしを済ませる)、到着後にもう一度測り直す。失敗・未対応でも測る。
+{ const go = () => window.__miseLogo(); if (document.fonts && document.fonts.load) { const f = document.fonts.load('1000 54px "Mise Logo"', 'MISE'); Promise.race([f, new Promise(r => setTimeout(r, 2500))]).then(go, go); f.then(go, go); } else go(); }
 </script>
     <p class="logo-pron" lang="en">/ˈmiːseɪ/</p>
     <p class="logo-caption" data-i18n="tagline">A directory search engine for today.</p>
@@ -55,7 +62,7 @@ window.__miseLogo();
   <section id="directory" aria-label="Categories" data-i18n-label="categoriesLabel"><nav id="breadcrumbs" class="breadcrumbs" aria-label="Current location" data-i18n-label="locationLabel"></nav><div id="categories" class="categories"></div><p id="sample-label" class="directory-empty" hidden data-i18n="sample">Listed sites</p><ul id="directory-sites" class="directory-sites"></ul><p id="directory-empty" class="directory-empty" hidden data-i18n="noSites">No sites in this category.</p></section>
   <section id="results" class="results" hidden><hr><h2 id="result-title" role="status" aria-live="polite"></h2><p><a href="#directory" id="clear" data-i18n="back">Back to categories</a></p><ul id="result-list"></ul><p id="empty" hidden data-i18n="noResults">No sites found.</p></section>
   <hr>
-  <footer id="about"><p data-i18n="concept">For those tired of search results dominated by ads and major sites.<br>Discover independent websites you have yet to find.</p></footer><aside class="corner-panel"><section id="picks" class="picks" hidden><button id="pick-pause" type="button" aria-pressed="false" data-i18n="pickPause">Pause</button><h2 data-i18n="picks">Featured sites</h2><ul id="pick-list"></ul></section><nav class="author-links" aria-label="Creator" data-i18n-label="authorLabel"><a href="https://llll-ll.com/" aria-label="Creator’s website" title="Creator’s website" data-i18n-label="author"><svg aria-hidden="true" class="author-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M6.906.664a1.749 1.749 0 0 1 2.187 0l5.25 4.2c.415.332.657.835.657 1.367v7.019A1.75 1.75 0 0 1 13.25 15h-3.5a.75.75 0 0 1-.75-.75V9H7v5.25a.75.75 0 0 1-.75.75h-3.5A1.75 1.75 0 0 1 1 13.25V6.23c0-.531.242-1.034.657-1.366l5.25-4.2Zm1.25 1.171a.25.25 0 0 0-.312 0l-5.25 4.2a.25.25 0 0 0-.094.196v7.019c0 .138.112.25.25.25H5.5V8.25a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 .75.75v5.25h2.75a.25.25 0 0 0 .25-.25V6.23a.25.25 0 0 0-.094-.195Z"/></svg></a><a href="https://github.com/kako-jun" aria-label="Creator on GitHub" title="Creator on GitHub" data-i18n-label="github"><svg aria-hidden="true" class="author-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg></a></nav></aside>
+  <footer id="about"><p data-i18n="concept">For those tired of search results dominated by ads and major sites.<br>Discover independent websites you have yet to find.</p></footer><aside class="corner-panel"><section id="picks" class="picks" hidden><h2 data-i18n="picks">Featured sites</h2><ul id="pick-list"></ul></section><nav class="author-links" aria-label="Creator" data-i18n-label="authorLabel"><a href="https://llll-ll.com/" aria-label="Creator’s website" title="Creator’s website" data-i18n-label="author"><svg aria-hidden="true" class="author-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M6.906.664a1.749 1.749 0 0 1 2.187 0l5.25 4.2c.415.332.657.835.657 1.367v7.019A1.75 1.75 0 0 1 13.25 15h-3.5a.75.75 0 0 1-.75-.75V9H7v5.25a.75.75 0 0 1-.75.75h-3.5A1.75 1.75 0 0 1 1 13.25V6.23c0-.531.242-1.034.657-1.366l5.25-4.2Zm1.25 1.171a.25.25 0 0 0-.312 0l-5.25 4.2a.25.25 0 0 0-.094.196v7.019c0 .138.112.25.25.25H5.5V8.25a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 .75.75v5.25h2.75a.25.25 0 0 0 .25-.25V6.23a.25.25 0 0 0-.094-.195Z"/></svg></a><a href="https://github.com/kako-jun" aria-label="Creator on GitHub" title="Creator on GitHub" data-i18n-label="github"><svg aria-hidden="true" class="author-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"/></svg></a></nav></aside>
 </main>
 </body>
 </html>

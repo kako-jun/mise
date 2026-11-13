@@ -20,13 +20,15 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | [concept/overview.md](concept/overview.md) | 目指す体験、世界観、マスコット、発見の機会の方針 |
 | [concept/listing-criteria.md](concept/listing-criteria.md) | 載せる基準・拒否の理由・分類の方針 |
 | **design/** 設計 | |
-| [design/architecture.md](design/architecture.md) | 技術構成、配信、地球儀、国旗・区画と地球の連動 |
+| [design/architecture.md](design/architecture.md) | 技術構成、配信、PWA、地球儀、国旗・区画と地球の連動 |
 | [design/data-model.md](design/data-model.md) | データモデル（実装済みの列・将来案） |
-| [design/ui.md](design/ui.md) | 画面の仕様（一覧の並び、ピックアップ、HUD、NEW、ファビコン） |
+| [design/ui.md](design/ui.md) | 画面の仕様（一覧の並び、ピックアップ、HUD、NEW、ファビコン、PWA） |
 | [design/seo.md](design/seo.md) | SEO・クローラ向けの方針 |
 | **collection/** 収集 | |
 | [collection/discovery-policy.md](collection/discovery-policy.md) | 発見・確認の方針（robots、レビュー、定期処理の考え方） |
 | [collection/pipeline.md](collection/pipeline.md) | 独立サイトの発見パイプライン（frontier 台帳・決定論フィルタ） |
+| [collection/llm-judge.md](collection/llm-judge.md) | LLM 判定工程（Claude API、手元実行）。2段階・N件まとめ・予算ガード・使い方 |
+| [collection/recrawl.md](collection/recrawl.md) | 登録済みサイトの再巡回（状態遷移・変更検出・要確認の候補リスト） |
 | [collection/public-bodies.md](collection/public-bodies.md) | 官公庁・自治体の名簿（公式サイト台帳） |
 | [collection/procedures.md](collection/procedures.md) | 恒常的な収集手順（スクリプトの再実行方法・書式） |
 | [collection/thumbnails.md](collection/thumbnails.md) | サムネイル撮影の試験（設計・作法・結果。試験用スクリプトのみ実装済み） |
@@ -42,11 +44,12 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | 機能 | コード |
 |---|---|
 | API・配信・sitemap | `src/index.js`、`src/seo.js` |
+| PWA（manifest・service worker・アイコン） | `public/manifest.webmanifest`、`public/sw.js`、`public/pwa/`、`scripts/check-pwa.mjs` |
 | 画面（範囲・カテゴリ階層・検索・ピックアップ・HUD） | `public/app.js`、`public/index.html`、`public/style.css` |
 | 地球儀 | `src/client/globe.js` → `public/globe.js`（生成） |
 | 国・区画の表 | `public/countries.js`、`public/regions.js`（生成） |
 | データベース | `migrations/` |
-| 収集・台帳・パイプライン | `scripts/`、`data/` |
+| 収集・台帳・パイプライン | `scripts/`、`data/`（LLM 判定は `scripts/llm/`） |
 
 ## 旧パスの対応
 
