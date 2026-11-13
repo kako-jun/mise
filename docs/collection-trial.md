@@ -28,3 +28,9 @@
 ## 埋め込み可否の実測（2026-11-13、Issue #41）
 
 `scripts/check-embeddable.py` が既存25サイトのトップページについて、iframe で mise 内に表示できるかをHTTPヘッダだけで判定する。robots.txt（1リクエスト）→ トップページの GET（ヘッダのみ、本文は1バイトで切る）を、サイト間・リクエスト間とも2秒以上空けて直列に行い、リダイレクトは同一ホスト宛てのみ最大1回追う（その場合は3リクエスト。別ホスト宛ては追わず記録のみ）。robots.txt は 200 なら規則を読み、404/410 は規則なし、それ以外（取得失敗・3xx・401/403・5xx）はそのサイトを測定せず `robots-unknown` と記録する（collect-source-updated.py と同じ方針）。UA は MiseResearchBot/0.1。記録するのは X-Frame-Options、CSP の frame-ancestors、最終URLのスキーム、HTTPステータス、robots の可否で、迂回はしない。JS の frame-busting など、ヘッダ以外の理由で表示できないケースは判定外。結果は `data/embeddability.json`（生の観測値・判定・UTC時刻）。再実行: `uv run python3 scripts/check-embeddable.py > data/embeddability.json`。実行のたびに実サイトへアクセスする。対象は固定25サイトのみ。
+
+## 米国の独立・小規模サイト（実験、Issue #43）
+
+国（scope）の実験として、米国の独立した個人・小規模サイトを第1弾と同じ基準で登録した。広告中心・大手・企業・量産サイトは対象外。既知サイトを起点に候補を探し、robots.txt 禁止（候補の一つ）、取得不能、ドメイン移転、メンテナンス表示だけ、403 を返すものは載せていない。国は運営者の所在がサイトの公開記載で確認できたものだけ `US` とし、確認できないものは `NULL`（旗なし）。州は区画列を使わず、根拠の扱いだけを `region_evidence` に記録している。更新日は `scripts/collect-source-updated.py` の関数を流用し、根拠が取れたものだけ入れた。
+
+出典・確認日時・robots判定・国の根拠は `data/collection-batch-us1.json`、登録は `migrations/0014_us_batch1.sql`。紹介文は取得したタイトル・meta description・本文に基づく1文で、審査済みの承認データではない。
