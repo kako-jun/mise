@@ -151,8 +151,11 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 .search-row { margin-bottom: 3px; }
 .recommend-row { margin: 0 0 18px; font-size: 12px; }
 .logo span:first-child { transform: scaleX(1.5); }
-.logo span { background-image: linear-gradient(135deg, #202831 0 30%, #b9460e 31% 57%, #8a5a37 58% 72%, #202831 73%); }
-html[data-theme="dark"] .logo span { background-image: linear-gradient(135deg, #e6e2da 0 30%, #ff9a55 31% 57%, #aa8067 58% 72%, #e6e2da 73%); }
+@property --blur { syntax: '<percentage>'; inherits: false; initial-value: 0%; }
+.logo span { --blur: 0%; transition: --blur .4s ease; background-image: linear-gradient(135deg, #202831 0 calc(30% - var(--blur)), #b9460e calc(31% + var(--blur)) calc(57% - var(--blur)), #8a5a37 calc(58% + var(--blur)) calc(72% - var(--blur)), #202831 calc(73% + var(--blur))); }
+html[data-theme="dark"] .logo span { background-image: linear-gradient(135deg, #e6e2da 0 calc(30% - var(--blur)), #ff9a55 calc(31% + var(--blur)) calc(57% - var(--blur)), #aa8067 calc(58% + var(--blur)) calc(72% - var(--blur)), #e6e2da calc(73% + var(--blur))); }
+.logo:hover span, .logo:focus-visible span, .logo:active span { --blur: 6%; }
+@media (prefers-reduced-motion: reduce) { .logo span { transition: none; } }
 .logo-caption { font-weight: 400; }
 
 .author-links a { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; }
