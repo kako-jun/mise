@@ -4,8 +4,8 @@ const storage = { get(key) { try { return localStorage.getItem(key); } catch (_)
 let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', scaleSr:n=>`1■は約${n}件`, totalLabel:'SITES', unavailable:'UNAVAILABLE' },
-  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', scaleSr:n=>`1 square is about ${n} sites`, totalLabel:'SITES', unavailable:'UNAVAILABLE' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', fly:'地球から日本へ', earth:'地球に戻る', browse:'カテゴリから探す', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', search:'検索', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', log:'ACTIVITY', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE' },
+  en: { tagline:'A directory search engine for today.', fly:'Fly to Japan', earth:'Back to Earth', browse:'Browse categories', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', search:'Search', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', log:'ACTIVITY', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE' }
 };
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
@@ -53,25 +53,23 @@ $('#theme-toggle').addEventListener('click', () => { const theme=document.docume
 window.addEventListener('mise-fly-japan',()=>logActivity('fly japan'));
 
 
-const HISTORY_MAX_SQUARES = 12;
 function renderStats() {
   $('#site-total').textContent = `${t('totalLabel')}: ${activityStats ? activityStats.total : t('unavailable')}`;
   const bars=$('#history-bars'); bars.replaceChildren();
   if(!activityStats) { bars.textContent='UNAVAILABLE'; return; }
   const days=new Map(activityStats.known_daily.map(d=>[d.day,d.count]));
-  const maxCount=Math.max(0,...days.values()), scale=Math.max(1,Math.ceil(maxCount/HISTORY_MAX_SQUARES));
+  const maxCount=Math.max(0,...days.values());
   bars.style.setProperty('--count-digits', String(Math.max(1,...Array.from(days.values(),n=>String(n).length))));
   for(let i=6;i>=0;i--) {
     const date=new Date(); date.setUTCHours(0,0,0,0); date.setUTCDate(date.getUTCDate()-i);
     const day=date.toISOString().slice(0,10), count=days.get(day)||0;
     const item=document.createElement('div'); item.className='history-day'; const sr=document.createElement('span'); sr.className='visually-hidden'; sr.textContent=`${day}: ${count}`;
     const label=document.createElement('span'); label.className='history-date'; label.textContent=date.toLocaleDateString('en-US',{weekday:'short',timeZone:'UTC'});
-    const squares=document.createElement('span'); squares.className='history-squares'; squares.setAttribute('aria-hidden','true');
-    for(let n=0;n<Math.ceil(count/scale);n++){ const square=document.createElement('span'); square.className='history-square'; squares.append(square); }
+    const bar=document.createElement('span'); bar.className='history-bar'; bar.setAttribute('aria-hidden','true'); bar.style.width=count>0&&maxCount>0?`max(3px, ${count/maxCount*100}%)`:'0';
+    const track=document.createElement('span'); track.className='history-track'; track.setAttribute('aria-hidden','true'); track.append(bar);
     const number=document.createElement('span'); number.className='history-count'; number.textContent=String(count);
-    label.setAttribute('aria-hidden','true'); number.setAttribute('aria-hidden','true'); item.append(sr,label,number,squares); bars.append(item);
+    label.setAttribute('aria-hidden','true'); number.setAttribute('aria-hidden','true'); item.append(sr,label,number,track); bars.append(item);
   }
-  if(scale>1) { const note=document.createElement('div'); note.className='history-scale'; const vis=document.createElement('span'); vis.setAttribute('aria-hidden','true'); vis.textContent=`1■≈${scale}`; const ssr=document.createElement('span'); ssr.className='visually-hidden'; ssr.textContent=t('scaleSr')(scale); note.append(vis,ssr); bars.append(note); }
 }
 function categoryUrl(path) { const u=new URL(location.href); u.search=''; u.hash=''; path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
 function link(label, path, callback) {
@@ -86,26 +84,37 @@ function categoryPath(id) {
 }
 // 国旗（SVG。絵文字は Windows で国コード文字になるため使わない）。国コードが無い/表に無いサイトは出さない。
 // 旗の画像は必要になった国のものだけ /flags/ から読み、無ければ旗ごと隠す。
+function regionInfo(site) {
+  const code=site.region_code;
+  return window.MISE_REGIONS && /^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(code||'') && code.slice(0,2)===site.country_code ? window.MISE_REGIONS[code]||null : null;
+}
+// 区画（県・州）が分かるサイトだけ、旗の右に区画名を小さく出す。区画表に無ければ従来どおり旗のみ。
 function countryFlag(site) {
   const code=site.country_code, info=window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(code||'') ? window.MISE_COUNTRIES[code] : null;
   if(!info || !(window.MISE_FLAGS||[]).includes(code)) return null;
-  const label=`${info.ja} / ${info.en}`;
-  const span=document.createElement('span'); span.className='site-flag'; span.setAttribute('role','img'); span.setAttribute('aria-label',label); span.title=label; span.dataset.country=code;
+  const region=regionInfo(site);
+  const label=region ? `${info.ja} ${region.ja} / ${info.en} ${region.en}` : `${info.ja} / ${info.en}`;
+  const wrap=document.createElement('span'); wrap.className='site-place'; wrap.setAttribute('role','img'); wrap.setAttribute('aria-label',label); wrap.title=label; wrap.dataset.country=code;
+  if(region) wrap.dataset.region=site.region_code;
+  const flag=document.createElement('span'); flag.className='site-flag'; flag.setAttribute('aria-hidden','true');
   const img=document.createElement('img'); img.alt=''; img.src=`/flags/${code.toLowerCase()}.svg`; img.loading='lazy'; img.decoding='async';
-  img.addEventListener('error',()=>{span.hidden=true;});
-  span.append(img);
-  return span;
+  img.addEventListener('error',()=>{wrap.hidden=true;});
+  flag.append(img); wrap.append(flag);
+  if(region) { const name=document.createElement('span'); name.className='site-region'; name.textContent=language==='ja'?region.ja:region.en; wrap.append(name); }
+  return wrap;
 }
 // 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗のタップ。行本体のクリックは従来どおり遷移のみ。
 const HOVER_DELAY_MS=300;
-function flyToCountry(code,hold) {
-  const info=window.MISE_COUNTRIES && window.MISE_COUNTRIES[code]; if(!info) return;
-  window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold}}));
-  logActivity(`look ${code}`);
+// 区画（県・州）が分かるサイトは区画の代表点（国より近い距離）、無ければ国の代表点。
+function flyToPlace(site,hold) {
+  const country=window.MISE_COUNTRIES && window.MISE_COUNTRIES[site.country_code]; if(!country) return;
+  const region=regionInfo(site), target=region||country;
+  window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:target.lat,lon:target.lon,hold,level:region?'region':'country'}}));
+  logActivity(`look ${region?site.region_code:site.country_code}`);
 }
-function bindGlobeHover(row,flag,code) {
+function bindGlobeHover(row,flag,site) {
   let timer=0, flown=false;
-  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToCountry(code,true); },HOVER_DELAY_MS); };
+  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToPlace(site,true); },HOVER_DELAY_MS); };
   // 地球を動かしていない（300ms未満で離れた）ときは release を出さない。
   const stop=()=>{ clearTimeout(timer); timer=0; if(flown) { flown=false; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
   row.addEventListener('pointerenter',e=>{ if(e.pointerType!=='touch') start(); });
@@ -113,7 +122,7 @@ function bindGlobeHover(row,flag,code) {
   row.addEventListener('focusin',start);
   row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
   // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
-  flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToCountry(code,false); });
+  flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToPlace(site,false); });
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
@@ -128,7 +137,7 @@ function renderSite(target, site, showCategories=false) {
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
   if(Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
   content.append(p);
-  const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site.country_code); }
+  const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site); }
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
@@ -205,4 +214,4 @@ window.addEventListener('popstate',restoreLocation);
 Promise.all([fetch('/api/categories'),fetch('/api/sites'),fetch('/api/activity').catch(()=>null)]).then(async ([a,b,stats])=>{if(!a.ok||!b.ok)throw Error('API');categories=await a.json();sites=await b.json();if(stats && stats.ok) activityStats=await stats.json();const ids=[...new Set(sites.map(s=>s.id))];for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}pickedIds=ids.slice(0,3);restoreLocation();applyLanguage();}).catch(()=>{if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error');});
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
-(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>{const l=[...document.querySelectorAll('.logo span')];if(l.length<4)return;const m=l[0].offsetWidth,s=l[2].offsetWidth;if(!m||!s)return;const sc=[1.5,1,1.5*m/s,1],gap=8;l.forEach((e,k)=>{const x=(sc[k]-1)*e.offsetWidth/2+gap/2;e.style.transform=`scaleX(${sc[k]})`;e.style.margin=`0 ${x}px`;});});
+(document.fonts?document.fonts.ready:Promise.resolve()).then(()=>window.__miseLogo&&window.__miseLogo());

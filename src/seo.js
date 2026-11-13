@@ -1,3 +1,5 @@
+// Default listing order: newest first by the site's own update date, falling back to registered_at when unknown; NULL/unparseable last; ties by id (docs/architecture.md).
+export const SITE_ORDER = `ORDER BY (datetime(COALESCE(s.source_updated_at, s.registered_at)) IS NULL), datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id`;
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -72,8 +74,8 @@ export async function renderIndex(c, assetResponse) {
   }).join('');
   let siteItems = '';
   if (path.length) {
-    const { results } = await c.env.DB.prepare('SELECT s.name, s.url, s.description_ja, s.description_en, s.country_code FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ORDER BY s.id').bind(path.at(-1)).all();
-    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    const { results } = await c.env.DB.prepare(`SELECT s.name, s.url, s.description_ja, s.description_en, s.country_code, s.region_code FROM sites s JOIN site_categories sc ON s.id = sc.site_id WHERE sc.category_id = ? ${SITE_ORDER}`).bind(path.at(-1)).all();
+    siteItems = results.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
   }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
