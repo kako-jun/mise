@@ -1,0 +1,543 @@
+{
+ "soumu-code.html": {
+  "url": "https://www.soumu.go.jp/denshijiti/code.html",
+  "fetched_at": "2026-11-13T06:40:38+00:00",
+  "last_modified": "Tue, 12 May 2026 21:42:43 GMT",
+  "bytes": 41047,
+  "sha256": "040c86bfb4b497f2f8b9a6107c8fb7de3be554f38b7686a909d11b5629a9b331"
+ },
+ "soumu-codes.xlsx": {
+  "url": "https://www.soumu.go.jp/main_content/000925835.xlsx",
+  "fetched_at": "2026-11-13T06:40:39+00:00",
+  "last_modified": "Wed, 01 Apr 2026 08:00:54 GMT",
+  "bytes": 97186,
+  "sha256": "7d04c8a7f6a6e76a7823a0414a8422bf2b26bb6070766971df76eab58ea6ff78"
+ },
+ "soumu-kaisei.xlsx": {
+  "url": "https://www.soumu.go.jp/main_content/000875488.xlsx",
+  "fetched_at": "2026-11-13T06:40:41+00:00",
+  "last_modified": "Wed, 22 Jan 2025 12:48:29 GMT",
+  "bytes": 172751,
+  "sha256": "2e508e34cb6055318f3ebca7c99a0808c9519a6ed7a7a4e0072c702880227caa"
+ },
+ "soumu-kumiai.xlsx": {
+  "url": "https://www.soumu.go.jp/main_content/000892696.xlsx",
+  "fetched_at": "2026-11-13T06:40:42+00:00",
+  "last_modified": "Tue, 14 Apr 2026 11:31:02 GMT",
+  "bytes": 195017,
+  "sha256": "b8813306eb482be277ddd3e474fd1bb016a7ff6053ba71b38016d1e0e11016dd"
+ },
+ "egov-local-governments.html": {
+  "url": "https://www.e-gov.go.jp/government-directory/local-governments.html",
+  "fetched_at": "2026-11-13T06:40:43+00:00",
+  "last_modified": "Wed, 04 Nov 2026 01:37:23 GMT",
+  "bytes": 67727,
+  "sha256": "b3ca2ec58cfa28dd5b92c5146011d72a2720c27d564ba0e6cf623a97b7c04a73"
+ },
+ "egov-ministries-and-agencies.html": {
+  "url": "https://www.e-gov.go.jp/government-directory/ministries-and-agencies.html",
+  "fetched_at": "2026-11-13T06:40:45+00:00",
+  "last_modified": "Wed, 04 Nov 2026 01:36:21 GMT",
+  "bytes": 45196,
+  "sha256": "fdb7baa8d0ef8a2c8fce266cbc49784bf1d52e82f808a042321683763053fead"
+ },
+ "egov-parliament-and-court.html": {
+  "url": "https://www.e-gov.go.jp/government-directory/parliament-and-court.html",
+  "fetched_at": "2026-11-13T06:40:46+00:00",
+  "last_modified": "Wed, 04 Nov 2026 01:42:04 GMT",
+  "bytes": 19992,
+  "sha256": "802af1b8d0ec8a8586e416d7068248b7a8d8ea044f099e1c991d8f3905c4bd81"
+ },
+ "egov-IAAs.html": {
+  "url": "https://www.e-gov.go.jp/government-directory/IAAs.html",
+  "fetched_at": "2026-11-13T06:40:47+00:00",
+  "last_modified": "Wed, 04 Nov 2026 01:43:47 GMT",
+  "bytes": 55046,
+  "sha256": "0490943b4d24eee07837660a7c6388a2e1b7e3e8a855e7a8bbd96648ae3ff87a"
+ },
+ "wikidata-p429.csv": {
+  "url": "https://query.wikidata.org/sparql",
+  "fetched_at": "2026-11-13T06:41:14+00:00",
+  "last_modified": null,
+  "bytes": 365622,
+  "sha256": "3600d0f660684b998c538c3ae7cfd1f0506e5286e667f3540ce3d6b698b1f751"
+ },
+ "wikidata-gojp.csv": {
+  "url": "https://query.wikidata.org/sparql",
+  "fetched_at": "2026-11-13T06:42:13+00:00",
+  "last_modified": null,
+  "bytes": 406788,
+  "sha256": "ff19c59531ea7ed4637b291b59f5361aeb6add4e2d3ee9a07d250e52587aece2"
+ },
+ "jlis-index.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/cms_1069.html",
+  "fetched_at": "2026-11-13T06:42:15+00:00",
+  "last_modified": null,
+  "bytes": 44847,
+  "sha256": "f2ff7cc3214e8d2c1cec31e70bc6f09420ebb2d9bebbb38000a2e1af0801df13"
+ },
+ "jlis-000.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_1069147.html",
+  "fetched_at": "2026-11-13T06:42:16+00:00",
+  "last_modified": null,
+  "bytes": 34512,
+  "sha256": "8e085944092821f88a084577589d7b16f137a6f2447cbb51eecbcd14a6379722",
+  "path": "/spd/map-search/chuugoku/cms_1069147.html"
+ },
+ "jlis-001.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_165569147.html",
+  "fetched_at": "2026-11-13T06:42:24+00:00",
+  "last_modified": null,
+  "bytes": 40150,
+  "sha256": "8f5a0597da4b05d62439f37904ba019bcc0dfad9f6583f8098d6cc2be56b4bb3",
+  "path": "/spd/map-search/chuugoku/cms_165569147.html"
+ },
+ "jlis-002.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_165669147.html",
+  "fetched_at": "2026-11-13T06:42:25+00:00",
+  "last_modified": null,
+  "bytes": 40169,
+  "sha256": "678412acbe6ed7b5e2e5bdc358b472e6dbb6f93949c1e925e7b2ff544343e84f",
+  "path": "/spd/map-search/chuugoku/cms_165669147.html"
+ },
+ "jlis-003.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_165769147.html",
+  "fetched_at": "2026-11-13T06:42:26+00:00",
+  "last_modified": null,
+  "bytes": 43905,
+  "sha256": "9bc0eb0dab6e022700f7fa12a19e9bc42f5b438d9dbafd2f324d2edc34ec5309",
+  "path": "/spd/map-search/chuugoku/cms_165769147.html"
+ },
+ "jlis-004.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_165869147.html",
+  "fetched_at": "2026-11-13T06:42:28+00:00",
+  "last_modified": null,
+  "bytes": 43485,
+  "sha256": "6092a7d6dd86127a35bfe925d9c7e08ad31535f0763a7886deb11ae4df2be709",
+  "path": "/spd/map-search/chuugoku/cms_165869147.html"
+ },
+ "jlis-005.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/chuugoku/cms_16596914.html",
+  "fetched_at": "2026-11-13T06:42:29+00:00",
+  "last_modified": null,
+  "bytes": 40372,
+  "sha256": "150fd4ee61323abe3511e021789abe52be811e884c473a299eab425c57cb7e63",
+  "path": "/spd/map-search/chuugoku/cms_16596914.html"
+ },
+ "jlis-006.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/hokkaido/cms_1069143.html",
+  "fetched_at": "2026-11-13T06:42:30+00:00",
+  "last_modified": null,
+  "bytes": 35915,
+  "sha256": "ed73b18367f9f10c4bd2072bdbff8d35f805fa6a14d3ca56938efbabe4baea26",
+  "path": "/spd/map-search/hokkaido/cms_1069143.html"
+ },
+ "jlis-007.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/hokkaido/cms_11685269143.html",
+  "fetched_at": "2026-11-13T06:42:32+00:00",
+  "last_modified": null,
+  "bytes": 59933,
+  "sha256": "93aadfa6f776684b4044213d370c307e73d77778b3a178d418d291e4007e89f1",
+  "path": "/spd/map-search/hokkaido/cms_11685269143.html"
+ },
+ "jlis-008.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/hokkaido/cms_11685369143.html",
+  "fetched_at": "2026-11-13T06:42:33+00:00",
+  "last_modified": null,
+  "bytes": 40050,
+  "sha256": "2c6f8a4df80df4a8ed243a6974beec0eb9c20affbcc8b6a83951b7c3e97419e8",
+  "path": "/spd/map-search/hokkaido/cms_11685369143.html"
+ },
+ "jlis-009.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/hokkaido/cms_11685469143.html",
+  "fetched_at": "2026-11-13T06:42:34+00:00",
+  "last_modified": null,
+  "bytes": 48257,
+  "sha256": "0604711127f7e40a15aa2ac990a1a41f6d76487dfc199d87225c8835e94254a8",
+  "path": "/spd/map-search/hokkaido/cms_11685469143.html"
+ },
+ "jlis-010.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/hokkaido/cms_11685569143.html",
+  "fetched_at": "2026-11-13T06:42:36+00:00",
+  "last_modified": null,
+  "bytes": 51329,
+  "sha256": "171f3aadfa11421e467c81311c429532d996e83e615d7cdccdf99eb24f0dcb30",
+  "path": "/spd/map-search/hokkaido/cms_11685569143.html"
+ },
+ "jlis-011.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_1069150.html",
+  "fetched_at": "2026-11-13T06:42:37+00:00",
+  "last_modified": null,
+  "bytes": 35125,
+  "sha256": "dcbd18c3dafed41b5c26fb8e18ec60c4d27fdc88181e74539b67474e2a9b6802",
+  "path": "/spd/map-search/kantou/cms_1069150.html"
+ },
+ "jlis-012.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_162969150.html",
+  "fetched_at": "2026-11-13T06:42:38+00:00",
+  "last_modified": null,
+  "bytes": 48807,
+  "sha256": "e8c4041226b6cdc2553ed40e234f1620e04848d0ed6ec6afe7d88b1290dd5eb8",
+  "path": "/spd/map-search/kantou/cms_162969150.html"
+ },
+ "jlis-013.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163069150.html",
+  "fetched_at": "2026-11-13T06:42:39+00:00",
+  "last_modified": null,
+  "bytes": 42806,
+  "sha256": "684b5d8f0d706b221f9ada865d717e56bca8886d508ad0fe8e7ea91859f7c9fd",
+  "path": "/spd/map-search/kantou/cms_163069150.html"
+ },
+ "jlis-014.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163169150.html",
+  "fetched_at": "2026-11-13T06:42:41+00:00",
+  "last_modified": null,
+  "bytes": 45911,
+  "sha256": "14590de515446bb18d5566c5b736a8b945e46ec3ce0f5f0621cba34028a79080",
+  "path": "/spd/map-search/kantou/cms_163169150.html"
+ },
+ "jlis-015.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163269150.html",
+  "fetched_at": "2026-11-13T06:42:42+00:00",
+  "last_modified": null,
+  "bytes": 57613,
+  "sha256": "39079f5f5785b6679449f7f8e323b1c750e3de56cde5c54904f2cc3b4e43fed4",
+  "path": "/spd/map-search/kantou/cms_163269150.html"
+ },
+ "jlis-016.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163369150.html",
+  "fetched_at": "2026-11-13T06:42:44+00:00",
+  "last_modified": null,
+  "bytes": 54010,
+  "sha256": "b7571271ebbd4a41ab1e5647d149648ce951266959cb44b66acb7a02c5d61b57",
+  "path": "/spd/map-search/kantou/cms_163369150.html"
+ },
+ "jlis-017.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163469150.html",
+  "fetched_at": "2026-11-13T06:42:45+00:00",
+  "last_modified": null,
+  "bytes": 54488,
+  "sha256": "ee3cd0272f52686b8e1fd569a24fe892806a08dff6d2e8f4c637f3495ca1fcf7",
+  "path": "/spd/map-search/kantou/cms_163469150.html"
+ },
+ "jlis-018.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kantou/cms_163569150.html",
+  "fetched_at": "2026-11-13T06:42:46+00:00",
+  "last_modified": null,
+  "bytes": 50817,
+  "sha256": "aca7bf0ab7684d9ea2e20602da78b543a4c535aa32794cd46e2642c21ad1a178",
+  "path": "/spd/map-search/kantou/cms_163569150.html"
+ },
+ "jlis-019.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_1069146.html",
+  "fetched_at": "2026-11-13T06:42:48+00:00",
+  "last_modified": null,
+  "bytes": 35091,
+  "sha256": "79bd1c1b780fb8142f60dfa1541064c62c42eb942eb934ac1082b40e87035a0b",
+  "path": "/spd/map-search/kinki/cms_1069146.html"
+ },
+ "jlis-020.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_164769146.html",
+  "fetched_at": "2026-11-13T06:42:49+00:00",
+  "last_modified": null,
+  "bytes": 43458,
+  "sha256": "92c67bcd7131f88f58c8828db6996c4e60983af9d3328899f1ffa9a7ceeddf5f",
+  "path": "/spd/map-search/kinki/cms_164769146.html"
+ },
+ "jlis-021.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_164869146.html",
+  "fetched_at": "2026-11-13T06:42:50+00:00",
+  "last_modified": null,
+  "bytes": 40312,
+  "sha256": "7565d38a61f6bd4c333384703b12c8146eac9e9d354a523809ddf93d25b9ebfd",
+  "path": "/spd/map-search/kinki/cms_164869146.html"
+ },
+ "jlis-022.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_164969146.html",
+  "fetched_at": "2026-11-13T06:42:51+00:00",
+  "last_modified": null,
+  "bytes": 44702,
+  "sha256": "0690b0aa466716b74fe020f763b0222ec81a00e2a6109ab26419af0abe0a5610",
+  "path": "/spd/map-search/kinki/cms_164969146.html"
+ },
+ "jlis-023.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_165069146.html",
+  "fetched_at": "2026-11-13T06:42:53+00:00",
+  "last_modified": null,
+  "bytes": 52608,
+  "sha256": "eea9ea622eb0bbd83dc71b86a470031bc5bd2442006b351ec8913888e838e9b3",
+  "path": "/spd/map-search/kinki/cms_165069146.html"
+ },
+ "jlis-024.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_165169146.html",
+  "fetched_at": "2026-11-13T06:42:54+00:00",
+  "last_modified": null,
+  "bytes": 49003,
+  "sha256": "01e5795cbdbf81cc0dfc0a296c9acf8925eb8f893f82132f45e8779f8f99fbbc",
+  "path": "/spd/map-search/kinki/cms_165169146.html"
+ },
+ "jlis-025.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_165269146.html",
+  "fetched_at": "2026-11-13T06:42:55+00:00",
+  "last_modified": null,
+  "bytes": 46939,
+  "sha256": "5364dc862c36f3a40e2adbcced7bdd715da4d9234df159d06171a7e191cf45dd",
+  "path": "/spd/map-search/kinki/cms_165269146.html"
+ },
+ "jlis-026.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kinki/cms_165369146.html",
+  "fetched_at": "2026-11-13T06:42:57+00:00",
+  "last_modified": null,
+  "bytes": 43840,
+  "sha256": "2ffaac49f5502b5c0b1dfda94d89a4eaa1f4e8f375332daadb1b2404bee1f6bb",
+  "path": "/spd/map-search/kinki/cms_165369146.html"
+ },
+ "jlis-027.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_1069149.html",
+  "fetched_at": "2026-11-13T06:42:58+00:00",
+  "last_modified": null,
+  "bytes": 35431,
+  "sha256": "86703c54b56ad8c201803b07b2647e4654ec2c5a032629cb5c1b761e906e27c3",
+  "path": "/spd/map-search/kyuusyuu/cms_1069149.html"
+ },
+ "jlis-028.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_166669149.html",
+  "fetched_at": "2026-11-13T06:42:59+00:00",
+  "last_modified": null,
+  "bytes": 56818,
+  "sha256": "04ad721f5930a89a2f74628d36757f895d4fdef6bd4a8ad9ae24963beda03fae",
+  "path": "/spd/map-search/kyuusyuu/cms_166669149.html"
+ },
+ "jlis-029.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_166769149.html",
+  "fetched_at": "2026-11-13T06:43:01+00:00",
+  "last_modified": null,
+  "bytes": 40684,
+  "sha256": "260a4ae828a8de0c073b219a7d5698ec84e6b50a119627e157e161359ff6c7cf",
+  "path": "/spd/map-search/kyuusyuu/cms_166769149.html"
+ },
+ "jlis-030.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_166869149.html",
+  "fetched_at": "2026-11-13T06:43:02+00:00",
+  "last_modified": null,
+  "bytes": 41310,
+  "sha256": "854f973874f90a7a43095c34b79a92d9ce5ecc4e7cdf418adfb9f5a934b5fe7d",
+  "path": "/spd/map-search/kyuusyuu/cms_166869149.html"
+ },
+ "jlis-031.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_166969149.html",
+  "fetched_at": "2026-11-13T06:43:03+00:00",
+  "last_modified": null,
+  "bytes": 48328,
+  "sha256": "457260ea353f97616eafa9deea1a3879c390dae4cc955bdcd1ab17adb0e1fd8c",
+  "path": "/spd/map-search/kyuusyuu/cms_166969149.html"
+ },
+ "jlis-032.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_167069149.html",
+  "fetched_at": "2026-11-13T06:43:05+00:00",
+  "last_modified": null,
+  "bytes": 39428,
+  "sha256": "869f0578c1a3d45a629addd4fea62fef0d39a59d49ded3e22e30de9312e0f51d",
+  "path": "/spd/map-search/kyuusyuu/cms_167069149.html"
+ },
+ "jlis-033.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_167169149.html",
+  "fetched_at": "2026-11-13T06:43:06+00:00",
+  "last_modified": null,
+  "bytes": 41946,
+  "sha256": "40ae6ead79873f8f8b9d1b60a672c744fd1fc5b8becfab0ee73629743eb13486",
+  "path": "/spd/map-search/kyuusyuu/cms_167169149.html"
+ },
+ "jlis-034.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_167269149.html",
+  "fetched_at": "2026-11-13T06:43:07+00:00",
+  "last_modified": null,
+  "bytes": 47916,
+  "sha256": "c00b6d8d976d7f88cced264b908c50affb9c77ccd8ca7c4260b21dd75568fb91",
+  "path": "/spd/map-search/kyuusyuu/cms_167269149.html"
+ },
+ "jlis-035.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/kyuusyuu/cms_167369149.html",
+  "fetched_at": "2026-11-13T06:43:09+00:00",
+  "last_modified": null,
+  "bytes": 47310,
+  "sha256": "8799cc0170076504c4ee4885dd0b3ee7540ab3b86c1f1275a5191b9dc9d2c481",
+  "path": "/spd/map-search/kyuusyuu/cms_167369149.html"
+ },
+ "jlis-036.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/shikoku/cms_1069148.html",
+  "fetched_at": "2026-11-13T06:43:10+00:00",
+  "last_modified": null,
+  "bytes": 34202,
+  "sha256": "326c3be0a57668cb8988a6d75fa422ce33cd3a1cebc8a9e03564d0f9567b1c0e",
+  "path": "/spd/map-search/shikoku/cms_1069148.html"
+ },
+ "jlis-037.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/shikoku/cms_166169148.html",
+  "fetched_at": "2026-11-13T06:43:12+00:00",
+  "last_modified": null,
+  "bytes": 41524,
+  "sha256": "841dabf58e0420628ea355d3266bca8a9e02ed573f622a74ccab1f689b8ebae4",
+  "path": "/spd/map-search/shikoku/cms_166169148.html"
+ },
+ "jlis-038.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/shikoku/cms_166269148.html",
+  "fetched_at": "2026-11-13T06:43:14+00:00",
+  "last_modified": null,
+  "bytes": 40203,
+  "sha256": "bca2c1d53c1ddac9367d8321dd26bce8d7206ecea990c0fcedd46459ccd62d42",
+  "path": "/spd/map-search/shikoku/cms_166269148.html"
+ },
+ "jlis-039.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/shikoku/cms_166369148.html",
+  "fetched_at": "2026-11-13T06:43:15+00:00",
+  "last_modified": null,
+  "bytes": 40595,
+  "sha256": "39e9a661d4157827e0e83657676e6abfd700655583a357f108fdd805cedfce79",
+  "path": "/spd/map-search/shikoku/cms_166369148.html"
+ },
+ "jlis-040.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/shikoku/cms_166469148.html",
+  "fetched_at": "2026-11-13T06:43:16+00:00",
+  "last_modified": null,
+  "bytes": 44534,
+  "sha256": "f900c396671bd5cc2a776ad0256448cebbaf21b68256fb61cada7521aab5f62c",
+  "path": "/spd/map-search/shikoku/cms_166469148.html"
+ },
+ "jlis-041.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_1069144.html",
+  "fetched_at": "2026-11-13T06:43:18+00:00",
+  "last_modified": null,
+  "bytes": 34824,
+  "sha256": "63c9f1f3a34aea3846cac5966fbd705b20bc4fecfc711a9dcad01dcf63fb54fa",
+  "path": "/spd/map-search/touhoku/cms_1069144.html"
+ },
+ "jlis-042.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162269144.html",
+  "fetched_at": "2026-11-13T06:43:19+00:00",
+  "last_modified": null,
+  "bytes": 47560,
+  "sha256": "a40b154e5841155de5a8f44ba1a2881ccaa22df6b7cf59a32efda4043394793a",
+  "path": "/spd/map-search/touhoku/cms_162269144.html"
+ },
+ "jlis-043.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162369144.html",
+  "fetched_at": "2026-11-13T06:43:20+00:00",
+  "last_modified": null,
+  "bytes": 45983,
+  "sha256": "5a52a1c8ef7f58f0b53e39b57b6383f17f4803499cd8d393f084c08c8524fc98",
+  "path": "/spd/map-search/touhoku/cms_162369144.html"
+ },
+ "jlis-044.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162469144.html",
+  "fetched_at": "2026-11-13T06:43:22+00:00",
+  "last_modified": null,
+  "bytes": 45712,
+  "sha256": "3c512416638ea289157620f34e9cca23a2b0929f1721ddd30679e6991af36efb",
+  "path": "/spd/map-search/touhoku/cms_162469144.html"
+ },
+ "jlis-045.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162569144.html",
+  "fetched_at": "2026-11-13T06:43:23+00:00",
+  "last_modified": null,
+  "bytes": 41949,
+  "sha256": "57289b9423ec604fd140f69458c5fbea812961cc742e09029cd6042ca235d383",
+  "path": "/spd/map-search/touhoku/cms_162569144.html"
+ },
+ "jlis-046.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162669144.html",
+  "fetched_at": "2026-11-13T06:43:24+00:00",
+  "last_modified": null,
+  "bytes": 45912,
+  "sha256": "5e125d7416c93026f9274fce944d0db647e627650a91a3e701322c7afa2b5a42",
+  "path": "/spd/map-search/touhoku/cms_162669144.html"
+ },
+ "jlis-047.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/touhoku/cms_162769144.html",
+  "fetched_at": "2026-11-13T06:43:26+00:00",
+  "last_modified": null,
+  "bytes": 52632,
+  "sha256": "0de674c6117620c646e4e3980a053922acb8c9ff9f6b1661e9116adf1ca1c4bf",
+  "path": "/spd/map-search/touhoku/cms_162769144.html"
+ },
+ "jlis-048.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_1069145.html",
+  "fetched_at": "2026-11-13T06:43:27+00:00",
+  "last_modified": null,
+  "bytes": 35723,
+  "sha256": "ab14a8e7a1d970de33614e1fc87c5c20c3d02d34c217adaad8e3699172907aed",
+  "path": "/spd/map-search/tyuubu/cms_1069145.html"
+ },
+ "jlis-049.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_163769145.html",
+  "fetched_at": "2026-11-13T06:43:28+00:00",
+  "last_modified": null,
+  "bytes": 46632,
+  "sha256": "84a064b35ee9222f89bc56cc7023aac0c3e88dd17e03135a4304f784e0fe9554",
+  "path": "/spd/map-search/tyuubu/cms_163769145.html"
+ },
+ "jlis-050.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_163869145.html",
+  "fetched_at": "2026-11-13T06:43:30+00:00",
+  "last_modified": null,
+  "bytes": 38777,
+  "sha256": "8cfa236a147424a6ed31c39e1cfe869b00811eae3a0b58a7f3e6b3da4eefa510",
+  "path": "/spd/map-search/tyuubu/cms_163869145.html"
+ },
+ "jlis-051.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_163969145.html",
+  "fetched_at": "2026-11-13T06:43:31+00:00",
+  "last_modified": null,
+  "bytes": 40716,
+  "sha256": "52e5911c1d3468f641a0b890d5ce9739cc20665153413b578c9c2c81617002ab",
+  "path": "/spd/map-search/tyuubu/cms_163969145.html"
+ },
+ "jlis-052.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164069145.html",
+  "fetched_at": "2026-11-13T06:43:32+00:00",
+  "last_modified": null,
+  "bytes": 39814,
+  "sha256": "3a8396c9c2fe771f6eca95d012323ecb7190cdc1808767b6185554211803fccd",
+  "path": "/spd/map-search/tyuubu/cms_164069145.html"
+ },
+ "jlis-053.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164169145.html",
+  "fetched_at": "2026-11-13T06:43:34+00:00",
+  "last_modified": null,
+  "bytes": 42398,
+  "sha256": "c2d702ac2a8d07dfac65b859820f0fa62928b9bc5101e9effb4def637f907d8d",
+  "path": "/spd/map-search/tyuubu/cms_164169145.html"
+ },
+ "jlis-054.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164269145.html",
+  "fetched_at": "2026-11-13T06:43:35+00:00",
+  "last_modified": null,
+  "bytes": 60019,
+  "sha256": "af3c601d436ff7c0921348881fe1e98c7074edfcd3fa0ea62af37bdf0766c558",
+  "path": "/spd/map-search/tyuubu/cms_164269145.html"
+ },
+ "jlis-055.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164369145.html",
+  "fetched_at": "2026-11-13T06:43:36+00:00",
+  "last_modified": null,
+  "bytes": 47042,
+  "sha256": "28667d9262783dff18574b471cb41bb4b9143a823a6c0e9c1488fd247b3e33a6",
+  "path": "/spd/map-search/tyuubu/cms_164369145.html"
+ },
+ "jlis-056.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164469145.html",
+  "fetched_at": "2026-11-13T06:43:38+00:00",
+  "last_modified": null,
+  "bytes": 46335,
+  "sha256": "65adc902da59f4c97673537c85506043bb62d0deedd6bf4de6cc8cfb90a4f66a",
+  "path": "/spd/map-search/tyuubu/cms_164469145.html"
+ },
+ "jlis-057.html": {
+  "url": "https://www.j-lis.go.jp/spd/map-search/tyuubu/cms_164569145.html",
+  "fetched_at": "2026-11-13T06:43:39+00:00",
+  "last_modified": null,
+  "bytes": 54033,
+  "sha256": "0732734e4d1589677806649797f18c0fd8fdf4fe9e75a44b035286e6b3979c49",
+  "path": "/spd/map-search/tyuubu/cms_164569145.html"
+ }
+}
