@@ -1,5 +1,5 @@
 import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
-import { querySites, parsePage, PAGE_SIZE } from './sites.js';
+import { querySites, parsePage, cleanTags, PAGE_SIZE } from './sites.js';
 // 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
 import '../public/countries.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
@@ -108,7 +108,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   const raw = url.searchParams.getAll('category');
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
-  const isSearch = !!url.searchParams.get('q')?.trim();
+  const tags = cleanTags(url.searchParams.getAll('tag')) ?? [];
+  const isSearch = !!url.searchParams.get('q')?.trim() || tags.length > 0; // タグ絞り込みも検索結果と同じ扱い（noindex・ページ番号なし）
   const page = path.length && !isSearch ? parsePage(url.searchParams.get('page')) : 1;
   if (page === null) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
@@ -137,8 +138,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     return `<div class="category${ch.site_count ? '' : ' is-empty'}"><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2>${sub}</div>`;
   }).join('');
   let siteItems = '', pagerBody = '', pages = 1;
-  if (path.length) {
-    const { items, total } = await querySites(c.env.DB, { cc, category: path.at(-1), limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+  if (path.length || tags.length) {
+    const { items, total } = await querySites(c.env.DB, { cc, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
     pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');

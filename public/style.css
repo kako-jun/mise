@@ -289,3 +289,16 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
   @keyframes view-fade-in { from { opacity: 0; } to { opacity: 1; } }
 }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none; } }
+
+/* タグ（#31）: 結果のタグは押せるリンク、押すと検索バー横に取り消せるチップが付く。[hidden] は display を持つ要素なので明示的に隠す。 */
+.site-tag { text-decoration: none; color: inherit; cursor: pointer; }
+.site-tag:hover, .site-tag:focus-visible { background: rgba(40, 103, 115, .16); }
+.site-tag.is-active { background: rgba(40, 103, 115, .28); font-weight: 700; }
+.tag-chips { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; }
+.tag-chips[hidden] { display: none; }
+.tag-chip { display: inline-flex; align-items: center; padding: 2px 2px 2px 10px; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
+html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-color: #82ddea; }
+.tag-chip button { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
+.tag-chip button:hover, .tag-chip button:focus-visible { background: rgba(40, 103, 115, .2); }
+@media (pointer: coarse) { .tag-chip button { min-width: 44px; min-height: 44px; } .tag-chip { padding-top: 0; padding-bottom: 0; } .site-tag { padding: 8px 10px; margin: 2px 0; } }
+@media (max-width: 700px) { .tag-chips { flex: 1 0 100%; } }

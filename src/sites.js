@@ -43,6 +43,15 @@ export const searchText = s => normalizeSearch(`${s.name} ${s.description_ja} ${
 // instr で比較するので、LIKE のメタ文字のエスケープも長さの制限（D1 は LIKE のパターンが約50バイトを超えると too complex）も要らない。
 export const cleanQuery = raw => { const q = [...normalizeSearch(raw).trim()].slice(0, 100).join(''); return q || null; }; // コードポイント単位で切る
 
+// タグ絞り込み（?tag=、複数は AND）。値はタグの日本語名か英語名（sites の site_tags.label_ja / label_en。画面は日本語名を URL に載せる）。
+// 空文字は無視、重複は 1 つにまとめる。MAX_TAGS 個を超える・1 つが 100 文字を超える場合は null（呼び出し側が 400）。
+export const MAX_TAGS = 5;
+export function cleanTags(raw) {
+  const out = [];
+  for (const v of raw ?? []) { const t = String(v ?? '').trim(); if (!t) continue; if ([...t].length > 100) return null; if (!out.includes(t)) out.push(t); }
+  return out.length > MAX_TAGS ? null : out;
+}
+
 // 「cursor の次」の条件。キーを辞書式に比較する（先頭から: 前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
 function afterCursor(vals) {
   const alts = [], args = [];
@@ -57,11 +66,12 @@ function afterCursor(vals) {
   return { sql: `(${alts.join(' OR ')})`, args };
 }
 
-function filters({ cc, category, q }) {
+function filters({ cc, category, q, tags }) {
   const where = [], args = [];
   if (cc) { where.push('s.country_code = ?'); args.push(cc); }
   if (category) { where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)'); args.push(category); }
   if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
+  for (const t of tags ?? []) { where.push('EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = ? OR t.label_en = ?))'); args.push(t, t); } // 複数タグは AND（タグごとに 1 条件）
   return { where, args };
 }
 
@@ -70,9 +80,9 @@ const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favi
 const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; return { ...r, category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
-// total は先頭ページ（カーソルなし）のときだけ数える。q は cleanQuery 済みであること。
-export async function querySites(db, { cc = null, category = null, q = null, limit = PAGE_SIZE, cursor = null, offset = 0 }) {
-  const { where, args } = filters({ cc, category, q });
+// total は先頭ページ（カーソルなし）のときだけ数える。q は cleanQuery 済み、tags は cleanTags 済みであること。
+export async function querySites(db, { cc = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
+  const { where, args } = filters({ cc, category, q, tags });
   const conds = [...where], a = [...args], hasCursor = cursor && !cursor.none;
   if (hasCursor) { const c = afterCursor(cursor.vals); conds.push(c.sql); a.push(...c.args); }
   const sql = `SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${siteOrder()} LIMIT ? OFFSET ?`;
