@@ -36,7 +36,7 @@ app.get('/api/picks', async c => { const sc = scopeOf(c); return sc ? c.json(awa
 app.get('/api/activity', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
   const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites WHERE (?1 IS NULL OR country_code = ?1)`).bind(sc.cc).first();
-  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
+  const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md

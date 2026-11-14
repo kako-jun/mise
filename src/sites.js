@@ -1,6 +1,6 @@
 // サイト一覧の取得（API と SSR が共有する単一の実装）。
 // ★ 並び順の定義はこのファイルの SORT_KEYS だけ。ORDER BY・カーソルのキー列・「次のページ」の比較条件・インデックス列はここから生成する。
-//   並びのキーを足す/変えるとき（例: #71 の `bulk_import` を先頭に足す）:
+//   並びのキーを足す/変えるとき（例: 先頭の `bulk_import`。#71 で足した）:
 //   1. SORT_KEYS に { expr, dir } を足す（先頭ほど優先。末尾の s.id は必ず最後に残す）。
 //   2. sortIndexSql() が返す CREATE INDEX を新しい migration に書く（scripts/check-api-headers.mjs が最新の migration と一致を検査する）。
 //   3. 追加した列が画面に必要なら COLUMNS にも足す（並びだけに使う列は足さなくてよい）。
@@ -8,6 +8,8 @@
 export const PAGE_SIZE = 40, MAX_LIMIT = 100;
 // dir は SQLite の NULL の並びに合わせる: ASC では NULL が先頭、DESC では NULL が末尾。
 export const SORT_KEYS = [
+  // 台帳などからの一括投入（bulk_import=1。官公庁の名簿など）は後ろ。通常のサイト（0）が先（NULL なし、DEFAULT 0）
+  { expr: `s.bulk_import`, dir: 'ASC', type: 'number' },
   // 新しい順（サイト自身の更新日、不明なら登録日。日時が読めない/NULL は DESC で末尾）
   { expr: `datetime(COALESCE(s.source_updated_at, s.registered_at))`, dir: 'DESC', type: 'string' },
   { expr: 's.id', dir: 'ASC', type: 'string' }, // 同値の安定化（必ず最後）
@@ -63,8 +65,8 @@ function filters({ cc, category, q }) {
   return { where, args };
 }
 
-// 画面に出す列。並びだけに使う列（bulk_import など）は SORT_KEYS で足りるのでここには要らない。
-const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
+// 画面に出す列。bulk_import は並びのほか NEW タグの抑止に画面が使うので含める。並びだけに使う列は SORT_KEYS で足りるのでここには要らない。
+const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
 const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; return { ...r, category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
@@ -82,8 +84,8 @@ export async function querySites(db, { cc = null, category = null, q = null, lim
   return out;
 }
 
-// ピックアップ用: 範囲内からランダムに n 件。
+// ピックアップ用: 範囲内からランダムに n 件。ピックアップは「発見」の表示なので、台帳などの一括投入（bulk_import=1）は除く。
 export async function randomSites(db, cc, n = 3) {
-  const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE (?1 IS NULL OR s.country_code = ?1) ORDER BY RANDOM() LIMIT ?2`).bind(cc, n).all();
+  const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) ORDER BY RANDOM() LIMIT ?2`).bind(cc, n).all();
   return results.map(shape);
 }

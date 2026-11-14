@@ -26,7 +26,7 @@
 
 ## 一覧・検索結果の既定の並び
 
-零細の個人サイトの更新が埋もれないよう、既定は「そのサイト自身の更新日」の新しい順。`ORDER BY COALESCE(source_updated_at, registered_at) DESC, id`（日時が読めない/NULL は末尾）。更新日が不明なサイトは mise への登録日で代用する（新規登録を新着扱いにする）。今日登録した更新日不明のサイトは、更新日が数か月前の既存サイトより上に並ぶ。
+零細の個人サイトの更新が埋もれないよう、既定は「そのサイト自身の更新日」の新しい順。`ORDER BY bulk_import, COALESCE(source_updated_at, registered_at) DESC, id`（日時が読めない/NULL は末尾。台帳などからの一括投入 `bulk_import=1` は常に通常のサイトの後ろ）。更新日が不明なサイトは mise への登録日で代用する（新規登録を新着扱いにする）。今日登録した更新日不明のサイトは、更新日が数か月前の既存サイトより上に並ぶ。
 
 定義は `src/sites.js` の `SORT_KEYS` に 1 か所だけあり（並びのキーを足すときはここだけ。手順は [data-model.md](data-model.md#インデックスと検索用列0018)）、`/api/sites` と SSR のカテゴリ一覧が共有する。`app.js` は並べ替えず、API の順で追記する（検索結果も同じ並び）。インデックスは `SORT_KEYS` から生成した式を migration に書く。NULL/読めない日時は `DESC` で自然に末尾。ピックアップ（ランダム）は対象外。並び順の切替 UI はない（意味検索・マッチ度とセットで構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。
 
@@ -49,7 +49,7 @@
 
 ## NEW タグ
 
-登録日時（`sites.registered_at`）から 30 日未満のサイトに NEW を付ける（期間は仮。未決）。登録日時が不明なサイトには付けない。新規 INSERT 時は DB のトリガ（migration 0006）が時刻を記録する。
+登録日時（`sites.registered_at`）から 30 日未満のサイトに NEW を付ける（期間は仮。未決）。登録日時が不明なサイト、一括投入（`bulk_import=1`）のサイトには付けない。直近登録のグラフ・ACTIVITY（`/api/activity`）も `bulk_import=1` を数えない。一覧の並びは一括投入を後ろにする。新規 INSERT 時は DB のトリガ（migration 0006）が時刻を記録する。
 
 ## HUD
 
