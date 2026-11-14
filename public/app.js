@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], pickIndex = 0, picksVisible = false, activityStats = null;
+let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字）または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国（サイトが 1 件以上ある国）と件数。
 const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
@@ -186,7 +186,7 @@ function stateUrl(scope=currentScope) {
   if(!currentTags.length) return `/${scope}/?q=${encodeURIComponent(currentSearch)}`;
   const u=new URL(`/${scope}/`,location.origin);
   if(currentSearch) u.searchParams.set('q',currentSearch);
-  currentPath.forEach(id=>u.searchParams.append('category',id));
+  tagPath.forEach(id=>u.searchParams.append('category',id));
   currentTags.forEach(tg=>u.searchParams.append('tag',tg.key));
   return u.pathname+u.search;
 }
@@ -195,7 +195,7 @@ function tagLink(tag) {
   const a=document.createElement('a'); a.className='site-tag'; a.href=tagUrl(tag.ja); a.textContent=tagLabel(tag); a.dataset.tagKey=tag.ja;
   a.title=t('tagFilter')(tagLabel(tag));
   if(tagActive(tag.ja)) { a.classList.add('is-active'); a.setAttribute('aria-current','true'); }
-  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); toggleTag(tag); });
+  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); toggleTag(tag, !!a.closest('#directory-sites')); });
   return a;
 }
 function refreshTagLinks() {
@@ -206,7 +206,7 @@ function renderChips() {
   for(const tg of currentTags) {
     const chip=document.createElement('span'), label=document.createElement('span'), x=document.createElement('button'), n=tagLabel(tg);
     chip.className='tag-chip'; label.textContent=`#${n}`; x.type='button'; x.textContent='×'; x.setAttribute('aria-label',t('tagRemove')(n)); x.title=t('tagRemove')(n);
-    x.addEventListener('click',()=>{ toggleTag(tg); });
+    x.addEventListener('click',()=>{ toggleTag(tg, false); });
     chip.append(label,x); box.append(chip);
   }
   box.setAttribute('aria-label',t('tagsLabel'));
@@ -217,15 +217,25 @@ function resolveTagLabels(items) {
   let changed=false;
   for(const tg of currentTags) {
     if(tg.resolved) continue;
-    for(const it of items) { let ts=[]; try { ts=JSON.parse(it.tags_json||'[]'); } catch (_) { ts=[]; } const hit=ts.find(x=>x.ja===tg.key || x.en===tg.key); if(hit) { tg.ja=hit.ja; tg.en=hit.en; tg.resolved=true; changed=true; break; } }
+    for(const it of items) { let ts=[]; try { ts=JSON.parse(it.tags_json||'[]'); } catch (_) { ts=[]; } const hit=ts.find(x=>x.ja===tg.key || x.en===tg.key); if(hit) { tg.key=hit.ja; tg.ja=hit.ja; tg.en=hit.en; tg.resolved=true; changed=true; break; } }
   }
-  if(changed) renderChips();
+  if(!changed) return;
+  // 英語名で来たタグは日本語名へ正規化する（行の太字・チップ・URL を日本語名に揃え、同じタグの二重チップも防ぐ）。
+  currentTags=currentTags.filter((tg,i)=>currentTags.findIndex(x=>x.key===tg.key)===i);
+  renderChips(); if(currentSearch!==null) setResultTitle(currentSearch);
+  if(currentSearch!==null && activeList && activeList.locKey===location.pathname+location.search) { const url=stateUrl(); if(location.pathname+location.search!==url) { history.replaceState(history.state,'',url); activeList.locKey=url; } }
 }
 // タグを付ける/外す。検索語（入力欄の文字）はそのまま残り、AND で絞る。履歴は 1 手ずつ積む（戻る/進むで復元）。
-function toggleTag(tag) {
+function showTagNotice() {
+  const n=$('#tag-notice'); n.textContent=t('tagsMax'); n.hidden=false; clearTimeout(showTagNotice.timer); showTagNotice.timer=setTimeout(()=>{ n.hidden=true; },4000);
+}
+function toggleTag(tag, fromDirectory=false) {
   const i=currentTags.findIndex(tg=>tg.key===tag.ja);
   if(i>=0) { currentTags.splice(i,1); logActivity(`untag ${tag.ja}`); }
-  else { if(currentTags.length>=MAX_TAGS) { logActivity(t('tagsMax')); return; } currentTags.push({key:tag.ja,ja:tag.ja,en:tag.en??null,resolved:true}); logActivity(`tag ${tag.ja}`); }
+  else { if(currentTags.length>=MAX_TAGS) { logActivity(t('tagsMax')); showTagNotice(); return; }
+    // カテゴリとの AND は、カテゴリ一覧の行から最初のタグを押したときだけ（検索結果・ピックアップからは範囲全体）。付いたあとは維持する。
+    if(!currentTags.length) tagPath=fromDirectory ? [...currentPath] : [];
+    currentTags.push({key:tag.ja,ja:tag.ja,en:tag.en??null,resolved:true}); logActivity(`tag ${tag.ja}`); }
   const q=$('#query').value.trim();
   if(q || currentTags.length) { currentSearch=q; const url=stateUrl(); if(location.pathname+location.search!==url) history.pushState(null,'',url); showResults(q); }
   else showDirectory(currentPath);
@@ -379,14 +389,14 @@ function swapView(viewKey, animate, fn, noVt=false) {
 let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
   const first=!viewShown; viewShown=true;
-  currentPath=path; currentSearch=null; currentTags=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
   // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
 }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
   if(!keepRequestOpen) setRequestOpen(false);
-  currentPath=path; currentSearch=null; currentTags=[]; renderChips(); updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
@@ -420,14 +430,18 @@ setInterval(()=>{
 function showResults(query) {
   const first=!viewShown; viewShown=true;
   currentSearch=query; renderChips();
-  swapView(`${currentScope}||${query}|${currentTags.map(tg=>tg.key).join('\n')}|${currentTags.length?currentPath.join('/'):''}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
+  swapView(`${currentScope}||${query}|${currentTags.map(tg=>tg.key).join('\n')}|${currentTags.length?tagPath.join('/'):''}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
+}
+function setResultTitle(query) {
+  const tagText=currentTags.map(tg=>`#${tagLabel(tg)}`).join(' ');
+  $('#result-title').textContent=currentTags.length ? (query ? `${t('results')(query)} ${tagText}` : t('taggedSites')(tagText)) : query?t('results')(query):t('all');
 }
 function showResultsNow(query) {
   if(!keepRequestOpen) setRequestOpen(false);
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
   // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
-  const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? currentPath.at(-1) : undefined, tagText=currentTags.map(tg=>`#${tagLabel(tg)}`).join(' ');
-  $('#result-title').textContent=tagKeys.length ? (query ? `${t('results')(query)} ${tagText}` : t('taggedSites')(tagText)) : query?t('results')(query):t('all'); $('#empty').hidden=true;
+  const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
+  setResultTitle(query); $('#empty').hidden=true;
   startList({ key:`${currentScope}|?q|${query}|${tagKeys.join('\n')}|${cat??''}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query,...(tagKeys.length?{tag:tagKeys}:{}),...(cat?{category:cat}:{})}, startPage:1, showCategories:true,
     onTotal:total=>{ $('#empty').hidden=!!total; if(activeList) resolveTagLabels(activeList.items); } });
 }
@@ -552,8 +566,11 @@ function restoreLocation() {
   if(keys.length) {
     const path=[]; let parent=null;
     for(const part of sp.getAll('category')) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c) { path.length=0; break; } path.push(c.id); parent=c.id; }
-    restoredOnce=true; currentPath=path; currentTags=keys.map(k=>({key:k,ja:k,en:null,resolved:false}));
-    $('#query').value=(q||'').trim(); showResults((q||'').trim()); return;
+    restoredOnce=true; currentPath=path; tagPath=[...path]; currentTags=keys.map(k=>({key:k,ja:k,en:null,resolved:false}));
+    $('#query').value=(q||'').trim(); showResults((q||'').trim());
+    // 6 個以上・空・重複・不正なカテゴリなどは切り詰めた形に URL を正規化する（履歴は増やさない）。
+    const norm=stateUrl(); if(location.pathname+location.search!==norm && (sp.getAll('tag').length!==keys.length || sp.getAll('category').length!==path.length)) history.replaceState(history.state,'',norm);
+    return;
   }
   if(q && q.trim()){ currentTags=[]; $('#query').value=q; showResults(q.trim()); return; }
   const first=!restoredOnce; restoredOnce=true;

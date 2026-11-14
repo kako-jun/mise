@@ -296,6 +296,8 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 .site-tag.is-active { background: rgba(40, 103, 115, .28); font-weight: 700; }
 .tag-chips { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; }
 .tag-chips[hidden] { display: none; }
+.tag-notice { margin: 4px 0 0; font-size: 13px; text-align: center; opacity: .85; }
+.tag-notice[hidden] { display: none; }
 .tag-chip { display: inline-flex; align-items: center; padding: 2px 2px 2px 10px; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
 html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-color: #82ddea; }
 .tag-chip button { min-width: 28px; min-height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
