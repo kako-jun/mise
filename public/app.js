@@ -311,11 +311,13 @@ function startList(opts) {
 }
 // 復元を打ち切る操作は「実際にスクロールしようとした」ものだけ（wheel / touchmove / スクロール系のキー）。タップ・touchstart・pointerdown では捨てない（API が遅い間にタップしても y=0 で確定させない）。
 const USER_MOVE=['wheel','touchmove','keydown'], SCROLL_KEYS=new Set(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' ','Spacebar']);
+// 入力欄の中での Space・矢印・Home・End は文字入力・カーソル移動でありスクロールではない（復元を打ち切らない）。
+const isEditable=el=>!!el && el.nodeType===1 && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
 function createList(opts) {
   const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
   L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
   const foot=opts.foot, ul=opts.ul;
-  const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && !SCROLL_KEYS.has(e.key)) return; L.userMoved=true; };
+  const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && (!SCROLL_KEYS.has(e.key) || isEditable(e.target))) return; L.userMoved=true; };
   // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
   L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
   if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
@@ -466,15 +468,24 @@ function showResultsNow(query) {
 }
 function updateSearch() {
   const q=$('#query').value.trim();
-  if(q || currentTags.length) { showResults(q); if(currentTags.length) history.replaceState(history.state,'',stateUrl()); } else showDirectory(currentPath, false);
+  if(q || currentTags.length) { commitSearchUrl(q); showResults(q); } else { leaveSearchUrl(); showDirectory(currentPath, false); }
 }
+// 検索（?q= / ?tag=）の URL 反映（#99）。カテゴリ等から検索に入る最初の 1 回だけ pushState、検索中の語の変更は replaceState（入力のたびに履歴を積まない）。
+const inSearchUrl=()=>{ const sp=new URLSearchParams(location.search); return sp.has('q') || sp.has('tag'); };
+function commitSearchUrl(q) {
+  const was=inSearchUrl(); currentSearch=q; const url=stateUrl();
+  if(location.pathname+location.search===url) return;
+  if(was) history.replaceState(history.state,'',url); else pushUrl(url);
+}
+// 検索語もタグも空になってカテゴリ一覧へ戻るとき、URL を検索中の項目のままにしない（replaceState。戻る先は積み増さない）。
+function leaveSearchUrl() { if(!inSearchUrl()) return; const url=categoryUrl(currentPath); if(location.pathname+location.search!==url) history.replaceState(null,'',url); }
 let reqStatus = null;
 let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
 $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);if(currentTags.length) history.replaceState(history.state,'',stateUrl());} else if(currentTags.length) {showResults(q);history.replaceState(history.state,'',stateUrl());} else showDirectory(currentPath,false);});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {leaveSearchUrl();showDirectory(currentPath,false);}});
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
 function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
