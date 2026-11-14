@@ -311,7 +311,7 @@ function swapView(viewKey, animate, fn, noVt=false) {
     vt.finished.catch(()=>{}).finally(()=>{ if(activeVt===vt) activeVt=null; });
     return;
   }
-  fn(); fadeIn($('#directory').hidden ? $('#results') : $('#directory'));
+  fn(); fadeIn($('#view-column'));
 }
 let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
