@@ -48,6 +48,9 @@ const countryName = code => {
 };
 const flagUrl = code => (globalThis.MISE_FLAGS ?? []).includes(code) ? `/flags/${code.toLowerCase()}.svg` : null;
 
+// `q` か `tag` が付いた URL は検索結果扱い（noindex）。tag は不正（6 個以上・101 文字以上で cleanTags が null）でも、付いた時点で対象にする。
+export const isSearchQuery = sp => !!sp.get('q')?.trim() || sp.has('tag');
+
 // app.js の restoreLocation と同じ解決規則（id または name_ja。解決できない時点で null）
 export function resolvePath(categories, raw) {
   let parent = null;
@@ -109,7 +112,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
   const tags = cleanTags(url.searchParams.getAll('tag')) ?? [];
-  const isSearch = !!url.searchParams.get('q')?.trim() || tags.length > 0; // タグ絞り込みも検索結果と同じ扱い（noindex・ページ番号なし）
+  const isSearch = isSearchQuery(url.searchParams); // タグ絞り込みも検索結果と同じ扱い（noindex・ページ番号なし）
   const page = path.length && !isSearch ? parsePage(url.searchParams.get('page')) : 1;
   if (page === null) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 

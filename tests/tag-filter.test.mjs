@@ -45,3 +45,12 @@ test('タグなしは従来どおり全件、total はタグ絞り込み後の�
   assert.equal((await querySites(d, {})).total, 4);
   assert.equal((await querySites(d, { tags: ['キノコ', '図鑑'] })).total, 2);
 });
+
+test('SSR: tag パラメータが付けば不正（6 個以上）でも noindex 対象', async () => {
+  const { isSearchQuery } = await import('../src/seo.js');
+  const sp = s => new URLSearchParams(s);
+  assert.equal(isSearchQuery(sp('tag=a')), true);
+  assert.equal(isSearchQuery(sp(Array.from({ length: MAX_TAGS + 1 }, (_, i) => 'tag=t' + i).join('&'))), true);
+  assert.equal(isSearchQuery(sp('q=x')), true);
+  assert.equal(isSearchQuery(sp('category=a')), false);
+});
