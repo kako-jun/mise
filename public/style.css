@@ -277,10 +277,10 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 /* グループは位置・大きさの補間をしない（スクロールした状態からの移動で列がヘッダー/検索欄の上をスライドするため）。新しい列の位置に固定し、旧像・新像は列の上端に揃えてはみ出しを切り、その場でクロスフェードだけさせる。 */
 ::view-transition-group(mise-view) { animation-name: none; overflow: clip; }
 ::view-transition-old(mise-view), ::view-transition-new(mise-view) { inset: 0; width: 100%; height: 100%; object-fit: none; object-position: top; }
-/* 1200px 以上は固定配置のピックアップ・コーナーパネル・猫。位置が変わらないので、別名で元の重なり順だけ保ち、旧像は即時に消す（二重像を出さない）。 */
-@media (min-width: 1200px) { #picks { view-transition-name: mise-picks; } .corner-panel { view-transition-name: mise-corner; } #walking-cat { view-transition-name: mise-cat; }
-  ::view-transition-group(mise-picks), ::view-transition-group(mise-corner), ::view-transition-group(mise-cat), ::view-transition-new(mise-picks), ::view-transition-new(mise-corner), ::view-transition-new(mise-cat) { animation: none; }
-  ::view-transition-old(mise-picks), ::view-transition-old(mise-corner), ::view-transition-old(mise-cat) { animation: none; display: none; } }
+/* 1200px 以上は固定配置のピックアップ・コーナーパネル（猫は名前を付けない: 遷移中に cat.js が hidden にすると名前付き新要素が消えて遷移ごと skip され、フェードが飛ぶ）。位置が変わらないので、別名で元の重なり順だけ保ち、旧像は即時に消す（二重像を出さない）。 */
+@media (min-width: 1200px) { #picks { view-transition-name: mise-picks; } .corner-panel { view-transition-name: mise-corner; }
+  ::view-transition-group(mise-picks), ::view-transition-group(mise-corner), ::view-transition-new(mise-picks), ::view-transition-new(mise-corner) { animation: none; }
+  ::view-transition-old(mise-picks), ::view-transition-old(mise-corner) { animation: none; display: none; } }
 ::view-transition-group(root) { animation: none; }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 ::view-transition-old(mise-view), ::view-transition-new(mise-view) { animation-duration: .2s; animation-timing-function: ease; animation-fill-mode: both; }
