@@ -292,6 +292,12 @@ let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fro
 const VT_WAIT_MS=600;
 const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
 function fadeIn(el) { if(reducedMotion() || vtLive) return; el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
+// 画面全体（列）のフェード。1200px 以上は列の中に position:fixed のコーナーパネル・ピックアップがあり、列ごと opacity を動かすと 0 から点滅するので、一覧側（#directory/#results）だけにかける。
+function fadeInView() {
+  const col=$('#view-column'), parts=[$('#directory'),$('#results')], wide=matchMedia('(min-width: 1200px)').matches;
+  [col,...parts].forEach(e=>e.classList.remove('fade-in'));
+  if(wide) parts.forEach(fadeIn); else fadeIn(col);
+}
 function swapView(viewKey, animate, fn, noVt=false) {
   const changed=viewKey!==lastViewKey; lastViewKey=viewKey;
   // 入れ替え待ちの遷移がある間の同じ画面の再描画（戻る/進む・範囲切替後の applyLanguage）は、待機中の描画が行うので何もしない。
@@ -308,10 +314,11 @@ function swapView(viewKey, animate, fn, noVt=false) {
       vtPending=false; vtLive=true;
       try { fn(); const L=activeList; if(L && L.firstLoad) await Promise.race([L.firstLoad,new Promise(r=>setTimeout(r,VT_WAIT_MS))]); } finally { vtLive=false; }
     });
+    vt.ready.catch(()=>{}); vt.updateCallbackDone.catch(()=>{}); // skipTransition() で捨てられた遷移の拒否を未捕捉にしない
     vt.finished.catch(()=>{}).finally(()=>{ if(activeVt===vt) activeVt=null; });
     return;
   }
-  fn(); fadeIn($('#view-column'));
+  fn(); fadeInView();
 }
 let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
