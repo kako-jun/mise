@@ -270,3 +270,15 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 
 /* 日本語判定の初回、app.js の初期化まで翻訳対象を不可視にする（レイアウトは動かさない） */
 .i18n-pending [data-i18n], .i18n-pending #scope-nav, .i18n-pending #directory, .i18n-pending #breadcrumbs { visibility: hidden; }
+
+/* 一覧の入れ替え（カテゴリ移動・検索・範囲切替）の短いフェード。View Transitions 非対応では .fade-in の opacity で同じ見た目にする。 */
+#directory, #results { view-transition-name: mise-view; }
+::view-transition-group(root) { animation: none; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-group(mise-view) { animation-duration: .2s; }
+::view-transition-old(mise-view), ::view-transition-new(mise-view) { animation-duration: .2s; animation-timing-function: ease; }
+@media (prefers-reduced-motion: no-preference) {
+  .fade-in { animation: view-fade-in .2s ease both; }
+  @keyframes view-fade-in { from { opacity: 0; } to { opacity: 1; } }
+}
+@media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none; } }
