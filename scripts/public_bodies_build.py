@@ -182,7 +182,8 @@ def main():
             cands = [(sname == 'jlis', not u.startswith('https://'), order, u) for order, sname in enumerate(('egov', 'wikidata', 'jlis'))
                      for u in srcs.get(sname, []) if host_key(u) == h]
             pick = clean_url(sorted(cands)[0][3])  # J-LIS の URL は他に同じホストの候補が無いときだけ（J-LIS 由来のパスを掲載しない）
-            tag = ';'.join(f'{ {"wikidata": "wikidata", "egov": "e-gov", "jlis": "j-lis"}[s] }@{ {"wikidata": fetch_day("wikidata-p429.csv"), "egov": fetch_day("egov-local-governments.html"), "jlis": jlis_date.get(c) or fetch_day("jlis-000.html")}[s] }' for s in used)
+            # J-LIS は照合にだけ使い、台帳の出典(sources)には記録しない(利用条件が未決のため。掲載の根拠は非 J-LIS の出典 + 到達確認)
+            tag = ';'.join(f'{ {"wikidata": "wikidata", "egov": "e-gov", "jlis": "j-lis"}[s] }@{ {"wikidata": fetch_day("wikidata-p429.csv"), "egov": fetch_day("egov-local-governments.html"), "jlis": jlis_date.get(c) or fetch_day("jlis-000.html")}[s] }' for s in used if s != 'jlis')
             tally['confirmed'] += 1
             ledger.append({'code': c, 'name_ja': e['name'], 'name_en': w.get('en', ''), 'reading_kana': e['kana'], 'type': t,
                            'prefecture': e['pref'], 'url': pick, 'host': h, 'domain_class': domain_class(h), 'sources': tag,

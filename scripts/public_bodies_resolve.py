@@ -93,8 +93,8 @@ def do_apply():
         h = host_key(url)
         ledger.append({'code': r['code'], 'name_ja': r['name_ja'], 'name_en': '', 'reading_kana': '', 'type': r['type'], 'prefecture': r['prefecture'],
                        'url': url, 'host': h, 'domain_class': B.domain_class(h),
-                       'sources': f'{SRC_NAME[to_src]}@{src_day[to_src]};{SRC_NAME[from_src]}+redirect@{checked}', 'status': 'active',
-                       'status_date': '', 'successor_code': '', 'note': f'{SRC_NAME[from_src]} の旧URL({[u for s, u in candidates(r) if s == from_src][0]})が {SRC_NAME[to_src]} のホストへリダイレクトすることを確認'})
+                       'sources': f'{SRC_NAME[to_src]}@{src_day[to_src]}', 'status': 'active',
+                       'status_date': '', 'successor_code': '', 'note': f'旧URL({[u for s, u in candidates(r) if s == from_src][0]})が {SRC_NAME[to_src]} のホストへリダイレクトすることを確認'})
         promoted += 1
     for name, rows, fields in (('ledger.csv', ledger, B.FIELDS), ('review.csv', review, B.REVIEW_FIELDS)):
         with open(ROOT / name, 'w', encoding='utf-8', newline='') as f:

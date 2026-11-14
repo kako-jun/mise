@@ -51,7 +51,8 @@ class Ledger(unittest.TestCase):
     def test_active_has_two_sources_and_matching_host(self):
         for r in self.rows:
             if r['status'] != 'active': continue
-            self.assertGreaterEqual(len(r['sources'].split(';')), 2, r['code'])
+            # 案(c): J-LIS を数えないので、掲載対象は 出典1以上 + reach の 2 要素、掲載しない行政区は出典1以上
+            self.assertGreaterEqual(len(r['sources'].split(';')), 1 if r['type'] == '行政区' else 2, r['code'])
             self.assertEqual(common.host_key(r['url']), r['host'], r['code'])
     def test_successor_exists_and_not_self(self):
         codes = {r['code'] for r in self.rows if r['status'] in ('active', 'unverified-reach')} | {r['code'] for r in csv.DictReader(open(LEDGER.with_name('review.csv'), encoding='utf-8'))}
@@ -123,6 +124,18 @@ class Sql(unittest.TestCase):
             if r['status'] != 'active' or r['type'] not in ('都道府県', '市', '町', '村', '特別区'): continue
             path = urllib.parse.urlsplit(r['url']).path
             self.assertEqual(path if path else '/', self.WIKIDATA_DEEP.get(r['code'], '/'), r['code'] + ' ' + r['url'])
+    def test_listed_basis_is_non_jlis_source_plus_reach(self):
+        # 案(c): J-LIS は出典に数えない。掲載行は Wikidata か e-Gov のどちらかと、到達確認(reach)を sources に持つ。
+        for r in csv.DictReader(open(LEDGER, encoding='utf-8')):
+            names = {x.split('@')[0] for x in r['sources'].split(';') if x}
+            self.assertFalse([n for n in names if n.startswith('j-lis')], r['code'] + ' sources に j-lis')
+            if r['status'] == 'active' and r['type'] in ('都道府県', '市', '町', '村', '特別区', '国の機関', '独立行政法人'):
+                self.assertTrue(names & {'wikidata', 'e-gov', 'override'}, r['code'] + ' に非J-LIS出典が無い')
+                self.assertIn('reach', names, r['code'])
+    def test_credit_does_not_cite_jlis(self):
+        root = LEDGER.parent.parent.parent
+        for f in ('public/app.js', 'public/index.html'):
+            self.assertNotIn('J-LIS', (root / f).read_text(encoding='utf-8'), f)
     def test_listed_rows_have_ok_reachability(self):
         ev = {e['code']: e for e in csv.DictReader(open(LEDGER.with_name('evidence') / 'reachability.csv', encoding='utf-8'))}
         for r in psql.listed(psql.load(LEDGER), False).values():
