@@ -249,7 +249,7 @@ function toggleTag(tag, fromDirectory=false) {
     if(!currentTags.length) tagPath=fromDirectory ? [...currentPath] : [];
     currentTags.push({key:tag.ja,ja:tag.ja,en:tag.en??null,resolved:true}); logActivity(`tag ${tag.ja}`); }
   const q=$('#query').value.trim();
-  if(q || currentTags.length) { currentSearch=q; const url=stateUrl(); if(location.pathname+location.search!==url) history.pushState(null,'',url); showResults(q); }
+  if(q || currentTags.length) { currentSearch=q; const url=stateUrl(); if(location.pathname+location.search!==url) pushUrl(url); showResults(q); }
   else showDirectory(currentPath);
   // 画面（スマホは先頭が見えていないことが多い）を、検索バー（チップ）と結果の先頭が見える位置へ。ホバーは使わずタップで完結する。
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ const row=document.querySelector('.search-row'); if(row.getBoundingClientRect().top<0) row.scrollIntoView({block:'start'}); }));
@@ -305,12 +305,13 @@ function startList(opts) {
   if(!opts.params) { activeList=null; clearListRows(opts.ul); opts.foot.replaceChildren(); return; }
   activeList=createList(opts); activeList.start();
 }
-const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
+// 復元を打ち切る操作は「実際にスクロールしようとした」ものだけ（wheel / touchmove / スクロール系のキー）。タップ・touchstart・pointerdown では捨てない（API が遅い間にタップしても y=0 で確定させない）。
+const USER_MOVE=['wheel','touchmove','keydown'], SCROLL_KEYS=new Set(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' ','Spacebar']);
 function createList(opts) {
   const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
   L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
   const foot=opts.foot, ul=opts.ul;
-  const saved=history.state && history.state.mise; const onMove=()=>{ L.userMoved=true; };
+  const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && !SCROLL_KEYS.has(e.key)) return; L.userMoved=true; };
   // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
   L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
   if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
@@ -344,7 +345,7 @@ function createList(opts) {
       const first=!L.items.length && L.total==null;
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
       if(first) { L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
-    } catch (e) { if(L.stopped) return; L.error=true; L.endRestore(); }
+    } catch (e) { if(L.stopped) return; L.error=true; /* 復元は捨てない: 保存値を守り（復元中は保存しない）、再試行で続ける */ }
     L.loading=false; L.resolveFirst(); if(L.stopped) return;
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
@@ -364,6 +365,8 @@ function createList(opts) {
 let saveTimer=0;
 addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
 addEventListener('pagehide',saveListState);
+// 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
+function pushUrl(url) { saveListState(); history.pushState(null,'',url); }
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
 // 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
 let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fromPop=false, animateRedraw=false;
@@ -403,7 +406,7 @@ function showDirectory(path, updateHistory=true, preserveSsr=false) {
   const first=!viewShown; viewShown=true;
   currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
   // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
-  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
+  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) pushUrl(categoryUrl(path));
   swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
 }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
@@ -565,7 +568,7 @@ async function chooseScope(scope) {
   logActivity(`scope ${scope}`);
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
-  history.pushState(null,'',stateUrl(scope));
+  pushUrl(stateUrl(scope));
   renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage(true);
   globeForScope(scope);
 }
