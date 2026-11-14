@@ -275,7 +275,7 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 /* 一覧とその後ろに続く区切り線・導入文・（1200px 未満の）コーナーパネルを 1 つの列（#view-column）にまとめて、1 つのグループでクロスフェードする（別々にすると新しい位置へ一気に移り、旧一覧の下から完全不透明で見える）。 */
 #view-column { view-transition-name: mise-view; }
 /* グループは位置・大きさの補間をしない（スクロールした状態からの移動で列がヘッダー/検索欄の上をスライドするため）。新しい列の位置に固定し、旧像・新像は列の上端に揃えてはみ出しを切り、その場でクロスフェードだけさせる。 */
-::view-transition-group(mise-view) { animation: none; overflow: clip; }
+::view-transition-group(mise-view) { animation-name: none; overflow: clip; }
 ::view-transition-old(mise-view), ::view-transition-new(mise-view) { inset: 0; width: 100%; height: 100%; object-fit: none; object-position: top; }
 /* 1200px 以上は固定配置のピックアップ・コーナーパネル・猫。位置が変わらないので、別名で元の重なり順だけ保ち、旧像は即時に消す（二重像を出さない）。 */
 @media (min-width: 1200px) { #picks { view-transition-name: mise-picks; } .corner-panel { view-transition-name: mise-corner; } #walking-cat { view-transition-name: mise-cat; }
@@ -283,7 +283,7 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
   ::view-transition-old(mise-picks), ::view-transition-old(mise-corner), ::view-transition-old(mise-cat) { animation: none; display: none; } }
 ::view-transition-group(root) { animation: none; }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
-::view-transition-old(mise-view), ::view-transition-new(mise-view) { animation-duration: .2s; animation-timing-function: ease; }
+::view-transition-old(mise-view), ::view-transition-new(mise-view) { animation-duration: .2s; animation-timing-function: ease; animation-fill-mode: both; }
 @media (prefers-reduced-motion: no-preference) {
   .fade-in { animation: view-fade-in .2s ease both; }
   @keyframes view-fade-in { from { opacity: 0; } to { opacity: 1; } }
