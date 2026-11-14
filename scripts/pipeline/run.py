@@ -10,6 +10,7 @@ import datetime
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -34,12 +35,14 @@ def triage(db, redo=False):
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred'")
     # 共有サービスの推定: 台帳に apex も www も無く(= 本体がリンクされていない)、配下のホストだけが多数ある登録ドメイン。
     # apex/www がある登録ドメイン、または links（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群とみなして対象外。
-    keys = [k for (k,) in db.execute('SELECT key FROM frontier')]
-    exempt = {registrable(k) for k in keys if not subdomain_of_registrable(k)}
-    exempt |= {registrable(k) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
+    keys = [k.split('/')[0] for (k,) in db.execute('SELECT key FROM frontier')]   # パス付きキー(request 由来のユーザー領域)はホスト部だけで数える
+    # 免除の根拠にするのは発見元が申請(request)でない行だけ。申請者は外部の提出者で、パス付きの推薦(sharedsvc.jp/someone)は共有サービスの証拠でもあるため、
+    # 提出によって同じドメイン配下の保留を外せないようにする（申請の URL 自体は通常どおり審査される）
+    exempt = {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source!='request'") if '/' not in k and not subdomain_of_registrable(k)}
+    exempt |= {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
     fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
-        reason = prefilter(r['host'], jp_only=r['source'] != 'links')
+        reason = prefilter(r['host'], jp_only=r['source'] not in ('links', 'request'))   # 申請の推薦は .jp 以外も許す（国は掲載時の country_code が決める）
         if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
             reason = 'shared_service_user'   # 台帳内で同じドメイン配下のホストが多い = 共有サービスの利用者領域の可能性
         if reason in DEFERRED_REASONS:
@@ -55,7 +58,7 @@ def triage(db, redo=False):
 
 def process(row):
     """1ホストの取得と特徴抽出（ネットワークのみ。DBには触らない）。"""
-    res = fetcher.fetch_site(row['host'])
+    res = fetcher.fetch_site(row['host'], path=urllib.parse.urlsplit(row['url']).path or '/')   # 申請のパス付き推薦は、そのパスを取る（それ以外は '/'）
     out = {'key': row['key'], 'robots_status': res['robots_status'], 'status': res['status'], 'final_url': res['final_url'], 'error': res['error'], 'feat': None}
     if not res['error'] and res['status'] == 200:
         ctype = res['headers'].get('content-type', '').lower()
@@ -68,7 +71,7 @@ def process(row):
 
 def fetch(db, limit, workers):
     # 新規(queued)と、バックオフが明けた failed（試行 MAX_ATTEMPTS 未満）を対象にする
-    rows = db.execute("SELECT key, host FROM frontier WHERE (state='queued' OR (state='failed' AND fetch_attempts<?)) AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY state DESC, priority DESC, key LIMIT ?", (MAX_ATTEMPTS, frontier.now(), limit)).fetchall()
+    rows = db.execute("SELECT key, host, url FROM frontier WHERE (state='queued' OR (state='failed' AND fetch_attempts<?)) AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY state DESC, priority DESC, key LIMIT ?", (MAX_ATTEMPTS, frontier.now(), limit)).fetchall()
     done = 0
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         futs = {ex.submit(process, r): r for r in rows}
