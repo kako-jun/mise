@@ -36,7 +36,9 @@ def triage(db, redo=False):
     # 共有サービスの推定: 台帳に apex も www も無く(= 本体がリンクされていない)、配下のホストだけが多数ある登録ドメイン。
     # apex/www がある登録ドメイン、または links（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群とみなして対象外。
     keys = [k.split('/')[0] for (k,) in db.execute('SELECT key FROM frontier')]   # パス付きキー(request 由来のユーザー領域)はホスト部だけで数える
-    exempt = {registrable(k) for k in keys if not subdomain_of_registrable(k)}
+    # 免除の根拠にするのは発見元が申請(request)でない行だけ。申請者は外部の提出者で、パス付きの推薦(sharedsvc.jp/someone)は共有サービスの証拠でもあるため、
+    # 提出によって同じドメイン配下の保留を外せないようにする（申請の URL 自体は通常どおり審査される）
+    exempt = {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source!='request'") if '/' not in k and not subdomain_of_registrable(k)}
     exempt |= {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
     fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():

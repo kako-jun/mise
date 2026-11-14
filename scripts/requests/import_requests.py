@@ -55,7 +55,10 @@ def _shared_suffixes():
     """共有ホスティングの一覧。正本は src/intake.js の SHARED_SUFFIXES（重複管理しない）。"""
     src = (ROOT / 'src' / 'intake.js').read_text(encoding='utf-8')
     m = re.search(r'SHARED_SUFFIXES\s*=\s*\[(.*?)\]', src, re.S)
-    return re.findall(r"'([^']+)'", m.group(1)) if m else []
+    found = re.findall(r"'([^']+)'", m.group(1)) if m else []
+    if not found:
+        raise RuntimeError('src/intake.js の SHARED_SUFFIXES を読めない（書式が変わった？）。import_requests.py の _shared_suffixes を直す')
+    return found
 
 
 def _decode_unreserved(s):
@@ -231,6 +234,10 @@ def main(argv=None, runner=subprocess.run):
     ap.add_argument('--emit-sql', action='store_true', help='status 更新 SQL を標準出力へ(D1 へは書かない)')
     a = ap.parse_args(argv)
     if a.mark_reviewed:
+        known = _review_ids(a.review_file)
+        for i in a.mark_reviewed:
+            if i not in known:
+                print(f'警告: 申請#{i} は {a.review_file} に無い（済みとして記録はする）', file=sys.stderr)
         mark_reviewed(a.review_file, a.mark_reviewed)
         print(f'{len(a.mark_reviewed)} 件を済みにした')
         return

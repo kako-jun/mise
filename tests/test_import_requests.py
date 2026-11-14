@@ -140,8 +140,18 @@ class ImportTest(Base):
         idx = ir.listed_index([{'id': 'collected-hyuki', 'url': 'https://www.hyuki.com/'}], files=[])
         self.assertEqual(idx, {'hyuki.com': 'collected-hyuki'})
 
-    def test_shared_suffixes_read_from_intake_js(self):
-        self.assertIn('github.io', ir._shared_suffixes())
+    def test_shared_suffixes_match_intake_js(self):
+        out = subprocess.run(['node', '--input-type=module', '-e', "import {SHARED_SUFFIXES as S} from './src/intake.js'; console.log(JSON.stringify(S))"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(ir._shared_suffixes(), json.loads(out))
+
+    def test_request_keys_do_not_exempt_shared_service_deferral(self):
+        import run as pipeline_run
+        for k, h, src in (('u1.sharedsvc.jp', 'u1.sharedsvc.jp', 'commoncrawl-webgraph'), ('u2.sharedsvc.jp', 'u2.sharedsvc.jp', 'commoncrawl-webgraph'),
+                          ('u3.sharedsvc.jp', 'u3.sharedsvc.jp', 'commoncrawl-webgraph'), ('sharedsvc.jp/someone', 'sharedsvc.jp', 'request'), ('sharedsvc.jp', 'sharedsvc.jp', 'request')):
+            frontier.add(self.db, k, h, f'https://{h}/', src)
+        pipeline_run.triage(self.db)
+        st = {r['key']: r['state'] for r in self.db.execute('SELECT key, state FROM frontier')}
+        self.assertEqual({st['u1.sharedsvc.jp'], st['u2.sharedsvc.jp'], st['u3.sharedsvc.jp']}, {'deferred'})
 
 
 class D1ReadTest(unittest.TestCase):
@@ -175,6 +185,12 @@ class D1ReadTest(unittest.TestCase):
         self.assertTrue(all('--remote' in c for c in calls))
         self.assertTrue(all(c[c.index('--command') + 1].lstrip().upper().startswith('SELECT') for c in calls))
         self.assertIn('WHERE id=5', buf.getvalue())
+
+    def test_mark_reviewed_warns_on_unknown_id(self):
+        import io, contextlib
+        with tempfile.TemporaryDirectory() as t, contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()):
+            ir.main(['--review-file', f'{t}/r.jsonl', '--mark-reviewed', '99'])
+        self.assertIn('申請#99', err.getvalue())
 
     def test_failure_raises(self):
         with self.assertRaises(RuntimeError):
