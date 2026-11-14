@@ -371,7 +371,7 @@ function createList(opts) {
 let saveTimer=0, listDirty=false; // listDirty: 最後の保存より後にスクロールした（未保存の位置がある）。件数だけ増えた場合は保存済みの位置が旧件数の範囲内なので対象外
 addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
 // 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
-addEventListener('pagehide',()=>{ if(listDirty) saveListState(); });
+addEventListener('pagehide',()=>{ if(listDirty || !(history.state && history.state.mise && activeList && history.state.mise.key===activeList.key)) saveListState(); });
 // 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
 function pushUrl(url) { saveListState(); history.pushState(null,'',url); }
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
