@@ -288,20 +288,23 @@ addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(sa
 addEventListener('pagehide',saveListState);
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
 // 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
-let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, animateRedraw=false;
+let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fromPop=false, animateRedraw=false;
 const VT_WAIT_MS=600;
 const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
 function fadeIn(el) { if(reducedMotion() || vtLive) return; el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
-function swapView(viewKey, animate, fn) {
+function swapView(viewKey, animate, fn, noVt=false) {
   const changed=viewKey!==lastViewKey; lastViewKey=viewKey;
   // 入れ替え待ちの遷移がある間の同じ画面の再描画（戻る/進む・範囲切替後の applyLanguage）は、待機中の描画が行うので何もしない。
   if(!changed && vtPending) return;
+  const seq=++vtSeq; // 後から別の画面が決まったら、古い遷移の描画コールバックは何もしない（URL と画面を食い違わせない）
+  if(changed) vtPending=false;
   if(!animate || !changed || reducedMotion()) { fn(); return; }
   if(activeVt) { try { activeVt.skipTransition(); } catch (_) { /* already finished */ } }
-  if(document.startViewTransition) {
+  if(document.startViewTransition && !noVt) {
     vtPending=true;
     // 新しい画面の最初のページ（上限 600ms）を待ってから描画を確定する。旧→空→新の二段にしない。時間切れなら行は後からフェードインする。
     const vt=activeVt=document.startViewTransition(async()=>{
+      if(seq!==vtSeq) return;
       vtPending=false; vtLive=true;
       try { fn(); const L=activeList; if(L && L.firstLoad) await Promise.race([L.firstLoad,new Promise(r=>setTimeout(r,VT_WAIT_MS))]); } finally { vtLive=false; }
     });
@@ -314,12 +317,13 @@ let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
   const first=!viewShown; viewShown=true;
   currentPath=path; currentSearch=null; // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
-  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr));
+  // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
+  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
+  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
 }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
   if(!keepRequestOpen) setRequestOpen(false);
   currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
-  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
@@ -491,7 +495,8 @@ let restoredOnce=false;
 window.addEventListener('popstate',async()=>{
   const scope=scopeFromLocation(), changed=scope!==currentScope;
   if(changed) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
-  restoreLocation(); applyLanguage();
+  fromPop=true; try { restoreLocation(); } finally { fromPop=false; }
+  applyLanguage();
   if(changed) globeForScope(scope);
 });
 (async()=>{

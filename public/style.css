@@ -274,7 +274,9 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 /* 一覧の入れ替え（カテゴリ移動・検索・範囲切替）の短いフェード。View Transitions 非対応では .fade-in の opacity で同じ見た目にする。 */
 #directory, #results { view-transition-name: mise-view; }
 /* 遷移の疑似要素は最前面に描かれるので、固定のピックアップ・コーナーパネル・猫は別名にして元の重なり順を保つ。 */
-#picks { view-transition-name: mise-picks; } .corner-panel { view-transition-name: mise-corner; } #walking-cat { view-transition-name: mise-cat; }
+@media (min-width: 1200px) { #picks { view-transition-name: mise-picks; } .corner-panel { view-transition-name: mise-corner; } #walking-cat { view-transition-name: mise-cat; }
+  ::view-transition-group(mise-picks), ::view-transition-group(mise-corner), ::view-transition-group(mise-cat), ::view-transition-new(mise-picks), ::view-transition-new(mise-corner), ::view-transition-new(mise-cat) { animation: none; }
+  ::view-transition-old(mise-picks), ::view-transition-old(mise-corner), ::view-transition-old(mise-cat) { animation: none; display: none; } }
 ::view-transition-group(root) { animation: none; }
 ::view-transition-old(root), ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
 ::view-transition-group(mise-view) { animation-duration: .2s; }
