@@ -189,7 +189,7 @@ function bindGlobeHover(row,flag,site) {
   });
 }
 // ---- タグ（#31）: 押すと検索バー横の取り消せるチップになり、検索語・範囲・カテゴリと AND で絞る。URL は ?tag=（複数は繰り返し）。 ----
-const MAX_TAGS=5, TAG_SWAP_GUARD_MS=300;
+const MAX_TAGS=5, TAG_SWAP_GUARD_MS=500;
 let tagDown=null; // 直近の pointerdown で押されたタグリンク（click と同じ要素のときだけ受け付ける）
 const tagLabel=tag=>(language==='en' && tag.en) ? tag.en : tag.ja;
 const tagUrl=(key,scope=currentScope)=>{ const u=new URL(`/${scope}/`,location.origin); u.searchParams.append('tag',key); return u.pathname+u.search; };
@@ -209,9 +209,9 @@ function tagLink(tag) {
   a.title=t('tagFilter')(tagLabel(tag));
   if(tagActive(tag.ja)) { a.classList.add('is-active'); a.setAttribute('aria-current','true'); }
   const born=performance.now();
-  // ピックアップは 8 秒ごとに入れ替わる。押した瞬間に描画中だった要素のタグだけを使い、入れ替え直後（300ms 以内）の押下と、押下〜離す間の入れ替えは無視する。
+  // ピックアップは 8 秒ごとに入れ替わる。押した瞬間に描画中だった要素のタグだけを使い、入れ替え直後（500ms 以内（pick-enter アニメと同じ長さ））の押下と、押下〜離す間の入れ替えは無視する。
   a.addEventListener('pointerdown', ()=>{ tagDown = (a.closest('#pick-list') && performance.now()-born<TAG_SWAP_GUARD_MS) ? null : a; });
-  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); const ok=e.detail===0 || tagDown===a; tagDown=null; if(!ok) return; toggleTag(tag, !!a.closest('#directory-sites')); });
+  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); const ok=e.detail===0 || tagDown===a || !a.closest('#pick-list'); tagDown=null; if(!ok) return; toggleTag(tag, !!a.closest('#directory-sites')); });
   return a;
 }
 function refreshTagLinks() {
