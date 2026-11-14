@@ -9,12 +9,21 @@ test('検索の URL 反映: 入力デバウンス・フォーム確定とも com
 });
 test('検索の URL 反映: 検索に入る最初だけ pushState、検索中は replaceState', () => {
   const fn = app.match(/function commitSearchUrl\(q\) \{[\s\S]*?\n\}/)[0];
-  assert.match(fn, /if\(was\) history\.replaceState\(history\.state,'',url\); else pushUrl\(url\);/);
+  assert.match(fn, /if\(was\) history\.replaceState\(history\.state,'',url\); else pushUrl\(url(?:,\{searchPushed:true\})?\);/);
   assert.match(app, /sp\.has\('q'\) \|\| sp\.has\('tag'\)/);
 });
 test('検索を空にしてカテゴリへ戻るとき URL もカテゴリへ戻す', () => {
-  assert.match(app, /leaveSearchUrl\(\); showDirectory\(currentPath, false\)/);
-  assert.match(app, /function leaveSearchUrl\(\)[^\n]*history\.replaceState\(null,'',url\)/);
+  assert.match(app, /if\(!leaveSearchUrl\(\)\) showDirectory\(currentPath, false\)/);
+  assert.match(app, /if\(!leaveSearchUrl\(\)\) showDirectory\(currentPath,false\)/);
+  const fn = app.match(/function leaveSearchUrl\(\) \{[\s\S]*?\n\}/)[0];
+  assert.match(fn, /history\.replaceState\(null,'',url\)/);
+});
+test('#102: 検索へ入る pushState に印を残し、空にして戻るときその印があれば history.back()（描画は popstate 任せ）', () => {
+  assert.match(app, /function pushUrl\(url,state=null\) \{ saveListState\(\); history\.pushState\(state,'',url\); \}/);
+  assert.match(app, /else pushUrl\(url,\{searchPushed:true\}\);/);
+  const fn = app.match(/function leaveSearchUrl\(\) \{[\s\S]*?\n\}/)[0];
+  assert.match(fn, /history\.state && history\.state\.searchPushed\) \{ history\.back\(\); return true; \}/);
+  assert.match(fn, /return false;\s*\}$/);
 });
 test('位置復元の打ち切り: 入力欄でのキー操作は無視', () => {
   assert.match(app, /e\.type==='keydown' && \(!SCROLL_KEYS\.has\(e\.key\) \|\| isEditable\(e\.target\)\)/);
