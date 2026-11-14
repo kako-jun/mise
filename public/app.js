@@ -49,13 +49,13 @@ function applyStaticLanguage() {
   $('#language-toggle').title=t('lang'); $('#language-toggle').setAttribute('aria-label',t('lang'));
   renderLog();
 }
-function applyLanguage() {
+function applyLanguage(animate=false) {
   applyStaticLanguage();
   updateTitle();
   renderStats();
   renderScopeNav();
-  keepRequestOpen = true; // 言語切替の再描画では申請フォームの開閉を変えない
-  try { if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false); } finally { keepRequestOpen = false; }
+  keepRequestOpen = true; animateRedraw = animate; // 言語切替の再描画では申請フォームの開閉を変えない。範囲切替だけは一覧をフェードさせる
+  try { if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false); } finally { keepRequestOpen = false; animateRedraw = false; }
 }
 // サイトURLは http/https だけをリンクにする（javascript: 等は表に出さない）。
 const safeHttpUrl = value => { try { const u=new URL(value); return u.protocol==='http:'||u.protocol==='https:' ? u.href : null; } catch (_) { return null; } };
@@ -230,6 +230,7 @@ function startList(opts) {
 const USER_MOVE=['wheel','touchstart','keydown','pointerdown'];
 function createList(opts) {
   const L={ key:opts.key, opts, items:[], next:null, total:null, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
+  L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
   const foot=opts.foot, ul=opts.ul;
   const saved=history.state && history.state.mise; const onMove=()=>{ L.userMoved=true; };
   // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
@@ -253,7 +254,7 @@ function createList(opts) {
     prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
   };
   L.rerender=()=>{ L.render(); };
-  L.stop=()=>{ L.stopped=true; L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
+  L.stop=()=>{ L.stopped=true; L.resolveFirst(); L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
   // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
   L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
   L.loadMore=async (force)=>{
@@ -266,7 +267,7 @@ function createList(opts) {
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) L.total=d.total;
       if(first) { L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
     } catch (e) { if(L.stopped) return; L.error=true; L.endRestore(); }
-    L.loading=false; if(L.stopped) return;
+    L.loading=false; L.resolveFirst(); if(L.stopped) return;
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? t('listEnd')(L.total) : '') : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
     live.textContent=L.error ? t('listError') : L.ended && L.items.length ? t('listEnd')(L.total) : '';
@@ -287,20 +288,33 @@ addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(sa
 addEventListener('pagehide',saveListState);
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
 // 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
-let lastViewKey=null, activeVt=null;
+let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, animateRedraw=false;
+const VT_WAIT_MS=600;
 const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
-function fadeIn(el) { if(reducedMotion()) return; el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
+function fadeIn(el) { if(reducedMotion() || vtLive) return; el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
 function swapView(viewKey, animate, fn) {
   const changed=viewKey!==lastViewKey; lastViewKey=viewKey;
-  if(!animate || !changed || lastViewKey===null || reducedMotion()) { fn(); return; }
+  // 入れ替え待ちの遷移がある間の同じ画面の再描画（戻る/進む・範囲切替後の applyLanguage）は、待機中の描画が行うので何もしない。
+  if(!changed && vtPending) return;
+  if(!animate || !changed || reducedMotion()) { fn(); return; }
   if(activeVt) { try { activeVt.skipTransition(); } catch (_) { /* already finished */ } }
-  if(document.startViewTransition) { const vt=activeVt=document.startViewTransition(fn); vt.finished.catch(()=>{}).finally(()=>{ if(activeVt===vt) activeVt=null; }); return; }
+  if(document.startViewTransition) {
+    vtPending=true;
+    // 新しい画面の最初のページ（上限 600ms）を待ってから描画を確定する。旧→空→新の二段にしない。時間切れなら行は後からフェードインする。
+    const vt=activeVt=document.startViewTransition(async()=>{
+      vtPending=false; vtLive=true;
+      try { fn(); const L=activeList; if(L && L.firstLoad) await Promise.race([L.firstLoad,new Promise(r=>setTimeout(r,VT_WAIT_MS))]); } finally { vtLive=false; }
+    });
+    vt.finished.catch(()=>{}).finally(()=>{ if(activeVt===vt) activeVt=null; });
+    return;
+  }
   fn(); fadeIn($('#directory').hidden ? $('#results') : $('#directory'));
 }
 let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
   const first=!viewShown; viewShown=true;
-  swapView(`${currentScope}|${path.join('/')}|`, !keepRequestOpen && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr));
+  currentPath=path; currentSearch=null; // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
+  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr));
 }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
   if(!keepRequestOpen) setRequestOpen(false);
@@ -338,7 +352,8 @@ setInterval(()=>{
 },8000);
 function showResults(query) {
   const first=!viewShown; viewShown=true;
-  swapView(`${currentScope}||${query}`, !keepRequestOpen && !first, ()=>showResultsNow(query));
+  currentSearch=query;
+  swapView(`${currentScope}||${query}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
 }
 function showResultsNow(query) {
   if(!keepRequestOpen) setRequestOpen(false);
@@ -456,7 +471,7 @@ async function chooseScope(scope) {
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
   const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
-  renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage();
+  renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage(true);
   globeForScope(scope);
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。
