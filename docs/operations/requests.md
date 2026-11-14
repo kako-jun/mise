@@ -1,6 +1,6 @@
 # 申請の受付と取り込み
 
-推薦（`add`）・取り下げ（`remove`）・訂正（`correct`）の受付の仕様と運用手順。Issue #4・#29。**受付と保存だけが実装済み**。取り込み（手元スクリプト）まで実装済み。巡回側の拒否リスト接続などは未実装（[ideas/requests.md](../ideas/requests.md)）。方針の決定は [decisions.md](../decisions.md)。
+推薦（`add`）・取り下げ（`remove`）・訂正（`correct`）の受付の仕様と運用手順。Issue #4・#29。**受付・保存と、手元スクリプトでの巡回候補への取り込みまでが実装済み**。巡回側の拒否リスト接続などは未実装（[ideas/requests.md](../ideas/requests.md)）。方針の決定は [decisions.md](../decisions.md)。
 
 ## 原則
 
@@ -76,11 +76,11 @@ npx wrangler d1 execute mise --remote --file /tmp/requests-import.sql
 
 | 種別 | 行き先 | 以降 |
 |---|---|---|
-| `add`（推薦） | frontier 台帳（`var/frontier.sqlite`、`source='request'`、`source_detail='request#ID'`）の候補 | 既存の自動判定（robots.txt、決定論フィルタ、[LLM 判定](../collection/llm-judge.md)）に任せる。人の承認は挟まない |
+| `add`（推薦） | frontier 台帳（`var/frontier.sqlite`、`source='request'`、`source_detail='request#ID'`）の候補。キーは比較キー（ホスト+パス。`ameblo.jp/bar` や `asahi-net.or.jp/~x` のようなパス型のユーザー領域は別サイトとして積み、取得もそのパスを見る） | 既存の自動判定（robots.txt、決定論フィルタ、[LLM 判定](../collection/llm-judge.md)）に任せる。人の承認は挟まない |
 | `remove` / `correct` | 人が見る候補ファイル（`var/requests/review.jsonl`。理由と該当する掲載サイトの ID を併記） | `uv run python3 scripts/recrawl/recrawl.py candidates` の一覧に併記される。人が見て判断する。**申請だけでは掲載状態を変えない** |
 
-- 推薦で、frontier または掲載サイト（`data/collection-*.json`）に既にあるホストは台帳に積まず `approved`（`note='duplicate'`）にする。拒否リスト（`blocked_hosts`）に当たる推薦は `rejected`（`note='blocklisted'`）。それ以外の取り込み済みは `approved`（`note='imported'`）。`approved` は「取り込み済み」の意味で、掲載の承認ではない。
-- 冪等: 同じ申請を二重に台帳・候補ファイルへ積まない。SQL を適用するまで `pending` のままなので、再実行しても同じ結果になる。SQL は `status='pending'` の行だけを更新する。
+- 推薦で、frontier または掲載サイトに既にある比較キー（ホスト+パスの完全一致）は台帳に積まず `approved`（`note='duplicate'`）にする。拒否リスト（`blocked_hosts`）に当たる推薦は `rejected`（`note='blocklisted'`）。それ以外の取り込み済みは `approved`（`note='imported'`）。掲載サイトの照合元は D1 の `sites`（`SELECT id, url FROM sites`。読み取りのみ。`--remote` を付けたときだけ本番、既定は `--local`）で、`data/collection-*.json` は補助。拒否リストの照合は `src/intake.js` の `isBlocked` と同じ（共有ホスティングの `user.github.io` は `github.io` の行では止まらない。`SHARED_SUFFIXES` は intake.js から読む）。**`.jp` 以外の推薦も候補に入る**（frontier の事前フィルタは request 由来を `jp_only` から外す。`not_jp` で落とすのは発見元が Common Crawl のものだけ。日本語かどうかは取得後の判定で見る。掲載の国は `country_code` が決める）。`approved` は「取り込み済み」の意味で、掲載の承認ではない。
+- 冪等: 同じ申請を二重に台帳・候補ファイルへ積まない。SQL を適用するまで `pending` のままなので、再実行しても同じ結果（`imported` のまま）になる。人が見終えた取り下げ・訂正は `uv run python3 scripts/requests/import_requests.py --mark-reviewed ID...` で済みにする（`recrawl candidates` に出なくなる。D1 には触れない）。`recrawl candidates` は理由を端末に出すとき制御文字を除き、1 行 200 字に切る（`--json` は全文。サイトの行は `kind: site`、申請の行は `kind: request`）。SQL は `status='pending'` の行だけを更新する。
 - 取り下げ・訂正の反映は人が判断して手で行う: `remove` は `sites` の該当行と `site_categories`・`site_tags` を削除（`data/` の台帳も同期）、`correct` は `sites` の該当列を更新（[procedures.md](../collection/procedures.md)）。拒否リストへ入れたいときは `blocked_hosts` に手で行を足す（ホスト全体の拒否は、サイトの運営者がそのドメイン全体の所有者と確認できた場合だけ。パス付きの申請でホスト全体を入れるとサービス全体が以後拒否される）。
 - robots.txt / noindex で外したホストは、申請なしで `blocked_hosts` に入れる: `INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason) VALUES ('example.com','','robots')`（host は小文字・末尾ドットなし・`www.` なし。パス単位の noindex は `path_prefix` に）。
 - 誤申請・取り消しは、管理者が `rejected`・`note='withdrawn'` にする。

@@ -15,6 +15,7 @@ import re
 import sqlite3
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.robotparser
 from collections import defaultdict
@@ -389,11 +390,31 @@ def confirm(db, key, reason, now=None):
 
 
 def request_candidates(path):
-    """取り下げ・訂正の申請(scripts/requests/import_requests.py が出す JSON Lines)。人が見る一覧に併記する。"""
+    """取り下げ・訂正の申請(scripts/requests/import_requests.py が出す JSON Lines)。人が見る一覧に併記する。
+    `import_requests.py --mark-reviewed ID` で済みにした申請(<path>.reviewed)は出さない。壊れた行は読み飛ばす。"""
     p = Path(path)
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text(encoding='utf-8').splitlines() if l.strip()]
+    done = set()
+    rp = Path(str(p) + '.reviewed')
+    if rp.exists():
+        done = {int(l) for l in rp.read_text(encoding='utf-8').split() if l.isdigit()}
+    out = []
+    for l in p.read_text(encoding='utf-8').splitlines():
+        try:
+            e = json.loads(l) if l.strip() else None
+        except ValueError:
+            continue
+        if isinstance(e, dict) and e.get('request_id') not in done and all(k in e for k in ('state', 'url', 'request_id')):
+            out.append(e)
+    return out
+
+
+def safe_text(v, limit=200):
+    """端末表示用: 制御文字(C0/C1・ESC・書式制御)を除き、改行は \\n に直し、limit 字で切る(利用者の入力に ANSI や偽の行を差し込ませない)。"""
+    t = str(v if v is not None else '').replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\\n')
+    t = ''.join(ch for ch in t if unicodedata.category(ch) not in ('Cc', 'Cf'))
+    return t if len(t) <= limit else t[:limit] + '…'
 
 
 def candidates(db):
@@ -443,11 +464,11 @@ def main(argv=None):
             rows = candidates(db)
             reqs = request_candidates(a.requests_file)
             if a.json:
-                print(json.dumps([dict(r) for r in rows] + reqs, ensure_ascii=False, indent=2))
+                print(json.dumps([{'kind': 'site', **dict(r)} for r in rows] + [{'kind': 'request', **q} for q in reqs], ensure_ascii=False, indent=2))
             for r in ([] if a.json else rows):
-                print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {r['note'] or ''}")
+                print(f"[{r['state']}{'/' + r['flag'] if r['flag'] else ''}] {r['site_id']} {r['url']} 失敗{r['consecutive_failures']}回 最終正常={r['last_ok_at']} 直近={r['last_kind']}/{r['last_http_status']} {safe_text(r['note'])}")
             for q in ([] if a.json else reqs):
-                print(f"[{q['state']}] {q.get('site_id') or '掲載なし'} {q['url']} 申請#{q['request_id']} 理由: {q['reason']}")
+                print(f"[{safe_text(q['state'], 40)}] {safe_text(q.get('site_id') or '掲載なし', 80)} {safe_text(q['url'])} 申請#{safe_text(q['request_id'], 20)} 理由: {safe_text(q.get('reason'))}")
             if not rows and not reqs and not a.json:
                 print('候補なし')
         elif a.cmd == 'confirm':

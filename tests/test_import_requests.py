@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / 'scripts' / 'requests'))
 sys.path.insert(0, str(ROOT / 'scripts' / 'recrawl'))
+sys.path.insert(0, str(ROOT / 'scripts' / 'pipeline'))
 import import_requests as ir
 import frontier
 import recrawl
@@ -24,7 +25,7 @@ class Base(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.db = frontier.connect(self.dir / 'f.sqlite')
         self.review = self.dir / 'review.jsonl'
-        self.listed = ({'listed.example': 'collected-listed', 'blog.example/me': 'collected-me'}, {'listed.example': 'collected-listed', 'blog.example': 'collected-me'})
+        self.listed = {'listed.example': 'collected-listed', 'blog.example/me': 'collected-me', 'asahi.example/~dy7s': 'collected-dy7s'}
 
     def tearDown(self):
         self.db.close(); self.tmp.cleanup()
@@ -32,8 +33,11 @@ class Base(unittest.TestCase):
     def run_import(self, rows, blocked=()):
         return ir.import_requests(rows, self.db, self.review, blocked, self.listed)
 
+    def reviews_raw(self):
+        return self.review.read_text(encoding='utf-8').splitlines()
+
     def reviews(self):
-        return [json.loads(l) for l in self.review.read_text(encoding='utf-8').splitlines()] if self.review.exists() else []
+        return [json.loads(l) for l in self.review.read_text(encoding='utf-8').splitlines() if l.startswith('{"request_id"') and 'type' in l] if self.review.exists() else []
 
 
 class ImportTest(Base):
@@ -57,7 +61,7 @@ class ImportTest(Base):
                                 row(3, 'add', 'https://svc.example/other')], blocked)
         self.assertEqual(d[1], ('rejected', 'blocklisted')); self.assertEqual(d[2], ('rejected', 'blocklisted'))
         self.assertEqual(d[3][0], 'approved')
-        self.assertEqual(self.db.execute('SELECT key FROM frontier').fetchall()[0]['key'], 'svc.example')
+        self.assertEqual(self.db.execute('SELECT key FROM frontier').fetchall()[0]['key'], 'svc.example/other')
 
     def test_remove_correct_to_review_file_with_reason(self):
         d, c = self.run_import([row(1, 'remove', 'https://blog.example/me', '消したい'), row(2, 'correct', 'https://nolisted.example/', '名前が違う')])
@@ -85,6 +89,60 @@ class ImportTest(Base):
         self.assertFalse(ir.is_blocked('notbad.example', [{'host': 'bad.example', 'path_prefix': ''}]))
         self.assertFalse(ir.is_blocked('s.svc.example/foo', [{'host': 'svc.example', 'path_prefix': '/foo'}]))
 
+    def test_shared_hosting_user_not_blocked_by_parent(self):
+        row = [{'host': 'github.io', 'path_prefix': ''}]
+        self.assertFalse(ir.is_blocked('user.github.io', row))
+        self.assertTrue(ir.is_blocked('user.github.io', [{'host': 'user.github.io', 'path_prefix': ''}]))
+        self.assertTrue(ir.is_blocked('a.user.github.io', [{'host': 'user.github.io', 'path_prefix': ''}]))
+
+    def test_key_of_matches_intake_normalization(self):
+        self.assertEqual(ir.key_of('https://WWW.Example.com/%7Ebob//a;x=1/./b/'), 'example.com/~bob/a/b')
+        self.assertEqual(ir.key_of('http://example.com/foo%2Fbar/'), 'example.com/foo/bar')
+        self.assertEqual(ir.key_of('https://example.com/a/../b.'), 'example.com/b')
+
+    def test_path_type_add_is_per_user(self):
+        d, c = self.run_import([row(1, 'add', 'https://asahi.example/~other'), row(2, 'add', 'https://asahi.example/~dy7s'),
+                                row(3, 'add', 'https://ameblo.example/bar'), row(4, 'add', 'https://ameblo.example/baz')])
+        self.assertEqual(d[1], ('approved', 'imported')); self.assertEqual(d[2], ('approved', 'duplicate'))
+        keys = {r['key'] for r in self.db.execute('SELECT key FROM frontier')}
+        self.assertEqual(keys, {'asahi.example/~other', 'ameblo.example/bar', 'ameblo.example/baz'})
+
+    def test_us_host_is_imported_and_not_rejected_by_triage(self):
+        import run as pipeline_run
+        self.run_import([row(1, 'add', 'https://us-site.com/')])
+        pipeline_run.triage(self.db)
+        r = self.db.execute("SELECT state, reject_reason FROM frontier WHERE key='us-site.com'").fetchone()
+        self.assertEqual(r['state'], 'queued')
+
+    def test_path_request_site_id_only_on_exact_match(self):
+        self.run_import([row(1, 'remove', 'https://asahi.example/~other'), row(2, 'remove', 'https://asahi.example/~dy7s/'), row(3, 'correct', 'https://blog.example/other')])
+        self.assertEqual([r['site_id'] for r in self.reviews()], [None, 'collected-dy7s', None])
+
+    def test_rerun_without_applying_sql_keeps_imported(self):
+        rows = [row(1, 'add', 'https://new.example/')]
+        d1, _ = self.run_import(rows); d2, c2 = self.run_import(rows)
+        self.assertEqual(d1[1], d2[1]); self.assertEqual(d2[1], ('approved', 'imported')); self.assertEqual(c2['frontier'], 1)
+
+    def test_broken_review_line_does_not_stop(self):
+        self.review.write_text('{broken\n' + json.dumps({'request_id': 1}) + '\n', encoding='utf-8')
+        d, c = self.run_import([row(1, 'remove', 'https://listed.example/'), row(2, 'remove', 'https://listed.example/')])
+        self.assertEqual(len(self.reviews_raw()), 3)   # 壊れた行 + 既存 1 + 新規 2
+        self.assertEqual(c['review'], 2)
+
+    def test_mark_reviewed_hides_from_candidates(self):
+        self.run_import([row(1, 'remove', 'https://listed.example/'), row(2, 'correct', 'https://listed.example/')])
+        ir.mark_reviewed(self.review, [1])
+        self.assertEqual([q['request_id'] for q in recrawl.request_candidates(self.review)], [2])
+        self.run_import([row(1, 'remove', 'https://listed.example/')])   # 再取り込みしても復活しない
+        self.assertEqual(len(self.reviews()), 2)
+
+    def test_listed_index_prefers_d1_rows(self):
+        idx = ir.listed_index([{'id': 'collected-hyuki', 'url': 'https://www.hyuki.com/'}], files=[])
+        self.assertEqual(idx, {'hyuki.com': 'collected-hyuki'})
+
+    def test_shared_suffixes_read_from_intake_js(self):
+        self.assertIn('github.io', ir._shared_suffixes())
+
 
 class D1ReadTest(unittest.TestCase):
     def fake(self, store):
@@ -105,6 +163,8 @@ class D1ReadTest(unittest.TestCase):
         def runner(cmd, **kw):
             calls.append(cmd)
             sql = cmd[cmd.index('--command') + 1]
+            if 'FROM sites' in sql:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps([{'results': [{'id': 'collected-x', 'url': 'https://x.example/'}], 'success': True}]), '')
             res = [{'id': 5, 'type': 'add', 'url': 'https://m.example/', 'host': 'm.example', 'normalized_key': 'm.example', 'reason': 'r', 'created_at': 't'}] if 'FROM requests' in sql else []
             return subprocess.CompletedProcess(cmd, 0, json.dumps([{'results': res, 'success': True}]), '')
         with tempfile.TemporaryDirectory() as t:
@@ -126,6 +186,22 @@ class RecrawlCandidatesTest(Base):
         self.run_import([row(1, 'remove', 'https://listed.example/', '消して')])
         r = recrawl.request_candidates(self.review)
         self.assertEqual(r[0]['site_id'], 'collected-listed'); self.assertEqual(recrawl.request_candidates(self.dir / 'none'), [])
+
+    def test_safe_text_strips_escapes_newlines_and_truncates(self):
+        t = recrawl.safe_text('a\x1b[31mred\x1b[0m\r\nfake line\x07\u202e' + 'x' * 50000)
+        self.assertNotIn('\x1b', t); self.assertNotIn('\n', t); self.assertNotIn('\r', t); self.assertNotIn('\x07', t); self.assertNotIn('\u202e', t)
+        self.assertIn('\\nfake line', t); self.assertLessEqual(len(t), 201)
+
+    def test_candidates_cli_output_is_one_safe_line_and_json_has_kind(self):
+        import io, contextlib
+        self.run_import([row(1, 'remove', 'https://listed.example/', 'x\x1b[2J\nFAKE [needs_review] line' + 'y' * 50000)])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            recrawl.main(['--db', str(self.dir / 'rc.sqlite'), 'candidates', '--requests-file', str(self.review)])
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1); self.assertNotIn('\x1b', lines[0]); self.assertLess(len(lines[0]), 400)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            recrawl.main(['--db', str(self.dir / 'rc.sqlite'), 'candidates', '--json', '--requests-file', str(self.review)])
+        self.assertEqual([e['kind'] for e in json.loads(out.getvalue())], ['request'])
 
 
 if __name__ == '__main__':
