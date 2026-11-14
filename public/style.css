@@ -289,3 +289,11 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
   @keyframes view-fade-in { from { opacity: 0; } to { opacity: 1; } }
 }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none; } }
+
+/* 検索結果リンク右の「別タブで開く」ボタン。枠・背景なし、タップ領域 32px は透明な余白で確保（負マージンで行高は増やさない）。 */
+.site-newtab { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: -8px -4px -8px -2px; vertical-align: middle; color: #4f7480; text-decoration: none; border-radius: 4px; }
+.site-newtab[hidden] { display: none; }
+.site-newtab svg { width: 14px; height: 14px; fill: currentColor; }
+.site-newtab:hover, .site-newtab:focus-visible { color: #007f98; }
+html[data-theme="dark"] .site-newtab { color: #9fc3cc; }
+html[data-theme="dark"] .site-newtab:hover, html[data-theme="dark"] .site-newtab:focus-visible { color: #82ddea; }
