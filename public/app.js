@@ -368,12 +368,13 @@ function createList(opts) {
   };
   return L;
 }
-let saveTimer=0;
-addEventListener('scroll',()=>{ clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
-addEventListener('pagehide',saveListState);
+let saveTimer=0, listDirty=false; // listDirty: 最後の保存より後にスクロールした（未保存の位置がある）。件数だけ増えた場合は保存済みの位置が旧件数の範囲内なので対象外
+addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
+// 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
+addEventListener('pagehide',()=>{ if(listDirty) saveListState(); });
 // 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
 function pushUrl(url) { saveListState(); history.pushState(null,'',url); }
-function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); } catch (_) { /* state is best-effort */ } }
+function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
 // 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
 let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fromPop=false, animateRedraw=false;
 const VT_WAIT_MS=600;
