@@ -26,10 +26,10 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=38">
+<link rel="stylesheet" href="/style.css?v=39">
 <script src="/countries.js?v=3" defer></script>
 <script src="/regions.js?v=1" defer></script>
-<script src="/app.js?v=35" defer></script>
+<script src="/app.js?v=36" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=12").catch(() => {})));
@@ -56,7 +56,7 @@ window.__miseLogo = () => { try { const l = [...document.querySelectorAll('.logo
     <p class="logo-caption" data-i18n="tagline">A directory search engine for today.</p>
     <nav id="scope-nav" class="scope-nav" aria-label="Scope" data-i18n-label="scopeLabel"></nav>
     <div class="preferences"><button id="theme-toggle" type="button" aria-label="Dark / light" title="Dark / light" data-i18n-label="theme">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button><button id="external-toggle" type="button" aria-pressed="false" aria-label="外部リンクを別タブで開く" title="外部リンクを別タブで開く"><svg aria-hidden="true" class="external-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/></svg></button></div>
-    <div class="search-row"><form id="search-form" role="search"><label class="visually-hidden" for="query" data-i18n="searchLabel">Search sites</label><svg class="search-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><input id="query" type="search" size="25" autocomplete="off"></form></div><noscript><p>この窓口は JavaScript が必要です。/ This form needs JavaScript.</p></noscript><p class="recommend-row"><span data-i18n="recommendIntro">Can’t find a site?</span> <a href="#recommend" id="recommend-link" aria-expanded="false" aria-controls="recommend" data-i18n="recommend">Recommend it</a></p>
+    <div class="search-row"><form id="search-form" role="search"><label class="visually-hidden" for="query" data-i18n="searchLabel">Search sites</label><svg class="search-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg><input id="query" type="search" size="25" autocomplete="off"></form><div id="tag-chips" class="tag-chips" role="group" hidden></div></div><p id="tag-notice" class="tag-notice" role="status" aria-live="polite" hidden></p><noscript><p>この窓口は JavaScript が必要です。/ This form needs JavaScript.</p></noscript><p class="recommend-row"><span data-i18n="recommendIntro">Can’t find a site?</span> <a href="#recommend" id="recommend-link" aria-expanded="false" aria-controls="recommend" data-i18n="recommend">Recommend it</a></p>
     <section id="recommend" class="recommend" hidden aria-labelledby="req-title">
       <h2 id="req-title" data-i18n="reqTitle">Requests</h2>
       <p class="req-note" data-i18n="reqNote">A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.</p>

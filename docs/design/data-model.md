@@ -35,7 +35,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 - `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。
 - `site_categories`: `(site_id, category_id)` が主キー。同じサイトを複数カテゴリに登録できる。
-- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示のみで、検索対象ではない。
+- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。`q` の部分一致（`search_text`）の対象ではない。
 
 ### 運営者の所在国（`country_code`）
 

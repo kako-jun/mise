@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-let categories = [], pickedSites = [], currentPath = [], currentSearch = null, pickIndex = 0, picksVisible = false, activityStats = null;
+let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字）または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国（サイトが 1 件以上ある国）と件数。
 const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
@@ -17,8 +17,8 @@ let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, credit:'官公庁・自治体の掲載は、総務省「全国地方公共団体コード」とデジタル庁 e-Gov「政府機関関連情報」(いずれも公共データ利用規約 第1.0版)、Wikidata(CC0)をもとに、MISE が編集・加工したものです。', concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, prevPage:'‹ 前のページ' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, credit:'Government and municipal sites: based on MIC “National Local Government Codes” and Digital Agency e-Gov “Government Directory” (both under the Public Data License 1.0) and Wikidata (CC0); compiled and processed by MISE.', concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, prevPage:'‹ Previous page' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, credit:'官公庁・自治体の掲載は、総務省「全国地方公共団体コード」とデジタル庁 e-Gov「政府機関関連情報」(いずれも公共データ利用規約 第1.0版)、Wikidata(CC0)をもとに、MISE が編集・加工したものです。', concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, credit:'Government and municipal sites: based on MIC “National Local Government Codes” and Digital Agency e-Gov “Government Directory” (both under the Public Data License 1.0) and Wikidata (CC0); compiled and processed by MISE.', concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.' }
 };
 Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
 Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
@@ -188,6 +188,72 @@ function bindGlobeHover(row,flag,site) {
     clearTimeout(timer); flown=false; flyToPlace(site,false);
   });
 }
+// ---- タグ（#31）: 押すと検索バー横の取り消せるチップになり、検索語・範囲・カテゴリと AND で絞る。URL は ?tag=（複数は繰り返し）。 ----
+const MAX_TAGS=5;
+const tagLabel=tag=>(language==='en' && tag.en) ? tag.en : tag.ja;
+const tagUrl=(key,scope=currentScope)=>{ const u=new URL(`/${scope}/`,location.origin); u.searchParams.append('tag',key); return u.pathname+u.search; };
+// 結果ページ/タグ付きの URL。タグが無ければ従来どおり（検索は ?q=、ディレクトリは ?category=）。
+function stateUrl(scope=currentScope) {
+  if(currentSearch===null) return categoryUrl(currentPath,scope);
+  if(!currentTags.length) return `/${scope}/?q=${encodeURIComponent(currentSearch)}`;
+  const u=new URL(`/${scope}/`,location.origin);
+  if(currentSearch) u.searchParams.set('q',currentSearch);
+  tagPath.forEach(id=>u.searchParams.append('category',id));
+  currentTags.forEach(tg=>u.searchParams.append('tag',tg.key));
+  return u.pathname+u.search;
+}
+const tagActive=key=>currentTags.some(tg=>tg.key===key);
+function tagLink(tag) {
+  const a=document.createElement('a'); a.className='site-tag'; a.href=tagUrl(tag.ja); a.textContent=tagLabel(tag); a.dataset.tagKey=tag.ja;
+  a.title=t('tagFilter')(tagLabel(tag));
+  if(tagActive(tag.ja)) { a.classList.add('is-active'); a.setAttribute('aria-current','true'); }
+  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); toggleTag(tag, !!a.closest('#directory-sites')); });
+  return a;
+}
+function refreshTagLinks() {
+  document.querySelectorAll('a.site-tag').forEach(a=>{ const on=tagActive(a.dataset.tagKey); a.classList.toggle('is-active',on); if(on) a.setAttribute('aria-current','true'); else a.removeAttribute('aria-current'); });
+}
+function renderChips() {
+  const box=$('#tag-chips'); box.replaceChildren(); box.hidden=!currentTags.length;
+  for(const tg of currentTags) {
+    const chip=document.createElement('span'), label=document.createElement('span'), x=document.createElement('button'), n=tagLabel(tg);
+    chip.className='tag-chip'; label.textContent=`#${n}`; x.type='button'; x.textContent='×'; x.setAttribute('aria-label',t('tagRemove')(n)); x.title=t('tagRemove')(n);
+    x.addEventListener('click',()=>{ toggleTag(tg, false); });
+    chip.append(label,x); box.append(chip);
+  }
+  box.setAttribute('aria-label',t('tagsLabel'));
+  refreshTagLinks();
+}
+// URL から来たタグは日本語名/英語名のキーだけなので、最初の結果が届いたら表示名（日英）を埋める。
+function resolveTagLabels(items) {
+  let changed=false;
+  for(const tg of currentTags) {
+    if(tg.resolved) continue;
+    for(const it of items) { let ts=[]; try { ts=JSON.parse(it.tags_json||'[]'); } catch (_) { ts=[]; } const hit=ts.find(x=>x.ja===tg.key || x.en===tg.key); if(hit) { tg.key=hit.ja; tg.ja=hit.ja; tg.en=hit.en; tg.resolved=true; changed=true; break; } }
+  }
+  if(!changed) return;
+  // 英語名で来たタグは日本語名へ正規化する（行の太字・チップ・URL を日本語名に揃え、同じタグの二重チップも防ぐ）。
+  currentTags=currentTags.filter((tg,i)=>currentTags.findIndex(x=>x.key===tg.key)===i);
+  renderChips(); if(currentSearch!==null) setResultTitle(currentSearch);
+  if(currentSearch!==null && activeList && activeList.locKey===location.pathname+location.search) { const url=stateUrl(); if(location.pathname+location.search!==url) { history.replaceState(history.state,'',url); activeList.locKey=url; } }
+}
+// タグを付ける/外す。検索語（入力欄の文字）はそのまま残り、AND で絞る。履歴は 1 手ずつ積む（戻る/進むで復元）。
+function showTagNotice() {
+  const n=$('#tag-notice'); n.textContent=t('tagsMax'); n.hidden=false; clearTimeout(showTagNotice.timer); showTagNotice.timer=setTimeout(()=>{ n.hidden=true; },4000);
+}
+function toggleTag(tag, fromDirectory=false) {
+  const i=currentTags.findIndex(tg=>tg.key===tag.ja);
+  if(i>=0) { currentTags.splice(i,1); logActivity(`untag ${tag.ja}`); }
+  else { if(currentTags.length>=MAX_TAGS) { logActivity(t('tagsMax')); showTagNotice(); return; }
+    // カテゴリとの AND は、カテゴリ一覧の行から最初のタグを押したときだけ（検索結果・ピックアップからは範囲全体）。付いたあとは維持する。
+    if(!currentTags.length) tagPath=fromDirectory ? [...currentPath] : [];
+    currentTags.push({key:tag.ja,ja:tag.ja,en:tag.en??null,resolved:true}); logActivity(`tag ${tag.ja}`); }
+  const q=$('#query').value.trim();
+  if(q || currentTags.length) { currentSearch=q; const url=stateUrl(); if(location.pathname+location.search!==url) history.pushState(null,'',url); showResults(q); }
+  else showDirectory(currentPath);
+  // 画面（スマホは先頭が見えていないことが多い）を、検索バー（チップ）と結果の先頭が見える位置へ。ホバーは使わずタップで完結する。
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ const row=document.querySelector('.search-row'); if(row.getBoundingClientRect().top<0) row.scrollIntoView({block:'start'}); }));
+}
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
   const href=safeHttpUrl(site.url); if(href) { a.href=href; configureExternalLink(a); }
@@ -208,7 +274,7 @@ function renderSite(target, site, showCategories=false) {
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
   let tags=[]; try { tags=JSON.parse(site.tags_json || '[]'); } catch (_) { tags=[]; }
-  for(const tag of tags) { const span=document.createElement('span'); span.className='site-tag'; span.textContent=(language==='en' && tag.en) ? tag.en : tag.ja; meta.append(' ',span); }
+  for(const tag of tags) { meta.append(' ',tagLink(tag)); }
   if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
@@ -268,7 +334,7 @@ function createList(opts) {
   L.rerender=()=>{ L.render(); };
   L.stop=()=>{ L.stopped=true; L.resolveFirst(); L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
   // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
-  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope,...opts.params}); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
+  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope}); for(const [k,v] of Object.entries(opts.params)) for(const x of [].concat(v)) u.append(k,x); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
   L.loadMore=async (force)=>{
     if(L.loading || L.stopped || (L.ended && !force)) return;
     L.loading=true; L.error=false; status.textContent=t('loadingMore'); btn.hidden=true; L.ctl=new AbortController();
@@ -335,14 +401,14 @@ function swapView(viewKey, animate, fn, noVt=false) {
 let viewShown=false;
 function showDirectory(path, updateHistory=true, preserveSsr=false) {
   const first=!viewShown; viewShown=true;
-  currentPath=path; currentSearch=null; // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
   // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
   swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
 }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
   if(!keepRequestOpen) setRequestOpen(false);
-  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
     crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
@@ -375,19 +441,25 @@ setInterval(()=>{
 },8000);
 function showResults(query) {
   const first=!viewShown; viewShown=true;
-  currentSearch=query;
-  swapView(`${currentScope}||${query}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
+  currentSearch=query; renderChips();
+  swapView(`${currentScope}||${query}|${currentTags.map(tg=>tg.key).join('\n')}|${currentTags.length?tagPath.join('/'):''}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
+}
+function setResultTitle(query) {
+  const tagText=currentTags.map(tg=>`#${tagLabel(tg)}`).join(' ');
+  $('#result-title').textContent=currentTags.length ? (query ? `${t('results')(query)} ${tagText}` : t('taggedSites')(tagText)) : query?t('results')(query):t('all');
 }
 function showResultsNow(query) {
   if(!keepRequestOpen) setRequestOpen(false);
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
-  $('#result-title').textContent=query?t('results')(query):t('all'); $('#empty').hidden=true;
-  startList({ key:`${currentScope}|?q|${query}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query}, startPage:1, showCategories:true,
-    onTotal:total=>{ $('#empty').hidden=!!total; } });
+  // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
+  const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
+  setResultTitle(query); $('#empty').hidden=true;
+  startList({ key:`${currentScope}|?q|${query}|${tagKeys.join('\n')}|${cat??''}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query,...(tagKeys.length?{tag:tagKeys}:{}),...(cat?{category:cat}:{})}, startPage:1, showCategories:true,
+    onTotal:total=>{ $('#empty').hidden=!!total; if(activeList) resolveTagLabels(activeList.items); } });
 }
 function updateSearch() {
   const q=$('#query').value.trim();
-  if(q) showResults(q); else showDirectory(currentPath, false);
+  if(q || currentTags.length) { showResults(q); if(currentTags.length) history.replaceState(history.state,'',stateUrl()); } else showDirectory(currentPath, false);
 }
 let reqStatus = null;
 let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
@@ -395,8 +467,8 @@ let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
 $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
-$('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);if(currentTags.length) history.replaceState(history.state,'',stateUrl());} else if(currentTags.length) {showResults(q);history.replaceState(history.state,'',stateUrl());} else showDirectory(currentPath,false);});
+$('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
 function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
 $('#request-form').addEventListener('submit',async e=>{
@@ -493,15 +565,26 @@ async function chooseScope(scope) {
   logActivity(`scope ${scope}`);
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
-  const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
+  history.pushState(null,'',stateUrl(scope));
   renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage(true);
   globeForScope(scope);
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。
 window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code||''); if(scopes.countries.some(r=>r.code===code)) chooseScope(code.toLowerCase()); });
 function restoreLocation() {
-  const q=new URLSearchParams(location.search).get('q');
-  if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
+  const sp=new URLSearchParams(location.search), q=sp.get('q');
+  // ?tag=（複数は AND）。空・重複は無視し、5 個を超える分は捨てる。タグがあるときはカテゴリ階層（?category=）とも AND。
+  const keys=[...new Set(sp.getAll('tag').map(x=>x.trim()).filter(x=>x && [...x].length<=100))].slice(0,MAX_TAGS);
+  if(keys.length) {
+    const path=[]; let parent=null;
+    for(const part of sp.getAll('category')) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c) { path.length=0; break; } path.push(c.id); parent=c.id; }
+    restoredOnce=true; currentPath=path; tagPath=[...path]; currentTags=keys.map(k=>({key:k,ja:k,en:null,resolved:false}));
+    $('#query').value=(q||'').trim(); showResults((q||'').trim());
+    // 6 個以上・空・重複・不正なカテゴリなどは切り詰めた形に URL を正規化する（履歴は増やさない）。
+    const norm=stateUrl(); if(location.pathname+location.search!==norm && (sp.getAll('tag').length!==keys.length || sp.getAll('category').length!==path.length)) history.replaceState(history.state,'',norm);
+    return;
+  }
+  if(q && q.trim()){ currentTags=[]; $('#query').value=q; showResults(q.trim()); return; }
   const first=!restoredOnce; restoredOnce=true;
   $('#query').value='';
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
