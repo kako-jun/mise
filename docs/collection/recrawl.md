@@ -32,7 +32,7 @@ uv run python3 scripts/recrawl/recrawl.py sql --out var/site_checks.sql   # site
 | `robots_disallowed` `http_denied`（401/403/429）`error` | 中立。サイトの生死が分からないので失敗に数えず、状態も据え置き |
 | `redirect_offsite` `ssrf_blocked`（内部アドレスへ解決） | 即 `needs_review`（移転・売却・乗っ取りの疑い）。flag が付き、**人の確認まで維持**する |
 
-状態は `listed` → `needs_review`（連続失敗 3 回以上）→ `hide_candidate`（連続失敗 6 回以上、かつ最初の失敗から 14 日以上）。**自動削除はしない**。`candidates` が人の確認用の一覧で、非表示・削除の判断は人が行う。flag（`offsite` / `ssrf`）付きの状態は、その後に失敗・中立・**成功（ok）**が来ても `listed` に戻らず注記も消えない（転送後に売却ページが 200 で返る乗っ取りを見逃さないため）。解除は人が `confirm <site_id|url> --reason 理由` で行い、理由と日時が `confirmations` に残る。flag の無いサイトと、flag 付きの `hide_candidate`（連続失敗 6 回以上）は拒否され、状態も注記も変わらない。同じ URL が複数行にあるときは site_id で指定する。**実際に別ドメインへ移転したサイトは、confirm しても次の巡回で再び flag が付く**ので、その場合は掲載 URL を新しいものに更新する。`hide_candidate` になっても flag（由来）は残り、`candidates` と `sql`（`site_checks.flag`）に出る。flag なしの状態は成功で `listed` に戻り、その旨を `note` に残す（本番側での復帰は人が確認）。閾値は `recrawl.py` 冒頭の定数。
+状態は `listed` → `needs_review`（連続失敗 3 回以上）→ `hide_candidate`（連続失敗 6 回以上、かつ最初の失敗から 14 日以上）。**自動削除はしない**。`candidates` が人の確認用の一覧で（取り下げ・訂正の申請が `scripts/requests/import_requests.py` で取り込まれていれば、理由つきで併記される。[operations/requests.md](../operations/requests.md)）、非表示・削除の判断は人が行う。flag（`offsite` / `ssrf`）付きの状態は、その後に失敗・中立・**成功（ok）**が来ても `listed` に戻らず注記も消えない（転送後に売却ページが 200 で返る乗っ取りを見逃さないため）。解除は人が `confirm <site_id|url> --reason 理由` で行い、理由と日時が `confirmations` に残る。flag の無いサイトと、flag 付きの `hide_candidate`（連続失敗 6 回以上）は拒否され、状態も注記も変わらない。同じ URL が複数行にあるときは site_id で指定する。**実際に別ドメインへ移転したサイトは、confirm しても次の巡回で再び flag が付く**ので、その場合は掲載 URL を新しいものに更新する。`hide_candidate` になっても flag（由来）は残り、`candidates` と `sql`（`site_checks.flag`）に出る。flag なしの状態は成功で `listed` に戻り、その旨を `note` に残す（本番側での復帰は人が確認）。閾値は `recrawl.py` 冒頭の定数。
 
 ## 優先度と間隔
 

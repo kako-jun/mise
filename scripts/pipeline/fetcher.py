@@ -163,7 +163,7 @@ class RobotsCache:
         return st, st == 'allowed_no_robots', 0
 
 
-def fetch_site(host, scheme_order=('https', 'http')):
+def fetch_site(host, scheme_order=('https', 'http'), path='/'):
     """ホストのトップページを robots 確認の上で取得する（1ホスト: robots 1〜2 + ページ 1〜4 リクエスト）。
 
     戻り dict: robots_status, status, headers, body, final_url, error(None|FetchError.code)
@@ -177,7 +177,7 @@ def fetch_site(host, scheme_order=('https', 'http')):
         for scheme in scheme_order:
             origin = f'{scheme}://{h}'
             try:
-                st, ok, delay = robots.check(origin, '/')
+                st, ok, delay = robots.check(origin, path)
             except FetchError as e:
                 out['error'] = e.code; out['error_detail'] = e.detail
                 if e.code in ('ssrf_blocked',):
@@ -188,7 +188,7 @@ def fetch_site(host, scheme_order=('https', 'http')):
                 out['error'] = 'robots_unavailable'; return out
             if not ok:
                 out['error'] = 'robots_disallowed'; return out
-            return _follow(out, origin + '/', robots, delay)
+            return _follow(out, origin + path, robots, delay)
     return out
 
 

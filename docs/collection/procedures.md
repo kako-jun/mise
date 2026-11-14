@@ -14,7 +14,7 @@
 
 > サイトを migration で足した/紹介文を直したあとは、検索用の列を埋め直す: `node scripts/refresh-search-text.mjs --local|--remote`（INSERT/UPDATE のトリガが入れるのは ASCII の小文字化だけの暫定値。詳細は [data-model.md](../design/data-model.md#インデックスと検索用列0018)）。
 
-サイトごとに次を持つ。D1 への投入は、この JSON を根拠に手で書く migration（`migrations/0005`・`0009`・`0014` など）で行う。
+サイトごとに次を持つ。D1 への投入は、この JSON を根拠に手で書く migration（`migrations/0005`・`0009`・`0014` など）で行う。官公庁は台帳から `scripts/public_bodies_sql.py` が生成する（`0015`）。
 
 - `id`、`url`、`name`、`categories`（既存のカテゴリ ID）
 - `discovery_source`（発見元）、`checked_at`、robots.txt の URL・HTTP 状態・判定、トップページの HTTP 状態、観測した title / meta description
@@ -34,7 +34,7 @@
 | `scripts/collect-regions.py` | 区画表 `public/regions.js` を生成 | `uv run python3 scripts/collect-regions.py` |
 | `scripts/capture-thumbnails.mjs` | サムネイル撮影の試験（Node、playwright が別途必要） | [thumbnails.md](thumbnails.md#実行) |
 | `scripts/pipeline/run.py` | 独立サイトの発見パイプライン | [pipeline.md](pipeline.md#実行方法) |
-| `scripts/public_bodies_*.py` | 官公庁の名簿 | [public-bodies.md](public-bodies.md) |
+| `scripts/public_bodies_*.py` | 官公庁の名簿（取得・突き合わせ・リダイレクト解消・migration 生成） | [public-bodies.md](public-bodies.md) |
 
 ### サイトの更新日の取得
 
