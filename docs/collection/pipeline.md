@@ -29,7 +29,7 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 
 ## frontier 台帳
 
-単位は**ホスト**（キーは先頭の `www.` を除いた小文字ホスト名）。主な列: `source`（`commoncrawl-webgraph` / `links`）、`source_detail`、`discovered_at`、`depth`、`state`、`next_fetch_at`、`priority`、`fetch_attempts`、`last_http_status`、`reject_reason`、`robots_status`、取得後の `title` / `description` / `lang` / `kana_count` / `text_len` / `ad_hits` / `flags` / `site_kind` / `adult` / `personal_score`（手作り感の語の出現数。並べ替えの目安のみで判定に使わない）。`source_cursor` 表に発見元ごとの「どこまで探したか」を残す。
+単位は**ホスト**（キーは先頭の `www.` を除いた小文字ホスト名）。ただし申請の推薦（`source='request'`）でパスを持つもの（パス型のユーザー領域）は、キーにパスを含める（`ameblo.jp/bar`）。主な列: `source`（`commoncrawl-webgraph` / `links` / `request`）、`source_detail`、`discovered_at`、`depth`、`state`、`next_fetch_at`、`priority`、`fetch_attempts`、`last_http_status`、`reject_reason`、`robots_status`、取得後の `title` / `description` / `lang` / `kana_count` / `text_len` / `ad_hits` / `flags` / `site_kind` / `adult` / `personal_score`（手作り感の語の出現数。並べ替えの目安のみで判定に使わない）。`source_cursor` 表に発見元ごとの「どこまで探したか」を残す。
 
 `state`: `discovered` → `queued`（取得前を通過）/ `rejected` / `deferred`（共有サービス配下の個人領域）→ 取得後 `fetched`（特徴を抽出済み）/ `failed` / `blocked_by_robots` / `rejected` → `judge` で `candidate` または `rejected`。`judge` は台帳の特徴だけを見るので、閾値や語を変えたら再取得せず再判定できる（`triage --redo` は未取得の取得前除外と保留を引き直す）。
 
@@ -40,12 +40,12 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 調査の詳細（出典・利用条件・規模・限界）は Issue #39 のコメント参照。
 
 - **`discover-cc`（実装済み）**: Common Crawl のホストレベルのウェブグラフ（`cc-main-2026-jul-aug-sep`）の vertices から `.jp` ホストを取り、ホスト名の CRC32 で 1/N を決定論的に抽出する（既定 N=1000）。パート（約27〜40MB）は一時ファイルに落として完了後に rename し、`--max-filesize` 100MB で打ち切る。`--limit` で打ち切ると、パート内で先に出るホストへ偏る（再現はできる）。**`.jp` が入っているパート番号**（`CC_JP_PART`）はリリースごとに違う: `…-host-vertices.paths.gz` の各パートの先頭 3KB を Range 取得して `zcat | head -1` し、`jp.` が現れる境界のパートを選ぶ（`.jp` はそのパートと直前パートの末尾にまたがる）。
-- **`discover-links`（実装済み）**: 既存掲載サイト（`data/collection-*.json`）のトップページから外部リンク先ホストを深さ1で発見する。`.jp` 以外も許し、日本語かは取得後に判定する。
+- **`discover-links`（実装済み）**: 既存掲載サイト（`data/collection-*.json`）のトップページから外部リンク先ホストを深さ1で発見する。`.jp` 以外も許し、日本語かは取得後に判定する（申請の推薦 `source='request'` も同様に `not_jp` を適用しない）。
 - Wayback CDX / CT ログ（crt.sh）: 大量発見には不向き（TLD 全体の走査が遅い・拒否される／巨大）。個別ドメインの裏取りや補完用として、`discover.py` に関数を足す口だけがある（未実装）。
 
 ## フィルタ
 
-**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または、台帳に apex も `www.` も無い（本体がリンクされていない）登録ドメインの配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（`sakura.ne.jp` 型の共有サービスの利用者領域とみなす推定）。apex か `www.` が台帳にある登録ドメイン、および `links`（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群として推定の対象外。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
+**取得前（`hostnames.prefilter` と `run.triage`）**: `government`（`.go.jp`・`.lg.jp`・地域ドメインの市町村。層1の担当）、`spam_like_name`（量産ドメインの形）、`not_jp`、`invalid_host`。共有サービス配下は `deferred`（`shared_service_user`）: `blocklist/platforms.txt` の登録ドメイン配下のホスト、または、台帳に apex も `www.` も無い（本体がリンクされていない）登録ドメインの配下のホストが 3 件以上（`SHARED_SUBDOMAIN_THRESHOLD`）あるもの（`sakura.ne.jp` 型の共有サービスの利用者領域とみなす推定）。apex か `www.` が台帳にある登録ドメイン（`source='request'` の行は根拠にしない。提出者は外部で、パス付きの推薦は共有サービスの証拠でもあるため）、および `links`（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群として推定の対象外。同一ドメインの機能サブドメイン（`blog.example.jp` 等）は拒否せず、優先度だけ下げる。
 
 **取得後（`features.judge`）**: 取得できない/HTTP状態（`http_404` 等。5xx・429 は `failed`）、`noindex`（X-Robots-Tag と meta robots）、`parking_or_default_page`（売却・パーキング・サーバ初期ページ。`Under construction` / `coming soon` などの弱い語は **title に出た時だけ**有効。本文だけに出る場合は無視し、本文が薄ければ `thin_content` が拾う）、`thin_content`（可視テキスト 200 字未満）、`not_japanese`（かな 20 字未満）、`no_title`、`ad_heavy`（広告・アフィリエイト参照が 3 以上かつ「本文 300 字あたり 1 つ以上」＝広告が本文より多い、または 15 以上の量産テンプレ級。広告を載せた個人ブログは通す）。通過したものが `candidate`。語による拒否（会社・法人・成人向け・大手など）は使わない。
 
@@ -81,7 +81,7 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 1. 規模拡大: `--sample-every` を下げる。取得は 1 日数百ホスト程度の低速を維持する。
 2. 広告中心・量産の特徴量を実データで検証して足す（affiliate/購入導線リンクの量、同一テンプレートの量産）。
 3. 保留（`deferred`）の基準（#50）。
-4. 台帳の `candidate` を JSON/SQL に出す書き出し（D1 投入前の形）と、申請・拒否リスト（[ideas/requests.md](../ideas/requests.md)）の除外。
+4. 台帳の `candidate` を JSON/SQL に出す書き出し（D1 投入前の形）と、拒否リスト（[ideas/requests.md](../ideas/requests.md)）の除外。なお推薦の申請は `scripts/requests/import_requests.py` が frontier に `source='request'` で追記する（[operations/requests.md](../operations/requests.md)）。
 5. 紹介文・スパム一次判定・種別・成人向けの確定: 手元からの LLM バッチ（[ideas/llm-judging.md](../ideas/llm-judging.md)）。入力は `title` / `description` / `text_head` のみ。
 6. 発見元の追加: Wayback/CT による個別補完、公開リンク集。リンク数順の優先度付けにはグラフの edges/ranks（巨大）が必要で、範囲取得の方法を別途調べる。
 7. cron 登録（[operations/jobs.md](../operations/jobs.md)）。

@@ -38,6 +38,13 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
   node scripts/refresh-search-text.mjs --remote --db mise
   node scripts/refresh-search-text.mjs --remote --db mise-preview   # ※ mise-preview は一時設定が要る。手順は下の「官公庁の名簿（0015・0019）」の 2・3
   ```
+- **連絡先の廃止（#88）のマージ後に 1 回だけ**、本番とプレビューの両方で、廃止前に保存された連絡先を消す（`contact` 列は未使用で常に NULL とする。定期の掃除からは外してある）:
+
+  ```sh
+  npx wrangler d1 execute mise --remote --command "UPDATE requests SET contact = NULL WHERE contact IS NOT NULL;"
+  npx wrangler d1 execute mise-preview --remote --command "UPDATE requests SET contact = NULL WHERE contact IS NOT NULL;"
+  ```
+
 - 適用済みの migration は書き換えない。データの修正は新しい番号の migration で行う。番号は他の作業と衝突しないよう、最新を確認してから振る。
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。

@@ -82,7 +82,7 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 
 ### 状態遷移・申請
 
-掲載の状態（`listed` / `down` / `long_down` / `suspect` …）のデータは未設計。申請は `requests`、拒否リストは `blocked_hosts`（[operations/requests.md](../operations/requests.md)）。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
+掲載の状態（`listed` / `down` / `long_down` / `suspect` …）のデータは未設計。申請は `requests`（`contact` 列は連絡先の廃止後は未使用で常に NULL）、拒否リストは `blocked_hosts`（[operations/requests.md](../operations/requests.md)）。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
 
 ## 未決事項
 
