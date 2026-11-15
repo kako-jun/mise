@@ -36,7 +36,8 @@ async function toCategoryAndSearch(page) {
   await page.fill('#query', WORD); await page.waitForFunction(() => location.search.includes('q='));
   return catSearch;
 }
-const wrapBack = (page) => page.evaluate(() => { window.__backs = 0; const o = history.back.bind(history); history.back = () => { window.__backs++; o(); }; });
+// hold=true: back() の実行（= popstate）を window.__release() まで保留する（負荷で時間が前後しても競合状態を保てる）
+const wrapBack = (page, hold = false) => page.evaluate((h) => { window.__backs = 0; const o = history.back.bind(history); history.back = () => { window.__backs++; if (h) window.__release = o; else o(); }; }, hold);
 
 await scenario('語を全部消す: 履歴は増えず、カテゴリ一覧に戻る。戻る1回で検索前のページ、進むで ?q= が復元', async (page) => {
   const catSearch = await toCategoryAndSearch(page);
@@ -60,13 +61,20 @@ await scenario('検索中に再読込してから語を消す: 一覧が表示�
 await scenario('popstate が来ない場合: 1 秒後に URL をカテゴリへ戻して一覧を描く', async (page) => {
   const catSearch = await toCategoryAndSearch(page);
   await page.evaluate(() => { history.back = () => {}; });
-  await page.fill('#query', ''); await page.waitForTimeout(1500);
+  const lenSearch = await len(page);
+  await page.fill('#query', '');
+  // タイマー約 1250ms 後 + View Transition（最大 600ms 待ち + 200ms フェード）で、画面切替は最大約 2050ms 後
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('#directory')).display !== 'none', null, { timeout: 3000 });
+  assert.equal(await len(page), lenSearch, '安全弁は replaceState で履歴を積まない');
   assert.equal(search(page), catSearch); assert.ok(await shown(page, '#directory')); assert.ok(!(await shown(page, '#results')));
 });
-await scenario('空欄 submit と debounce が続けて通っても back() は 1 回だけ', async (page) => {
-  const catSearch = await toCategoryAndSearch(page); await wrapBack(page);
-  await page.fill('#query', ''); await page.press('#query', 'Enter'); await page.waitForTimeout(WAIT);
+await scenario('back() 待ちの間に空欄 submit しても back() は 1 回だけ（leavingSearch ガード）', async (page) => {
+  const catSearch = await toCategoryAndSearch(page); await wrapBack(page, true); // popstate を保留する
+  await page.fill('#query', ''); await page.waitForFunction(() => window.__backs === 1, null, { timeout: 3000 }); // debounce が発火し back() 済み・popstate 前（popstate は保留中）
   assert.equal(await page.evaluate(() => window.__backs), 1);
+  await page.press('#query', 'Enter'); await page.waitForTimeout(200);
+  assert.equal(await page.evaluate(() => window.__backs), 1, 'submit で back() が 2 回目に積まれない');
+  await page.evaluate(() => window.__release()); await page.waitForTimeout(WAIT);
   assert.equal(search(page), catSearch);
   await page.goBack(); await page.waitForTimeout(WAIT); assert.equal(search(page), topSearch, '2 つ前へ飛んでいない');
 });
