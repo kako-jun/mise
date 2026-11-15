@@ -51,7 +51,9 @@ await scenario('[あとで]で消えて記録され、リロードしても再�
   await ready(page); await fire(page); await untilShown(page, true);
   await page.click('#install-later'); await untilShown(page, false);
   const at = Number(await stored(page)); assert.ok(Math.abs(Date.now() - at) < 60_000, '現在時刻付近が記録される');
-  await ready(page); await fire(page); await page.waitForFunction(() => window.__prompts === 0); assert.equal(await shown(page), false, '7日以内は出ない');
+  await ready(page); await fire(page); await page.waitForFunction(() => window.MiseInstall.event !== null, null, { timeout: T }); // 捕捉済み(イベントは保持される)でも、抑制中なら出さない
+  await page.waitForTimeout(200); // 「出ないこと」の確認なので固定待ちで足りる
+  assert.equal(await shown(page), false, '7日以内は出ない');
   await page.evaluate(([k, v]) => localStorage.setItem(k, v), [KEY, String(Date.now() - 7 * DAY - 1000)]);
   await ready(page); await fire(page); await untilShown(page, true);
   await page.evaluate(([k, v]) => localStorage.setItem(k, v), [KEY, String(Date.now() - 6 * DAY)]);
@@ -99,6 +101,16 @@ await scenario('回帰: 起動処理が最後まで走る（日本語カテゴ�
   await page.waitForFunction(() => / › |^[^M]/.test(document.title) && !document.title.startsWith('MISE —'), null, { timeout: T }); // カテゴリ名から始まるタイトル（復元された）
   await bootRegression(page, '/?q=zzqq');
   await page.waitForFunction(() => document.querySelector('#query').value === 'zzqq', null, { timeout: T });
+}, { width: 1000, height: 700 }, 'ja-JP');
+await scenario('install.js が読めなくても(404)起動は最後まで走る: 日本語タイトル・?q= の復元・pageerror なし', async (page) => {
+  const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+  await page.route('**/install.js*', (r) => r.fulfill({ status: 404, body: 'not found' }));
+  await page.goto(BASE + '/?q=zzqq'); await page.waitForFunction(() => window.__miseBooted === true, null, { timeout: T });
+  assert.equal(await page.evaluate(() => 'MiseInstall' in window), false, 'install.js は読まれていない');
+  assert.equal(await page.inputValue('#query'), 'zzqq');
+  assert.ok(/[぀-ヿ一-鿿]/.test(await page.title()), `日本語のタイトル ${await page.title()}`);
+  assert.equal(await shown(page), false, 'バナーは出ない');
+  assert.deepEqual(errors, [], 'pageerror 0');
 }, { width: 1000, height: 700 }, 'ja-JP');
 await browser.close();
 if (failed) { console.log(`${failed} 件失敗`); process.exit(1); }

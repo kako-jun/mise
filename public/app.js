@@ -645,19 +645,21 @@ window.addEventListener('popstate',async()=>{
 // 起動処理(下の即時関数)が applyStaticLanguage() → renderInstallBanner() を同期で呼ぶので、宣言は必ず起動処理より前に置く(const/let の TDZ)。tests/install-banner.test.mjs が順序を検査する。
 // [あとで]・インストール却下は 7 日間出さない(却下時刻は localStorage。読み書きが失敗してもバナー自体は動く)。standalone 起動・iOS Safari(イベントなし)では出さない。
 const INSTALL_DISMISS_KEY = 'mise-install-dismissed-at';
-const installDismissed = () => window.MiseInstall.isDismissActive(window.MiseInstall.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now());
+// install.js が読めない(404・ネットワーク・拡張機能のブロック)と window.MiseInstall は無い。おまけ機能なので、その場合はバナーを出さないだけで例外にしない。
+const installDismissed = () => { const mi = window.MiseInstall; return !!mi && mi.isDismissActive(mi.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now()); };
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 function renderInstallBanner() {
   const box = $('#install-banner'); if (!box) return;
-  box.hidden = !(window.MiseInstall.event && !isStandalone() && !installDismissed());
+  const mi = window.MiseInstall;
+  box.hidden = !(mi && mi.event && !isStandalone() && !installDismissed());
   $('#install-text').textContent = t('installText'); $('#install-add').textContent = t('installAdd'); $('#install-later').textContent = t('installLater');
 }
-function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); window.MiseInstall.event = null; renderInstallBanner(); }
+function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); if (window.MiseInstall) window.MiseInstall.event = null; renderInstallBanner(); }
 window.addEventListener('miseinstallprompt', renderInstallBanner);
 window.addEventListener('appinstalled', () => closeInstallBanner(false));
 $('#install-later').addEventListener('click', () => closeInstallBanner(true));
 $('#install-add').addEventListener('click', async () => {
-  const ev = window.MiseInstall.event; if (!ev) return;
+  const ev = window.MiseInstall && window.MiseInstall.event; if (!ev) return;
   let dismissed = false;
   try { await ev.prompt(); dismissed = (await ev.userChoice).outcome === 'dismissed'; } catch (_) { /* 二重呼び出し等は黙って閉じる */ }
   closeInstallBanner(dismissed);

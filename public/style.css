@@ -313,7 +313,7 @@ html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-co
 html[data-theme="dark"] .site-newtab { color: #9fc3cc; }
 html[data-theme="dark"] .site-newtab:hover, html[data-theme="dark"] .site-newtab:focus-visible { color: #82ddea; }
 
-/* インストール提案バナー(#105): 画面下部に固定。検索バー・本文には重ねず、閉じられる。display を持つので [hidden] を併記する */
+/* インストール提案バナー(#105): 画面下部に固定(本文の流れには入らず、スクロール中は一覧の下端に重なるが閉じられる)。display を持つので [hidden] を併記する */
 .install-banner { position: fixed; z-index: 10; left: 50%; transform: translateX(-50%); bottom: calc(12px + env(safe-area-inset-bottom)); width: min(560px, calc(100% - 24px)); box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 12px; border: 1px solid #72a3af; border-radius: 8px; background: rgba(255, 255, 255, .97); color: #12272c; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); }
 .install-banner[hidden] { display: none; }
 .install-text { flex: 1 1 160px; font-size: 13px; }

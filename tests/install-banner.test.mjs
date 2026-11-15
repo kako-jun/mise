@@ -36,7 +36,7 @@ test('保存値の解釈: 数字列だけを受け付け、壊れた値・未保
 test('配線: 標準提案を止め・standalone と却下中は出さず・appinstalled で消す', () => {
   assert.match(installSrc, /addEventListener\('beforeinstallprompt', e => \{\s*e\.preventDefault\(\);\s*api\.event = e;/);
   assert.doesNotMatch(app, /addEventListener\('beforeinstallprompt'/);
-  assert.match(app, /box\.hidden = !\(window\.MiseInstall\.event && !isStandalone\(\) && !installDismissed\(\)\)/);
+  assert.match(app, /box\.hidden = !\(mi && mi\.event && !isStandalone\(\) && !installDismissed\(\)\)/);
   assert.match(app, /matchMedia\('\(display-mode: standalone\)'\)\.matches/);
   assert.match(app, /addEventListener\('appinstalled', \(\) => closeInstallBanner\(false\)\)/);
 });
@@ -68,4 +68,9 @@ test('実行順: インストール関連の宣言は起動処理(applyStaticLan
   }
   assert.doesNotMatch(app, /\blet installEvent\b/);
   assert.match(app.slice(boot), /window\.__miseBooted = true/); // 起動完了の印(e2e の待ち条件)
+});
+test('install.js が無くても(window.MiseInstall なし)例外にしない: 参照はすべてガード付き', () => {
+  const rest = app.replace('if (window.MiseInstall) window.MiseInstall.event = null', '').replace('window.MiseInstall && window.MiseInstall.event', '');
+  assert.doesNotMatch(rest, /window\.MiseInstall\./, '直接の参照が残っている');
+  assert.match(app, /const installDismissed = \(\) => \{ const mi = window\.MiseInstall; return !!mi && /);
 });
