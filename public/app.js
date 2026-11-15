@@ -641,6 +641,28 @@ window.addEventListener('popstate',async()=>{
   applyLanguage();
   if(changed) globeForScope(scope);
 });
+// インストール提案(#105)。ブラウザ標準の提案は install.js が止め(beforeinstallprompt を握って preventDefault)、ここで画面下部の控えめなバナーに置き換える。
+// 起動処理(下の即時関数)が applyStaticLanguage() → renderInstallBanner() を同期で呼ぶので、宣言は必ず起動処理より前に置く(const/let の TDZ)。tests/install-banner.test.mjs が順序を検査する。
+// [あとで]・インストール却下は 7 日間出さない(却下時刻は localStorage。読み書きが失敗してもバナー自体は動く)。standalone 起動・iOS Safari(イベントなし)では出さない。
+const INSTALL_DISMISS_KEY = 'mise-install-dismissed-at';
+const installDismissed = () => window.MiseInstall.isDismissActive(window.MiseInstall.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now());
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function renderInstallBanner() {
+  const box = $('#install-banner'); if (!box) return;
+  box.hidden = !(window.MiseInstall.event && !isStandalone() && !installDismissed());
+  $('#install-text').textContent = t('installText'); $('#install-add').textContent = t('installAdd'); $('#install-later').textContent = t('installLater');
+}
+function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); window.MiseInstall.event = null; renderInstallBanner(); }
+window.addEventListener('miseinstallprompt', renderInstallBanner);
+window.addEventListener('appinstalled', () => closeInstallBanner(false));
+$('#install-later').addEventListener('click', () => closeInstallBanner(true));
+$('#install-add').addEventListener('click', async () => {
+  const ev = window.MiseInstall.event; if (!ev) return;
+  let dismissed = false;
+  try { await ev.prompt(); dismissed = (await ev.userChoice).outcome === 'dismissed'; } catch (_) { /* 二重呼び出し等は黙って閉じる */ }
+  closeInstallBanner(dismissed);
+});
+
 (async()=>{
   try {
     currentScope=scopeFromLocation();
@@ -649,34 +671,8 @@ window.addEventListener('popstate',async()=>{
     if(sc) scopes=sc;
     restoreLocation(); applyLanguage();
   } catch (_) { if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error'); }
-  finally { endI18nPending(); }
+  finally { endI18nPending(); window.__miseBooted = true; } // 起動処理が最後まで終わった印(e2e の待ち条件。成否は画面の内容で見る)
 })();
-
-// インストール提案(#105)。ブラウザ標準の提案を止め(beforeinstallprompt を握って preventDefault)、画面下部の控えめなバナーに置き換える。
-// [あとで]・インストール却下は 7 日間出さない(却下時刻は localStorage。読み書きが失敗してもバナー自体は動く)。standalone 起動・iOS Safari(イベントなし)では出さない。
-let installEvent = null;
-const INSTALL_DISMISS_KEY = 'mise-install-dismissed-at';
-const installDismissed = () => window.MiseInstall.isDismissActive(window.MiseInstall.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now());
-const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-function renderInstallBanner() {
-  const box = $('#install-banner'); if (!box) return;
-  box.hidden = !installEvent;
-  $('#install-text').textContent = t('installText'); $('#install-add').textContent = t('installAdd'); $('#install-later').textContent = t('installLater');
-}
-function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); installEvent = null; renderInstallBanner(); }
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault();
-  if (isStandalone() || installDismissed()) return;
-  installEvent = e; renderInstallBanner();
-});
-window.addEventListener('appinstalled', () => closeInstallBanner(false));
-$('#install-later').addEventListener('click', () => closeInstallBanner(true));
-$('#install-add').addEventListener('click', async () => {
-  const ev = installEvent; if (!ev) return;
-  let dismissed = false;
-  try { await ev.prompt(); dismissed = (await ev.userChoice).outcome === 'dismissed'; } catch (_) { /* 二重呼び出し等は黙って閉じる */ }
-  closeInstallBanner(dismissed);
-});
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>window.__miseLogo&&window.__miseLogo());

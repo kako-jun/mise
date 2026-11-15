@@ -83,12 +83,12 @@
 
 ### インストール提案バナー
 
-ブラウザ標準のインストール提案（上部のミニバー等）は出さない（`beforeinstallprompt` を握って `preventDefault()`）。代わりに**画面下部**に固定の控えめなバナーを出す: 文言・[インストール]・[あとで]（日英。言語切替に追従、ダークも対応）。幅は最大 560px、モバイルでは左右 12px の余白で折り返し、`safe-area-inset-bottom` を避ける。バナーは本文の流れに入らず、閉じられる。
+ブラウザ標準のインストール提案（上部のミニバー等）は出さない（`beforeinstallprompt` を握って `preventDefault()`）。代わりに**画面下部**に固定の控えめなバナーを出す: 文言・[インストール]・[あとで]（日英。言語切替に追従、ダークも対応）。幅は最大 560px、モバイルでは左右 12px の余白で折り返し、`safe-area-inset-bottom` を避ける。バナーは本文の流れに入らず、閉じられる。Android でキーボードが出ると検索結果に重なることがあるが、閉じられるので許容する。
 
 - [インストール]: 握っておいた `prompt()` を呼び、結果にかかわらずバナーを閉じる。結果が dismissed なら却下扱い。
-- [あとで]・却下: **7 日間は出さない**。却下時刻を `localStorage`（`mise-install-dismissed-at`）に残す。読み書きに失敗しても（プライベートモード等）バナーは出て閉じられるが、記憶は残らない。
+- [あとで]・却下: **7 日間は出さない**（保存された時刻が未来のときは抑制しない。時計が大きく進んだ後に長期間出なくなるのを避ける）。却下時刻を `localStorage`（`mise-install-dismissed-at`）に残す。読み書きに失敗しても（プライベートモード等）バナーは出て閉じられるが、記憶は残らない。
 - 出さない場合: standalone 起動（`display-mode: standalone`・iOS の `navigator.standalone`）。`appinstalled` で消す。`beforeinstallprompt` が来ない iOS Safari などでは何も出さない（手順ヒントも出さない）。
-- 抑制判定の純関数は `public/install.js`（`tests/install-banner.test.mjs` が実挙動で検査）。表示と配線は `public/app.js`、実ブラウザ検証は `scripts/e2e-install-banner.mjs`。
+- 抑制判定の純関数と `beforeinstallprompt` の捕捉・保持（`window.MiseInstall.event`）は `public/install.js`（`app.js` より前に読み込む。`tests/install-banner.test.mjs` が検査）。表示と配線は `public/app.js`（宣言は起動処理より前に置く）、実ブラウザ検証は `scripts/e2e-install-banner.mjs`。
 
 ## 言語
 

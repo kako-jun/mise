@@ -22,19 +22,20 @@ function chromiumPath() {
 }
 const browser = await chromium.launch({ executablePath: chromiumPath(), args: ['--no-sandbox', '--disable-gpu'] });
 let failed = 0;
-async function scenario(name, fn, viewport = { width: 1000, height: 700 }) {
-  const ctx = await browser.newContext({ viewport, locale: 'en-US' }); const page = await ctx.newPage();
+async function scenario(name, fn, viewport = { width: 1000, height: 700 }, locale = 'en-US') {
+  const ctx = await browser.newContext({ viewport, locale }); const page = await ctx.newPage();
   try { await fn(page, ctx); console.log(`ok   ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}\n     ${e.message.split('\n').slice(0, 6).join(' | ')}`); } finally { await ctx.close(); }
 }
 const shown = (p) => p.evaluate(() => getComputedStyle(document.querySelector('#install-banner')).display !== 'none');
 const untilShown = (p, want) => p.waitForFunction((w) => (getComputedStyle(document.querySelector('#install-banner')).display !== 'none') === w, want, { timeout: T });
-const ready = async (p) => { await p.goto(BASE + '/'); await p.waitForFunction(() => window.__miseReady === true && !!window.MiseInstall, null, { timeout: T }); };
+const ready = async (p) => { await p.goto(BASE + '/'); await p.waitForFunction(() => window.__miseBooted === true && !!window.MiseInstall, null, { timeout: T }); };
 // 本物の beforeinstallprompt の代わりに、prompt()/userChoice を持つイベントを発火する。defaultPrevented でブラウザ標準提案の抑止も見る。
 const fire = (p, outcome = 'accepted') => p.evaluate((o) => {
   const e = new Event('beforeinstallprompt', { cancelable: true });
   window.__prompts = 0; e.prompt = async () => { window.__prompts++; }; e.userChoice = Promise.resolve({ outcome: o, platform: 'web' });
   window.dispatchEvent(e); return e.defaultPrevented;
 }, outcome);
+const bootRegression = async (page, url) => { await page.goto(BASE + url); await page.waitForFunction(() => window.__miseBooted === true, null, { timeout: T }); };
 const stored = (p) => p.evaluate((k) => localStorage.getItem(k), KEY);
 const shot = (p, n) => SHOT && p.screenshot({ path: path.join(SHOT, `${n}.png`) });
 
@@ -86,6 +87,19 @@ await scenario('日本語表示・ダーク・モバイル幅（375px）で崩�
   const g = await page.evaluate(() => { const b = document.querySelector('#install-banner').getBoundingClientRect(); return { l: b.left, r: b.right, bb: b.bottom, h: b.height, vw: innerWidth, vh: innerHeight, sw: document.documentElement.scrollWidth }; });
   assert.ok(g.l >= 0 && g.r <= g.vw && g.bb <= g.vh && g.sw <= g.vw, JSON.stringify(g)); assert.ok(g.h < 130, `高さ ${g.h}`); await shot(page, 'banner-mobile-ja-dark');
 }, { width: 375, height: 667 });
+await scenario('回帰: 起動処理が最後まで走る（日本語カテゴリ・?category= / ?q= の復元。バナー関連の宣言順で止まらない）', async (page) => {
+  await bootRegression(page, '/');
+  await page.waitForSelector('#categories a');
+  const first = await page.evaluate(() => ({ id: new URL(document.querySelector('#categories a').href).searchParams.get('category'), name: document.querySelector('#categories a').textContent }));
+  assert.ok(/[぀-ヿ一-鿿]/.test(first.name), `日本語のカテゴリ名 ${first.name}`);
+  assert.ok(/[぀-ヿ一-鿿]/.test(await page.title()), '日本語のタイトル');
+  assert.ok(first.id, 'カテゴリリンクに category がある');
+  await bootRegression(page, `/?category=${first.id}`);
+  assert.equal(new URL(page.url()).searchParams.get('category'), first.id);
+  await page.waitForFunction(() => / › |^[^M]/.test(document.title) && !document.title.startsWith('MISE —'), null, { timeout: T }); // カテゴリ名から始まるタイトル（復元された）
+  await bootRegression(page, '/?q=zzqq');
+  await page.waitForFunction(() => document.querySelector('#query').value === 'zzqq', null, { timeout: T });
+}, { width: 1000, height: 700 }, 'ja-JP');
 await browser.close();
 if (failed) { console.log(`${failed} 件失敗`); process.exit(1); }
 console.log('すべて成功');
