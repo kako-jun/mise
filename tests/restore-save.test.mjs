@@ -13,5 +13,5 @@ test('listDirty: スクロールで立て、保存成功で下ろす（件数追
   assert.match(app, /y:scrollY\}\},''\); listDirty=false;/);
 });
 test('画面を移る前の保存（pushUrl）は常に同期で保存する', () => {
-  assert.match(app, /function pushUrl\(url(?:,state=null)?\) \{ saveListState\(\); history\.pushState/);
+  assert.match(app, /function pushUrl\(url,state=null\) \{ saveListState\(\); history\.pushState/);
 });

@@ -478,13 +478,20 @@ function commitSearchUrl(q) {
   if(location.pathname+location.search===url) return;
   if(was) history.replaceState(history.state,'',url); else pushUrl(url,{searchPushed:true});
 }
-// 検索語もタグも空になってカテゴリ一覧へ戻るとき、URL を検索中の項目のままにしない。
-// 検索に入るときの pushState が history.state.searchPushed の印を残しているので、その項目なら history.back() で 1 つ前（検索に入る前の項目）へ戻す
-// （replaceState だと同じカテゴリ URL の項目が 2 つ並び、直後の「戻る」が 1 回空振りする #102）。back() は非同期で、描画は popstate の restoreLocation が行う
-// ので true を返し、呼び出し側は showDirectory を呼ばない。印がない（URL 直入り等）ときは従来どおり replaceState（戻る先は積み増さない）で false を返す。
+// 検索を空にして戻るとき URL を検索の項目のままにしない（#102。仕様は docs/design/ui.md）。
+// 返り値 true = history.back() 済みで、描画は popstate が行う（呼び出し側は描画しない）。false = 呼び出し側が showDirectory する。
+let leavingSearch=false, leavingTimer=0;
 function leaveSearchUrl() {
+  if(leavingSearch) return true;
   if(!inSearchUrl()) return false;
-  if(history.state && history.state.searchPushed) { history.back(); return true; }
+  if(history.state && history.state.searchPushed) {
+    leavingSearch=true;
+    leavingTimer=setTimeout(()=>{ // popstate が来なかったときの安全弁
+      if(!leavingSearch) return; leavingSearch=false;
+      if(!$('#query').value.trim() && !currentTags.length && inSearchUrl()) { history.replaceState(null,'',categoryUrl(currentPath)); showDirectory(currentPath,false); }
+    },1000);
+    history.back(); return true;
+  }
   const url=categoryUrl(currentPath); if(location.pathname+location.search!==url) history.replaceState(null,'',url);
   return false;
 }
@@ -622,9 +629,12 @@ function restoreLocation() {
 let restoredOnce=false;
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
+  const leaving=leavingSearch; leavingSearch=false; clearTimeout(leavingTimer);
   const scope=scopeFromLocation(), changed=scope!==currentScope;
   if(changed) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
+  const typed=leaving ? $('#query').value.trim() : ''; // back() 待ちの間に入力された語は、復元で消さず検索し直す
   fromPop=true; try { restoreLocation(); } finally { fromPop=false; }
+  if(typed) { $('#query').value=typed; updateSearch(); }
   applyLanguage();
   if(changed) globeForScope(scope);
 });
