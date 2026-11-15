@@ -376,7 +376,7 @@ addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTim
 // 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
 addEventListener('pagehide',()=>{ if(listDirty || !(history.state && history.state.mise && activeList && history.state.mise.key===activeList.key)) saveListState(); });
 // 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
-function pushUrl(url) { saveListState(); history.pushState(null,'',url); }
+function pushUrl(url,state=null) { saveListState(); history.pushState(state,'',url); }
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
 // 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
 let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fromPop=false, animateRedraw=false;
@@ -472,24 +472,39 @@ function showResultsNow(query) {
 }
 function updateSearch() {
   const q=$('#query').value.trim();
-  if(q || currentTags.length) { commitSearchUrl(q); showResults(q); } else { leaveSearchUrl(); showDirectory(currentPath, false); }
+  if(q || currentTags.length) { commitSearchUrl(q); showResults(q); } else { if(!leaveSearchUrl()) showDirectory(currentPath, false); }
 }
 // 検索（?q= / ?tag=）の URL 反映（#99）。カテゴリ等から検索に入る最初の 1 回だけ pushState、検索中の語の変更は replaceState（入力のたびに履歴を積まない）。
 const inSearchUrl=()=>{ const sp=new URLSearchParams(location.search); return sp.has('q') || sp.has('tag'); };
 function commitSearchUrl(q) {
   const was=inSearchUrl(); currentSearch=q; const url=stateUrl();
   if(location.pathname+location.search===url) return;
-  if(was) history.replaceState(history.state,'',url); else pushUrl(url);
+  if(was) history.replaceState(history.state,'',url); else pushUrl(url,{searchPushed:true});
 }
-// 検索語もタグも空になってカテゴリ一覧へ戻るとき、URL を検索中の項目のままにしない（replaceState。戻る先は積み増さない）。
-function leaveSearchUrl() { if(!inSearchUrl()) return; const url=categoryUrl(currentPath); if(location.pathname+location.search!==url) history.replaceState(null,'',url); }
+// 検索を空にして戻るとき URL を検索の項目のままにしない（#102。仕様は docs/design/ui.md）。
+// 返り値 true = history.back() 済みで、描画は popstate が行う（呼び出し側は描画しない）。false = 呼び出し側が showDirectory する。
+let leavingSearch=false, leavingTimer=0;
+function leaveSearchUrl() {
+  if(leavingSearch) return true;
+  if(!inSearchUrl()) return false;
+  if(history.state && history.state.searchPushed) {
+    leavingSearch=true;
+    leavingTimer=setTimeout(()=>{ // popstate が来なかったときの安全弁
+      if(!leavingSearch) return; leavingSearch=false;
+      if(!$('#query').value.trim() && !currentTags.length && inSearchUrl()) { history.replaceState(null,'',categoryUrl(currentPath)); showDirectory(currentPath,false); }
+    },1000);
+    history.back(); return true;
+  }
+  const url=categoryUrl(currentPath); if(location.pathname+location.search!==url) history.replaceState(null,'',url);
+  return false;
+}
 let reqStatus = null;
 let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
 $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {leaveSearchUrl();showDirectory(currentPath,false);}});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {if(!leaveSearchUrl()) showDirectory(currentPath,false);}});
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
 function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
@@ -617,9 +632,12 @@ function restoreLocation() {
 let restoredOnce=false;
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
+  const leaving=leavingSearch; leavingSearch=false; clearTimeout(leavingTimer);
   const scope=scopeFromLocation(), changed=scope!==currentScope;
   if(changed) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
+  const typed=leaving ? $('#query').value.trim() : ''; // back() 待ちの間に入力された語は、復元で消さず検索し直す
   fromPop=true; try { restoreLocation(); } finally { fromPop=false; }
+  if(typed) { $('#query').value=typed; updateSearch(); }
   applyLanguage();
   if(changed) globeForScope(scope);
 });
