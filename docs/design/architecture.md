@@ -41,6 +41,8 @@
 - **ナビゲーションプリロード**: `activate` で有効化し、起動時の SW 待ちでページ移動が遅れないようにする（応答の保存ではなくネットワーク応答そのもの）。
 - **更新**: `skipWaiting` + `clients.claim` で新しい SW を即時有効化する。キャッシュが無いので古い画面が残らない（`activate` で既存の Cache Storage も消す）。`sw.js` と manifest は `_headers` で `Cache-Control: no-cache`（更新確認を遅らせない）。
 
+- **インストール提案**: ブラウザ標準の提案は `public/app.js` が `beforeinstallprompt` を握って止め、下部の自前バナーに置き換える（SW・キャッシュ・CSP には関与しない。仕様は [ui.md](ui.md#インストール提案バナー)）。抑制判定の純関数は `public/install.js`（`index.html` で app.js より先に読む）。
+
 配信設定は `npm run check` の `scripts/check-pwa.mjs` が検査する（`_headers`・`wrangler.jsonc`・CSP・manifest とアイコンの寸法・theme-color の一致。静的ファイルは Worker を通らないため設定ファイルそのものを読む）。
 
 オフラインでアプリを使えるようにしない（古いカテゴリ・サイトを現行と誤認させない）。将来オフライン閲覧を足す場合は、日付・「古い可能性」の表示と更新方針を決めてから。
