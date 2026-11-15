@@ -22,6 +22,8 @@ const words = {
 };
 Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
 Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
+Object.assign(words.ja, { installText:'MISE をホーム画面に追加できます。', installAdd:'インストール', installLater:'あとで' });
+Object.assign(words.en, { installText:'Add MISE to your home screen.', installAdd:'Install', installLater:'Not now' });
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
@@ -48,6 +50,7 @@ function applyStaticLanguage() {
   updateExternalToggle();
   $('#language-toggle').title=t('lang'); $('#language-toggle').setAttribute('aria-label',t('lang'));
   renderLog();
+  renderInstallBanner();
 }
 function applyLanguage(animate=false) {
   applyStaticLanguage();
@@ -630,6 +633,32 @@ window.addEventListener('popstate',async()=>{
   } catch (_) { if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error'); }
   finally { endI18nPending(); }
 })();
+
+// インストール提案(#105)。ブラウザ標準の提案を止め(beforeinstallprompt を握って preventDefault)、画面下部の控えめなバナーに置き換える。
+// [あとで]・インストール却下は 7 日間出さない(却下時刻は localStorage。読み書きが失敗してもバナー自体は動く)。standalone 起動・iOS Safari(イベントなし)では出さない。
+let installEvent = null;
+const INSTALL_DISMISS_KEY = 'mise-install-dismissed-at';
+const installDismissed = () => window.MiseInstall.isDismissActive(window.MiseInstall.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now());
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function renderInstallBanner() {
+  const box = $('#install-banner'); if (!box) return;
+  box.hidden = !installEvent;
+  $('#install-text').textContent = t('installText'); $('#install-add').textContent = t('installAdd'); $('#install-later').textContent = t('installLater');
+}
+function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); installEvent = null; renderInstallBanner(); }
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  if (isStandalone() || installDismissed()) return;
+  installEvent = e; renderInstallBanner();
+});
+window.addEventListener('appinstalled', () => closeInstallBanner(false));
+$('#install-later').addEventListener('click', () => closeInstallBanner(true));
+$('#install-add').addEventListener('click', async () => {
+  const ev = installEvent; if (!ev) return;
+  let dismissed = false;
+  try { await ev.prompt(); dismissed = (await ev.userChoice).outcome === 'dismissed'; } catch (_) { /* 二重呼び出し等は黙って閉じる */ }
+  closeInstallBanner(dismissed);
+});
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）
 (document.fonts?document.fonts.ready:Promise.resolve()).then(()=>window.__miseLogo&&window.__miseLogo());
