@@ -52,7 +52,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 ### 制約と注意
 
 - カテゴリ未所属のサイトも `GET /api/sites`（`category` 指定なし）と検索には出る（`category_ids` が空配列。画面では「未分類」）。カテゴリ別の一覧には出ない。
-- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
+- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけで、LLM 判定の承認済み候補は `scripts/llm/export_approved_sql.py` が出す SQL で入れる（[llm-judge.md](../collection/llm-judge.md#台帳への取り込みと承認)）。
 
 ## 将来案（未実装）
 

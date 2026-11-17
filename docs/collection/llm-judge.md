@@ -1,8 +1,8 @@
 # LLM 判定工程（Claude API、手元実行）
 
-候補サイトの取得文を Claude に渡し、紹介文・長い紹介文・一次判定・カテゴリ候補・属性を**候補として**出力させる工程（Issue #48）。公開サーバーからは呼ばない。手元PCだけで動かし、出力は人の承認を経るまで公開しない。鍵・クレジットの運用ルールは [operations/jobs.md](../operations/jobs.md#鍵クレジットllm-予算)、載せる基準は [concept/listing-criteria.md](../concept/listing-criteria.md)、未実装の残りは [ideas/llm-judging.md](../ideas/llm-judging.md)。比較実験の結果と推奨の最小構成は [trials.md](trials.md#llm-判定工程の比較実験2026-11-14issue-48)。
+候補サイトの取得文を Claude に渡し、紹介文・長い紹介文・一次判定・カテゴリ候補・属性を**候補として**出力させる工程（Issue #48）。公開サーバーからは呼ばない。手元PCだけで動かし、出力は人の承認を経るまで公開しない。鍵・クレジットの運用ルールは [operations/jobs.md](../operations/jobs.md#鍵クレジットllm-予算)、載せる基準は [concept/listing-criteria.md](../concept/listing-criteria.md)、構想の残りは [ideas/llm-judging.md](../ideas/llm-judging.md)。比較実験の結果と推奨の最小構成は [trials.md](trials.md#llm-判定工程の比較実験2026-11-14issue-48)。
 
-状態: **単独プロトタイプ**（入力は JSONL、出力は `var/` の JSON）。frontier 台帳（[pipeline.md](pipeline.md)）への書き戻しとD1への投入は未実装。
+状態: 判定（入力は JSONL、出力は `var/` の JSON）は手元実行のプロトタイプ。結果の frontier 台帳（[pipeline.md](pipeline.md)）への取り込み・承認・承認済みの投入 SQL の書き出しは実装済み（下の「台帳への取り込みと承認」）。D1 への適用は人が行い、本番への投入は kako-jun の承認後に別途（この工程は本番に流さない）。
 
 ## 構成
 
@@ -13,9 +13,41 @@
 | `scripts/llm/export_sites.py` | 既掲載サイト（`migrations/` を in-memory SQLite に適用）と `data/` の取得結果から入力JSONLと、比較用の人手の値を書き出す。新規アクセスなし |
 | `scripts/llm/export_candidates.py` | 発見パイプラインの frontier（`state='candidate'`）を読み取り専用で入力JSONLにする |
 | `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助。名前を解決して**全アドレスが公開アドレス**でなければ取得せず（解決できない名前も拒否）、curl は `--resolve` でチェック済みアドレスに固定する（チェック後の再解決＝DNS リバインディングを防ぐ）。本文テキストはインライン要素の間に空白を足さない（`support</a>.` が `support .` にならない） |
+| `scripts/llm/import_results.py` | 判定結果 JSON を frontier 台帳の `llm_judgement` に取り込む（冪等）。API なし |
+| `scripts/llm/review_state.py` | `llm_judgement.review_state` の一覧と承認・却下・差し戻し。API なし |
+| `scripts/llm/export_approved_sql.py` | 承認済みを `sites` / `site_categories` / `site_tags` への冪等な INSERT SQL として `var/` に書き出す。API なし |
 | `scripts/llm/merge_ledgers.py` | 旧 `<var-dir>/llm-ledger.jsonl` を共有台帳へ統合（繰り返し可） |
 | `scripts/llm/ledger_release.py` | 開いたままの予約の一覧と手動解放 |
 | `scripts/llm/compare.py` `review_long.py` `exp_summary.py` | 人手の値との並置、長い紹介文の根拠突き合わせ表、実験の費用・一致率の表 |
+
+## 台帳への取り込みと承認
+
+判定結果は**候補**で、公開は人の承認の後。流れは「判定 → `import_results.py` → `review_state.py` → `export_approved_sql.py` → ローカル D1 で検証 → （kako-jun の承認後に）本番」。下の 3 つのスクリプトは API も外部アクセスも使わない（費用 $0）。
+
+```sh
+uv run python3 scripts/llm/import_results.py var/pipeline-two-g5-haiku.json --input var/frontier-candidates.jsonl   # 台帳 var/frontier.sqlite へ
+uv run python3 scripts/llm/review_state.py list --state pending --verdict pass
+uv run python3 scripts/llm/review_state.py approve example.com another.example   # reject で却下、pending で差し戻し
+uv run python3 scripts/llm/export_approved_sql.py            # -> var/approved-sites.sql
+npx wrangler d1 execute mise --local --file var/approved-sites.sql   # ローカル D1 で検証（再実行しても増えない）
+```
+
+**台帳の表** `llm_judgement`（正本は `scripts/pipeline/schema.sql`。1ホスト1行、最新の判定だけ。接続時に `CREATE TABLE IF NOT EXISTS` で旧台帳にも付く）: 判定（`spam_verdict` / `spam_kind` / `spam_reason`、`description_ja/en`、`long_description_ja/en` と根拠引用、`categories`、`tags`、`adult` / `site_kind` / `site_scope`、`confidence`、`country_code` / `region_code`、`notes`）、由来（`input_hash`、`origin` = pipeline|judge、`model`、`judged_at` = 結果ファイルの更新日時、`imported_at`）、承認（`review_state` = pending|approved|rejected、既定 pending、`reviewed_at`）。`frontier.adult` / `site_kind`（決定論の属性）とは別の列で、混ぜない。
+
+**取り込みの規則**（`import_results.py RESULTS --input CANDIDATES`。`--input` は judge に渡した JSONL）:
+
+- 結果の `id` は台帳のキーと `export_candidates.cand_id` で対応づける。台帳に無いホスト、複数キーに当たる id、`--input` に無い候補、候補の URL が台帳の行（`final_url` か `url`）と違う（古い入力）もの、`judge.validate_output` を通らない出力（逐語引用の突き合わせを含む）は**拒否**して件数と理由を出し、書かない（終了コード 2）。出力の無い件（失敗）は数えるだけ。
+- **冪等**: 入力ハッシュ = sha256(origin、モデル、LLM に渡した候補テキスト)。同じハッシュは何もしない（承認の状態も保つ）。**新しいハッシュ（候補テキストかモデルが変わった）は行を上書きし、`review_state` を pending に戻す**（承認済みでも。内容が変わったので承認し直す）。
+- `reject` は取り込みと同時に `review_state=rejected`（広告・量産・パーキング・スパムの一次判定。理由は残る）。`deferred`（共有サービス配下の個別ページ）・`pass`・`suspect` は pending。**`frontier.state` は変えない**（判定は候補で、台帳の状態遷移は決定論の段のもの）。
+- `review_state.py approve` は `reject` / `deferred` と、日英の短い紹介文が無い行を拒む（`sites.description_ja` が必須で、載せられないため）。`suspect` は人の判断で承認できる。
+- 成人向け（`adult=yes`）は、台帳の方針（本文冒頭を保存しない）を踏襲し、長い紹介文とその根拠引用を保存しない。成人向けの根拠引用（`adult.evidence_quote`）と所在の根拠引用は、成人向けかどうかに関わらず保存しない（列を持たない。検証は取り込み時に済んでいる）。
+
+**SQL の書き出し**（`export_approved_sql.py`。台帳は読み取り専用で開く）:
+
+- 対象は approved かつ verdict が pass / suspect で、日英の紹介文がある行。`sites`（`id` = `fr-<ホスト>-<キーの sha1 先頭8桁>`、`url`、`name`、`description_ja/en`、`country_code`、`region_code`）、`site_categories`（木に存在する id だけ）、`site_tags` を作る。`registered_at` と検索用の暫定 `search_text` は DB のトリガが入れ、`bulk_import` は 0（個別に承認したサイトは通常の登録として扱う）。非 ASCII を含む `search_text` の正規化は掲載後に `scripts/refresh-search-text.mjs`（[deploy.md](../operations/deploy.md)）で埋め直す。
+- `name` は台帳の `title`（空白を畳み 80 字まで）。空か `adult=yes` のときはホスト名（成人向けのタイトルは公開文言にしない。紹介文は判定の指示で既に中立・婉曲）。長い紹介文は載せる列がまだ無いので出さない。タグは LLM が返す英語のキーワードで、`label_ja` と `label_en` の両方に同じ値を入れる。
+- **冪等・除外は SQL 自身が行う**ので、どの D1 に流しても安全: 既掲載（`sites.url` を小文字・スキーム・`www.`・末尾スラッシュを無視して比較）、`blocked_hosts`（ホスト全体の拒否は親ドメイン配下を含む。パス指定はそのパス配下だけ）、同じ `id` は挿入しない。承認集合内の同じ URL の重複は書き出し側で 1 件にする。既存の行の更新はしない（紹介文を直したいときは別の仕組みで）。
+- 出力は `var/`（`.gitignore`）の派生物でコミットしない。適用先はローカル D1（`--local`）で検証し、**本番 D1 への適用はこの工程に含めない**。
 
 ## 取得の限界（fetch_about.py）
 

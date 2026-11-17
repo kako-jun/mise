@@ -24,7 +24,7 @@
 
 ## 鍵・クレジット・LLM 予算
 
-LLM 判定工程（紹介文・長い紹介文・一次判定・分類候補）の単独プロトタイプは `scripts/llm/`（仕様・使い方は [collection/llm-judge.md](../collection/llm-judge.md)。台帳への接続と定期実行は未実装で、残りは [ideas/llm-judging.md](../ideas/llm-judging.md)）。工程を動かすときに守る運用ルール:
+LLM 判定工程（紹介文・長い紹介文・一次判定・分類候補）は `scripts/llm/`（仕様・使い方は [collection/llm-judge.md](../collection/llm-judge.md)。判定結果の台帳への取り込み・承認・承認済み SQL の書き出し〔API を呼ばない手元作業〕は実装済みで、本番 D1 への投入は kako-jun の承認後に別途。定期実行は未実装で、構想の残りは [ideas/llm-judging.md](../ideas/llm-judging.md)）。工程を動かすときに守る運用ルール:
 
 - LLM は手元の PC/Raspberry Pi から API で呼ぶ。**公開サーバーからは呼ばない**。Claude Code の対話利用のトークンは使わない。
 - API キーはリポジトリの外のユーザー設定ファイル（権限 600）に置き、環境変数として読む。**キーの値をログ・出力・コミット・Issue・PR・docs に書かない**。
