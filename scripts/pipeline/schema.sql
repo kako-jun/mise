@@ -38,3 +38,35 @@ CREATE TABLE IF NOT EXISTS source_cursor (
   source TEXT NOT NULL, cursor_key TEXT NOT NULL, cursor_value TEXT, updated_at TEXT NOT NULL,
   PRIMARY KEY (source, cursor_key)
 );
+-- LLM 判定結果（Issue #48）。scripts/llm/import_results.py が judge/pipeline の出力を取り込む。1ホスト1行（最新の判定だけ）。
+-- frontier の列とは別表: frontier.adult / site_kind は決定論の属性、ここは LLM の判定（出自が違うので混ぜない）。
+-- frontier.state は変えない（判定は候補であり、公開は review_state が approved になってから）。FK は付けない（frontier の表作り直しで参照が壊れないように）。
+CREATE TABLE IF NOT EXISTS llm_judgement (
+  key            TEXT PRIMARY KEY,         -- frontier.key
+  input_hash     TEXT NOT NULL,            -- 取り込み時に作るハッシュ（origin + モデル + LLM に渡した候補テキスト）。同じなら二重に取り込まない
+  origin         TEXT NOT NULL CHECK (origin IN ('pipeline','judge')),
+  model          TEXT NOT NULL,            -- 使ったモデル（pipeline の二段で第2段が違うときは 'haiku+sonnet' の形）
+  judged_at      TEXT NOT NULL,            -- 判定結果ファイルの更新日時（UTC。API の応答時刻ではない）
+  imported_at    TEXT NOT NULL,
+  spam_verdict   TEXT NOT NULL CHECK (spam_verdict IN ('pass','suspect','reject','deferred')),
+  spam_kind      TEXT NOT NULL,
+  spam_reason    TEXT NOT NULL,
+  description_ja TEXT,
+  description_en TEXT,
+  long_description_ja TEXT,                -- adult=yes では保存しない（本文の再現を避ける）
+  long_description_en TEXT,
+  long_description_evidence TEXT,          -- JSON 配列（原文からの逐語引用）。adult=yes では保存しない
+  categories     TEXT NOT NULL,            -- JSON 配列（migrations/0001 の木の id、最大3）
+  tags           TEXT NOT NULL,            -- JSON 配列（最大5）
+  adult          TEXT NOT NULL CHECK (adult IN ('yes','no','unknown')),   -- 根拠引用は保存しない
+  site_kind      TEXT NOT NULL CHECK (site_kind IN ('individual','business','organization','company','unknown')),
+  site_kind_reason TEXT NOT NULL,
+  site_scope     TEXT NOT NULL CHECK (site_scope IN ('standalone','service_top','user_page')),
+  confidence     TEXT NOT NULL CHECK (confidence IN ('low','medium','high')),
+  country_code   TEXT,                     -- 本文に根拠のあるものだけ。根拠引用は保存しない
+  region_code    TEXT,
+  notes          TEXT NOT NULL DEFAULT '',
+  review_state   TEXT NOT NULL DEFAULT 'pending' CHECK (review_state IN ('pending','approved','rejected')),
+  reviewed_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS llm_judgement_review ON llm_judgement (review_state, spam_verdict);
