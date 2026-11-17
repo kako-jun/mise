@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // sites.search_text（検索用の正規化済みテキスト）を、NFKC + 小文字化で全行埋め直す。
-// サイトを追加・紹介文を直した後に実行する（migration の暫定値は ASCII の小文字化だけ）。
+// サイトを追加・紹介文やタグを直した後に実行する（タグ ja/en も含める）（migration の暫定値は ASCII の小文字化だけ）。
 // 使い方: node scripts/refresh-search-text.mjs --local [--persist-to <dir>]        ローカル D1（DB は mise のみ）
 //         node scripts/refresh-search-text.mjs --remote [--db mise|mise-preview]   本番（既定 mise）/ プレビュー用 DB。意図して実行すること
 import { execFileSync } from 'node:child_process';
@@ -34,6 +34,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const base = ['wrangler', 'd1', 'execute', o.db, `--${o.mode}`, ...(o.persistTo ? ['--persist-to', o.persistTo] : [])];
   const wr = args => execFileSync('npx', [...base, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
   const rows = JSON.parse(wr(['--json', '--command', 'SELECT id, name, description_ja, description_en, url FROM sites']))[0].results;
+  const tags = JSON.parse(wr(['--json', '--command', 'SELECT site_id, label_ja, label_en FROM site_tags ORDER BY rowid']))[0].results;
+  const bySite = new Map();
+  for (const t of tags) { if (!bySite.has(t.site_id)) bySite.set(t.site_id, []); bySite.get(t.site_id).push(t); }
+  for (const r of rows) r.tags = bySite.get(r.id) ?? [];
   const q = s => `'${s.replace(/'/g, "''")}'`;
   const dir = mkdtempSync(join(tmpdir(), 'mise-st-')), file = join(dir, 'st.sql');
   writeFileSync(file, rows.map(r => `UPDATE sites SET search_text = ${q(searchText(r))} WHERE id = ${q(r.id)};`).join('\n'));

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { cleanTags, MAX_TAGS, querySites } from '../src/sites.js';
+import { cleanTags, MAX_TAGS, querySites, searchText, cleanQuery } from '../src/sites.js';
 
 // タグ絞り込み（#31）: ?tag= の解釈と、複数タグ・検索語・範囲・カテゴリとの AND。
 const db = new DatabaseSync(':memory:');
@@ -53,4 +53,13 @@ test('SSR: tag パラメータが付けば不正（6 個以上）でも noindex 
   assert.equal(isSearchQuery(sp(Array.from({ length: MAX_TAGS + 1 }, (_, i) => 'tag=t' + i).join('&'))), true);
   assert.equal(isSearchQuery(sp('q=x')), true);
   assert.equal(isSearchQuery(sp('category=a')), false);
+});
+
+test('searchText: タグ ja/en を正規化して含める（q がタグに当たる）', async () => {
+  const st = searchText({ name: 'N', description_ja: 'd', description_en: null, url: 'https://x/', tags: [{ label_ja: 'ｷﾉｺ', label_en: 'Mushrooms' }, { label_ja: '図鑑', label_en: null }] });
+  assert.equal(st, 'n d  https://x/ キノコ mushrooms 図鑑 ');
+  assert.equal(searchText({ name: 'N', description_ja: 'd', description_en: 'e', url: 'u' }), 'n d e u');
+  db.prepare('UPDATE sites SET search_text=? WHERE id=?').run(st, 'd');
+  assert.deepEqual(await ids({ q: cleanQuery('MUSHROOM') }), ['d']);
+  assert.deepEqual(await ids({ q: cleanQuery('図鑑') }), ['d']);
 });
