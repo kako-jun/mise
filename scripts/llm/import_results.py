@@ -10,10 +10,14 @@ to re-validate the output (including verbatim quotes) before anything enters the
 Rules (details: docs/collection/llm-judge.md):
 - A result whose id does not match exactly one ledger key, whose candidate is not in --input, whose candidate URL differs
   from the ledger row, or whose output fails judge.validate_output is rejected (counted, never written).
+- The candidate text is rendered with the body limit the judge ran with (pipeline: args.body_limit, judge.py: the
+  record's body_limit; judge.BODY_LIMIT when an old output has none), so the hash covers what the LLM actually saw.
 - Idempotent: the input hash = sha256(origin, model, rendered candidate text). The same hash is skipped. A new hash replaces
   the row and puts review_state back to pending (verdict reject: rejected), whatever it was before.
 - verdict reject is stored with review_state=rejected; deferred / pass / suspect start as pending. frontier.state is
   never changed.
+- A results file older than the stored judgement of that host (file mtime = judged_at) is rejected, so a stale file
+  cannot overwrite a newer judgement and put an approved row back to pending. --allow-older overrides.
 - adult=yes: no long description, no quotes (adult / long-description / location evidence) are stored.
 Exit code: 0 all fine, 2 when some results were rejected, 1 on usage errors.
 """
@@ -46,7 +50,7 @@ def read_jsonl(path):
 
 
 def load_results(path):
-    """-> (origin, [(id, output|None, model, error)], body_limit). Raises SystemExit on a shape we do not know."""
+    """-> (origin, [(id, output|None, model, error, body_limit)]). Raises SystemExit on a shape we do not know."""
     with open(path, encoding="utf-8") as f:
         try:
             data = json.load(f)
@@ -65,15 +69,17 @@ def load_results(path):
             out = r.get("output")
             described = out is not None and out is not r.get("triage") and out != r.get("triage")
             model = f"{base}+{desc}" if described and desc and desc != base else base
-            items.append((r["id"], out, model, r.get("error")))
-        return "pipeline", items, args.get("body_limit") or judge.BODY_LIMIT
+            items.append((r["id"], out, model, r.get("error"), args.get("body_limit") or judge.BODY_LIMIT))
+        return "pipeline", items
     if isinstance(data, list):
         items = []
         for r in data:
             if not isinstance(r, dict) or "id" not in r or not isinstance(r.get("model"), str):
                 raise SystemExit(f"{path}: judge result without id / model")
-            items.append((r["id"], r.get("output"), r["model"], r.get("error")))
-        return "judge", items, judge.BODY_LIMIT
+            bl = r.get("body_limit")
+            items.append((r["id"], r.get("output"), r["model"], r.get("error"),
+                          bl if isinstance(bl, int) and not isinstance(bl, bool) and bl > 0 else judge.BODY_LIMIT))
+        return "judge", items
     raise SystemExit(f"{path}: neither a pipeline.py output (object with results) nor a judge.py output (list)")
 
 
@@ -104,9 +110,9 @@ def row_values(origin, model, out, judged_at, imported_at, h):
     }
 
 
-def import_results(db, results_path, input_path):
+def import_results(db, results_path, input_path, allow_older=False):
     """Returns (counts, problems). Writes inside one transaction."""
-    origin, items, body_limit = load_results(results_path)
+    origin, items = load_results(results_path)
     cands = {c["id"]: c for c in read_jsonl(input_path)}
     valid_ids = set(judge.category_ids(judge.load_categories()))
     by_id = {}
@@ -121,7 +127,7 @@ def import_results(db, results_path, input_path):
         counts["rejected"] += 1
         problems.append(f"{cid}: {why}")
 
-    for cid, out, model, err in items:
+    for cid, out, model, err, body_limit in items:
         if out is None:
             counts["no_output"] += 1
             continue
@@ -143,9 +149,12 @@ def import_results(db, results_path, input_path):
             reject(cid, "invalid output: " + "; ".join(errs))
             continue
         h = input_hash(origin, model, text)
-        old = db.execute("SELECT input_hash FROM llm_judgement WHERE key=?", (row["key"],)).fetchone()
+        old = db.execute("SELECT input_hash, judged_at FROM llm_judgement WHERE key=?", (row["key"],)).fetchone()
         if old and old["input_hash"] == h:
             counts["unchanged"] += 1
+            continue
+        if old and not allow_older and (old["judged_at"] or "") > judged_at:
+            reject(cid, f"results file ({judged_at}) is older than the stored judgement ({old['judged_at']}); --allow-older to overwrite")
             continue
         vals = row_values(origin, model, out, judged_at, imported_at, h)
         cols = ["key"] + list(vals)
@@ -161,10 +170,11 @@ def main(argv=None):
     ap.add_argument("results")
     ap.add_argument("--input", required=True, help="the candidates JSONL that was given to the judge")
     ap.add_argument("--db", default=None, help="frontier sqlite (default var/frontier.sqlite)")
+    ap.add_argument("--allow-older", action="store_true", help="let a results file older than the stored judgement overwrite it")
     a = ap.parse_args(argv)
     db = frontier.connect(a.db)
     try:
-        counts, problems = import_results(db, a.results, a.input)
+        counts, problems = import_results(db, a.results, a.input, a.allow_older)
     finally:
         db.close()
     for p in problems:
