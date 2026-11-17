@@ -15,6 +15,7 @@ check('twitter:image が og:image と同じ', !!twImage && twImage === ogImage);
 check('twitter:card が summary_large_image', meta('name', 'twitter:card') === 'summary_large_image');
 check('og:image:type が image/png', meta('property', 'og:image:type') === 'image/png');
 check('og:image:alt が空でない', !!meta('property', 'og:image:alt'));
+check('twitter:image:alt が og:image:alt と同じ', !!meta('name', 'twitter:image:alt') && meta('name', 'twitter:image:alt') === meta('property', 'og:image:alt'));
 const file = ogImage ? root + 'public' + ogImage.slice(ORIGIN.length) : null;
 let w = 0, h = 0, isPng = false;
 if (file && fs.existsSync(file)) { const b = fs.readFileSync(file); isPng = b.subarray(1, 4).toString() === 'PNG'; w = b.readUInt32BE(16); h = b.readUInt32BE(20); }

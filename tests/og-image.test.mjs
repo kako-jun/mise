@@ -14,6 +14,7 @@ test('OGP 画像: og:image / twitter:image / summary_large_image が揃う', () 
   assert.match(html, /<meta property="og:image:height" content="630">/);
   assert.match(html, /<meta property="og:image:type" content="image\/png">/);
   assert.match(html, /<meta property="og:image:alt" content="[^"]+">/);
+  assert.match(html, /<meta name="twitter:image:alt" content="[^"]+">/);
   assert.match(html, /<meta name="twitter:card" content="summary_large_image">/);
   assert.match(html, /<meta name="twitter:image" content="https:\/\/mise\.llll-ll\.com\/og\/og\.png">/);
 });
