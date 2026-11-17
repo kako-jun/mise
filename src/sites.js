@@ -39,7 +39,7 @@ export function decodeCursor(raw) {
 }
 // 全角半角・大文字小文字をそろえる（検索語と sites.search_text の両方に同じ処理を使う）
 export const normalizeSearch = s => String(s ?? '').normalize('NFKC').toLowerCase();
-// 名前・日英の紹介文・URL の後ろにタグ（日本語名 英語名）を空白区切りで続ける（migration 0020 の暫定値と同じ並び）。s.tags は [{label_ja,label_en}]（省略可）。
+// 名前・日英の紹介文・URL の後ろにタグ（日本語名 英語名）を空白区切りで続ける（migration 0020 の暫定値と同じ並び。タグは label_ja 昇順の BINARY 順で渡す呼び出し側の責任で、ここでは並べ替えない）。s.tags は [{label_ja,label_en}]（省略可）。
 export const searchText = s => normalizeSearch(`${s.name} ${s.description_ja} ${s.description_en ?? ''} ${s.url}${(s.tags ?? []).map(t => ` ${t.label_ja} ${t.label_en ?? ''}`).join('')}`);
 // instr で比較するので、LIKE のメタ文字のエスケープも長さの制限（D1 は LIKE のパターンが約50バイトを超えると too complex）も要らない。
 export const cleanQuery = raw => { const q = [...normalizeSearch(raw).trim()].slice(0, 100).join(''); return q || null; }; // コードポイント単位で切る

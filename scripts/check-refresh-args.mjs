@@ -2,6 +2,7 @@
 // 自己検査: refresh-search-text.mjs の引数検証（誤指定で別名の DB を作らない・本番以外の DB を取り違えない）と、0018・0020 の search_text トリガの挙動（node:sqlite のメモリ DB）。
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
+import { searchText } from '../src/sites.js';
 import { parseArgs } from './refresh-search-text.mjs';
 let failed = 0;
 const t = (label, ok) => { console.log(`${ok ? 'OK  ' : 'NG  '}${label}`); if (!ok) failed++; };
@@ -43,6 +44,12 @@ db.exec("DELETE FROM site_tags WHERE site_id='c' AND label_ja='キノコ'");
 t('タグ DELETE で追従', !st('c').includes('fungi') && st('c').includes('図鑑'));
 db.exec("INSERT INTO site_tags VALUES('b','メモ','Memo')");
 t('明示 search_text のサイトもタグ追加で作り直す（仕様）', st('b').includes('memo'));
+// タグの並び: 挿入順と逆の英字タグでも label_ja 昇順になり、searchText()（ASCII 入力・同じ順で渡す）と一致する
+db.exec("INSERT INTO sites(id,url,name,description_ja,description_en) VALUES('d','http://d/','Name','日本','En')");
+db.exec("INSERT INTO site_tags VALUES('d','zeta','Zeta2');INSERT INTO site_tags VALUES('d','alpha','Alpha2');INSERT INTO site_tags VALUES('d','Mid','mid2')");
+const dTags = db.prepare('SELECT label_ja, label_en FROM site_tags WHERE site_id=? ORDER BY label_ja').all('d').map(r => ({ ...r }));
+t('タグは label_ja 昇順（挿入順でない）', eq(dTags.map(x => x.label_ja), ['Mid', 'alpha', 'zeta']) && st('d').indexOf('mid') < st('d').indexOf('alpha') && st('d').indexOf('alpha') < st('d').indexOf('zeta'));
+t('トリガの暫定値 = searchText()（ASCII）', st('d') === searchText({ name: 'Name', description_ja: '日本', description_en: 'En', url: 'http://d/', tags: dTags }));
 // 埋め直し UPDATE（0020 末尾）が既存行にタグを入れる
 db.exec("DROP TRIGGER site_tags_search_text_ai; INSERT INTO site_tags VALUES('a','後付','Late'); UPDATE sites SET search_text='stale' WHERE id='a'");
 db.exec(readFileSync(new URL('../migrations/0020_search_text_tags.sql', import.meta.url), 'utf8').split('-- 既存行の埋め直し（暫定値）。')[1]);

@@ -34,7 +34,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const base = ['wrangler', 'd1', 'execute', o.db, `--${o.mode}`, ...(o.persistTo ? ['--persist-to', o.persistTo] : [])];
   const wr = args => execFileSync('npx', [...base, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
   const rows = JSON.parse(wr(['--json', '--command', 'SELECT id, name, description_ja, description_en, url FROM sites']))[0].results;
-  const tags = JSON.parse(wr(['--json', '--command', 'SELECT site_id, label_ja, label_en FROM site_tags ORDER BY rowid']))[0].results;
+  const tags = JSON.parse(wr(['--json', '--command', 'SELECT site_id, label_ja, label_en FROM site_tags ORDER BY site_id, label_ja']))[0].results;
   const bySite = new Map();
   for (const t of tags) { if (!bySite.has(t.site_id)) bySite.set(t.site_id, []); bySite.get(t.site_id).push(t); }
   for (const r of rows) r.tags = bySite.get(r.id) ?? [];
