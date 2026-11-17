@@ -552,6 +552,36 @@ class ExportTests(Base):
         t.executescript(self.export())
         self.assertEqual(t.execute("SELECT count(*) FROM sites WHERE url LIKE '%tilde.example%'").fetchone()[0], 1)
 
+    def test_redirected_final_url_path_does_not_hide_a_removal_or_a_listing(self):
+        # (a) approved removal recorded for the registered root; the site redirects / -> /ja/
+        self.approve_new("foo.example", out_pass(), name="rd1.json", final_url="https://foo.example/ja/")
+        # (b) listed under the registered root; the ledger final_url is /index.html
+        self.approve_new("bar.example", out_pass(), name="rd2.json", final_url="https://bar.example/index.html")
+        # a different path on the same host, nothing listed or requested: still exported
+        self.approve_new("baz.example", out_pass(), name="rd3.json", final_url="https://baz.example/ja/")
+        t = self.target()
+        t.execute("INSERT INTO requests (type,status,url,host,normalized_key) VALUES ('remove','approved','https://foo.example/','foo.example','foo.example')")
+        t.execute("INSERT INTO sites (id,url,name,description_ja) VALUES ('old','https://bar.example/','b','d')")
+        t.execute("INSERT INTO requests (type,status,url,host,normalized_key) VALUES ('remove','approved','https://baz.example/other','baz.example','baz.example/other')")
+        t.executescript(self.export())
+        self.assertIsNone(self.listed(t, "foo.example"))
+        self.assertEqual(t.execute("SELECT count(*) FROM sites WHERE url LIKE '%bar.example%'").fetchone()[0], 1)
+        self.assertIsNotNone(self.listed(t, "baz.example"))
+
+    def test_final_url_key_and_url_are_all_checked_for_requests_and_path_blocks(self):
+        self.approve_new("qux.example", out_pass(), name="rd4.json", final_url="https://qux.example/ja/")
+        self.approve_new("sub.example/a", out_pass(), name="rd5.json", url="https://sub.example/a/", final_url="https://sub.example/b/")
+        t = self.target()
+        # request keyed by the redirect target
+        t.execute("INSERT INTO requests (type,status,url,host,normalized_key) VALUES ('add','rejected','https://qux.example/ja/','qux.example','qux.example/ja')")
+        # path block on the registered path while final_url moved elsewhere
+        t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('sub.example','/a','removal_request')")
+        t.executescript(self.export())
+        self.assertIsNone(self.listed(t, "qux.example"))
+        self.assertIsNone(self.listed(t, "sub.example"))
+        keys = export_approved_sql.url_keys(["https://x.example/ja/", "https://x.example/", "https://x.example"])
+        self.assertEqual(keys, ["x.example", "x.example/ja"])
+
     def test_only_candidate_state_hosts_are_exported(self):
         for st in ("rejected", "blocked_by_robots", "deferred"):
             self.db.execute("UPDATE frontier SET state=? WHERE key='gamma.example'", (st,))
@@ -566,14 +596,23 @@ class ExportTests(Base):
     def test_sql_with_semicolons_newlines_and_comment_markers_applies_with_wrangler_local(self):
         nasty = "a; b\n-- c; DROP TABLE sites; it's /* x */ ok"
         self.approve_new("nasty.example", out_pass(description_ja=nasty, description_en=nasty), name="r11.json", title="T; -- x\nsecond")
-        sql = self.export()
         state = os.path.join(self.dir, "d1")
         sqlfile = self.path("w.sql")
-        write(sqlfile, sql)
         run = lambda *a: subprocess.run(["npx", "wrangler", "d1", *a, "--local", "--persist-to", state], cwd=ROOT,
                                         capture_output=True, text=True, timeout=300)
         r = run("migrations", "apply", "mise")
         self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        # alpha is listed first, then re-approved with other tags and categories: the file mixes listed and new sites
+        write(sqlfile, self.export())
+        r = run("execute", "mise", "--file", sqlfile)
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-800:])
+        self.imp(self.write_pipeline({"alpha.example": out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+                                                                tags=["a", "b", "c", "d", "e"])}, name="rr-w.json", model="sonnet"))
+        self.assertEqual(review_state.set_state(self.db, ["alpha.example"], "approved")[0][1], True)
+        self.approve_new("zeta.example", out_pass(), name="r12.json")
+        sql = self.export()
+        self.assertIn("-- alpha.example", sql)
+        write(sqlfile, sql)
         for _ in range(2):  # second run: nothing is added
             r = run("execute", "mise", "--file", sqlfile)
             self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-800:])
@@ -586,7 +625,13 @@ class ExportTests(Base):
         c = run("execute", "mise", "--json", "--command",
                 "SELECT (SELECT count(*) FROM site_tags WHERE site_id LIKE 'fr-%') AS t, (SELECT count(*) FROM site_categories WHERE site_id LIKE 'fr-%') AS c")
         got = json.loads(c.stdout[c.stdout.index("["):])[0]["results"][0]
-        self.assertEqual((got["t"], got["c"]), (9, 5))  # alpha 2, adultsite 2, o'brien 1, gamma 2, nasty 2 tags; 1 category each
+        # alpha 2 (the re-approved 5 tags / 3 categories are skipped), adultsite 2, o'brien 1, gamma 2, nasty 2, zeta 2 tags; 1 category each
+        self.assertEqual((got["t"], got["c"]), (11, 6))
+        a = run("execute", "mise", "--json", "--command",
+                "SELECT (SELECT count(*) FROM sites WHERE id LIKE 'fr-alpha%') AS s, (SELECT count(*) FROM site_tags WHERE site_id LIKE 'fr-alpha%' AND label_en IN ('a','b','c','d','e')) AS t, "
+                "(SELECT count(*) FROM site_categories WHERE site_id LIKE 'fr-alpha%' AND category_id LIKE 'arts%') AS c")
+        got = json.loads(a.stdout[a.stdout.index("["):])[0]["results"][0]
+        self.assertEqual((got["s"], got["t"], got["c"]), (1, 0, 0))
 
     def test_missing_ledger_or_table(self):
         with contextlib.redirect_stderr(io.StringIO()):

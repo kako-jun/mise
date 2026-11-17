@@ -59,9 +59,13 @@ def norm_sql(col):
     return f"rtrim(replace(CASE WHEN ({s}) LIKE 'www.%' THEN substr(({s}),5) ELSE ({s}) END,'%7e','~'),'/')"
 
 
-def url_keys(url):
-    """Both comparison forms of a URL (the request key and the plain SQL-side key)."""
-    return sorted({import_requests.key_of(url), norm_url(url)})
+def as_list(urls):
+    return [urls] if isinstance(urls, str) else list(urls)
+
+
+def url_keys(urls):
+    """Both comparison forms (the request key and the plain SQL-side key) of every candidate URL."""
+    return sorted({k for u in as_list(urls) for k in (import_requests.key_of(u), norm_url(u))})
 
 
 def site_id(key):
@@ -76,22 +80,26 @@ def site_name(row):
     return title[:80]
 
 
-def blocked_sql(url):
+def blocked_sql(urls):
     """Same rule as the intake: the host or a parent domain (never above a shared-hosting user area) for whole-host rows,
-    the host itself plus the folded path for path_prefix rows. No LIKE, so _ and % in a row are plain characters."""
-    sp = urllib.parse.urlsplit(url)
-    host = (sp.hostname or "").rstrip(".").lower()
-    host = host[4:] if host.startswith("www.") else host
-    path = import_requests.match_path(sp.path)
-    cands = ",".join(q(h) for h in import_requests.block_candidates(host)) or q(host)
-    return ("EXISTS (SELECT 1 FROM blocked_hosts b WHERE (b.path_prefix='' AND b.host IN (%s)) "
-            "OR (b.path_prefix<>'' AND b.host=%s AND (%s=b.path_prefix OR substr(%s,1,length(b.path_prefix)+1)=b.path_prefix||'/')))"
-            % (cands, q(host), q(path), q(path)))
+    the host itself plus the folded path for path_prefix rows. No LIKE, so _ and % in a row are plain characters.
+    Several candidate URLs (url / final_url / key of one site): blocked when any of them is."""
+    parts = []
+    for url in as_list(urls):
+        sp = urllib.parse.urlsplit(url)
+        host = (sp.hostname or "").rstrip(".").lower()
+        host = host[4:] if host.startswith("www.") else host
+        path = import_requests.match_path(sp.path)
+        cands = ",".join(q(h) for h in import_requests.block_candidates(host)) or q(host)
+        parts.append("(b.path_prefix='' AND b.host IN (%s)) "
+                     "OR (b.path_prefix<>'' AND b.host=%s AND (%s=b.path_prefix OR substr(%s,1,length(b.path_prefix)+1)=b.path_prefix||'/'))"
+                     % (cands, q(host), q(path), q(path)))
+    return "EXISTS (SELECT 1 FROM blocked_hosts b WHERE %s)" % " OR ".join("(%s)" % x for x in parts)
 
 
-def requested_off_sql(url):
+def requested_off_sql(urls):
     """A rejected recommendation (manual / withdrawn / expired / blocklisted) or an approved removal for the same key."""
-    keys = ",".join(q(k) for k in url_keys(url))
+    keys = ",".join(q(k) for k in url_keys(urls))
     return (f"EXISTS (SELECT 1 FROM requests r WHERE r.normalized_key IN ({keys}) "
             "AND ((r.type='add' AND r.status='rejected') OR (r.type='remove' AND r.status='approved')))")
 
@@ -111,12 +119,14 @@ def statements(row):
     cc, rc = row["country_code"], row["region_code"]
     cc = cc if cc and COUNTRY.fullmatch(cc) else None
     rc = rc if cc and rc and REGION.fullmatch(rc) and rc.startswith(cc + "-") else None
-    keys = ",".join(q(k) for k in url_keys(url))
+    # redirects keep the host but may change the path (/ -> /ja/), so every spelling of the site is checked
+    cands = list(dict.fromkeys([url, row["url"], "https://" + row["key"]]))
+    keys = ",".join(q(k) for k in url_keys(cands))
     out = [
         f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code) "
         f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)} "
-        f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({keys})) AND NOT {blocked_sql(url)} "
-        f"AND NOT {requested_off_sql(url)} ON CONFLICT DO NOTHING;"]
+        f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({keys})) AND NOT {blocked_sql(cands)} "
+        f"AND NOT {requested_off_sql(cands)} ON CONFLICT DO NOTHING;"]
     # changes() is the row count of the statement right before: 1 after a new sites row, 0 when it was skipped. Tags come first
     # (one statement; a new site gets at least one row), categories second (they see the sites or the tags count). An empty
     # list emits no statement and leaves the previous count in place, so the chain stays correct.
