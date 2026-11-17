@@ -1016,6 +1016,8 @@ def main(argv=None):
         except BudgetExceeded as e:
             print(f"STOPPED by budget guard: {e}", file=sys.stderr)
             return 3
+        for r in res:
+            r.setdefault("body_limit", a.body_limit)  # import_results.py re-renders the candidate with this limit
         out = a.out if a.out and len(models) == 1 else os.path.join(a.results_dir or a.var_dir, f"llm-results-{m}.json")
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, "w", encoding="utf-8") as f:

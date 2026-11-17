@@ -85,6 +85,7 @@ npx wrangler d1 execute mise --remote --file /tmp/requests-import.sql
 - 取り下げ・訂正の反映は人が判断して手で行う: `remove` は `sites` の該当行と `site_categories`・`site_tags` を削除（`data/` の台帳も同期）、`correct` は `sites` の該当列を更新（[procedures.md](../collection/procedures.md)）。拒否リストへ入れたいときは `blocked_hosts` に手で行を足す（ホスト全体の拒否は、サイトの運営者がそのドメイン全体の所有者と確認できた場合だけ。パス付きの申請でホスト全体を入れるとサービス全体が以後拒否される）。
 - robots.txt / noindex で外したホストは、申請なしで `blocked_hosts` に入れる: `INSERT OR IGNORE INTO blocked_hosts (host,path_prefix,reason) VALUES ('example.com','','robots')`（host は小文字・末尾ドットなし・`www.` なし。パス単位の noindex は `path_prefix` に）。
 - 誤申請・取り消しは、管理者が `rejected`・`note='withdrawn'` にする。
+- `rejected` の推薦（手動・`withdrawn`・`expired`・`blocklisted`）と `approved` の取り下げは、LLM 判定の承認済み SQL の書き出し（`scripts/llm/export_approved_sql.py`、[llm-judge.md](../collection/llm-judge.md)）が `normalized_key` で読み、同じキーのサイトを掲載 SQL から外す。`pending` は外さない。
 
 ## 確認
 

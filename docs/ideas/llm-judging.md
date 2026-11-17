@@ -1,6 +1,6 @@
 # LLM 判定工程（構想）
 
-Issue #48・#2。**未実装**（`scripts/llm/` は存在しない）。決定論の収集の後段に、紹介文・スパム一次判定・分類候補を LLM で作る工程を置く設計案。方針は [discovery-policy.md](../collection/discovery-policy.md)、運用ルールは [operations/jobs.md](../operations/jobs.md#鍵クレジットllm-予算)。
+Issue #48・#2。構想（初期の設計案）。実装の仕様と使い方は [collection/llm-judge.md](../collection/llm-judge.md)（判定の実装、台帳への取り込み・承認・SQL 書き出しまで済み）が正本で、ここは経緯と残りの構想。決定論の収集の後段に、紹介文・スパム一次判定・分類候補を LLM で作る工程を置く設計案。方針は [discovery-policy.md](../collection/discovery-policy.md)、運用ルールは [operations/jobs.md](../operations/jobs.md#鍵クレジットllm-予算)。
 
 ## 設計案
 
