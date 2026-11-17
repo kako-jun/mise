@@ -16,7 +16,9 @@ Per site: sites (id, url, name, description_ja/en, country_code, region_code) / 
     and %7E/~ ignored), the host (or a parent domain, with the shared-hosting rule of the intake) is in blocked_hosts, a
     path_prefix row of blocked_hosts covers the path (same path folding as src/intake.js), a request of the same
     normalized_key was rejected (type add) or approved as a removal (type remove), or the id already exists.
-    Skipped here: duplicates inside the approved set (same normalized URL).
+    The already-listed / requests / path_prefix checks look at the union of url, final_url and key.
+    Skipped here: duplicates inside the approved set (same normalized URL). That dedup only looks at key_of(final_url or url);
+    whatever it misses is absorbed by the SQL-side already-listed check (and by the changes() guard on the child rows).
   - Children (tags, then categories) are inserted only when the sites INSERT right before inserted a row (changes()), so
     re-approving and re-exporting a site that is already listed never adds categories or tags to it.
   - categories keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en

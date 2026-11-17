@@ -573,6 +573,7 @@ class ExportTests(Base):
         self.approve_new("sub.example/a", out_pass(), name="rd5.json", url="https://sub.example/a/", final_url="https://sub.example/b/")
         t = self.target()
         # request keyed by the redirect target
+        # (a positive case that already passed before the union fix; it guards against regressing it)
         t.execute("INSERT INTO requests (type,status,url,host,normalized_key) VALUES ('add','rejected','https://qux.example/ja/','qux.example','qux.example/ja')")
         # path block on the registered path while final_url moved elsewhere
         t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('sub.example','/a','removal_request')")
