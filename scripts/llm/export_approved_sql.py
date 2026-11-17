@@ -7,14 +7,20 @@ Read-only on the ledger (SQLite read-only mode); no network, no API. The SQL is 
 it only INSERTs, and every statement guards itself against what the target database already holds, so running it twice
 adds nothing. Apply it to the local D1 only (npx wrangler d1 execute mise --local --file var/approved-sites.sql).
 
-Exported: review_state=approved with verdict pass / suspect and both descriptions. Per site:
-  sites (id, url, name, description_ja/en, country_code, region_code) / site_categories / site_tags.
-  - id = fr-<host with unsafe characters as '-'>-<8 hex of sha1(key)>; name = the page title (80 chars), or the host when
-    the title is empty or the site is adult=yes (the descriptions are already neutral, the title may not be).
-  - Skipped by the SQL itself when: the site is already listed (same host+path, www./scheme/trailing slash ignored), or
-    the host (or a parent domain) is in blocked_hosts, or the id already exists. Skipped here: duplicates inside the
-    approved set (same normalized URL).
-  - categories keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en.
+Exported: review_state=approved with verdict pass / suspect and both descriptions, and only while the host is still
+frontier.state='candidate' (a host that moved to rejected / blocked_by_robots / deferred is not exported even if approved).
+Per site: sites (id, url, name, description_ja/en, country_code, region_code) / site_categories (max 3) / site_tags (max 5).
+  - id = fr-<host with unsafe characters as '-'>-<8 hex of sha1(key)>; name = the frontier title as of the export (it can
+    differ from the title the LLM saw), or the host when the title is empty or the site is adult=yes.
+  - Skipped by the SQL itself when: the site is already listed (same host+path; scheme, a leading www., trailing slash, case
+    and %7E/~ ignored), the host (or a parent domain, with the shared-hosting rule of the intake) is in blocked_hosts, a
+    path_prefix row of blocked_hosts covers the path (same path folding as src/intake.js), a request of the same
+    normalized_key was rejected (type add) or approved as a removal (type remove), or the id already exists.
+    Skipped here: duplicates inside the approved set (same normalized URL).
+  - Children (tags, then categories) are inserted only when the sites INSERT right before inserted a row (changes()), so
+    re-approving and re-exporting a site that is already listed never adds categories or tags to it.
+  - categories keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
+    (case-insensitive duplicates and tags over 40 chars are dropped).
   - long descriptions are not exported (no column for them yet). Existing rows are never updated.
 """
 import argparse
@@ -27,6 +33,10 @@ import sys
 import urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "requests"))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "pipeline"))
+import import_requests  # noqa: E402  (key_of / match_path / block_candidates: the same keys as the intake and the request import)
+
 COUNTRY = re.compile(r"[A-Z]{2}")
 REGION = re.compile(r"[A-Z]{2}-[A-Z0-9]{1,3}")
 
@@ -36,12 +46,22 @@ def q(v):
 
 
 def norm_url(u):
-    """Same comparison key as norm_sql(): lower case, no scheme, no www., no trailing slash."""
-    return re.sub(r"^https?://", "", u.strip().lower()).replace("www.", "").rstrip("/")
+    """Comparison key mirroring norm_sql(): lower case, no scheme, no leading www., %7e as ~, no trailing slash."""
+    u = re.sub(r"^https?://", "", u.strip().lower())
+    u = u[4:] if u.startswith("www.") else u
+    return u.replace("%7e", "~").rstrip("/")
 
 
 def norm_sql(col):
-    return f"rtrim(replace(replace(replace(lower({col}),'https://',''),'http://',''),'www.',''),'/')"
+    """SQL twin of norm_url (only the scheme and a leading www. are removed; migration 0015 removed any 'www.')."""
+    s = f"CASE WHEN lower(trim({col})) LIKE 'https://%' THEN substr(lower(trim({col})),9) " \
+        f"WHEN lower(trim({col})) LIKE 'http://%' THEN substr(lower(trim({col})),8) ELSE lower(trim({col})) END"
+    return f"rtrim(replace(CASE WHEN ({s}) LIKE 'www.%' THEN substr(({s}),5) ELSE ({s}) END,'%7e','~'),'/')"
+
+
+def url_keys(url):
+    """Both comparison forms of a URL (the request key and the plain SQL-side key)."""
+    return sorted({import_requests.key_of(url), norm_url(url)})
 
 
 def site_id(key):
@@ -57,13 +77,33 @@ def site_name(row):
 
 
 def blocked_sql(url):
+    """Same rule as the intake: the host or a parent domain (never above a shared-hosting user area) for whole-host rows,
+    the host itself plus the folded path for path_prefix rows. No LIKE, so _ and % in a row are plain characters."""
     sp = urllib.parse.urlsplit(url)
     host = (sp.hostname or "").rstrip(".").lower()
     host = host[4:] if host.startswith("www.") else host
-    path = sp.path.rstrip("/").lower()
-    return ("EXISTS (SELECT 1 FROM blocked_hosts b WHERE (b.path_prefix='' AND (b.host=%s OR %s LIKE '%%.' || b.host)) "
-            "OR (b.path_prefix<>'' AND b.host=%s AND (%s=b.path_prefix OR %s LIKE b.path_prefix || '/%%')))"
-            % (q(host), q(host), q(host), q(path), q(path)))
+    path = import_requests.match_path(sp.path)
+    cands = ",".join(q(h) for h in import_requests.block_candidates(host)) or q(host)
+    return ("EXISTS (SELECT 1 FROM blocked_hosts b WHERE (b.path_prefix='' AND b.host IN (%s)) "
+            "OR (b.path_prefix<>'' AND b.host=%s AND (%s=b.path_prefix OR substr(%s,1,length(b.path_prefix)+1)=b.path_prefix||'/')))"
+            % (cands, q(host), q(path), q(path)))
+
+
+def requested_off_sql(url):
+    """A rejected recommendation (manual / withdrawn / expired / blocklisted) or an approved removal for the same key."""
+    keys = ",".join(q(k) for k in url_keys(url))
+    return (f"EXISTS (SELECT 1 FROM requests r WHERE r.normalized_key IN ({keys}) "
+            "AND ((r.type='add' AND r.status='rejected') OR (r.type='remove' AND r.status='approved')))")
+
+
+def clean_tags(tags):
+    out, seen = [], set()
+    for t in tags:
+        t = re.sub(r"\s+", " ", t).strip()
+        if t and len(t) <= 40 and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out[:5]
 
 
 def statements(row):
@@ -71,17 +111,25 @@ def statements(row):
     cc, rc = row["country_code"], row["region_code"]
     cc = cc if cc and COUNTRY.fullmatch(cc) else None
     rc = rc if cc and rc and REGION.fullmatch(rc) and rc.startswith(cc + "-") else None
+    keys = ",".join(q(k) for k in url_keys(url))
     out = [
         f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code) "
         f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)} "
-        f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')}={q(norm_url(url))}) AND NOT {blocked_sql(url)} "
-        f"ON CONFLICT DO NOTHING;"]
-    for cat in json.loads(row["categories"]):
-        out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT {q(sid)},{q(cat)} "
-                   f"WHERE EXISTS (SELECT 1 FROM sites WHERE id={q(sid)}) AND EXISTS (SELECT 1 FROM categories WHERE id={q(cat)});")
-    for tag in json.loads(row["tags"]):
-        out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT {q(sid)},{q(tag)},{q(tag)} "
-                   f"WHERE EXISTS (SELECT 1 FROM sites WHERE id={q(sid)});")
+        f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({keys})) AND NOT {blocked_sql(url)} "
+        f"AND NOT {requested_off_sql(url)} ON CONFLICT DO NOTHING;"]
+    # changes() is the row count of the statement right before: 1 after a new sites row, 0 when it was skipped. Tags come first
+    # (one statement; a new site gets at least one row), categories second (they see the sites or the tags count). An empty
+    # list emits no statement and leaves the previous count in place, so the chain stays correct.
+    tags = clean_tags(json.loads(row["tags"]))
+    if tags:
+        sel = " UNION ALL ".join(f"SELECT {q(sid)},{q(t)},{q(t)}" for t in tags)
+        out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel}) WHERE changes()>0;")
+    cats = list(dict.fromkeys(json.loads(row["categories"])))[:3]
+    if cats:
+        sel = " UNION ALL ".join(f"SELECT {q(sid)}{' AS site_id' if i == 0 else ''},{q(c)}{' AS category_id' if i == 0 else ''}"
+                                 for i, c in enumerate(cats))
+        out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT * FROM ({sel}) "
+                   f"WHERE changes()>0 AND category_id IN (SELECT id FROM categories);")
     return out
 
 
@@ -93,7 +141,7 @@ def build(db_path):
     try:
         rows = con.execute(
             "SELECT j.*, f.host, f.url, f.final_url, f.title FROM llm_judgement j JOIN frontier f ON f.key=j.key "
-            "WHERE j.review_state='approved' ORDER BY j.key").fetchall()
+            "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()
     stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0}
@@ -103,10 +151,10 @@ def build(db_path):
             stats["skipped_verdict"] += 1
         elif not (r["description_ja"] and r["description_en"]):
             stats["skipped_no_description"] += 1
-        elif norm_url(r["final_url"] or r["url"]) in seen:
+        elif import_requests.key_of(r["final_url"] or r["url"]) in seen:
             stats["skipped_duplicate"] += 1
         else:
-            seen.add(norm_url(r["final_url"] or r["url"]))
+            seen.add(import_requests.key_of(r["final_url"] or r["url"]))
             body.append(f"-- {r['key']}")
             body += statements(r)
             stats["exported"] += 1

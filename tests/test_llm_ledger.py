@@ -5,7 +5,9 @@ import copy
 import io
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -239,6 +241,49 @@ class ImportTests(Base):
             self.assertEqual(import_results.main([self.write_pipeline({"alpha.example": out_pass(categories=["zzz"])}, name="b.json"), "--input", inp, "--db", dbp]), 2)
 
 
+class ImportSafetyTests(Base):
+    def test_body_limit_of_the_judge_run_decides_the_hash_and_validation(self):
+        long_body = "東京都に事務所のある" + "あ" * 200 + "活動の記録を公開しています"
+        self.db.execute("UPDATE frontier SET text_head=? WHERE key='alpha.example'", (long_body,))
+        self.db.commit()
+        inp = self.write_input()
+        res = [{"id": export_candidates.cand_id("alpha.example"), "model": "m", "output": out_pass(long_description_evidence=["東京都に事務所のある"]), "body_limit": 25}]
+        p = self.path("j.json")
+        write(p, json.dumps(res))
+        self.assertEqual(self.imp(p, inp)[0]["imported"], 1)
+        h1 = self.row("alpha.example")["input_hash"]
+        res[0]["body_limit"] = 9000
+        res[0]["output"]["long_description_evidence"] = ["活動の記録を公開しています"]
+        write(p, json.dumps(res))
+        self.assertEqual(self.imp(p, inp)[0]["updated"], 1)
+        self.assertNotEqual(self.row("alpha.example")["input_hash"], h1)
+        # an old output without body_limit falls back to judge.BODY_LIMIT
+        del res[0]["body_limit"]
+        write(p, json.dumps(res))
+        self.assertEqual(self.imp(p, inp)[0]["unchanged"], 1)
+        # a quote beyond the limit the judge actually used is rejected
+        res[0]["body_limit"] = 25
+        write(p, json.dumps(res))
+        counts, problems = self.imp(p, inp)
+        self.assertEqual(counts["rejected"], 1, problems)
+
+    def test_older_results_file_cannot_overwrite_a_newer_judgement(self):
+        newer = self.write_pipeline({"alpha.example": out_pass(description_ja="新しい紹介文。")}, name="new.json", model="sonnet")
+        older = self.write_pipeline({"alpha.example": out_pass(description_ja="古い紹介文。")}, name="old.json", model="haiku")
+        os.utime(older, (1_700_000_000, 1_700_000_000))
+        os.utime(newer, (1_800_000_000, 1_800_000_000))
+        self.imp(newer)
+        review_state.set_state(self.db, ["alpha.example"], "approved")
+        counts, problems = self.imp(older)
+        self.assertEqual(counts["rejected"], 1)
+        self.assertIn("older", problems[0])
+        self.assertEqual(self.row("alpha.example")["description_ja"], "新しい紹介文。")
+        self.assertEqual(self.row("alpha.example")["review_state"], "approved")
+        counts, _ = import_results.import_results(self.db, older, self.write_input(), allow_older=True)
+        self.assertEqual(counts["updated"], 1)
+        self.assertEqual(self.row("alpha.example")["review_state"], "pending")
+
+
 class ReviewTests(Base):
     def setUp(self):
         super().setUp()
@@ -401,6 +446,147 @@ class ExportTests(Base):
         p = self.write_pipeline({"alpha.example": out_pass(description_ja="別の紹介文。")}, name="r5.json", model="sonnet")
         self.imp(p)  # new hash -> pending again
         self.assertNotIn("-- alpha.example", self.export())
+
+    def listed(self, t, host):
+        return t.execute("SELECT id FROM sites WHERE url LIKE ?", (f"%{host}%",)).fetchone()
+
+    def approve_new(self, key, out, name="rx.json", **cols):
+        self.add(key, **cols)
+        self.imp(self.write_pipeline({key: out}, name=name))
+        review_state.set_state(self.db, [key], "approved")
+
+    def counts(self, t):
+        return [t.execute(f"SELECT count(*) FROM {x}").fetchone()[0] for x in ("sites", "site_categories", "site_tags")]
+
+    def test_reapproved_site_that_is_already_listed_gets_no_new_children(self):
+        t = self.target()
+        t.executescript(self.export())
+        sid = t.execute("SELECT id FROM sites WHERE url='https://alpha.example/'").fetchone()[0]
+        before = (t.execute("SELECT category_id FROM site_categories WHERE site_id=?", (sid,)).fetchall(),
+                  sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall()))
+        # new model -> new hash -> pending; approve again; different categories and tags
+        p = self.write_pipeline({"alpha.example": out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+                                                           tags=["a", "b", "c", "d", "e"])}, name="rr.json", model="sonnet")
+        self.imp(p)
+        self.assertEqual(review_state.set_state(self.db, ["alpha.example"], "approved")[0][1], True)
+        c = self.counts(t)
+        t.executescript(self.export())
+        self.assertEqual(self.counts(t), c)
+        self.assertEqual((t.execute("SELECT category_id FROM site_categories WHERE site_id=?", (sid,)).fetchall(),
+                          sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall())), before)
+
+    def test_new_site_gets_at_most_3_categories_and_5_tags_and_each_alone_works(self):
+        self.approve_new("many.example", out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+                                                  tags=["T1", "t2", "t3", "t4", "t5"]))
+        self.approve_new("onlycat.example", out_pass(categories=["news"], tags=[]), name="r6.json")
+        self.approve_new("onlytag.example", out_pass(categories=[], tags=["solo"]), name="r7.json")
+        t = self.target()
+        sql = self.export()
+        t.executescript(sql)
+        c = self.counts(t)
+        t.executescript(sql)
+        self.assertEqual(self.counts(t), c)
+        n = lambda tbl, host: t.execute(f"SELECT count(*) FROM {tbl} WHERE site_id=?", (self.listed(t, host)[0],)).fetchone()[0]
+        self.assertEqual((n("site_categories", "many.example"), n("site_tags", "many.example")), (3, 5))
+        self.assertEqual((n("site_categories", "onlycat.example"), n("site_tags", "onlycat.example")), (1, 0))
+        self.assertEqual((n("site_categories", "onlytag.example"), n("site_tags", "onlytag.example")), (0, 1))
+
+    def test_tags_are_deduplicated_case_insensitively_and_length_capped(self):
+        rows = export_approved_sql.clean_tags(["Photo", "photo", " PHOTO ", "x" * 41, "a  b", "c", "d", "e", "f"])
+        self.assertEqual(rows, ["Photo", "a b", "c", "d", "e"])
+
+    def test_rejected_recommendation_and_approved_removal_are_excluded_pending_is_not(self):
+        for k in ("rej.example", "rm.example", "pend.example", "rmpend.example", "addok.example", "rmno.example"):
+            self.approve_new(k, out_pass(), name=f"r-{k}.json")
+        t = self.target()
+        ins = "INSERT INTO requests (type,status,url,host,normalized_key) VALUES (?,?,?,?,?)"
+        t.execute(ins, ("add", "rejected", "https://www.Rej.example/", "rej.example", "rej.example"))
+        t.execute(ins, ("remove", "approved", "https://rm.example/", "rm.example", "rm.example"))
+        t.execute(ins, ("add", "pending", "https://pend.example/", "pend.example", "pend.example"))
+        t.execute(ins, ("remove", "pending", "https://rmpend.example/", "rmpend.example", "rmpend.example"))
+        t.execute(ins, ("add", "approved", "https://addok.example/", "addok.example", "addok.example"))
+        t.execute(ins, ("remove", "rejected", "https://rmno.example/", "rmno.example", "rmno.example"))
+        t.executescript(self.export())
+        for host, listed in (("rej.example", 0), ("rm.example", 0), ("pend.example", 1), ("rmpend.example", 1),
+                             ("addok.example", 1), ("rmno.example", 1)):
+            self.assertEqual(1 if self.listed(t, host) else 0, listed, host)
+        self.assertEqual(t.execute("SELECT count(*) FROM site_tags WHERE site_id LIKE 'fr-rej-%'").fetchone()[0], 0)
+
+    def test_path_prefix_block_excludes_only_that_path_and_folds_the_path(self):
+        self.approve_new("sakura.example/~bob", out_pass(), name="r8.json", url="https://sakura.example/%7Ebob/")
+        self.approve_new("sakura.example/alice", out_pass(), name="r9.json", url="https://sakura.example/alice/")
+        t = self.target()
+        t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('sakura.example','/~bob','removal_request')")
+        sql = self.export()
+        t.executescript(sql)
+        self.assertIsNone(t.execute("SELECT 1 FROM sites WHERE url LIKE '%bob%'").fetchone())
+        self.assertIsNotNone(t.execute("SELECT 1 FROM sites WHERE url LIKE '%alice%'").fetchone())
+
+    def test_blocked_sql_matches_the_intake_rules(self):
+        t = self.target()
+        t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('sakura.example','/~bob','manual')")
+        t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('a_c.example','','manual')")
+        t.execute("INSERT INTO blocked_hosts (host,path_prefix,reason) VALUES ('github.io','','manual')")
+        def hit(url):
+            return t.execute("SELECT " + export_approved_sql.blocked_sql(url)).fetchone()[0]
+        self.assertEqual(hit("https://sakura.example/%7Ebob/page"), 1)
+        self.assertEqual(hit("https://www.sakura.example//~Bob/;x"), 1)
+        self.assertEqual(hit("https://sakura.example/~bobby"), 0)
+        self.assertEqual(hit("https://sub.sakura.example/~bob"), 0)
+        self.assertEqual(hit("https://abc.example/"), 0)       # _ is not a wildcard
+        self.assertEqual(hit("https://a_c.example/"), 1)
+        self.assertEqual(hit("https://x.y.a_c.example/"), 1)    # deep subdomain of a blocked domain
+        self.assertEqual(hit("https://user.github.io/"), 0)     # shared hosting: the user area only, like the intake
+
+    def test_listed_comparison_ignores_only_a_leading_www(self):
+        self.assertEqual(export_approved_sql.norm_url("http://WWW.awww.site.com/a/"), "awww.site.com/a")
+        self.assertEqual(export_approved_sql.norm_url("https://awww.site.com/x"), "awww.site.com/x")
+        t = self.target()
+        for u, want in (("https://awww.site.com/x/", "awww.site.com/x"), ("http://www.Site.com/%7Ea", "site.com/~a")):
+            self.assertEqual(t.execute("SELECT " + export_approved_sql.norm_sql(export_approved_sql.q(u))).fetchone()[0], want)
+
+    def test_listed_site_with_tilde_spelling_is_excluded(self):
+        self.approve_new("tilde.example/~u", out_pass(), name="r10.json", url="https://tilde.example/%7Eu/")
+        t = self.target()
+        t.execute("INSERT INTO sites (id,url,name,description_ja) VALUES ('old','http://www.tilde.example/~u','a','d')")
+        t.executescript(self.export())
+        self.assertEqual(t.execute("SELECT count(*) FROM sites WHERE url LIKE '%tilde.example%'").fetchone()[0], 1)
+
+    def test_only_candidate_state_hosts_are_exported(self):
+        for st in ("rejected", "blocked_by_robots", "deferred"):
+            self.db.execute("UPDATE frontier SET state=? WHERE key='gamma.example'", (st,))
+            self.db.commit()
+            self.assertNotIn("-- gamma.example", self.export(), st)
+        self.db.execute("UPDATE frontier SET state='candidate' WHERE key='gamma.example'")
+        self.db.commit()
+        self.assertIn("-- gamma.example", self.export())
+
+    @unittest.skipUnless(os.path.exists(os.path.join(ROOT, "node_modules", ".bin", "wrangler")) and not os.environ.get("MISE_SKIP_WRANGLER"),
+                         "wrangler not installed (or MISE_SKIP_WRANGLER)")
+    def test_sql_with_semicolons_newlines_and_comment_markers_applies_with_wrangler_local(self):
+        nasty = "a; b\n-- c; DROP TABLE sites; it's /* x */ ok"
+        self.approve_new("nasty.example", out_pass(description_ja=nasty, description_en=nasty), name="r11.json", title="T; -- x\nsecond")
+        sql = self.export()
+        state = os.path.join(self.dir, "d1")
+        sqlfile = self.path("w.sql")
+        write(sqlfile, sql)
+        run = lambda *a: subprocess.run(["npx", "wrangler", "d1", *a, "--local", "--persist-to", state], cwd=ROOT,
+                                        capture_output=True, text=True, timeout=300)
+        r = run("migrations", "apply", "mise")
+        self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        for _ in range(2):  # second run: nothing is added
+            r = run("execute", "mise", "--file", sqlfile)
+            self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-800:])
+        q = run("execute", "mise", "--json", "--command",
+                "SELECT count(*) AS n, min(description_ja) AS d FROM sites WHERE id LIKE 'fr-nasty%'")
+        self.assertEqual(q.returncode, 0, q.stderr[-500:])
+        res = json.loads(q.stdout[q.stdout.index("["):])[0]["results"][0]
+        self.assertEqual(res["n"], 1)
+        self.assertEqual(res["d"], nasty)
+        c = run("execute", "mise", "--json", "--command",
+                "SELECT (SELECT count(*) FROM site_tags WHERE site_id LIKE 'fr-%') AS t, (SELECT count(*) FROM site_categories WHERE site_id LIKE 'fr-%') AS c")
+        got = json.loads(c.stdout[c.stdout.index("["):])[0]["results"][0]
+        self.assertEqual((got["t"], got["c"]), (9, 5))  # alpha 2, adultsite 2, o'brien 1, gamma 2, nasty 2 tags; 1 category each
 
     def test_missing_ledger_or_table(self):
         with contextlib.redirect_stderr(io.StringIO()):
