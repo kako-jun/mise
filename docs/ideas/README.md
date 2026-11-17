@@ -10,6 +10,6 @@
 | [requests.md](requests.md) 推薦・取り下げ・訂正の申請 | 受付と、手元スクリプトでの巡回候補への取り込みは実装済み。掲載への反映の自動化などが未実装 | #4, #29 |
 | [exchange-and-deliberation.md](exchange-and-deliberation.md) 証券取引所の比喩、状態遷移、審議コーナー、初期発見の喜び、見たサイトの累計 | 設計案、未実装（PR なし） | #53, #55, #58, #2 |
 | [attention-feasibility.md](attention-feasibility.md) 注目度の積み上げグラフの実現性検証（Wayback 累計・Common Crawl 最高順位） | 検証のみ、未実装 | #55 |
-| [llm-judging.md](llm-judging.md) LLM 判定工程 | 設計案、未実装 | #48 |
+| [llm-judging.md](llm-judging.md) LLM 判定工程 | 構想の残りだけ置く（判定の実装と台帳への取り込み・承認・SQL 書き出しは実装済み。正本は [collection/llm-judge.md](../collection/llm-judge.md)） | #48 |
 
 この他、共有サービス配下の個別ユーザー領域の扱い（#50）、官公庁のカテゴリ設計、継続巡回の運用（#2）が未決。

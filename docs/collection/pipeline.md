@@ -81,7 +81,6 @@ uv run python3 scripts/pipeline/run.py report --sample 20                       
 1. 規模拡大: `--sample-every` を下げる。取得は 1 日数百ホスト程度の低速を維持する。
 2. 広告中心・量産の特徴量を実データで検証して足す（affiliate/購入導線リンクの量、同一テンプレートの量産）。
 3. 保留（`deferred`）の基準（#50）。
-4. （実装済み）LLM 判定結果の台帳への取り込み・承認・承認済みの SQL 書き出し（拒否リストと既掲載の除外を含む）は [llm-judge.md](llm-judge.md#台帳への取り込みと承認)。本番 D1 への投入は別途 kako-jun の承認後。なお推薦の申請は `scripts/requests/import_requests.py` が frontier に `source='request'` で追記する（[operations/requests.md](../operations/requests.md)）。
-5. 紹介文・スパム一次判定・種別・成人向けの確定: 手元からの LLM バッチ（[llm-judge.md](llm-judge.md)。結果の台帳への戻しは 4 の通り）。入力は `title` / `description` / `text_head` のみ。
-6. 発見元の追加: Wayback/CT による個別補完、公開リンク集。リンク数順の優先度付けにはグラフの edges/ranks（巨大）が必要で、範囲取得の方法を別途調べる。
-7. cron 登録（[operations/jobs.md](../operations/jobs.md)）。
+4. 紹介文・スパム一次判定・種別・成人向けの確定の定期実行と本番 D1 への投入（手元の LLM バッチ・台帳への取り込み・承認・承認済みの SQL 書き出しは実装済みで [llm-judge.md](llm-judge.md#台帳への取り込みと承認)。本番は kako-jun の承認後に別途）。入力は `title` / `description` / `text_head` のみ。
+5. 発見元の追加: Wayback/CT による個別補完、公開リンク集。リンク数順の優先度付けにはグラフの edges/ranks（巨大）が必要で、範囲取得の方法を別途調べる。
+6. cron 登録（[operations/jobs.md](../operations/jobs.md)）。
