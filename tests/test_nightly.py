@@ -16,6 +16,8 @@ import judge
 import nightly
 import integrity
 
+REAL_LEAF_ORDER = nightly.wikidata_leaf_order
+
 JCOLS = ("key, input_hash, origin, model, judged_at, imported_at, spam_verdict, spam_kind, spam_reason, categories, tags, adult, "
          "site_kind, site_kind_reason, site_scope, confidence, review_state")
 
@@ -49,6 +51,9 @@ class Env(unittest.TestCase):
         self.p_run.start()
         self.addCleanup(self.p_run.stop)
         self.violations = {}
+        self.p_leaf = mock.patch.object(nightly, 'wikidata_leaf_order', side_effect=lambda n, **kw: (['shrines', 'temples', 'museums'][:n], 'テスト'))   # 本番 API に出ない
+        self.p_leaf.start()
+        self.addCleanup(self.p_leaf.stop)
         self.p_gate = mock.patch.object(integrity, 'gate', side_effect=lambda sql, current=None: self.violations)
         self.p_gate.start()
         self.addCleanup(self.p_gate.stop)
@@ -506,3 +511,30 @@ class Prod(Env):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class WikidataStage(Env):
+    def test_discover_runs_wikidata_with_leaves_and_continues_on_failure(self):
+        self.seed()
+        a = self.args('--wikidata-leaves', '2')
+        n = nightly.Night(a)
+        n.s_discover()
+        wd = [c for c in self.calls if 'discover-wikidata' in c]
+        self.assertEqual(len(wd), 1)
+        self.assertEqual(wd[0][wd[0].index('--leaves') + 1], 'shrines,temples')
+        self.assertEqual(wd[0][wd[0].index('--limit-leaves') + 1], '2')
+
+    def test_disabled_with_zero(self):
+        n = nightly.Night(self.args('--wikidata-leaves', '0'))
+        n.s_discover()
+        self.assertFalse([c for c in self.calls if 'discover-wikidata' in c])
+
+    def test_leaf_order_prefers_short_leaves_and_falls_back(self):
+        def boom():
+            raise OSError('offline')
+        order, how = REAL_LEAF_ORDER(50, fetch=lambda: [{'id': 'shrines', 'site_count': 150}, {'id': 'temples', 'site_count': 5}, {'id': 'libraries', 'site_count': 0}, {'id': 'museums', 'site_count': 200}])
+        self.assertEqual(order[-1], 'temples')                  # 少ない順(API に無い葉は 0 扱いで先)。5 件の temples が最後
+        self.assertNotIn('shrines', order); self.assertNotIn('museums', order)   # 100 以上は除外
+        order, how = REAL_LEAF_ORDER(2, fetch=boom)
+        self.assertEqual(order, ['libraries', 'shrines'])       # 対応表の先頭から(固定順)
+        self.assertIn('固定', how)
