@@ -440,8 +440,9 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
     onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
   if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
-function renderPick() {
+function renderPick(dir=1) {
   const list=$('#pick-list');
+  list.classList.toggle('is-prev',dir<0);
   // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
   const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
   if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
@@ -452,11 +453,74 @@ function renderPick() {
 }
 const picks=$('#picks');
 if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
-setInterval(()=>{
-  if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  pickIndex=(pickIndex+1)%pickedSites.length;
-  renderPick();
-},8000);
+// ---- ピックアップの切替（自動 8 秒 / 横スワイプ / 左右キー、#113）。規則は docs/design/ui.md のピックアップ。 ----
+const PICK_AUTO_MS=8000, PICK_HISTORY_MAX=5, SWIPE_MIN_PX=40, SWIPE_DOMINANCE=1.5;
+let pickHistory=[], pickTimer=0, pickSwiped=false, pickSwipedTimer=0;
+const pickStatus=document.createElement('div'); pickStatus.className='visually-hidden'; pickStatus.setAttribute('role','status'); picks.append(pickStatus);
+function startPickTimer() {
+  clearInterval(pickTimer);
+  pickTimer=setInterval(()=>{
+    if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || reducedMotion()) return;
+    stepPick(1,false);
+  },PICK_AUTO_MS);
+}
+// dir=1: 次、dir=-1: 前（履歴を戻る。尽きたら何もしない）。manual のときだけ支援技術へ知らせ、自動入れ替えのタイマーを再始動する。
+function stepPick(dir, manual) {
+  if(pickedSites.length<2) return false;
+  if(dir>0) { pickHistory.push(pickIndex); if(pickHistory.length>PICK_HISTORY_MAX) pickHistory.shift(); pickIndex=(pickIndex+1)%pickedSites.length; }
+  else if(pickHistory.length) pickIndex=pickHistory.pop(); else return false;
+  renderPick(dir);
+  if(manual) {
+    startPickTimer();
+    const n=pickedSites.length;
+    pickStatus.textContent=`${t('picks')} ${pickIndex%n+1} / ${n}: ${pickedSites[pickIndex%n].name}`;
+  }
+  return true;
+}
+// 履歴が尽きて前へ戻れないときの控えめな弾み（reduced-motion では出さない）
+function nudgePick() {
+  if(reducedMotion()) return;
+  $('#pick-list').animate?.([{transform:'translateX(0)'},{transform:'translateX(10px)'},{transform:'translateX(0)'}],{duration:180,easing:'ease-out'});
+}
+let pickDrag=null;
+// 言語切替で古い言語の読み上げ文言が残らないよう、切替時に空にする
+$('#language-toggle').addEventListener('click',()=>{ pickStatus.textContent=''; });
+const abortPickDrag=()=>{
+  pickDrag=null;
+  removeEventListener('pointerup',endPickDrag,true); removeEventListener('pointercancel',endPickDrag,true);
+};
+// 枠外で離した等で pointerup が届かなくても、window で受けて後始末する
+function endPickDrag(e){ if(pickDrag && pickDrag.id===e.pointerId) abortPickDrag(); }
+picks.addEventListener('pointerdown',e=>{
+  if(pickDrag && !e.isPrimary) { abortPickDrag(); return; } // 2 本目以降の指（ピンチ等）はスワイプにしない
+  if(!e.isPrimary || (e.pointerType==='mouse' && e.button!==0)) return;
+  pickSwiped=false; clearTimeout(pickSwipedTimer);
+  pickDrag={id:e.pointerId,x:e.clientX,y:e.clientY,done:false};
+  addEventListener('pointerup',endPickDrag,true); addEventListener('pointercancel',endPickDrag,true);
+});
+picks.addEventListener('pointermove',e=>{
+  const d=pickDrag; if(!d || d.id!==e.pointerId) return;
+  // pointerup を取り逃した場合の保険（macOS の ctrl+クリックでコンテキストメニューが mouseup を取る、ドラッグ中のフォーカス喪失など）。ボタンなしの移動で状態を捨てる
+  if(e.pointerType==='mouse' && e.buttons===0) { abortPickDrag(); return; }
+  if(d.done) return;
+  const dx=e.clientX-d.x, dy=e.clientY-d.y;
+  if(Math.abs(dx)<SWIPE_MIN_PX || Math.abs(dx)<Math.abs(dy)*SWIPE_DOMINANCE) return;
+  d.done=true; pickSwiped=true; tagDown=null;
+  clearTimeout(pickSwipedTimer); pickSwipedTimer=setTimeout(()=>{pickSwiped=false;},600);
+  const sel=getSelection(); if(sel && sel.rangeCount && picks.contains(sel.getRangeAt(0).commonAncestorContainer)) sel.removeAllRanges();
+  if(!stepPick(dx<0 ? 1 : -1, true)) nudgePick();
+});
+// ネイティブの dragstart は押下中に数 px 動いた時点で出るため、pickDrag（押下〜離すまで存在）がある間は常に止まる。
+// つまりピックアップ内リンクのマウスドラッグ（ブックマークバー/新タブへ）はできない。スワイプを優先する意図的なトレードオフ
+// （Cmd/Ctrl/中ボタン/右クリックでの新タブ・コンテキストメニュー、キーボードは従来どおり使える）
+picks.addEventListener('dragstart',e=>{ if(pickDrag) e.preventDefault(); });
+// スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）。キーボード由来（detail 0）は対象外
+picks.addEventListener('click',e=>{ if(pickSwiped && e.detail!==0) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
+picks.addEventListener('keydown',e=>{
+  if(e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')) return;
+  e.preventDefault(); stepPick(e.key==='ArrowRight' ? 1 : -1, true);
+});
+startPickTimer();
 function showResults(query) {
   const first=!viewShown; viewShown=true;
   currentSearch=query; renderChips();
@@ -598,7 +662,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0;
+  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0; pickHistory=[];
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。
