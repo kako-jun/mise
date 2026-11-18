@@ -88,23 +88,31 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 **承認を取ってから実行する。** 0021 は `categories` を旧 59 → 新 153 に入れ替え、`site_categories` を対応表で移す（`sites`・`site_tags`・`search_text` には触れない。検索用列の埋め直しは不要）。
 
-1. バックアップ（上の手順 1 と同じ `d1 export`）。加えて D1 Time Travel の時点を控える: `npx wrangler d1 time-travel info mise`（失敗時の戻し先）。
-2. **適用前の確認**（旧カテゴリしか持たず、対応表に行き先が無いサイトがあると、0021 は CHECK 違反で**全体が失敗して何も変わらない**。想定は 0 件）:
+**順序は 1 つ**: バックアップ → 事前集計（CHECK 条件が 0）→ migration 適用 → 件数確認 → マージ。コード（画面）は旧 id でも新 id でも壊れない（画面は木に依存しない）ので、migration を先にしてからマージ（自動デプロイ）する。
+
+1. **バックアップ**（失敗時の戻し先）。上の手順 1 と同じ `npx wrangler d1 export mise --remote --output=…` に加えて、D1 Time Travel の時点（bookmark）を控える: `npx wrangler d1 time-travel info mise`。
+2. **事前集計**（`--remote` の SELECT だけ。何も変わらない）。
    ```sh
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM site_categories WHERE category_id IN ('computers-multimedia','local-world','government-research-institutes','news-world-news','news-current-affairs','social-science-economics')"
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites s JOIN site_categories c ON c.site_id=s.id AND c.category_id='government-government-agencies' WHERE s.id NOT LIKE 'pb-%'"   # 想定 1（sample-6。URL 照合で国の機関の葉に入る）
+   # (a) 旧カテゴリしか持たず、行き先が無い(drop)サイトの数。0 でなければ 0021 は CHECK 違反で全体が失敗する。想定 0
+   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM (SELECT site_id FROM site_categories GROUP BY site_id HAVING sum(category_id NOT IN ('computers-multimedia','local-world','government-research-institutes')) = 0)"
+   # (b) 官公庁の旧カテゴリで pb- でないサイト(URL 照合で国の機関の葉に入る)。想定 1(sample-6)
+   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites s JOIN site_categories c ON c.site_id=s.id AND c.category_id='government-government-agencies' WHERE s.id NOT LIKE 'pb-%'"
+   # (c) 適用前のカテゴリ別件数を控える(適用後の比較用。サイト数・カテゴリ付きサイト数も)
+   npx wrangler d1 execute mise --remote --command "SELECT category_id, count(*) FROM site_categories GROUP BY 1 ORDER BY 1"
+   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites"
    ```
-3. 適用: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
-4. 確認（適用後、マージ前に本番 DB を読む）:
+   **適用前後をまたいで、LLM 側の書き出し SQL（#48 の `export_approved_sql`）を流さない**（適用前に流すと新 id が本番に無くカテゴリが付かず、適用後に流すと旧 id が使えない。0021 の適用と LLM 側の取り込み・書き出しは別の時間帯にする。LLM 側は適用後に回す）。
+3. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。0021 は 1 つのトランザクションで、途中で失敗すれば全体が取り消される。
+4. **件数確認**（`--remote` の SELECT）:
    ```sh
    npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM categories"                       # 153
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites WHERE id NOT IN (SELECT site_id FROM site_categories)"   # 適用前と同じ（想定 0）
+   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites"                             # 適用前と同じ
+   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites WHERE id NOT IN (SELECT site_id FROM site_categories)"   # 適用前と同じ(想定 0 = 未分類なし)
    npx wrangler d1 execute mise --remote --command "SELECT category_id, count(*) FROM site_categories WHERE category_id IN ('national-agencies','independent-agencies','prefectures','cities','special-wards','towns','villages','government') GROUP BY 1"
    ```
-   官公庁の葉は 46 / 51 / 46 / 779 / 23 / 728 / 179、`government` 直下は 0 件（2026-11-18 の本番）。件数がずれたら 0015 の適用後に官公庁の掲載が変わっている。
-5. キャッシュ: 画面のページ HTML は CDN で 60 秒、`/api/*` は無し・`sitemap.xml` は 1 時間。この変更の JS/CSS は `app.js?v=42`・`style.css?v=42` に上げてある（デプロイ後に古い JS がカテゴリ名を ` ` 区切りで出さないよう）。サイトマップのカテゴリ URL は新 id に替わり、旧カテゴリ URL はトップを返す（転送表なし）。
-6. **順序**: コードと migration はどちらが先でも画面は壊れない（画面は木に依存しない）。ただし**旧コードが新しい木を読むと、トップの子の名前が空白区切りで出る**だけなので、通常どおりマージ（自動デプロイ）→ migration の順でよい。LLM 側（`scripts/llm/`）は手元実行で、適用前の `data/categories.csv` を読むので、**本番に 0021 を適用してから**取り込み・書き出しを回す（適用前に書き出した SQL は新 id が本番に無く、カテゴリが付かない）。
-7. 戻し方: バックアップからの復元か Time Travel（`wrangler d1 time-travel restore mise --timestamp=…`）。0021 だけを戻す逆 migration は持たない（旧→新は多対一で、元に戻せない）。
+   官公庁の葉は 46 / 51 / 46 / 779 / 23 / 728 / 179、`government` 直下は 0 件（2026-11-18 の本番）。ずれたら 0015 の適用後に官公庁の掲載が変わっている。退避先（`business` `society` `business-services` `community`）の件数は、手順 2 (c) の旧カテゴリ件数（企業・団体・製品とサービス・地域）から見込める。
+5. **マージ**: 手順 4 が想定どおりなら PR をマージする（自動デプロイ）。キャッシュ: 画面のページ HTML は CDN で 60 秒、`/api/*` は無し・`sitemap.xml` は 1 時間。この変更の JS/CSS は `app.js?v=43`・`style.css?v=42` に上げてある（古い JS がカテゴリ名を空白区切りで出さないように）。サイトマップのカテゴリ URL は新 id に替わり、旧カテゴリ URL はトップを返す（転送表なし）。LLM 側（`scripts/llm/`）の取り込み・書き出しは、本番に 0021 を適用してから回す。
+6. **失敗したとき**: 手順 3 が失敗したら、まず `npx wrangler d1 execute mise --remote --command "SELECT name FROM d1_migrations WHERE name LIKE '0021%'"` で **0021 が記録されていない**ことを確認する（記録が無ければ全体が取り消されていて、DB は適用前のまま。原因の行を直して再適用）。中途半端に変わっていた場合は、手順 1 の Time Travel bookmark へ `npx wrangler d1 time-travel restore mise --bookmark=…` で戻す（バックアップの `d1 execute --file` で戻すのは最後の手段）。0021 だけを戻す逆 migration は持たない（旧→新は多対一で、元に戻せない）。
 
 ## プレビュービルド（ブランチごと）
 
