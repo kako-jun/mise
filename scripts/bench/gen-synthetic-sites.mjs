@@ -1,12 +1,14 @@
 // 計測用: ローカル D1（miniflare の sqlite ファイル）に合成サイトを足して総数を targetTotal にする（決定的乱数。本番には使えない: ローカルのファイルを直接開く）。#126
-// usage: node scripts/bench/gen-synthetic-sites.mjs <sqliteFile> <targetTotal>
+// usage: [PROD_SHAPE=1] node scripts/bench/gen-synthetic-sites.mjs <sqliteFile> <targetTotal>
+//   PROD_SHAPE=1: 本番の形（台帳の一括投入）にする。全体の 86% が bulk_import=1 で rowid が連続した塊になり、その日時（registered_at）がすべて同値（'2026-11-13 00:00:00'）、source_updated_at は NULL。
+//   散らばった一括投入・同値の少ない日時では、同じ日時が大量に続く塊での読み取りの増え方（キーセットの一時 B-tree）とピックアップの偏りが出ない（#126 のレビューで判明）。
 //   sqliteFile は `.wrangler/state/v3/d1/miniflare-D1DatabaseObject/<hash>.sqlite`（全 migration 適用済みであること）。実行前に dev サーバーを止める。
 //   分布: 日本語 200 語・英語 190 語を Zipf 分布で並べた紹介文（ja 必須、en は 70%）、タグは 2,000 語彙から 0〜5 個、カテゴリは葉から 1〜3 個、国は JP 27% ほか、15% は bulk_import=1、40% に source_updated_at。
 //   合成サイトの id は syn- で始まる。消すには DELETE FROM sites WHERE id LIKE 'syn-%'（site_tags・site_categories も同様）。
 import { DatabaseSync } from 'node:sqlite';
 import { searchText } from '../../src/sites.js';
 const [file, target] = [process.argv[2], Number(process.argv[3])];
-const db = new DatabaseSync(file);
+const db = new DatabaseSync(file), PROD_SHAPE = process.env.PROD_SHAPE === '1';
 let seed = 12345; const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 2 ** 32; };
 const pick = a => a[Math.floor(rnd() * a.length)];
 const zipf = (n, s = 1.05) => { const w = Array.from({ length: n }, (_, i) => 1 / (i + 1) ** s); const tot = w.reduce((a, b) => a + b); const cum = []; let c = 0; for (const x of w) { c += x / tot; cum.push(c); } return () => { const r = rnd(); let lo = 0, hi = n - 1; while (lo < hi) { const m = (lo + hi) >> 1; if (cum[m] < r) lo = m + 1; else hi = m; } return lo; }; };
@@ -33,9 +35,10 @@ for (let i = 0; i < target - have; i++) {
   const cc = pick(CC), url = `https://${host}.${cc === 'JP' ? pick(['jp', 'com', 'net', 'co.jp']) : pick(['com', 'org', 'net'])}/`;
   const name = rnd() < 0.6 ? JA[zJa()] + pick(['工房', 'の部屋', '研究所', 'ブログ', '堂', '屋', '日記', 'ラボ', '']) + (rnd() < 0.3 ? ' ' + EN[zEn()] : '') : EN[zEn()] + ' ' + EN[zEn()] + ' ' + pick(['Studio', 'Lab', 'Works', 'Journal', 'Club']);
   const dj = jaSent(4 + Math.floor(rnd() * 10)), de = rnd() < 0.7 ? enSent(8 + Math.floor(rnd() * 12)) : null;
-  const reg = new Date(Date.UTC(2026, 10, 15) - Math.floor(rnd() * 1095) * 86400000 - Math.floor(rnd() * 86400) * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
-  const upd = rnd() < 0.4 ? new Date(Date.UTC(2026, 10, 15) - Math.floor(rnd() * 2000) * 86400000).toISOString().slice(0, 10) : null;
-  const bulk = rnd() < 0.15 ? 1 : 0;
+  const inBulk = PROD_SHAPE && i >= Math.floor((target - have) * 0.02) && i < Math.floor((target - have) * 0.88);
+  const reg = inBulk ? '2026-11-13 00:00:00' : new Date(Date.UTC(2026, 10, 15) - Math.floor(rnd() * 1095) * 86400000 - Math.floor(rnd() * 86400) * 1000).toISOString().replace(/\.\d+Z$/, 'Z');
+  const upd = inBulk ? null : rnd() < 0.4 ? new Date(Date.UTC(2026, 10, 15) - Math.floor(rnd() * 2000) * 86400000).toISOString().slice(0, 10) : null;
+  const bulk = PROD_SHAPE ? (inBulk ? 1 : 0) : rnd() < 0.15 ? 1 : 0;
   const tags = []; const nt = Math.floor(rnd() * 6); for (let k = 0; k < nt; k++) { const t = TAGS[zTag()]; if (!tags.some(x => x.label_ja === t.label_ja)) tags.push(t); }
   tags.sort((a, b) => a.label_ja < b.label_ja ? -1 : a.label_ja > b.label_ja ? 1 : 0);
   const rec = { name, description_ja: dj, description_en: de, url, tags };
