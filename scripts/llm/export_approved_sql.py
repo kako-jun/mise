@@ -24,6 +24,23 @@ Per site: sites (id, url, name, description_ja/en, country_code, region_code) / 
   - categories are translated from old (pre-#114) ids and keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
     (case-insensitive duplicates and tags over 40 chars are dropped).
   - long descriptions are not exported (no column for them yet). Existing rows are never updated.
+
+Category update mode (Issue #122; a separate mode, never mixed with the INSERT output above): sites that are already listed
+keep the categories 0021 moved mechanically, so a re-judgement does not reach them. These options write a different file
+(default var/update-categories.sql) that REPLACES site_categories of listed sites, idempotently (DELETE then INSERT per site,
+both guarded by "the site exists" and "it has no category under government"):
+
+  --update-categories                  approved ledger rows (frontier.state='candidate', verdict pass / suspect) whose site is
+                                       listed under the same id as the export (fr-<host>-<sha1 of the key>)
+  --update-categories-from RESULTS --input CANDIDATES.jsonl
+                                       pipeline.py / judge.py results whose id is a site id (sample-*, collected-* ... the ids
+                                       export_sites.py writes); only verdict pass, output re-validated with judge.validate_output
+  --current DB                         a sqlite file of the target (the local D1) to read the present sites / categories; with it the
+                                       summary shows real changes and sites that are not listed / have a government leaf are left out
+  --dry-run                            print the summary only, write no SQL
+
+Never touched: ids starting with pb-, sites holding a leaf under government (guarded in SQL too), an empty judgement or one
+without any valid id (old ids are translated first, see judge.modernize_categories). Summary on stdout.
 """
 import argparse
 import hashlib
@@ -181,11 +198,201 @@ def build(db_path):
     return "\n".join(head + body) + "\n", stats
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# Category update mode (#122)
+RETREAT = ("business", "society", "business-services", "community")  # where 0021 parked the old company / organisation ids
+
+
+def read_current(path):
+    """-> (sites {id: sorted category ids}, parent {category id: parent id}) from a sqlite file of the target, read-only."""
+    con = sqlite3.connect("file:" + urllib.parse.quote(os.path.abspath(path)) + "?mode=ro", uri=True)
+    try:
+        sites = {r[0]: [] for r in con.execute("SELECT id FROM sites")}
+        for sid, cid in con.execute("SELECT site_id,category_id FROM site_categories ORDER BY category_id"):
+            if sid in sites:
+                sites[sid].append(cid)
+        parent = {r[0]: r[1] for r in con.execute("SELECT id,parent_id FROM categories")}
+    finally:
+        con.close()
+    return sites, parent
+
+
+def plan_from_ledger(db_path):
+    """-> (items [(site id, [new category ids])], stats). Same row selection as build()."""
+    uri = "file:" + urllib.parse.quote(os.path.abspath(db_path)) + "?mode=ro"
+    con = sqlite3.connect(uri, uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT j.key, j.spam_verdict, j.categories, f.url, f.final_url FROM llm_judgement j JOIN frontier f ON f.key=j.key "
+            "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
+    finally:
+        con.close()
+    stats = {"approved": len(rows), "skipped_verdict": 0, "skipped_empty": 0}
+    items, seen = [], set()
+    for r in rows:
+        if r["spam_verdict"] not in ("pass", "suspect"):
+            stats["skipped_verdict"] += 1
+            continue
+        cats = judge.modernize_categories(json.loads(r["categories"] or "[]"), VALID_CATEGORIES, LEGACY_CATEGORIES)
+        if not cats:
+            stats["skipped_empty"] += 1
+            continue
+        sid = site_id(r["key"])
+        if sid not in seen:
+            seen.add(sid)
+            items.append((sid, cats))
+    return items, stats
+
+
+def plan_from_results(results_path, input_path):
+    """-> (items, stats) from a pipeline.py / judge.py results file whose ids are site ids. Only verdict pass counts; the
+    output goes through judge.validate_output against the rendered candidate text, like import_results.py."""
+    import import_results  # noqa: E402  (local import: it pulls in the ledger module)
+    _origin, loaded = import_results.load_results(results_path)
+    cands = {c["id"]: c for c in import_results.read_jsonl(input_path)}
+    stats = {"results": len(loaded), "no_output": 0, "rejected": 0, "skipped_verdict": 0, "skipped_empty": 0, "skipped_protected": 0}
+    problems, items, seen = [], [], set()
+    for cid, out, _model, _err, body_limit in loaded:
+        if out is None:
+            stats["no_output"] += 1
+            continue
+        if cid.startswith("pb-"):
+            stats["skipped_protected"] += 1
+            continue
+        cand = cands.get(cid)
+        if cand is None:
+            stats["rejected"] += 1
+            problems.append(f"{cid}: candidate not in --input")
+            continue
+        cats = out.get("categories") if isinstance(out, dict) else None
+        if isinstance(cats, list) and any(isinstance(c, str) and c not in VALID_CATEGORIES and c in LEGACY_CATEGORIES for c in cats):
+            out = dict(out, categories=judge.modernize_categories(cats, VALID_CATEGORIES, LEGACY_CATEGORIES)
+                       + [c for c in cats if not (isinstance(c, str) and (c in VALID_CATEGORIES or c in LEGACY_CATEGORIES))])
+        errs = judge.validate_output(out, VALID_CATEGORIES, judge.render_candidate(cand, body_limit))
+        if errs:
+            stats["rejected"] += 1
+            problems.append(f"{cid}: invalid output: " + "; ".join(errs))
+            continue
+        if out["spam"]["verdict"] != "pass":
+            stats["skipped_verdict"] += 1
+            continue
+        new = judge.modernize_categories(out["categories"], VALID_CATEGORIES, LEGACY_CATEGORIES)
+        if not new:
+            stats["skipped_empty"] += 1
+        elif cid not in seen:
+            seen.add(cid)
+            items.append((cid, new))
+    return items, stats, problems
+
+
+def update_statements(sid, cats):
+    gov = (f"EXISTS (SELECT 1 FROM site_categories sc JOIN categories c ON c.id=sc.category_id "
+           f"WHERE sc.site_id={q(sid)} AND c.parent_id='government')")
+    listed = f"EXISTS (SELECT 1 FROM sites WHERE id={q(sid)})"
+    ids = ",".join(q(c) for c in cats)
+    return [f"DELETE FROM site_categories WHERE site_id={q(sid)} AND {listed} AND NOT {gov};",
+            f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT {q(sid)},id FROM categories WHERE id IN ({ids}) "
+            f"AND {listed} AND NOT EXISTS (SELECT 1 FROM site_categories WHERE site_id={q(sid)});"]
+
+
+def build_update(items, current=None):
+    """-> (sql text, summary dict). current = read_current() result or None (then nothing is known about the target)."""
+    sites, parent = current if current else (None, {})
+    summary = {"planned": len(items), "sites_changed": 0, "unchanged": 0, "not_listed": 0, "government_leaf": 0,
+               "retreat_to_real": 0, "gained": {}, "lost": {}}
+    body = []
+    for sid, cats in items:
+        if sites is not None:
+            old = sites.get(sid)
+            if old is None:
+                summary["not_listed"] += 1
+                continue
+            if any(parent.get(c) == "government" for c in old):
+                summary["government_leaf"] += 1
+                continue
+            if set(old) == set(cats):
+                summary["unchanged"] += 1
+                continue
+            summary["sites_changed"] += 1
+            for c in set(cats) - set(old):
+                summary["gained"][c] = summary["gained"].get(c, 0) + 1
+            for c in set(old) - set(cats):
+                summary["lost"][c] = summary["lost"].get(c, 0) + 1
+            if (set(old) & set(RETREAT)) - set(cats) and set(cats) - set(RETREAT):
+                summary["retreat_to_real"] += 1
+        body.append(f"-- {sid}")
+        body += update_statements(sid, cats)
+    head = ["-- Category replacement for listed sites (scripts/llm/export_approved_sql.py --update-categories*). Derived file: do not edit.",
+            "-- Idempotent: per site, DELETE then INSERT, guarded by 'the site exists' and 'no category under government'.",
+            f"-- {len(body) // 3} site(s)." if body else "-- 0 site(s)."]
+    return "\n".join(head + body) + "\n", summary
+
+
+def print_summary(summary, stats, known):
+    print("update-categories summary")
+    print("  " + ", ".join(f"{k}={v}" for k, v in stats.items()))
+    print(f"  planned sites: {summary['planned']}")
+    if not known:
+        print("  (no --current: changes and unlisted sites are unknown; the SQL guards itself)")
+        return
+    print(f"  sites changed: {summary['sites_changed']}, unchanged: {summary['unchanged']}, not listed: {summary['not_listed']}, "
+          f"skipped (government leaf): {summary['government_leaf']}")
+    print(f"  sites moving from a retreat category ({'/'.join(RETREAT)}) to a real one: {summary['retreat_to_real']}")
+    for title, d in (("gained", summary["gained"]), ("lost", summary["lost"])):
+        print(f"  categories {title} (sites):")
+        for c, n in sorted(d.items(), key=lambda x: (-x[1], x[0]))[:40]:
+            print(f"    {c}: {n}")
+
+
+def main_update(a):
+    if a.update_categories and a.update_categories_from:
+        print("--update-categories and --update-categories-from are separate modes", file=sys.stderr)
+        return 1
+    problems = []
+    try:
+        if a.update_categories:
+            if not os.path.exists(a.db):
+                print(f"no ledger at {a.db}", file=sys.stderr)
+                return 1
+            items, stats = plan_from_ledger(a.db)
+        else:
+            if not a.input:
+                print("--update-categories-from needs --input (the candidates JSONL given to the judge)", file=sys.stderr)
+                return 1
+            items, stats, problems = plan_from_results(a.update_categories_from, a.input)
+        current = read_current(a.current) if a.current else None
+    except sqlite3.OperationalError as e:
+        print(f"cannot read: {e}", file=sys.stderr)
+        return 1
+    for p in problems:
+        print("REJECTED " + p, file=sys.stderr)
+    sql, summary = build_update(items, current)
+    print_summary(summary, stats, current is not None)
+    out = a.out if a.out != os.path.join(ROOT, "var", "approved-sites.sql") else os.path.join(ROOT, "var", "update-categories.sql")
+    if not a.dry_run:
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(sql)
+        print(f"  -> {out}")
+    return 2 if problems else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=os.path.join(ROOT, "var", "frontier.sqlite"))
     ap.add_argument("--out", default=os.path.join(ROOT, "var", "approved-sites.sql"))
+    ap.add_argument("--update-categories", action="store_true", help="category update mode from the approved ledger rows (#122)")
+    ap.add_argument("--update-categories-from", metavar="RESULTS", help="category update mode from a results file (site ids; needs --input)")
+    ap.add_argument("--input", help="candidates JSONL given to the judge (with --update-categories-from)")
+    ap.add_argument("--current", help="sqlite file of the target (local D1) to read present sites / categories for the summary")
+    ap.add_argument("--dry-run", action="store_true", help="update mode: print the summary, write no SQL")
     a = ap.parse_args(argv)
+    if a.update_categories or a.update_categories_from:
+        return main_update(a)
+    if a.dry_run or a.current or a.input:
+        print("--dry-run / --current / --input belong to the category update mode", file=sys.stderr)
+        return 1
     if not os.path.exists(a.db):
         print(f"no ledger at {a.db}", file=sys.stderr)
         return 1
