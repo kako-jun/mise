@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { loadCategories, loadScopes, sitemapXml } from '../src/seo.js';
 import { querySites } from '../src/sites.js';
 
@@ -186,14 +187,15 @@ test('sitemap: 旧実装（範囲ごとに再帰 CTE）と同じ URL 列', async
   assert.deepEqual(got.slice().sort(), want.sort()); // sort_order が同値のカテゴリの並びは未定義（旧実装も同じ）なので集合で比べる
 });
 
-// docs/operations/deploy.md の手順 3（本番の一致確認クエリ）と戻し方の SQL を、文書から取り出してそのまま実行する。
+// 本番の一致確認クエリ（scripts/llm/integrity.py）と、docs/operations/deploy.md の戻し方の SQL（文書から取り出す）をそのまま実行する。
 const deployMd = readFileSync(new URL('../docs/operations/deploy.md', import.meta.url), 'utf8');
 const cmdOf = re => { const m = deployMd.match(re); assert.ok(m, 'deploy.md に見つからない: ' + re); return m[1]; };
-// 一致確認は複数本（各 sh ブロック。D1 本番の複合 SELECT 項数上限のため分割）。1 本目から順に [1]..[5]。
-const checkSqls = () => [...deployMd.matchAll(/d1 execute mise --remote --command "((?:WITH RECURSIVE tree|SELECT sc\.)[^"]+)"/g)].map(m => m[1]);
+// 一致確認の 5 本は scripts/llm/integrity.py が正本（deploy.md は scripts/check-data-integrity.py を参照するだけ。#137）。順に [1]..[5]。
+const CHECK_NAMES = ['category_counts_all', 'category_counts_country', 'scope_counts_country', 'scope_counts_all', 'category_closure'];
+const checkSqls = () => { const all = JSON.parse(execFileSync('uv', ['run', 'python3', 'scripts/check-data-integrity.py', '--print-sql'], { cwd: new URL('..', import.meta.url), encoding: 'utf8' })); return CHECK_NAMES.map(n => all[n]); };
 const compoundTerms = q => (q.match(/\b(UNION ALL|UNION|EXCEPT|INTERSECT)\b/g) || []).length + 1;
 
-test('deploy.md の一致確認クエリ(5 本): 正しい DB では全部 0 行、わざとずらすとそれぞれの本が検出', async () => {
+test('一致確認クエリ(integrity.py の 5 本): 正しい DB では全部 0 行、わざとずらすとそれぞれの本が検出', async () => {
   const db = fresh(f => f < '0022');
   seedBeforeCounts(db);
   apply(db, '0022_category_counts.sql');
