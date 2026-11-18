@@ -1,6 +1,7 @@
 /* /about/ 専用（#118）。配色・リンク・ダークは style.css を引き継ぐ。言語は html[lang] で .t-en / .t-ja の片方だけ出す。 */
 .about { max-width: 640px; padding: 0 4px 24px; font-size: 14px; line-height: 1.7; }
-.about-head { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding-top: 0 !important; margin-bottom: 8px; }
+.about-head { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding-top: 0; margin-bottom: 8px; }
+.about-head .preferences[hidden] { display: none; }
 .about-head .preferences { position: static; flex-direction: row; margin: 0; }
 .about-logo, .about-logo:visited { color: #c90018; font: 1000 34px/1 "Mise Logo", Impact, "Arial Narrow", sans-serif; letter-spacing: 3px; text-decoration: none; text-shadow: 1px 1px #73000b; padding: 4px 0; }
 html[data-theme="dark"] .about-logo, html[data-theme="dark"] .about-logo:visited { color: #ff9a55; text-shadow: none; }
@@ -10,6 +11,6 @@ html[data-theme="dark"] .about-logo, html[data-theme="dark"] .about-logo:visited
 .about ul { padding-left: 1.4em; }
 .about li { margin: 4px 0; }
 .about a { overflow-wrap: anywhere; }
-.about-back { margin-top: 28px !important; }
+.about .about-back { margin-top: 28px; }
 html[lang="ja"] .t-en, html:not([lang="ja"]) .t-ja { display: none; }
-@media (max-width: 700px) { .about { padding-left: 8px; padding-right: 8px; } .about-head { padding-top: 0 !important; } }
+@media (max-width: 700px) { .about { padding-left: 8px; padding-right: 8px; } .about-head { padding-top: 0; } }

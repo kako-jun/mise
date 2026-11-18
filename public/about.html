@@ -23,7 +23,7 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; document.documentElement.lang = l; } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=42">
+<link rel="stylesheet" href="/style.css?v=41">
 <link rel="stylesheet" href="/about.css?v=1">
 <script src="/about.js?v=1" defer></script>
 </head>
@@ -31,7 +31,7 @@
 <main class="about">
   <header class="about-head">
     <a href="/jp/" class="about-logo" aria-label="MISE Home">MISE</a>
-    <div class="preferences"><button id="theme-toggle" type="button" aria-label="Dark / light" title="Dark / light">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
+    <div class="preferences" hidden><button id="theme-toggle" type="button" aria-label="Dark / light" title="Dark / light">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
   </header>
 
   <div class="t-en" lang="en">
@@ -40,13 +40,13 @@
 
     <h2>What gets listed</h2>
     <p>Independent sites: personal sites, but also small businesses, company sites, shops, associations, schools and universities, and larger sites. Adult sites may be listed too. Being commercial, big, adult or an organization is not a reason to refuse a site. Not every site is listed.</p>
-    <p>The only things refused are: ad-centered pages, mass-produced sites (such as affiliate farms), parked or for-sale domains and server default pages, spam, and sites that cannot technically be read (blocked by robots.txt, noindex, HTTP errors, almost no text). Official sites of government bodies are listed only when confirmed against public lists, and a fake site cannot be ruled out with certainty.</p>
+    <p>The only things refused are: ad-centered pages, mass-produced sites (such as affiliate farms), parked or for-sale domains and server default pages, spam, and sites that cannot technically be read (blocked by robots.txt, noindex, HTTP errors, almost no text). Official sites of government bodies are listed only when the hostname matches a trusted public list and at least two independent sources; a domain name or HTTPS alone is never enough, and a fake site cannot be ruled out with certainty.</p>
 
     <h2>What MISE does not do</h2>
     <ul>
       <li>It does not show or rank by popularity or page views, so that big and buried sites get a more equal chance of being found.</li>
       <li>It does not use whether a site uses AI as a reason for lower marks or ranking.</li>
-      <li>Lists are ordered by the site's own last-update date, newest first.</li>
+      <li>Lists are ordered by the site's own last-update date, newest first (the registration date is used when it is unknown; bulk-imported sites come after the rest).</li>
     </ul>
 
     <h2>How to use it</h2>
@@ -71,13 +71,13 @@
 
     <h2>載せるサイト</h2>
     <p>独立したサイトを載せます。個人のサイトに限らず、小さな事業者・企業の公式サイト・店・団体・学校や大学、大手のサイト、成人向けも載せることがあります。商業的であること、大手であること、成人向けであること、組織であることは、拒否の理由にしません。すべてのサイトを網羅しているわけではありません。</p>
-    <p>拒否するのは次だけです。広告中心のページ、量産されたサイト（アフィリエイト目的など）、パーキングやドメイン売却・サーバ初期ページ、スパム、技術的に取れないもの（robots.txt 拒否・noindex・HTTP エラー・本文が極端に薄いなど）。官公庁のサイトは、公的機関の一覧で確認できたものだけを載せます。偽サイトを完全に排除できるとは保証できません。</p>
+    <p>拒否するのは次だけです。広告中心のページ、量産されたサイト（アフィリエイト目的など）、パーキングやドメイン売却・サーバ初期ページ、スパム、技術的に取れないもの（robots.txt 拒否・noindex・HTTP エラー・本文が極端に薄いなど）。官公庁のサイトは、公的機関の信頼できる一覧と、独立した 2 つ以上の出典でホスト名が一致したものだけを載せます（ドメイン名や HTTPS だけでは決めません）。偽サイトを完全に排除できるとは保証できません。</p>
 
     <h2>MISE がしないこと</h2>
     <ul>
       <li>人気や閲覧数の表示・ランキングはしません。大手と埋もれたサイトの発見機会をならすためです。</li>
       <li>AI を使っているかどうかを、低い評価や順位付けの根拠にしません。</li>
-      <li>一覧の並びは、そのサイト自身の更新日が新しい順です。</li>
+      <li>一覧の並びは、そのサイト自身の更新日が新しい順です（更新日が不明なら登録日で代用し、一括投入のサイトは後ろに回します）。</li>
     </ul>
 
     <h2>使い方</h2>

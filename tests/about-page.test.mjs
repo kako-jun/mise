@@ -11,6 +11,10 @@ test('フッタ: 「i」リンクは作者リンク列の最左・/about/ へ同
   assert.equal(links[0][1], '/about/');
   assert.doesNotMatch(links[0][2], /target=/);
   assert.match(links[0][2], /aria-label="About MISE" title="About MISE" data-i18n-label="about"/);
+  assert.match(nav.slice(0, nav.indexOf('>')), /aria-label="Links" data-i18n-label="linksLabel"/); // 作者に限らない中立の語
+  assert.match(app, /linksLabel:'リンク'/);
+  assert.match(app, /linksLabel:'Links'/);
+  assert.doesNotMatch(app, /authorLabel/);
   assert.match(app, /about:'MISE について'/);
   assert.match(app, /about:'About MISE'/);
   assert.match(css, /\.author-links a \{ width: 32px; height: 32px/);
@@ -28,4 +32,12 @@ test('/about/: 日英の本文・出典へのリンク・canonical', () => {
   assert.match(about, /href="\/licenses\/public-data-credits\.txt"/);
   assert.match(about, /rel="canonical" href="https:\/\/mise\.llll-ll\.com\/about\/"/);
   assert.doesNotMatch(about, /公共データ利用規約/); // 出典文そのものは画面に再掲しない（#111）
+});
+test('/about/: 官公庁の基準と並びの但し書き、JS 前は設定ボタンを隠す', () => {
+  assert.match(about, /独立した 2 つ以上の出典でホスト名が一致/);
+  assert.match(about, /at least two independent sources/);
+  assert.match(about, /登録日で代用/);
+  assert.match(about, /<div class="preferences" hidden>/);
+  assert.match(read('public/about.js'), /\.preferences'\)\.hidden = false/);
+  assert.match(read('public/about.css'), /\.preferences\[hidden\] \{ display: none; \}/);
 });

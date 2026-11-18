@@ -13,5 +13,6 @@
   }
   $('#language-toggle').addEventListener('click', () => { root.lang = root.lang === 'ja' ? 'en' : 'ja'; save('mise-language', root.lang); apply(); });
   $('#theme-toggle').addEventListener('click', () => { const t = root.dataset.theme === 'dark' ? 'light' : 'dark'; root.dataset.theme = t; save('mise-theme', t); });
+  $('.preferences').hidden = false;
   apply();
 })();
