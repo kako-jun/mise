@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { renderAbout, loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
 import { receiveRequest } from './intake.js';
-import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags } from './sites.js';
+import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags, ALL_SCOPE } from './sites.js';
 const app = new Hono();
 app.use('*', async (c, next) => {
   await next();
@@ -37,7 +37,7 @@ app.get('/api/sites', async c => {
 app.get('/api/picks', async c => { const sc = scopeOf(c); return sc ? c.json(await randomSites(c.env.DB, sc.cc, 3)) : c.json({ error: 'invalid scope' }, 400); });
 app.get('/api/activity', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
-  const totals = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM sites WHERE (?1 IS NULL OR country_code = ?1)`).bind(sc.cc).first();
+  const totals = await c.env.DB.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(sc.cc ?? ALL_SCOPE).first(); // 集計表から（#126）
   const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) GROUP BY date(registered_at) ORDER BY day`).bind(sc.cc).all();
   return c.json({total:totals.total, known_daily:results});
 });

@@ -15,6 +15,7 @@ for sub in ("scripts/llm", "scripts/pipeline"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
 import export_approved_sql as ea  # noqa: E402
+import counts_check  # noqa: E402
 import export_sites  # noqa: E402
 import review_state  # noqa: E402
 import test_llm_ledger as L  # noqa: E402
@@ -98,6 +99,16 @@ class LedgerModeTests(UpdateBase):
         snap = list(t.execute("SELECT * FROM site_categories ORDER BY 1,2"))
         self.run_sql(out)
         self.assertEqual(list(t.execute("SELECT * FROM site_categories ORDER BY 1,2")), snap)
+
+    def test_counts_table_follows_the_category_replacement(self):
+        """migration 0022 のトリガ: --update-categories の DELETE + INSERT OR IGNORE のあとも集計表 = 再帰 CTE（#126）。"""
+        out = self.path("u2.sql")
+        self.assertEqual(self.run_main("--update-categories", "--db", self.dbp, "--out", out)[0], 0)
+        counts_check.check(self, self.target)
+        self.run_sql(out)
+        counts_check.check(self, self.target)
+        self.run_sql(out)  # 冪等
+        counts_check.check(self, self.target)
 
     def test_not_listed_site_is_not_inserted(self):
         self.target.execute("DELETE FROM site_categories WHERE site_id=?", (self.ids["alpha.example"],))

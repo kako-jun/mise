@@ -17,6 +17,7 @@ ROOT = os.path.dirname(HERE)
 for sub in ("scripts/llm", "scripts/pipeline"):
     sys.path.insert(0, os.path.join(ROOT, sub))
 
+import counts_check  # noqa: E402
 import export_approved_sql  # noqa: E402
 import export_candidates  # noqa: E402
 import export_sites  # noqa: E402
@@ -403,6 +404,17 @@ class ExportTests(Base):
             self.assertNotIn(f"-- {k}", sql)
         self.assertNotIn("--remote", sql)
         self.assertNotIn("DELETE", sql); self.assertNotIn("UPDATE", sql)
+
+    def test_counts_table_follows_the_nightly_insert(self):
+        """migration 0022 のトリガ: 夜間の一括投入（通常 INSERT）のあとも集計表 = 再帰 CTE（#126）。"""
+        t = self.target()
+        counts_check.check(self, t)
+        sql = self.export()
+        t.executescript(sql)
+        counts_check.check(self, t)
+        t.executescript(sql)  # 2 回目（INSERT OR IGNORE）で二重に数えない
+        counts_check.check(self, t)
+        self.assertEqual(t.execute("SELECT n FROM scope_counts WHERE scope='all'").fetchone()[0], t.execute("SELECT COUNT(*) FROM sites").fetchone()[0])
 
     def test_applies_once_and_again_adds_nothing(self):
         sql = self.export()
