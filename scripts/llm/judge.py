@@ -651,6 +651,26 @@ class Ledger:
                     "or pass --init-ledger to start an empty one on purpose.")
             self._append_nolock({"kind": "init", "note": "ledger created"})
 
+    def month_total(self, month):
+        """USD of one UTC month ("YYYY-MM"): calls + open reservations (reserve - release). Missing ledger = 0.
+        A reservation counts in the month it was made, and its release is netted against THAT month (the month of
+        the original reserve of the same batch tag), not the month the release happened to be written in."""
+        rows = self._lines()
+        reserved_in = {}
+        for r in rows:
+            if r["kind"] == "reserve":
+                reserved_in.setdefault(r.get("batch"), str(r.get("ts", ""))[:7])
+        t = 0.0
+        for r in rows:
+            m = str(r.get("ts", ""))[:7]
+            if r["kind"] == "call" and m == month:
+                t += r["cost_usd"]
+            elif r["kind"] == "reserve" and m == month:
+                t += r["usd"]
+            elif r["kind"] == "release" and reserved_in.get(r.get("batch"), m) == month:
+                t -= r["usd"]
+        return t
+
     def _check_nolock(self, worst_case_usd):
         eps = 1e-9
         if self.run_spent + self.run_reserved + worst_case_usd > self.budget_run + eps:

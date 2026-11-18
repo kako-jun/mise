@@ -2,7 +2,7 @@
 
 ## 定期処理
 
-現状、**自動巡回・定期処理は稼働していない**（cron は未登録）。収集は手元で実行し、結果を migration として手動で本番に適用している。
+**夜間ジョブの運用の正本は [nightly.md](nightly.md)**（`scripts/nightly.py`。発見・取得・判定・承認・SQL・整合チェック・本番反映）。**cron は未登録**（登録は kako-jun が行い、最初は `--apply-prod` なしで数夜回して確認する）。それまでは収集を手元で実行し、結果を手動で本番に適用している。以下は個別段を単独で cron に載せる場合の参考。
 
 登録するなら、手元 PC または Raspberry Pi で、リポジトリを置いたユーザーの crontab に次のような形にする想定（登録は台帳の規模・実行時間を見てから）。Workers やエージェントでは回さない。
 
@@ -24,7 +24,7 @@
 
 ## 鍵・クレジット・LLM 予算
 
-LLM 判定工程（紹介文・長い紹介文・一次判定・分類候補）は `scripts/llm/`（仕様・使い方は [collection/llm-judge.md](../collection/llm-judge.md)。判定結果の台帳への取り込み・承認・承認済み SQL の書き出し〔API を呼ばない手元作業〕は実装済みで、本番 D1 への投入は kako-jun の承認後に別途。定期実行は未実装で、構想の残りは [ideas/llm-judging.md](../ideas/llm-judging.md)）。工程を動かすときに守る運用ルール:
+LLM 判定工程（紹介文・長い紹介文・一次判定・分類候補）は `scripts/llm/`（仕様・使い方は [collection/llm-judge.md](../collection/llm-judge.md)。判定結果の台帳への取り込み・承認・承認済み SQL の書き出し〔API を呼ばない手元作業〕は実装済みで、本番 D1 への投入は kako-jun の承認後に別途。定期実行は [nightly.md](nightly.md) の骨格まで実装済みで、構想の残りは [ideas/llm-judging.md](../ideas/llm-judging.md)）。工程を動かすときに守る運用ルール:
 
 - LLM は手元の PC/Raspberry Pi から API で呼ぶ。**公開サーバーからは呼ばない**。Claude Code の対話利用のトークンは使わない。
 - API キーはリポジトリの外のユーザー設定ファイル（権限 600）に置き、環境変数として読む。**キーの値をログ・出力・コミット・Issue・PR・docs に書かない**。
