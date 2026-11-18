@@ -33,9 +33,24 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 ### `categories` / `site_categories` / `site_tags`
 
-- `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。
+- `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。木の中身と育て方は下の「カテゴリの木」。
 - `site_categories`: `(site_id, category_id)` が主キー。同じサイトを複数カテゴリに登録できる。
 - `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。タグ名（日英）は `q` の部分一致の対象でもある（`search_text` に含める。0020・#31 第1段）。
+
+### カテゴリの木（#114 第1段、0021）
+
+- **正本は `data/categories.csv`**（`id, parent_id, name_ja, name_en, sort_order, assign`。現在 153 カテゴリ: トップ 15・第2階層 122・第3階層 16）。D1 の `categories` はこの写しで、`tests/test_taxonomy.py` が「全 migration を適用した結果 = CSV」を検査する。**木を変える migration を足すときは CSV も同じ変更にする**。LLM 判定の選択肢（`scripts/llm/judge.py` の `load_categories`）もこの CSV から読む。
+- 旧 59 → 新の対応表は `data/category-map.csv`（`keep` 同じ id を引き継ぐ / `map` 常にその新 id へ / `fallback` 主題でなく運営主体・地域だった旧カテゴリで、他に新カテゴリが無いサイトにだけ退避先を付ける / `drop` 0 件で廃止 / `rule` 官公庁）。0021（`scripts/taxonomy_sql.py` が生成した一回限りの migration。適用後は凍結）が使い、LLM 側は旧 id の判定を新 id に写すのに使う（[llm-judge.md](../collection/llm-judge.md#カテゴリの木と指示文)）。
+- **主題の木**: カテゴリは「そのサイトが何について書いているか・何を扱っているか」。運営主体（企業・団体・個人サイト・店）は木に置かず、`site_kind` とタグで扱う。店は扱う品・サービスの主題、学校は教育、病院は健康に入れる。国・地域は木に入れない（国は範囲、県は第2段で範囲の第2階層）。1 サイトは最大 3 カテゴリ。合う葉が無いときだけ親に置く。
+- **id 規則**: 英語の kebab-case の短い slug。**親の id を前に付けない**（親子は `parent_id` だけで持つ。ノードを移しても id と URL が変わらない）。一意にならないときだけ語を足す。**`all` と 2 文字の id は使わない**（範囲の URL `/all/` `/jp/` と衝突する）。トップのうち `arts business reference education science government health society` は旧 id を引き継ぎ、それ以外の旧 id（`親-子` 形式）は木に残らない。日本語名は 12 字程度まで、「・」で並べるのは 2〜3 語まで。英語名は sentence case。
+- **官公庁**: `government`（行政・公的機関）の下に種別 7 葉（`national-agencies` `independent-agencies` `prefectures` `cities` `special-wards` `towns` `villages`）。台帳の `type`（0015 が各サイトにタグとして付けたもの）から決定論で振り、LLM には渡さない（`assign=rule`）。台帳に無い公的機関（公社など）は LLM が `government`（トップ）か主題を選ぶ。以後の官公庁の差分 migration（`public_bodies_sql.py --since`）も種別の葉を付ける。
+- **成長則**（葉の件数は、範囲を「全世界」にしたときの `/api/categories?scope=all` の `site_count`、つまり配下を含む件数で見る）:
+  - 葉が **50 件を超えたら分割を検討**する。**100 件を超えたら次の追加ラウンドの前に必ず子を足す**。
+  - 分けるときは、その葉の中で多い主題を 3〜8 個の子にする。子に入らない残りは親に置いたままでよい。
+  - 深さは現在最大 3 だが、**3 を超えてもよい**（件数が必要とする所だけ深くする。トップは 15 のまま保つ）。UI・URL・件数の再帰集計は任意の深さで動く。
+  - 0 件の葉は残してよい（画面は薄く表示する）。3 か月以上 0 件のままなら統合の候補にする。
+  - 木を変えるときは、新しい migration で子を INSERT し、既存サイトの `site_categories` を移す（移す前に、移す先の件数を確認する）。同時に `data/categories.csv` と LLM の指示文の一覧が自動で追従することを確かめる。
+  - 件数の見方（例）: `curl -s 'https://mise.llll-ll.com/api/categories?scope=all'` の `site_count` が 50・100 を超える葉を探す。
 
 ### 運営者の所在国（`country_code`）
 
@@ -87,7 +102,7 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 ## 未決事項
 
 - 利用 DB の ID 方式、スキーマ移行、サイトとページの境界、正規 URL・重複・リダイレクトの扱い。
-- カテゴリ名変更時の共有 URL 互換性、複数分類や更新時の確認方法、カテゴリ削除時の扱い。
+- カテゴリ名変更時の共有 URL 互換性（#114 の決定: 旧カテゴリの id を含む URL は無効値として扱い、トップに戻す。転送表は持たない）、複数分類や更新時の確認方法。
 - 紹介文の生成タイミング、複数出典、承認・差し替え・削除の運用。
 - 所在地の取得対象、推定の許容範囲、精度、位置情報の公開基準と削除対応。
 - 巡回頻度、削除やアクセス拒否の扱い。

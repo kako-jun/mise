@@ -15,7 +15,7 @@
 | `scripts/llm/fetch_about.py` | トップと About 系ページ（最大2、同一ホスト、robots遵守、2秒間隔）を取得して `body_excerpt` に入れる決定論の補助。名前を解決して**全アドレスが公開アドレス**でなければ取得せず（解決できない名前も拒否）、curl は `--resolve` でチェック済みアドレスに固定する（チェック後の再解決＝DNS リバインディングを防ぐ）。本文テキストはインライン要素の間に空白を足さない（`support</a>.` が `support .` にならない） |
 | `scripts/llm/import_results.py` | 判定結果 JSON を frontier 台帳の `llm_judgement` に取り込む（冪等）。API なし |
 | `scripts/llm/review_state.py` | `llm_judgement.review_state` の一覧と承認・却下・差し戻し。API なし |
-| `scripts/llm/export_approved_sql.py` | 承認済みを `sites` / `site_categories` / `site_tags` への冪等な INSERT SQL として `var/` に書き出す。API なし |
+| `scripts/llm/export_approved_sql.py` | 承認済みを `sites` / `site_categories` / `site_tags` への冪等な INSERT SQL として `var/` に書き出す（旧カテゴリ id は新 id に写す）。API なし |
 | `scripts/llm/merge_ledgers.py` | 旧 `<var-dir>/llm-ledger.jsonl` を共有台帳へ統合（繰り返し可） |
 | `scripts/llm/ledger_release.py` | 開いたままの予約の一覧と手動解放 |
 | `scripts/llm/compare.py` `review_long.py` `exp_summary.py` | 人手の値との並置、長い紹介文の根拠突き合わせ表、実験の費用・一致率の表 |
@@ -70,6 +70,13 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 出力は構造化出力（`output_config.format = json_schema`）で固定し、**件ごとに**検証する（キー、列挙、カテゴリidが木にあること、`deferred` と `user_page` の整合、`verdict` と `kind` の対応（pass/deferred は none、reject は広告・量産・パーキング・スパムの種別、suspect は none 以外）、英語の長文の長さ上限、第1段で `ad` が y でないのに `aq` がある場合の拒否 など）。引用は、入力のうち値の部分（`url:` `title:` などのラベル・`(none)`・`<candidate>` タグ・ページ区切りを除く）に空白を1つへ正規化して照合し、語をつなげて一致させることはしない。不正な件だけを1件ずつ再試行する（打ち切りなら `max_tokens` を増やす）。`judge.py --escalate-model` の上位モデル再判定が失敗しても、最初の有効な結果は残し、失敗は `escalation_failed` に記録する。第1段・第2段の結果は `judge.py` の全項目形に正規化して保存する。`--stages full` は全項目を1回で返させる基準形。
 
 判定基準（指示文に入っている。正本は [listing-criteria.md](../concept/listing-criteria.md)）: `reject` は広告中心・量産（アフィリエイト目的等）・パーキング/売却・スパムだけ。個人/事業者/企業/大手/団体/学校/SNS本体/成人向けは理由にしない。`site_kind`（individual / business / organization / company / unknown）、`adult`、`site_scope` は属性として記録するだけ。共有サービス配下の個別ユーザーのページ（`user_page`）は `deferred`（保留）。成人向けの紹介文は中立・婉曲で、本文を再現しない。所在（国・区画）は本文に明記され、逐語引用がある場合だけ。不確かなら `null`。
+
+## カテゴリの木と指示文
+
+- **選択肢の取得元は `data/categories.csv`**（旧: `migrations/0001_initial.sql` を正規表現で読んでいた）。`judge.load_categories()` が木の順・深さ付きで返し、`assign=rule` の行（`government` 配下の種別 7 葉）は**LLM に渡さない**（官公庁は台帳の種別から決定論で振る。台帳に無い公的機関だけ `government`（トップ）か主題を選ぶ）。構造化出力の `enum` と、結果の検証（カテゴリ id が木にあること）も同じ一覧を使う。
+- **指示文**（規則 5）: カテゴリは主題で選ぶ（運営主体で選ばない。店は扱う品の主題へ）、**最も深い（具体的な）id を優先**し、合う子が無いときだけ親、同じ枝からは原則 1 つ、最大 3 つ。一覧は 1 レベル 2 スペースの字下げで木の深さを示す（`category_lines`。`pipeline.py` の第1段も同じ）。
+- **トークン**: 一覧は 59 個 約 980 → 153 個 約 3,030 トークン（`count_tokens` で実測、2026-11-18）。差は約 +2,050 で、キャッシュ読み（$0.01/M）ならほぼ 0、キャッシュ無しでも 77 リクエスト（381 件、`--group 5`）で約 $0.016。`system` はキャッシュの最小長 512 トークンを十分に超え、Haiku の 100K トークン階層にも遠い。見積り（`--dry-run`）は文字数ベースで一覧の増加分が自動で入る。木を変えると system が変わるので、結果の入力ハッシュキャッシュ（`var/llm-cache/`）は全件が外れる（一覧が 300 個になっても約 6,000 トークンで費用は誤差。上限を決めるのは費用でなく選び間違いの率なので、育てるときは `exp_summary.py` の category overlap で見る）。
+- **旧カテゴリ id の互換**（#114）: 旧 59 → 新の対応表は `data/category-map.csv`。`judge.modernize_categories` が旧 id を新 id に写す（`map`/`keep` は常に、`fallback`（企業・団体・製品とサービス・地域）は他に残る id が無いときだけ、`drop`/`rule` は消す。最大 3、重複なし）。使う場所は 2 つ: (1) `export_approved_sql.py` — 台帳に残る旧 id の承認済み判定を書き出すときに新 id へ写す（写さないと `category_id IN (SELECT id FROM categories)` で黙って落ち、カテゴリ無しで載る）。(2) `import_results.py` — 旧 id を含む過去の結果ファイルの取り込みで、検証の前に写す。**台帳 `llm_judgement.categories` に残る既存の判定そのものは書き換えない**。全件の LLM 再判定（非官公庁 307 件、Haiku 第1段だけで約 $0.05〜0.1）で主題に振り直すのは別作業（#114 Q5）。
 
 ## トークンを減らす設計
 
