@@ -435,8 +435,9 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
     onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
   if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
-function renderPick() {
+function renderPick(dir=1) {
   const list=$('#pick-list');
+  list.classList.toggle('is-prev',dir<0);
   // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
   const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
   if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
@@ -447,11 +448,61 @@ function renderPick() {
 }
 const picks=$('#picks');
 if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
-setInterval(()=>{
-  if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  pickIndex=(pickIndex+1)%pickedSites.length;
-  renderPick();
-},8000);
+// ---- ピックアップの切替（自動 8 秒 / 横スワイプ / 左右キー、#113）。規則は docs/design/ui.md のピックアップ。 ----
+const PICK_AUTO_MS=8000, PICK_HISTORY_MAX=5, SWIPE_MIN_PX=40, SWIPE_DOMINANCE=1.5;
+let pickHistory=[], pickTimer=0, pickSwiped=false, pickSwipedTimer=0;
+const pickStatus=document.createElement('div'); pickStatus.className='visually-hidden'; pickStatus.setAttribute('role','status'); picks.append(pickStatus);
+function startPickTimer() {
+  clearInterval(pickTimer);
+  pickTimer=setInterval(()=>{
+    if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || reducedMotion()) return;
+    stepPick(1,false);
+  },PICK_AUTO_MS);
+}
+// dir=1: 次、dir=-1: 前（履歴を戻る。尽きたら何もしない）。manual のときだけ支援技術へ知らせ、自動入れ替えのタイマーを再始動する。
+function stepPick(dir, manual) {
+  if(pickedSites.length<2) return false;
+  if(dir>0) { pickHistory.push(pickIndex); if(pickHistory.length>PICK_HISTORY_MAX) pickHistory.shift(); pickIndex=(pickIndex+1)%pickedSites.length; }
+  else if(pickHistory.length) pickIndex=pickHistory.pop(); else return false;
+  renderPick(dir);
+  if(manual) {
+    startPickTimer();
+    const n=pickedSites.length;
+    pickStatus.textContent=`${t('picks')} ${pickIndex%n+1} / ${n}: ${pickedSites[pickIndex%n].name}`;
+  }
+  return true;
+}
+// 履歴が尽きて前へ戻れないときの控えめな弾み（reduced-motion では出さない）
+function nudgePick() {
+  if(reducedMotion()) return;
+  $('#pick-list').animate?.([{transform:'translateX(0)'},{transform:'translateX(10px)'},{transform:'translateX(0)'}],{duration:180,easing:'ease-out'});
+}
+let pickDrag=null;
+picks.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='mouse' && e.button!==0) return;
+  pickSwiped=false; clearTimeout(pickSwipedTimer);
+  pickDrag={id:e.pointerId,x:e.clientX,y:e.clientY,done:false};
+});
+picks.addEventListener('pointermove',e=>{
+  const d=pickDrag; if(!d || d.id!==e.pointerId || d.done) return;
+  const dx=e.clientX-d.x, dy=e.clientY-d.y;
+  if(Math.abs(dx)<SWIPE_MIN_PX || Math.abs(dx)<Math.abs(dy)*SWIPE_DOMINANCE) return;
+  d.done=true; pickSwiped=true; tagDown=null;
+  clearTimeout(pickSwipedTimer); pickSwipedTimer=setTimeout(()=>{pickSwiped=false;},600);
+  getSelection()?.removeAllRanges();
+  if(!stepPick(dx<0 ? 1 : -1, true)) nudgePick();
+});
+const endPickDrag=e=>{ if(pickDrag && pickDrag.id===e.pointerId) pickDrag=null; };
+picks.addEventListener('pointerup',endPickDrag); picks.addEventListener('pointercancel',endPickDrag);
+// マウスの横ドラッグでリンクがネイティブにドラッグされるのを防ぐ
+picks.addEventListener('dragstart',e=>e.preventDefault());
+// スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）
+picks.addEventListener('click',e=>{ if(pickSwiped) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
+picks.addEventListener('keydown',e=>{
+  if(e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')) return;
+  e.preventDefault(); stepPick(e.key==='ArrowRight' ? 1 : -1, true);
+});
+startPickTimer();
 function showResults(query) {
   const first=!viewShown; viewShown=true;
   currentSearch=query; renderChips();
@@ -593,7 +644,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0;
+  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0; pickHistory=[];
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。

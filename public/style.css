@@ -80,6 +80,7 @@ html[data-theme="dark"] .new-tag { color: #ff9a8d; }
 
 .picks { width: 560px; max-width: 100%; margin: 22px auto; }
 .picks h2 { font-size: 14px; }
+#picks { touch-action: pan-y; }
 #pick-list { list-style: none; padding: 0; }
 #pick-list li { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; }
 #pick-list li p { margin: 3px 0; }
@@ -109,6 +110,8 @@ html[data-theme="dark"] .picks { border-color: #376b77; background: rgba(14,38,4
 @media (prefers-reduced-motion: no-preference) {
   #pick-list li { animation: pick-enter .5s ease-out both; }
   @keyframes pick-enter { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: translateX(0); } }
+  #pick-list.is-prev li { animation-name: pick-enter-prev; }
+  @keyframes pick-enter-prev { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: translateX(0); } }
 }
 @media (max-width: 700px) { .preferences { text-align: right; margin-right: 8px; } }
 @media (min-width: 1200px) {
