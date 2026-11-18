@@ -106,7 +106,7 @@ class ModernizeTests(unittest.TestCase):
     def test_new_ids_pass_through_and_old_ones_translate(self):
         self.assertEqual(self.m(["astronomy"]), ["astronomy"])
         self.assertEqual(self.m(["science-astronomy", "arts-photography"]), ["astronomy", "photography"])
-        self.assertEqual(self.m(["science", "science-biology"]), ["science", "biology"])  # 引き継いだ id はそのまま
+        self.assertEqual(self.m(["science", "science-biology"]), ["biology"])  # 引き継いだ id は写るが、親(science)は子(biology)と並ぶので正規化で外れる(#137)
 
     def test_fallback_only_when_nothing_else_remains(self):
         self.assertEqual(self.m(["business-companies"]), ["business"])
@@ -211,7 +211,8 @@ class MigrationTests(unittest.TestCase):
         db.executescript(MIG.read_text(encoding="utf-8"))
         for n, ids in enumerate(combos):
             got = {("government" if c in leaves else c) for (c,) in db.execute("SELECT category_id FROM site_categories WHERE site_id=?", (f"c{n}",))}
-            want = set(judge.modernize_categories(list(ids), valid, legacy))
+            # 0021 は #137 より前の履歴なので正規化なし(空の木)で比べる。実データの整理は scripts/fix-redundant-categories.sql
+            want = set(judge.modernize_categories(list(ids), valid, legacy, tree=({}, frozenset())))
             self.assertEqual(got, want, ids)
         two = {c for (c,) in db.execute("SELECT category_id FROM site_categories WHERE site_id='c0'")}
         self.assertEqual(two, {"business", "business-services"})

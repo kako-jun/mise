@@ -83,10 +83,50 @@ def load_legacy_map(root=ROOT):
         return {r["old_id"]: {"new": r["new_id"] or None, "mode": r["mode"]} for r in csv.DictReader(f)}
 
 
-def modernize_categories(ids, valid_ids, legacy):
-    """Translate category ids stored by judgements made before the taxonomy change (#114) into the current tree.
+_TREE = None
+
+
+def load_tree(root=ROOT):
+    """(parent {id: parent id or None} for EVERY row of data/categories.csv including the assign=rule leaves, retreat ids).
+    Retreat ids = the new_id of every fallback row of data/category-map.csv (business / society / business-services / community):
+    where 0021 parked the old company / organisation ids. They are ALSO ordinary categories the LLM may choose (assign=llm), so the
+    canonical form does not drop them; the set is used only to report a coexistence as information (integrity check retreat_with_real).
+    The csv files are the single source (#137)."""
+    with open(os.path.join(root, "data", "categories.csv"), encoding="utf-8", newline="") as f:
+        parent = {r["id"]: r["parent_id"] or None for r in csv.DictReader(f)}
+    retreat = frozenset(m["new"] for m in load_legacy_map(root).values() if m["mode"] == "fallback" and m["new"])
+    return parent, retreat
+
+
+def normalize_categories(ids, tree=None, stats=None):
+    """Canonical form of a category set (#137): when a parent and its descendant are both present, only the descendant stays
+    (the count tables count descendants, so the parent's count does not change). Retreat ids (business / society / ...) are NOT
+    dropped here: the LLM chooses them in the current tree on purpose. The only retreat ids that were ever "not chosen" are the
+    ones modernize_categories gets from an old id's fallback, and those are used only when nothing else remains (alone).
+    Order is kept. stats (optional dict) gets "dropped_ancestors" added up."""
+    global _TREE
+    if tree is None:
+        _TREE = _TREE or load_tree()
+        tree = _TREE
+    parent, _retreat = tree
+    ids = list(dict.fromkeys(ids))
+    ancestors = set()
+    for i in ids:
+        p = parent.get(i)
+        while p and p not in ancestors:
+            ancestors.add(p)
+            p = parent.get(p)
+    out = [i for i in ids if i not in ancestors]
+    if stats is not None:
+        stats["dropped_ancestors"] = stats.get("dropped_ancestors", 0) + len(ids) - len(out)
+    return out
+
+
+def modernize_categories(ids, valid_ids, legacy, tree=None, stats=None):
+    """Translate category ids stored by judgements made before the taxonomy change (#114) into the current tree, then put the
+    set into the canonical form (normalize_categories, #137).
     Ids that are already valid pass through; old ids map through the table (map/keep always; fallback only when nothing
-    else remains; rule (public bodies) -> the government top; drop vanishes); anything unknown is dropped. Order is kept, duplicates removed, at most 3."""
+    else remains; rule (public bodies) -> the government top; drop vanishes); anything unknown is dropped. Order is kept, duplicates removed, at most 3 (after normalizing)."""
     out, fallbacks = [], []
     for i in ids:
         if i in valid_ids:
@@ -106,7 +146,22 @@ def modernize_categories(ids, valid_ids, legacy):
             out.append(t)
     if not out:
         out = [t for t in dict.fromkeys(fallbacks) if t in valid_ids]
-    return out[:3]
+    return normalize_categories(out, tree, stats)[:3]
+
+
+def canonical_categories(cats, valid_ids, legacy, tree=None, stats=None):
+    """The categories of one judgement output as it enters the ledger / the export. Old ids are translated and the set is
+    normalized; anything that is not a plain list of known ids is returned untouched (or with the unknown ids appended) so
+    that judge.validate_output still rejects it as before."""
+    if not isinstance(cats, list):
+        return cats
+    known = [c for c in cats if isinstance(c, str) and (c in valid_ids or c in legacy)]
+    unknown = [c for c in cats if not (isinstance(c, str) and (c in valid_ids or c in legacy))]
+    if any(c not in valid_ids for c in known):
+        return modernize_categories(known, valid_ids, legacy, tree, stats) + unknown
+    if unknown:
+        return cats
+    return normalize_categories(cats, tree, stats)
 
 
 def category_ids(cats):
