@@ -236,6 +236,15 @@ class ResultsModeTests(UpdateBase):
         self.run_sql(sql_path)
         self.assertEqual(list(t.execute("SELECT * FROM site_categories ORDER BY 1,2")), snap)
 
+    def test_pre_129_result_without_freshness_is_accepted(self):
+        old = L.out_pass(categories=["astronomy"])
+        old.pop("freshness", None); old.pop("exempt", None)
+        sql_path = self.path("old.sql")
+        rc, so, err = self.run_main("--update-categories-from", self.results({"sample-a": old}), "--input", self.cands, "--out", sql_path, "--current", self.curpath)
+        self.assertEqual(rc, 0, err)
+        self.run_sql(sql_path)
+        self.assertEqual(cats_of(self.target, "sample-a"), ["astronomy"])
+
     def test_fr_ids_are_left_to_the_ledger_mode(self):
         t = self.target
         fr = self.ids["delta.example"]  # listed, business only

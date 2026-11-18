@@ -49,7 +49,7 @@ def set_state(db, keys, state):
         if why:
             out.append((key, False, "refused: " + why))
             continue
-        db.execute("UPDATE llm_judgement SET review_state=?, reviewed_at=? WHERE key=?",
+        db.execute("UPDATE llm_judgement SET review_state=?, reviewed_at=?, review_reason=NULL WHERE key=?",
                    (state, None if state == "pending" else frontier.now(), key))
         out.append((key, True, state))
     db.commit()

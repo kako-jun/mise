@@ -33,6 +33,10 @@ def export(db_path, state="candidate"):
             "external_refs": r["ext_refs"], "http_status": r["last_http_status"],
             "robots": r["robots_status"], "flags": flags,
         }
+        keys = r.keys()
+        if "freshness_signal_at" in keys and r["freshness_signal_at"]:  # #129: 決定論で取れた更新の兆候（無ければキーごと渡さない）
+            features["freshness_signal_at"] = r["freshness_signal_at"]
+            features["freshness_source"] = r["freshness_source"]
         out.append({"id": cand_id(r["key"]), "url": r["final_url"] or r["url"], "title": r["title"],
                     "meta_description": r["description"], "lang": r["lang"],
                     "body_excerpt": r["text_head"] or "", "features": features})

@@ -56,6 +56,22 @@ npx wrangler d1 execute mise --local --file var/approved-sites.sql   # ローカ
 
 プロキシ経由で外に出る環境（curl が `https_proxy` などを使う PC）では、接続するのはプロキシで、名前を解決するのもプロキシ側になる。手元で名前を解決して全アドレスが公開であることは確認するが、`--resolve` による固定は効かず、チェックとプロキシの解決が食い違う余地は残る。プロキシ設定がある場合、`fetch_about.py` は起動時に警告を出す。**取得対象は手元で明示した少数のサイトのリストに限る**運用を守り、不特定のURLを渡さない。プロキシ無しの環境ではアドレス固定が効く。
 
+## 更新の有無と例外（#129）
+
+LLM は `freshness`（`active` / `stale` / `unknown`）と `exempt`（`rare_genre` / `notable` / `none`）を返す（2 段階 pipeline の第 1 段では短いコード `fr`（a/s/u）・`ex`（r/n/-）。理由は既存の `r` / `notes` に 1 行）。`export_candidates.py` が決定論で取れた `freshness_signal_at` / `freshness_source` を `features` に入れて渡す（取れなければキーごと無し）。今日の日付は指示文に入れるが、**キャッシュ鍵（`judge.input_hash`＝`judge.Cache` と `pipeline` の鍵）からは日付行を除く**ので、日をまたいで再開してもキャッシュは外れない（台帳の `import_results.input_hash` は指示文を含まないので元から無関係）。指示文の 4d: 兆候が 3 年以上前または無い個人サイトは `stale` / `unknown`（活動中と推測しない）。`exempt` の根拠は希少性（同じ主題の代替が少ない）か、サイト自体に独立した解説（百科事典等）があることだけで、人気・閲覧数・知名度・古さは根拠にしない。どちらも属性で、これだけでは reject しない。台帳 `llm_judgement.freshness` / `exempt` に保存（既存行は NULL = 未判定）。**入力ハッシュの規則（origin・モデル・候補テキストのみ。指示文を含めない）は変えない**。ただし新しい出力キーは必須なので、#129 より前の結果ファイルは `import_results.py` の検証で拒否される（再判定が要る）。一方 `export_approved_sql.py --update-categories-from` はカテゴリしか使わないので、`freshness` / `exempt` が無い旧結果も受け付ける（`validate_output(require_freshness=False)`。ある場合は値を検証する）。
+
+### 自動承認ポリシー（`approve_policy.py`）
+
+```sh
+uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --dry-run   # approve / hold / reject_stale の件数と理由別の内訳
+uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --apply     # pending の行だけ review_state を更新
+```
+
+- **approve**: `spam_verdict=pass` かつ `confidence=high` かつ日英の紹介文あり かつ有効なカテゴリあり かつ公的機関らしくない（名前の語彙: 市立・県立・広域連合・消防・役場・市役所・自治体・教育委員会 等と、`.lg.jp` / `.go.jp` 等のホスト。定数は `PUBLIC_WORDS` / `PUBLIC_HOST_SUFFIXES`）かつ（`site_kind` が business / organization / company と確定している、または `freshness=active` で決定論の日付と矛盾しない）。`individual` と `unknown`（NULL 含む）は個人の可能性があるので freshness が active でなければ承認しない。`review_reason=auto_approved`。
+- **reject_stale**: `site_kind=individual` かつ `freshness=stale` かつ `exempt=none` かつ pass + high かつ、決定論の日付（`freshness_signal_at`）が存在し 3 年以上前で、出所が © 年だけ（`footer_copyright`）ではないときだけ。`unknown` や日付なしは更新停止の証拠ではないので hold。`review_state=rejected`、`review_reason=stale_individual`。`review_state.py pending HOST` で戻せる。
+- **hold**（人が見る）: suspect・medium・low、個人（または不明）で stale/unknown かつ exempt が rare_genre / notable、stale/unknown だが決定論の日付が無い・© 年だけのもの、#129 より前の判定（個人で freshness が NULL）、LLM の `freshness` と決定論の `freshness_signal_at` が食い違うもの、公的機関らしいもの。
+- 「3 年」は `approve_policy.STALE_YEARS` の 1 箇所。ちょうど 3 年前の日付は stale（以上）。人が approved / rejected にした行と、`pending` 以外の行には触らない。`review_state.py` で人が状態を変えると `review_reason` は消える。
+
 ## 入力
 
 JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body_excerpt`, `features`。LLM に渡るのは**この文章だけ**で、HTML は渡さない。決定論で決まるもの（ホスト、HTTP状態、広告タグ数、かな数 など）は `features` に入れるだけで、LLM に出させない。本文は `--body-limit`（既定9000字）で切る。複数ページを入れるときは `body_excerpt` 内に `--- page: URL ---` の区切りを置く。frontier 候補は本文冒頭300字が上限。

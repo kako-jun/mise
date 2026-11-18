@@ -8,15 +8,19 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.robotparser
+
+import freshness
 
 USER_AGENT = 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)'
 ROBOT_TOKEN = 'MiseResearchBot'
 MAX_BODY = 512 * 1024        # 1ページの本文上限（先頭のみ使う）
 MAX_ROBOTS = 128 * 1024
 MAX_REDIRECTS = 3
+MAX_FRESHNESS_REQUESTS = 2   # 更新の兆候用の追加リクエスト上限（feed / sitemap。robots 遵守・ホスト別待ち）
 MAX_CRAWL_DELAY = 10
 HOST_WAIT = 1.5              # 同一ホストへのリクエスト間隔（秒）
 TIMEOUT = 20
@@ -188,8 +192,59 @@ def fetch_site(host, scheme_order=('https', 'http'), path='/'):
                 out['error'] = 'robots_unavailable'; return out
             if not ok:
                 out['error'] = 'robots_disallowed'; return out
-            return _follow(out, origin + path, robots, delay)
+            res = _follow(out, origin + path, robots, delay)
+            if not res['error'] and res['status'] == 200 and 'html' in res['headers'].get('content-type', 'html').lower():
+                try:
+                    res['freshness'] = collect_freshness(res, robots)
+                except Exception as e:  # 兆候は付随情報。失敗してもトップ取得の結果は捨てない
+                    print(f'freshness: {host}: {type(e).__name__}: {e}', file=sys.stderr)
+                    res['freshness'] = []
+            return res
     return out
+
+
+def collect_freshness(out, robots, today=None):
+    """トップ取得に成功したサイトの更新の兆候(header / feed / sitemap)を [(iso, source)] で返す。追加リクエストは最大 MAX_FRESHNESS_REQUESTS。
+    feed で日付が取れたら sitemap は取らない。失敗・robots 不許可は黙って飛ばす（兆候なしになるだけ）。"""
+    found = [(freshness.header_date(out.get('headers'), today), 'header')]
+    url = out.get('final_url')
+    if not url or out.get('status') != 200:
+        return found
+    parts = urllib.parse.urlsplit(url)
+    origin = f'{parts.scheme}://{parts.netloc}'
+    html = decode_body(out['body'], out['headers']) if out.get('body') else ''
+    targets = []
+    for href in freshness.feed_links(html):
+        u = urllib.parse.urljoin(url, href)
+        up = urllib.parse.urlsplit(u)
+        if up.scheme in ('http', 'https') and same_site(up.hostname or '', parts.hostname or '') and ('feed', u) not in targets:
+            targets.append(('feed', u))
+    targets = targets[:1]   # 公式に宣言された feed は 1 本だけ
+    targets.append(('sitemap', origin + '/sitemap.xml'))
+    if not targets[0][0] == 'feed':
+        targets.append(('feed', origin + '/rss.xml'))
+    done = 0
+    for kind, u in targets:
+        if done >= MAX_FRESHNESS_REQUESTS:
+            break
+        up = urllib.parse.urlsplit(u)
+        try:
+            st, ok, delay = robots.check(f'{up.scheme}://{up.netloc}', (up.path or '/') + (f'?{up.query}' if up.query else ''))
+            if not ok:
+                continue
+            time.sleep(max(HOST_WAIT, delay)); done += 1
+            status, headers, body = http_get(u)
+        except FetchError:
+            continue
+        if status != 200:
+            continue
+        text = decode_body(body, headers)
+        d = freshness.feed_date(text, today) if kind == 'feed' else freshness.sitemap_date(text, today)
+        if d:
+            found.append((d, kind))
+            if kind == 'feed':
+                break
+    return found
 
 
 def _follow(out, url, robots, delay):

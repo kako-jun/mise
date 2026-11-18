@@ -46,7 +46,7 @@ def out_pass(**kw):
         "spam": {"verdict": "pass", "kind": "none", "reason": "Plain organization page."},
         "categories": ["welfare"], "tags": ["organization", "records"],
         "adult": {"value": "no", "evidence_quote": None},
-        "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.",
+        "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.", "freshness": "active", "exempt": "none",
         "confidence": "medium",
         "location": {"country_code": "JP", "region_code": "JP-13", "evidence_quote": "東京都に事務所のある"},
         "notes": "",
@@ -137,6 +137,7 @@ class ImportTests(Base):
         self.assertEqual(json.loads(r["long_description_evidence"]), ["活動の記録を公開しています"])
         self.assertEqual((r["country_code"], r["region_code"], r["confidence"], r["site_kind"], r["site_scope"]),
                          ("JP", "JP-13", "medium", "organization", "standalone"))
+        self.assertEqual((r["freshness"], r["exempt"], r["review_reason"]), ("active", "none", None))
         self.assertEqual(r["model"], "haiku+sonnet")
         self.assertEqual((r["origin"], r["review_state"]), ("pipeline", "pending"))
         self.assertTrue(r["input_hash"] and r["judged_at"] and r["imported_at"])

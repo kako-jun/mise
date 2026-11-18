@@ -280,7 +280,7 @@ def plan_from_results(results_path, input_path, urls=None):
             continue
         if isinstance(out, dict) and isinstance(out.get("categories"), list):
             out = dict(out, categories=judge.canonical_categories(out["categories"], VALID_CATEGORIES, LEGACY_CATEGORIES, stats=stats))
-        errs = judge.validate_output(out, VALID_CATEGORIES, judge.render_candidate(cand, body_limit))
+        errs = judge.validate_output(out, VALID_CATEGORIES, judge.render_candidate(cand, body_limit), require_freshness=False)  # only categories are used here: a pre-#129 result is fine
         if errs:
             stats["rejected"] += 1
             problems.append(f"{cid}: invalid output: " + "; ".join(errs))

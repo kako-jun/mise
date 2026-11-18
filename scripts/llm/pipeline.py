@@ -32,6 +32,8 @@ SK = {"i": "individual", "b": "business", "o": "organization", "c": "company", "
 AD = {"y": "yes", "n": "no", "u": "unknown"}
 SC = {"s": "standalone", "t": "service_top", "u": "user_page"}
 CF = {"l": "low", "m": "medium", "h": "high"}
+FR = {"a": "active", "s": "stale", "u": "unknown"}
+EX = {"r": "rare_genre", "n": "notable", "-": "none"}
 # assumed output tokens per item, used for max_tokens and the worst-case budget check
 PER_ITEM_TOKENS = {"triage": 160, "describe": 900, "full": 1100}
 THINKING_BUFFER = {"triage": 400, "describe": 1500, "full": 2000}  # per request, for adaptive thinking
@@ -40,10 +42,10 @@ THINKING_BUFFER = {"triage": 400, "describe": 1500, "full": 2000}  # per request
 # ------------------------------------------------------------------ prompts
 def split_rules(template):
     """Rule blocks of judge.SYSTEM_TEMPLATE by label ('3', '3b', '4', '4a', ...)."""
-    parts = re.split(r"(?m)^(?=\d+[a-c]?\. )", template)
+    parts = re.split(r"(?m)^(?=\d+[a-d]?\. )", template)
     out = {}
     for p in parts:
-        m = re.match(r"(\d+[a-c]?)\. ", p)
+        m = re.match(r"(\d+[a-d]?)\. ", p)
         if m:
             out[m.group(1)] = p.split("\n\nALLOWED")[0].rstrip()
     return out
@@ -72,11 +74,13 @@ def triage_system(cats):
             "ad = adult-oriented: y, n, u (unknown)\n"
             "aq = verbatim quote proving ad=y, otherwise null\n"
             "sc = scope: s standalone, t service_top, u user_page\n"
+            "fr = freshness (rule 4d): a active, s stale, u unknown\n"
+            "ex = exempt (rule 4d): r rare_genre, n notable, - none\n"
             "cf = confidence: l, m, h\n"
             "cat = 1 to 3 category ids (most fitting first; empty array if none fits)\n"
-            "r = reason: empty string when v is p and cf is m or h; otherwise ONE short English sentence (max 20 words)\n\n"
+            "r = reason: empty string when v is p, cf is m or h and fr is a; otherwise ONE short English sentence (max 20 words)\n\n"
             "Definitions follow. Keep every definition, but answer with the codes above.\n\n"
-            + R["4"] + "\n" + R["4a"] + "\n" + R["4b"] + "\n" + R["4c"] + "\n" + R["5"] + "\n" + R["8"]
+            + R["4"] + "\n" + R["4a"] + "\n" + R["4b"] + "\n" + R["4d"] + "\n" + R["4c"] + "\n" + R["5"] + "\n" + R["8"]
             + "\n\nALLOWED CATEGORY IDS (id = English name / Japanese name; each 2-space indent = one level deeper, a child of the nearest less-indented line above)\n"
             + category_block(cats) + "\n")
 
@@ -108,7 +112,8 @@ def item_schema(stage, cats):
         props = {"i": {"type": "integer"}, "v": {"type": "string", "enum": list(V)},
                  "kd": {"type": "string", "enum": list(KD)}, "sk": {"type": "string", "enum": list(SK)},
                  "ad": {"type": "string", "enum": list(AD)}, "aq": NULLABLE,
-                 "sc": {"type": "string", "enum": list(SC)}, "cf": {"type": "string", "enum": list(CF)},
+                 "sc": {"type": "string", "enum": list(SC)}, "fr": {"type": "string", "enum": list(FR)},
+                 "ex": {"type": "string", "enum": list(EX)}, "cf": {"type": "string", "enum": list(CF)},
                  "cat": {"type": "array", "items": {"type": "string", "enum": ids}}, "r": NS}
     elif stage == "describe":
         props = {"i": {"type": "integer"}, "dj": NULLABLE, "de": NULLABLE, "lj": NULLABLE, "le": NULLABLE,
@@ -134,6 +139,7 @@ def triage_to_full(t):
         "categories": t["cat"], "tags": [],
         "adult": {"value": AD[t["ad"]], "evidence_quote": t["aq"] if t["ad"] == "y" else None},
         "site_scope": SC[t["sc"]], "site_kind": SK[t["sk"]], "site_kind_reason": "(stage 1 code)",
+        "freshness": FR[t["fr"]], "exempt": EX[t["ex"]],
         "confidence": CF[t["cf"]],
         "location": {"country_code": None, "region_code": None, "evidence_quote": None}, "notes": ""}
 

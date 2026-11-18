@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import discover
 import features
 import fetcher
+import freshness
 import frontier
 from hostnames import DEFERRED_REASONS, prefilter, registrable, subdomain_of_registrable
 
@@ -64,6 +65,8 @@ def process(row):
         ctype = res['headers'].get('content-type', '').lower()
         if 'html' in ctype or not ctype:
             out['feat'] = features.extract(row['host'], fetcher.decode_body(res['body'], res['headers']), res['headers'])
+            footer = (out['feat']['freshness_signal_at'], out['feat']['freshness_source'])
+            out['feat']['freshness_signal_at'], out['feat']['freshness_source'] = freshness.latest(list(res.get('freshness') or []) + [footer])
         else:
             out['error'] = 'not_html'
     return out

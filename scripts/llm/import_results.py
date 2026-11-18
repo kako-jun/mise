@@ -103,7 +103,7 @@ def row_values(origin, model, out, judged_at, imported_at, h):
         "long_description_evidence": None if hide else json.dumps(out["long_description_evidence"], ensure_ascii=False),
         "categories": json.dumps(out["categories"]), "tags": json.dumps(out["tags"], ensure_ascii=False),
         "adult": adult, "site_kind": out["site_kind"], "site_kind_reason": out["site_kind_reason"],
-        "site_scope": out["site_scope"], "confidence": out["confidence"],
+        "site_scope": out["site_scope"], "freshness": out["freshness"], "exempt": out["exempt"], "confidence": out["confidence"],
         "country_code": loc["country_code"], "region_code": loc["region_code"], "notes": out["notes"],
         "review_state": "rejected" if verdict == "reject" else "pending",
         "reviewed_at": imported_at if verdict == "reject" else None,
