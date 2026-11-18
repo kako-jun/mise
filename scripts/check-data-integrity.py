@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sqlite3
+import shutil
 import subprocess
 import sys
 
@@ -22,7 +23,7 @@ import integrity  # noqa: E402
 
 def wrangler_execute(db, target, persist_to):
     def run(sql):
-        cmd = ["npx", "wrangler", "d1", "execute", db, target, "--json", "--command", sql]
+        cmd = [shutil.which("npx") or "npx", "wrangler", "d1", "execute", db, target, "--json", "--command", sql]
         if persist_to and target == "--local":
             cmd += ["--persist-to", persist_to]
         p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)

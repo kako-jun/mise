@@ -39,7 +39,24 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 
 主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--fetch-limit 600`、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
-## cron の登録（kako-jun が行う）
+## 実行機 kako-rog（Windows）と pi-3b の cron
+
+実行機は **kako-rog**（Windows 11）。pi-3b の cron が ssh で起動する（tail-match と同じ型。[tail-match の cron 構成](https://github.com/kako-jun/tail-match/blob/main/scripts/cron/README.md)）。**ライブ版のラッパーは rog のリポ外** `C:\Users\kako-jun\mise-nightly.cmd`（`git reset --hard` が自分自身を書き換える事故を避ける）。`scripts/cron/mise-nightly.cmd` はその参照コピーで、**ASCII のみ**（SSH のコードページで .cmd の非 ASCII コメントが壊れる。tail-match #405）。変更したら両方を揃える。
+
+- ラッパーは `git fetch` + `git reset --hard origin/main`（毎回最新）→ `PYTHONUTF8=1` → `C:\Users\kako-jun\.config\mise\anthropic.env` を環境変数へ → `uv run python scripts\nightly.py --fetch-limit 300 --judge-limit 300 %*`。ログは `C:\Users\kako-jun\mise-nightly.log` に追記。`--apply-prod` は付けない（人が確認してから）。
+- リポは `C:\Users\kako-jun\repos\mise`。状態（`var/`）と LLM 台帳（`C:\Users\kako-jun\.config\mise\llm-ledger.jsonl`）は **rog が正本**。他の機で実行しない（予算と出荷済みが二重になる）。
+- 本番反映（`--apply-prod`）に進む前に、rog の `npx wrangler whoami` が通ること（Cloudflare 認証）を確認する。
+- ロックは `scripts/llm/filelock.py`（POSIX は `fcntl.flock`、Windows は `msvcrt.locking`）。`npx` は `shutil.which` で解決する。
+
+pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊文字、Windows パスは絶対パス）:
+
+```cron
+37 22 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd"' >> /tmp/mise-nightly.log 2>&1
+```
+
+手動の確認は `ssh kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd --dry-run"'`（`--dry-run` はラッパーの先頭の `git reset` は走るが、何も書かず API も呼ばない）。
+
+## cron の登録（kako-jun が行う）（Linux の例）
 
 手元 PC か Raspberry Pi の、リポジトリを置いたユーザーの crontab に登録する。**登録は kako-jun が行う。エージェントは登録しない。** 鍵は cron から読めるようにラッパーで読み込む。
 

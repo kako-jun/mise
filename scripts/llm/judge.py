@@ -12,7 +12,6 @@ import argparse
 import contextlib
 import csv
 import datetime
-import fcntl
 import hashlib
 import json
 import os
@@ -22,6 +21,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+
+import filelock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 API = "https://api.anthropic.com/v1/messages"
@@ -585,11 +586,11 @@ class Ledger:
     def _lock(self):
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path + ".lock", "a") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
+            filelock.lock(lf)
             try:
                 yield
             finally:
-                fcntl.flock(lf, fcntl.LOCK_UN)
+                filelock.unlock(lf)
 
     def _lines(self):
         try:

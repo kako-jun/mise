@@ -10,13 +10,13 @@ Same cache, ledger, budget guard and API plumbing as judge.py (imported). Never 
 """
 import argparse
 import datetime
-import fcntl
 import json
 import os
 import re
 import sys
 import time
 
+import filelock
 import judge
 from judge import (AmbiguousRequest, BudgetExceeded, Cache, Ledger, PRICING, MODELS, ROOT, API, ADULT_VALUES, CONFIDENCE, SITE_KINDS,
                    SITE_SCOPES, SPAM_KINDS, SPAM_VERDICTS, custom_id_for, estimate_tokens, http, input_hash,
@@ -380,7 +380,7 @@ class Pipeline:
             return
         d = self._batch_dir()
         with open(os.path.join(d, f"pipeline-{stage}.lock"), "a") as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX)
+            filelock.lock(lf)
             pending = [(f, st) for f, st in judge.unsettled_states(d)
                        if os.path.basename(f).startswith(f"pipeline-{stage}-") and st.get("model") == model]
             if pending:

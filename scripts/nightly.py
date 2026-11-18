@@ -12,10 +12,10 @@ Exit code: 0 正常（LLM 未解決が残る partial を含む） / 1 段の失�
 """
 import argparse
 import datetime
-import fcntl
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +26,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _d in ("scripts/llm", "scripts/pipeline"):
     sys.path.insert(0, os.path.join(ROOT, _d))
 import judge  # noqa: E402
+import filelock  # noqa: E402
 import export_candidates  # noqa: E402
 
 SCHEMA = 1
@@ -416,7 +417,7 @@ class Night:
         if rc != 0:
             self.status["guards"].append("投入前の本番整合チェックで error。投入しなかった")
             raise StageFailed("prod: 投入前の本番整合チェックが error のため投入しない(nightly.md「ロールバック」参照)\n" + out.strip()[-400:])
-        npx = ["npx", "wrangler", "d1"]
+        npx = [shutil.which("npx") or "npx", "wrangler", "d1"]   # Windows は npx.exe/npx.cmd を PATH から解決する
         bm_path = self.p("bookmark.txt")
         if os.path.exists(bm_path):   # 投入に失敗した夜の再実行: 最初に取った bookmark を上書きしない
             with open(bm_path, encoding="utf-8") as f:
@@ -576,7 +577,7 @@ def main(argv=None):
     os.makedirs(os.path.join(a.var_dir, "nightly"), exist_ok=True)
     with open(os.path.join(a.var_dir, "nightly", ".lock"), "w") as lf:
         try:
-            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            filelock.lock(lf, blocking=False)
         except OSError:
             print("別の夜間ジョブが実行中(var/nightly/.lock)", file=sys.stderr)
             return 75
