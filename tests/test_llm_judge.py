@@ -50,6 +50,13 @@ class FreshnessFieldTests(unittest.TestCase):
         o = good(); o["exempt"] = "famous"
         self.assertIn("exempt invalid", judge.validate_output(o, IDS, SOURCE))
 
+    def test_old_result_accepted_only_when_not_required(self):
+        o = good(); del o["freshness"]; del o["exempt"]
+        self.assertTrue(any("keys mismatch" in e for e in judge.validate_output(o, IDS, SOURCE)))
+        self.assertEqual(judge.validate_output(o, IDS, SOURCE, require_freshness=False), [])
+        o["freshness"] = "old"   # 付いているなら値は検証する
+        self.assertIn("freshness invalid", judge.validate_output(o, IDS, SOURCE, require_freshness=False))
+
     def test_missing_keys_rejected_and_schema_has_them(self):
         o = good(); del o["exempt"]
         self.assertTrue(any("keys mismatch" in e for e in judge.validate_output(o, IDS, SOURCE)))
@@ -177,6 +184,11 @@ class CostAndCacheTests(unittest.TestCase):
                      ("m", "sys", {"a": 2}, "user", 100, None), ("m", "sys", {"a": 1}, "user2", 100, None),
                      ("m", "sys", {"a": 1}, "user", 101, None), ("m", "sys", {"a": 1}, "user", 100, "low")):
             self.assertNotEqual(h, judge.input_hash(*args))
+
+    def test_hash_ignores_the_date_line_only(self):
+        a = judge.input_hash("m", "x\nToday is 2026-11-18. y", {}, "u", 1, None)
+        self.assertEqual(a, judge.input_hash("m", "x\nToday is 2026-11-19. y", {}, "u", 1, None))
+        self.assertNotEqual(a, judge.input_hash("m", "x2\nToday is 2026-11-18. y", {}, "u", 1, None))
 
     def test_cache_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:

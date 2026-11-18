@@ -190,10 +190,10 @@ GROUND RULES
 4c. site_scope: "standalone" (a site on its own domain), "service_top" (the front page or main site of a social network, blog or hosting service itself, for example a social network's own home page; these are fine to list and judged like any other site), or "user_page" (one individual user's page or blog on a shared service, on a sub-domain or a path of that service). A user_page gets verdict "deferred" with kind "none"; write the reason as a short note on why. Any other scope never gets "deferred".
 4a. adult is an ATTRIBUTE: an object with value and evidence_quote. value "yes" only when the candidate text itself shows the site is adult-oriented (age gate, explicit self-description, adult flag in features), with an exact verbatim quote in evidence_quote; "no" when the text shows nothing adult (evidence_quote null); "unknown" when you cannot tell (evidence_quote null). Never reproduce adult content in any output field: descriptions stay neutral, factual and euphemistic (for example "a site of illustrations for adult readers"), with no explicit words.
 4b. site_kind is an ATTRIBUTE of who seems to run the site; it is never a reason to reject. Choose from the text only: "individual" (a person's own site, blog, hobby or personal works), "business" (a shop, studio, clinic, freelancer or other business site), "organization" (association, society, union, NPO, social-welfare body, school, public body, club, community group), "company" (a company's corporate or product site), "unknown" (the text does not show it). Do not judge or mention size or fame. site_kind_reason: one short English sentence pointing at the text.
+4d. freshness and exempt are ATTRIBUTES for a human reviewer (Issue #129); they are never a reason to reject by themselves. features may contain freshness_signal_at (the newest date a deterministic fetcher found: HTTP Last-Modified, a copyright year or "last updated" text in the page, a sitemap lastmod or a feed entry date) and freshness_source (header / footer_updated / footer_copyright / sitemap / feed; footer_copyright is a copyright year only and a weak sign); both are absent when nothing was found. Today is {today}. freshness: "active" when a signal exists and is less than 3 years before today, or when the text itself shows recent activity; "stale" when the newest signal or the text's own dates are 3 years or more before today; "unknown" when there is no signal and the text shows no date. For an individual site (site_kind "individual") whose newest signal is 3 years or more old, or missing, use "stale" or "unknown" accordingly; do not guess that it is active. Put one short English sentence naming the date, or the lack of one, in notes. exempt: "rare_genre" only when few alternatives on the same subject are likely to exist (a niche field, craft, dialect, a rare hobby), judged from the subject in the text; "notable" only when the site itself carries an independent explanatory reference, like an encyclopedia, a database or a long-standing archive that is valuable regardless of new posts; otherwise "none". NEVER base exempt on popularity, page views, followers or fame, and never on how old the site is alone.
 5. categories: choose 1 to 3 ids from the allowed list below, most fitting first. Choose by SUBJECT: what the site is about, or what it sells, teaches, reports or provides. Never choose by who runs it: a shop, a company, an association, a school or an individual has no category of its own, so file it under the subject of its products, services or activity (a bakery under food, a clinic under hospitals, a builder under construction). Use only ids from the list, exactly as written. If nothing fits or the text is too thin, return an empty array. Always prefer the deepest (most specific) id that fits; use a parent id only when none of its children fits. Use at most one id from the same branch unless the site clearly covers two different subjects. `government` is only for public bodies that no subject id describes; municipalities and national agencies are placed by a separate fixed rule and are not in the list.
 6. tags: 0 to 5 short lowercase English keywords taken from the topics the text actually mentions. No category names unless the text mentions them.
 7. location: set country_code (ISO 3166-1 alpha-2, uppercase) and region_code (ISO 3166-2 first level, e.g. JP-13) ONLY when the candidate text explicitly states where the site's operator is located (for example an address, "based in Tokyo", an institution's stated location). Put an exact, verbatim quote of that statement from the candidate text in evidence_quote. The domain suffix, the page language, the currency, the hosting or an assumed nationality are NOT evidence. If the text does not state it, set all three location fields to null. region_code requires country_code with the same two-letter prefix; if only the country is stated, region_code is null.
-4d. freshness and exempt are ATTRIBUTES for a human reviewer (Issue #129); they are never a reason to reject by themselves. features may contain freshness_signal_at (the newest date a deterministic fetcher found: HTTP Last-Modified, a copyright year or "last updated" text in the page, a sitemap lastmod or a feed entry date) and freshness_source (header / footer / sitemap / feed); both are absent when nothing was found. Today is {today}. freshness: "active" when a signal exists and is less than 3 years before today, or when the text itself shows recent activity; "stale" when the newest signal or the text's own dates are 3 years or more before today; "unknown" when there is no signal and the text shows no date. For an individual site (site_kind "individual") whose newest signal is 3 years or more old, or missing, use "stale" or "unknown" accordingly; do not guess that it is active. Put one short English sentence naming the date, or the lack of one, in notes. exempt: "rare_genre" only when few alternatives on the same subject are likely to exist (a niche field, craft, dialect, a rare hobby), judged from the subject in the text; "notable" only when the site itself carries an independent explanatory reference, like an encyclopedia, a database or a long-standing archive that is valuable regardless of new posts; otherwise "none". NEVER base exempt on popularity, page views, followers or fame, and never on how old the site is alone.
 8. confidence: "high" only when the text clearly supports the whole judgement; "low" when you had to be cautious about several fields.
 9. notes: one short English sentence on anything missing or uncertain that a reviewer should know; empty string if nothing.
 When unsure about any field, use null (or an empty array) instead of guessing.
@@ -352,8 +352,9 @@ def quote_source(text):
     return _norm("\n".join(out))
 
 
-def validate_output(obj, valid_ids, source_text):
-    """Returns a list of problems (empty = valid)."""
+def validate_output(obj, valid_ids, source_text, require_freshness=True):
+    """Returns a list of problems (empty = valid). require_freshness=False accepts a result made before #129 (no freshness /
+    exempt keys); used only by the category-only path (export_approved_sql.py --update-categories-from)."""
     errs = []
     if not isinstance(obj, dict):
         return ["output is not an object"]
@@ -361,6 +362,8 @@ def validate_output(obj, valid_ids, source_text):
     want = {"description_ja", "description_en", "long_description_ja", "long_description_en",
             "long_description_evidence", "spam", "categories", "tags",
             "adult", "site_scope", "site_kind", "site_kind_reason", "freshness", "exempt", "confidence", "location", "notes"}
+    if not require_freshness:
+        want = want - ({"freshness", "exempt"} - set(obj))
     if set(obj) != want:
         errs.append(f"keys mismatch: {sorted(set(obj) ^ want)}")
         return errs
@@ -439,9 +442,9 @@ def validate_output(obj, valid_ids, source_text):
         errs.append("site_kind invalid")
     if not isinstance(obj["site_kind_reason"], str) or not obj["site_kind_reason"].strip():
         errs.append("site_kind_reason empty")
-    if obj["freshness"] not in FRESHNESS:
+    if "freshness" in obj and obj["freshness"] not in FRESHNESS:
         errs.append("freshness invalid")
-    if obj["exempt"] not in EXEMPT:
+    if "exempt" in obj and obj["exempt"] not in EXEMPT:
         errs.append("exempt invalid")
     if obj["confidence"] not in CONFIDENCE:
         errs.append("confidence invalid")
@@ -511,7 +514,13 @@ def estimate_tokens(text):
     return ascii_n // 3 + (len(text) - ascii_n) + 1
 
 
+TODAY_RE = re.compile(r"Today is \d{4}-\d{2}-\d{2}\.")
+
+
 def input_hash(model, system, schema, user_text, max_tokens, effort):
+    """Cache / pipeline key. The date line of the system prompt is left out so that resuming on another day does not miss
+    every cached result (the prompt text itself still carries the date)."""
+    system = TODAY_RE.sub("Today is (date not part of the key).", system)
     blob = json.dumps({"model": model, "system": system, "schema": schema, "user": user_text,
                        "max_tokens": max_tokens, "effort": effort}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
