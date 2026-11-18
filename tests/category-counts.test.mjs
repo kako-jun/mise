@@ -189,38 +189,56 @@ test('sitemap: 旧実装（範囲ごとに再帰 CTE）と同じ URL 列', async
 // docs/operations/deploy.md の手順 3（本番の一致確認クエリ）と戻し方の SQL を、文書から取り出してそのまま実行する。
 const deployMd = readFileSync(new URL('../docs/operations/deploy.md', import.meta.url), 'utf8');
 const cmdOf = re => { const m = deployMd.match(re); assert.ok(m, 'deploy.md に見つからない: ' + re); return m[1]; };
-const checkSql = () => cmdOf(/d1 execute mise --remote --command "(WITH RECURSIVE tree[^"]+)"/);
+// 一致確認は複数本（各 sh ブロック。D1 本番の複合 SELECT 項数上限のため分割）。1 本目から順に [1]..[5]。
+const checkSqls = () => [...deployMd.matchAll(/d1 execute mise --remote --command "((?:WITH RECURSIVE tree|SELECT sc\.)[^"]+)"/g)].map(m => m[1]);
+const compoundTerms = q => (q.match(/\b(UNION ALL|UNION|EXCEPT|INTERSECT)\b/g) || []).length + 1;
 
-test('deploy.md の一致確認クエリ: 正しい DB では 0 行、わざとずらすと all・国・閉包表・余りの行を検出', async () => {
+test('deploy.md の一致確認クエリ(5 本): 正しい DB では全部 0 行、わざとずらすとそれぞれの本が検出', async () => {
   const db = fresh(f => f < '0022');
   seedBeforeCounts(db);
   apply(db, '0022_category_counts.sql');
-  const q = checkSql(), run = () => db.prepare(q).all().map(r => ({ ...r }));
-  assert.deepEqual(run(), [], '一致している DB では 0 行');
-  const a = leaves(db)[0].id;
-  // 1. 国別（JP）の件数を +1
+  const qs = checkSqls();
+  assert.equal(qs.length, 5, '一致確認のクエリは 5 本');
+  // D1 本番の複合 SELECT 項数上限に当たらないよう、各本の UNION ALL は 1 つ以下（再帰 CTE の UNION を含めても 4 項以内）
+  for (const q of qs) assert.ok((q.match(/UNION ALL/g) || []).length <= 2 && compoundTerms(q) <= 4, '複合 SELECT が多すぎる: ' + q.slice(0, 60));
+  const run = i => db.prepare(qs[i]).all().map(r => ({ ...r }));
+  const runAll = () => qs.map((_, i) => run(i));
+  const only = (i, n = 1) => { const all = runAll(); all.forEach((r, k) => k === i ? assert.equal(r.length, n, `[${i + 1}] が ${n} 行`) : assert.deepEqual(r, [], `[${k + 1}] は 0 行のはず(注入は [${i + 1}])`)); return all[i]; };
+  assert.deepEqual(runAll(), [[], [], [], [], []], '一致している DB では全部 0 行');
+  const a = leaves(db)[0].id, pa = leaves(db)[0].parent_id;
+  // [2] 国別（JP）の件数を +1
   db.prepare("UPDATE category_counts SET n = n + 1 WHERE category_id = ? AND scope = 'JP'").run(a);
-  let r = run(); assert.equal(r.length, 1); assert.deepEqual([r[0].kind, r[0].id, r[0].scope, r[0].cached - r[0].expected], ['category_counts', a, 'JP', 1]);
+  let r = only(1); assert.deepEqual([r[0].id, r[0].scope, r[0].cached - r[0].expected], [a, 'JP', 1]);
   db.prepare("UPDATE category_counts SET n = n - 1 WHERE category_id = ? AND scope = 'JP'").run(a);
-  // 2. all の件数を +1（親が二重に数えられた状態）
-  db.prepare("UPDATE category_counts SET n = n + 1 WHERE category_id = ? AND scope = 'all'").run(leaves(db)[0].parent_id);
-  assert.equal(run().length, 1); db.prepare("UPDATE category_counts SET n = n - 1 WHERE category_id = ? AND scope = 'all'").run(leaves(db)[0].parent_id);
-  assert.deepEqual(run(), []);
-  // 3. サイトの無い国に残った行（category_counts / scope_counts）
-  db.exec("INSERT INTO category_counts VALUES ('" + a + "', 'ZZ', 2); INSERT INTO scope_counts VALUES ('ZZ', 3)");
-  assert.deepEqual(run().map(x => x.kind).sort(), ['category_counts(extra)', 'scope_counts(extra)']);
-  db.exec("DELETE FROM category_counts WHERE scope = 'ZZ'; DELETE FROM scope_counts WHERE scope = 'ZZ'");
-  // 4. 範囲件数のずれ（JP を +1）
+  // [1] all の件数を +1（親が二重に数えられた状態）
+  db.prepare("UPDATE category_counts SET n = n + 1 WHERE category_id = ? AND scope = 'all'").run(pa);
+  r = only(0); assert.deepEqual([r[0].id, r[0].cached - r[0].expected], [pa, 1]);
+  db.prepare("UPDATE category_counts SET n = n - 1 WHERE category_id = ? AND scope = 'all'").run(pa);
+  assert.deepEqual(runAll(), [[], [], [], [], []]);
+  // [2] サイトの無い国（ZZ）に残った category_counts 行
+  db.exec("INSERT INTO category_counts VALUES ('" + a + "', 'ZZ', 2)");
+  r = only(1); assert.deepEqual([r[0].id, r[0].scope, r[0].expected, r[0].cached], [a, 'ZZ', 0, 2]);
+  db.exec("DELETE FROM category_counts WHERE scope = 'ZZ'");
+  // [3] サイトの無い国（ZZ）に残った scope_counts 行
+  db.exec("INSERT INTO scope_counts VALUES ('ZZ', 3)");
+  r = only(2); assert.deepEqual([r[0].scope, r[0].expected, r[0].cached], ['ZZ', 0, 3]);
+  db.exec("DELETE FROM scope_counts WHERE scope = 'ZZ'");
+  // [3] 範囲件数のずれ（JP を +1）
   db.exec("UPDATE scope_counts SET n = n + 1 WHERE scope = 'JP'");
-  r = run(); assert.deepEqual(r.map(x => [x.kind, x.scope]), [['scope_counts', 'JP']]);
+  r = only(2); assert.deepEqual([r[0].scope, r[0].cached - r[0].expected], ['JP', 1]);
   db.exec("UPDATE scope_counts SET n = n - 1 WHERE scope = 'JP'");
-  // 5. 閉包表の欠け・余り
+  // [4] scope_counts(all) を +1
+  db.exec("UPDATE scope_counts SET n = n + 1 WHERE scope = 'all'");
+  r = only(3); assert.equal(r[0].cached - r[0].expected, 1);
+  db.exec("UPDATE scope_counts SET n = n - 1 WHERE scope = 'all'");
+  assert.deepEqual(runAll(), [[], [], [], [], []]);
+  // [5] 閉包表の欠け・余り
   db.exec("DELETE FROM category_closure WHERE ancestor_id <> descendant_id AND descendant_id = '" + a + "'");
-  assert.ok(run().some(x => x.kind === 'closure(missing)'));
+  assert.ok(run(4).some(x => x.kind === 'missing') && run(4).every(x => x.kind === 'missing'));
   apply_rebuild(db);
-  assert.deepEqual(run(), []);
+  assert.deepEqual(runAll(), [[], [], [], [], []]);
   db.exec("INSERT INTO category_closure VALUES ('" + a + "', (SELECT id FROM categories WHERE id <> '" + a + "' AND parent_id IS NULL LIMIT 1))");
-  assert.ok(run().some(x => x.kind === 'closure(extra)'));
+  r = run(4); assert.ok(r.length >= 1 && r.every(x => x.kind === 'extra'));
 });
 const apply_rebuild = db => db.exec(readFileSync(new URL('../scripts/rebuild-category-counts.sql', import.meta.url), 'utf8'));
 

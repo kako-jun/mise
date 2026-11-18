@@ -93,11 +93,28 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 0. **適用前の確認**: 適用は **PR ブランチ（`126-category-counts`）をチェックアウトした状態で行う**（`main` にはまだ 0022 のファイルが無い）。`npx wrangler d1 migrations list mise --remote` で**未適用が 0022 だけ**であることを確かめる（他に未適用があれば、それも一緒に流れてしまうので止めて原因を調べる）。
 1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
 2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
-3. **一致確認**（`--remote` の SELECT だけ。**結果 0 行**が正）。1 本のクエリで、`category_counts`（`all` と、サイトのある国すべて）・`scope_counts`・閉包表を、再帰 CTE / `sites` の数え直しと両方向で比べる（`kind` が不一致の種類、`expected` が数え直した値、`cached` が表の値。`(extra)` は「サイトの無い範囲に残った行」、`closure` は欠け・余り）:
-   ```sh
-   npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id), want AS (SELECT t.root_id AS cid, 'all' AS scope, COUNT(DISTINCT s.id) AS n FROM tree t JOIN site_categories x ON x.category_id = t.id JOIN sites s ON s.id = x.site_id GROUP BY t.root_id UNION ALL SELECT t.root_id, s.country_code, COUNT(DISTINCT s.id) FROM tree t JOIN site_categories x ON x.category_id = t.id JOIN sites s ON s.id = x.site_id WHERE s.country_code IS NOT NULL GROUP BY t.root_id, s.country_code), want_s AS (SELECT 'all' AS scope, COUNT(*) AS n FROM sites UNION ALL SELECT country_code, COUNT(*) FROM sites WHERE country_code IS NOT NULL GROUP BY country_code) SELECT 'category_counts' AS kind, w.cid AS id, w.scope AS scope, w.n AS expected, COALESCE(k.n, 0) AS cached FROM want w LEFT JOIN category_counts k ON k.category_id = w.cid AND k.scope = w.scope WHERE w.n <> COALESCE(k.n, 0) UNION ALL SELECT 'category_counts(extra)', k.category_id, k.scope, 0, k.n FROM category_counts k LEFT JOIN want w ON w.cid = k.category_id AND w.scope = k.scope WHERE w.cid IS NULL AND k.n <> 0 UNION ALL SELECT 'scope_counts', w.scope, w.scope, w.n, COALESCE(k.n, 0) FROM want_s w LEFT JOIN scope_counts k ON k.scope = w.scope WHERE w.n <> COALESCE(k.n, 0) UNION ALL SELECT 'scope_counts(extra)', k.scope, k.scope, 0, k.n FROM scope_counts k LEFT JOIN want_s w ON w.scope = k.scope WHERE w.scope IS NULL AND k.n <> 0 UNION ALL SELECT 'closure(missing)', root_id, id, 1, 0 FROM (SELECT root_id, id FROM tree EXCEPT SELECT ancestor_id, descendant_id FROM category_closure) UNION ALL SELECT 'closure(extra)', ancestor_id, descendant_id, 0, 1 FROM (SELECT ancestor_id, descendant_id FROM category_closure EXCEPT SELECT root_id, id FROM tree)"
-   ```
-   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上のクエリそのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
+3. **一致確認**（`--remote` の SELECT だけ。**下の 5 本それぞれ結果 0 行**が正。`expected` が数え直した値、`cached` が表の値）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）。複合 SELECT は 3 項以下に保つ:
+   - [1] `category_counts`（`all`）
+     ```sh
+     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id), want AS (SELECT t.root_id cid, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id JOIN sites s ON s.id=x.site_id GROUP BY t.root_id) SELECT k.id, COALESCE(w.n,0) expected, COALESCE(cc.n,0) cached FROM categories k LEFT JOIN want w ON w.cid=k.id LEFT JOIN category_counts cc ON cc.category_id=k.id AND cc.scope='all' WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0)"
+     ```
+   - [2] `category_counts`（各国。サイトの無い国に残った行も検出）
+     ```sh
+     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id), want AS (SELECT t.root_id cid, s.country_code scope, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id JOIN sites s ON s.id=x.site_id WHERE s.country_code IS NOT NULL GROUP BY t.root_id, s.country_code) SELECT COALESCE(w.cid,cc.category_id) id, COALESCE(w.scope,cc.scope) scope, COALESCE(w.n,0) expected, COALESCE(cc.n,0) cached FROM want w LEFT JOIN category_counts cc ON cc.category_id=w.cid AND cc.scope=w.scope WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0) UNION ALL SELECT cc.category_id, cc.scope, 0, cc.n FROM category_counts cc WHERE cc.scope<>'all' AND NOT EXISTS (SELECT 1 FROM sites s JOIN site_categories x ON x.site_id=s.id WHERE s.country_code=cc.scope)"
+     ```
+   - [3] `scope_counts`（各国）
+     ```sh
+     npx wrangler d1 execute mise --remote --command "SELECT sc.scope, sc.n cached, (SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope) expected FROM scope_counts sc WHERE sc.scope<>'all' AND sc.n<>(SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope)"
+     ```
+   - [4] `scope_counts`（`all`）
+     ```sh
+     npx wrangler d1 execute mise --remote --command "SELECT sc.n cached,(SELECT COUNT(*) FROM sites) expected FROM scope_counts sc WHERE sc.scope='all' AND sc.n<>(SELECT COUNT(*) FROM sites)"
+     ```
+   - [5] 閉包表の欠け（`missing`）・余り（`extra`）を再帰 CTE と両方向で比較
+     ```sh
+     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id) SELECT 'missing' kind, t.root_id, t.id FROM tree t WHERE NOT EXISTS (SELECT 1 FROM category_closure cl WHERE cl.ancestor_id=t.root_id AND cl.descendant_id=t.id) UNION ALL SELECT 'extra', cl.ancestor_id, cl.descendant_id FROM category_closure cl WHERE NOT EXISTS (SELECT 1 FROM tree t WHERE t.root_id=cl.ancestor_id AND t.id=cl.descendant_id)"
+     ```
+   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 5 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
 4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
 5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。マージ後、**手元の dev DB でも `npm run db:migrate` を流す**（流さないと手元の `/api/categories` が表なしでエラーになる）。
 6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。
