@@ -287,10 +287,15 @@ function renderSite(target, site, showCategories=false) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
     const ids=(site.category_ids||[]).filter(id=>categories.some(c=>c.id===id));
     if(!ids.length) row.append(t('uncategorized'));
+    // 上部のパンくずと同じ構造: 各階層を個別のリンクにし、区切り ' › ' はリンクの外のテキスト（区切りに下線を付けない）
     ids.forEach((id,index)=>{
       if(index) row.append(' / ');
-      const path=categoryPath(id), text=path.map(part=>name(categories.find(c=>c.id===part))).join(' › ');
-      row.append(link(text,path,()=>{logActivity(`cd /${path.join('/')}`);showDirectory(path);}));
+      const path=categoryPath(id);
+      path.forEach((part,i)=>{
+        if(i) row.append(' › ');
+        const sub=path.slice(0,i+1);
+        row.append(link(name(categories.find(c=>c.id===part)),sub,()=>{logActivity(`cd /${sub.join('/')}`);showDirectory(sub);}));
+      });
     });
     content.append(row);
   }
