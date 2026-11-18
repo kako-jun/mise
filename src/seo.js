@@ -1,5 +1,5 @@
 import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
-import { querySites, parsePage, cleanTags, PAGE_SIZE } from './sites.js';
+import { querySites, parsePage, cleanTags, PAGE_SIZE, ALL_SCOPE } from './sites.js';
 // 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
 import '../public/countries.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
@@ -35,11 +35,10 @@ function pagerHtml(path, scope, page, pages) {
 
 // サイトが 1 件以上ある国（件数の多い順）と全体の件数。範囲として選べる国 = ここに出る国だけ。
 export async function loadScopes(db) {
-  const [total, countries] = await db.batch([
-    db.prepare(`SELECT COUNT(*) AS n FROM sites`),
-    db.prepare(`SELECT country_code AS code, COUNT(*) AS count FROM sites WHERE country_code IS NOT NULL GROUP BY country_code ORDER BY count DESC, country_code`),
-  ]);
-  return { total: total.results[0].n, countries: countries.results.filter(r => /^[A-Z]{2}$/.test(r.code)) };
+  // 集計表 scope_counts（migration 0022。トリガが sites に追従させる派生物）を読む。数百行以下。
+  const { results } = await db.prepare(`SELECT scope, n FROM scope_counts WHERE n > 0 ORDER BY n DESC, scope`).all();
+  const total = results.find(r => r.scope === ALL_SCOPE)?.n ?? 0;
+  return { total, countries: results.filter(r => /^[A-Z]{2}$/.test(r.scope)).map(r => ({ code: r.scope, count: r.n })) };
 }
 const countryName = code => {
   const e = globalThis.MISE_COUNTRIES?.[code]?.en;
@@ -65,8 +64,9 @@ export function resolvePath(categories, raw) {
 }
 
 // cc を渡すと、その国のサイトだけを数える（空のカテゴリも 0 件で返す）。null は全世界。
+// 件数は集計表 category_counts（migration 0022。そのカテゴリ自身と全子孫の所属サイト数、重複なし。旧: 再帰 CTE）から読む。
 export async function loadCategories(db, cc = null) {
-  const { results } = await db.prepare(`WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id) SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COUNT(DISTINCT s.id) AS site_count FROM categories c LEFT JOIN tree ON tree.root_id = c.id LEFT JOIN site_categories sc ON sc.category_id = tree.id LEFT JOIN sites s ON s.id = sc.site_id AND (?1 IS NULL OR s.country_code = ?1) GROUP BY c.id ORDER BY c.sort_order`).bind(cc).all();
+  const { results } = await db.prepare(`SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COALESCE(k.n, 0) AS site_count FROM categories c LEFT JOIN category_counts k ON k.category_id = c.id AND k.scope = ?1 ORDER BY c.sort_order, c.id`).bind(cc ?? ALL_SCOPE).all();
   return results;
 }
 
@@ -80,10 +80,16 @@ function pathOf(categories, id) {
 export async function sitemapXml(db) {
   const scopes = await loadScopes(db);
   const urls = [ORIGIN + '/about/']; // アバウトページ（静的な説明ページ。索引に載せてよい。#118）
-  for (const [scope, cc] of [['all', null], ...scopes.countries.map(r => [r.code.toLowerCase(), r.code])]) {
-    const categories = await loadCategories(db, cc);
+  // カテゴリ一覧と全範囲の件数を 1 回ずつ読む（範囲ごとに loadCategories を実行しない。#126）。
+  const [cats, counts] = await db.batch([
+    db.prepare(`SELECT id, parent_id FROM categories ORDER BY sort_order`),
+    db.prepare(`SELECT category_id, scope FROM category_counts WHERE n > 0`),
+  ]);
+  const categories = cats.results, nonEmpty = new Map();
+  for (const r of counts.results) { if (!nonEmpty.has(r.scope)) nonEmpty.set(r.scope, new Set()); nonEmpty.get(r.scope).add(r.category_id); }
+  for (const [scope, key] of [['all', ALL_SCOPE], ...scopes.countries.map(r => [r.code.toLowerCase(), r.code])]) {
     urls.push(ORIGIN + categoryHref([], scope));
-    for (const c of categories) if (c.site_count > 0) urls.push(ORIGIN + categoryHref(pathOf(categories, c.id), scope));
+    for (const c of categories) if (nonEmpty.get(key)?.has(c.id)) urls.push(ORIGIN + categoryHref(pathOf(categories, c.id), scope));
   }
   const body = urls.map(u => `<url><loc>${esc(u)}</loc></url>`).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>\n`;

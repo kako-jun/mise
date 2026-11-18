@@ -13,8 +13,8 @@
 
 | エンドポイント | 内容 |
 |---|---|
-| `GET /api/scopes` | 範囲として選べる国（サイトが 1 件以上ある国、件数の多い順）と全体の件数。`{total, countries:[{code, count}]}` |
-| `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
+| `GET /api/scopes` | 範囲として選べる国（サイトが 1 件以上ある国、件数の多い順）と全体の件数。`{total, countries:[{code, count}]}`。集計表 `scope_counts` から読む（[data-model.md](./data-model.md) の「カテゴリ件数の集計表」） |
+| `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える（集計表 `category_counts` から読む。再帰 CTE で数え直さない）。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
 | `GET /api/sites?scope=&category=&q=&tag=&limit=&cursor=&page=` | サイトの 1 ページ分（`{ items, next_cursor, total }`）。カーソル方式: `limit`（既定 40、1〜100。100 超は 100 に丸め、0・負数・数字以外は 400）と、前の応答の `next_cursor`（並びのキー値の配列を JSON → base64url にした不透明な文字列。不正は 400）。`next_cursor` が `null` なら末尾。`total` は先頭の応答（`cursor` なし）にだけ入る件数（COUNT）。`category` はそのカテゴリ直下（存在しない id は 404）、`q` は名前・紹介文・URL・タグ名（日英）の部分一致（検索はサーバー側。NFKC + 小文字化、100 文字まで）。`tag` はタグの日本語名か英語名のどちらでも完全一致で絞る（複数指定は AND、最大 5 個。6 個以上、または 1 個が 101 文字以上は 400）。`page`（1〜999999、範囲外は 400）は開始位置の指定で `cursor` が無いときだけ有効（`?page=N` の直リンク用）。範囲で絞る（`country_code` が NULL のサイトは `all` にだけ出る）。各サイトに所属カテゴリ `category_ids`（空配列は「未分類」）。実装は `src/sites.js`（SSR と共有）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
 | `GET /api/picks?scope=` | ピックアップ用に範囲内からランダム 3 件（`/api/sites` と同じ形） |
 | `GET /api/activity?scope=` | 掲載総数と直近 7 日の日別登録数（HUD 用。範囲内だけ） |

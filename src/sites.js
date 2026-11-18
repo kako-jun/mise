@@ -6,6 +6,8 @@
 //   3. 追加した列が画面に必要なら COLUMNS にも足す（並びだけに使う列は足さなくてよい）。
 //   4. docs/design/ui.md の「既定の並び」を更新する。カーソルは配列なので形式の変更は不要。
 export const PAGE_SIZE = 40, MAX_LIMIT = 100;
+// 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの。
+export const ALL_SCOPE = 'all';
 // dir は SQLite の NULL の並びに合わせる: ASC では NULL が先頭、DESC では NULL が末尾。
 export const SORT_KEYS = [
   // 台帳などからの一括投入（bulk_import=1。官公庁の名簿など）は後ろ。通常のサイト（0）が先（NULL なし、DEFAULT 0）
@@ -91,7 +93,11 @@ export async function querySites(db, { cc = null, category = null, q = null, tag
   const more = results.length > limit, rows = results.slice(0, limit);
   const next_cursor = more ? encodeCursor(SORT_KEYS.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
   const out = { items: rows.map(shape), next_cursor };
-  if (!hasCursor) out.total = (await db.prepare(`SELECT COUNT(*) AS total FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`).bind(...args).first())?.total ?? 0;
+  if (!hasCursor) {
+    // 絞り込みが範囲（国）だけなら集計表 scope_counts から読む（COUNT(*) が全行を読むのを避ける。#126）。カテゴリ（直下のみ）・q・tag は従来どおり数える。
+    if (!category && !q && !tags?.length) out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(cc ?? ALL_SCOPE).first())?.total ?? 0;
+    else out.total = (await db.prepare(`SELECT COUNT(*) AS total FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`).bind(...args).first())?.total ?? 0;
+  }
   return out;
 }
 

@@ -37,6 +37,22 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 - `site_categories`: `(site_id, category_id)` が主キー。同じサイトを複数カテゴリに登録できる。
 - `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。タグ名（日英）は `q` の部分一致の対象でもある（`search_text` に含める。0020・#31 第1段）。
 
+### カテゴリ件数の集計表（#126 第1段、0022）
+
+- **正本は `sites` / `site_categories` / `categories`。次の 3 表は派生物で、トリガが常に追従させる**（ずれたら 0022 の「初期集計」と同じ文で作り直せる。`tests/category-counts.test.mjs` が「集計表 = 再帰 CTE」を検査する）。
+  - `category_closure(ancestor_id, descendant_id)`: カテゴリの祖先 → 子孫（自分自身を含む）。307 行（現在 153 カテゴリ・深さ 3）。
+  - `category_counts(category_id, scope, n)`: **そのカテゴリ自身と全子孫の所属サイト数**（同じサイトが複数の子孫に属しても 1 件）。`scope` は `'all'`（全世界。`ALL_SCOPE`）か `country_code`（その国のサイトだけ。`country_code` が NULL のサイトは `'all'` のみ）。旧 `loadCategories` の再帰 CTE（`COUNT(DISTINCT s.id)`）と同じ意味。行が無い・`n = 0` は「空」で、読み側が 0 とみなす。
+  - `scope_counts(scope, n)`: 範囲ごとのサイト数（`/api/scopes`・`/api/activity` の `total`・範囲だけを指定した `/api/sites` の `total`）。`n = 0` の行は読み側が除く。
+- **読み取り**: `loadCategories`（`/api/categories`・SSR・sitemap）は `categories LEFT JOIN category_counts`、`loadScopes` は `scope_counts`。sitemap は範囲ごとに数え直さず、`category_counts` の `n > 0` を 1 回で読む。`/api/sites` の `total` は、カテゴリ（**直下のみ**。集計表は子孫を含むので使えない）・`q`・`tag` があるときは従来どおり数える。
+- **トリガ**（書き込み量の見積りは migration 冒頭のコメント）: `site_categories` の INSERT / DELETE（「そのサイトの、祖先の部分木に入る所属行がちょうど 1 件」の祖先だけ +1、「消した後に 0 件」の祖先だけ -1 にして二重カウントを避ける）・UPDATE（旧・新の祖先を再計算）、`sites` の INSERT / DELETE / `country_code` の UPDATE、`categories` の INSERT / `parent_id` の UPDATE（閉包表を付け替え、旧親・新親の祖先の件数を再計算）/ DELETE。1 サイトの投入は通常 +3〜+14 行の書き込み（国あり・カテゴリ 1〜3 個）。夜間の一括投入（`export_approved_sql.py` の `INSERT` と `--update-categories` の `DELETE` + `INSERT OR IGNORE`）でも同じトリガが働く。
+- **作り直し**: ずれたら `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 の初期集計と同じ `INSERT`）で正本から作り直せる。手順・戻し方・一致確認のクエリは `docs/operations/deploy.md`。
+- **カテゴリの木を変えるときの制約**（migration で `categories` を INSERT / UPDATE / DELETE すれば閉包表と件数は追従するが、次を守る）:
+  - **親を先に INSERT する**（子の INSERT トリガは、親の閉包表の行を引いて祖先を作るため。親が無いと子の祖先が欠ける）。
+  - **カテゴリ id の変更（`UPDATE categories SET id`）は非対応**（閉包表・件数表・`site_categories` が旧 id を指したままになる）。作り直す場合は新 id を INSERT して所属を移し、旧 id を DELETE する。
+  - **親の変更や `site_categories` 行の UPDATE は、旧親・新親の祖先の部分木を数え直す**ので、10 万件規模の一括移行（#127 第2段など）では重い。大量の付け替えは、トリガに任せず、`scripts/rebuild-category-counts.sql` で最後に 1 回作り直す形を検討する。
+  - **`INSERT OR REPLACE` は使わない**（`sites` / `site_categories` / `categories` のどれも。再帰トリガが無効な既定（`recursive_triggers=0`）では、REPLACE が消す行の DELETE トリガが発火せず、集計がずれる）。`INSERT OR IGNORE` か `DELETE` + `INSERT`、`ON CONFLICT DO UPDATE` を使う。
+- 効果（10 万件、ローカル D1 の実測）: `/api/categories` 82 万 → 459 行、トップ（SSR）112 万 → 499 行、sitemap 1,670 万 → 3,262 行。
+
 ### カテゴリの木（#114 第1段、0021）
 
 - **正本は `data/categories.csv`**（`id, parent_id, name_ja, name_en, sort_order, assign`。現在 153 カテゴリ: トップ 15・第2階層 122・第3階層 16）。D1 の `categories` はこの写しで、`tests/test_taxonomy.py` が「全 migration を適用した結果 = CSV」を検査する。**木を変える migration を足すときは CSV も同じ変更にする**。LLM 判定の選択肢（`scripts/llm/judge.py` の `load_categories`）もこの CSV から読む。
