@@ -145,12 +145,11 @@ def import_results(db, results_path, input_path, allow_older=False):
             reject(cid, "candidate url differs from the ledger row (stale input)")
             continue
         text = judge.render_candidate(cand, body_limit)
-        # Results made before the taxonomy change (#114) carry old category ids: translate those through the old->new table
-        # (ids that are neither valid nor in the table stay and are rejected by validate_output as before).
-        cats = out.get("categories")
-        if isinstance(cats, list) and any(isinstance(c, str) and c not in valid_ids and c in legacy for c in cats):
-            out = dict(out, categories=judge.modernize_categories(cats, valid_ids, legacy)
-                       + [c for c in cats if not (isinstance(c, str) and (c in valid_ids or c in legacy))])
+        # Old ids (pre-#114) are translated and the set is put in the canonical form (#137: no ancestor next to its descendant;
+        # duplicates are merged silently). Unknown ids stay and are rejected by validate_output as before. Because of this step
+        # the result always is canonical: there is no separate "not canonical" rejection.
+        if isinstance(out.get("categories"), list):
+            out = dict(out, categories=judge.canonical_categories(out["categories"], valid_ids, legacy))
         errs = judge.validate_output(out, valid_ids, text)
         if errs:
             reject(cid, "invalid output: " + "; ".join(errs))

@@ -517,7 +517,7 @@ class ExportTests(Base):
                           sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall())), before)
 
     def test_new_site_gets_at_most_3_categories_and_5_tags_and_each_alone_works(self):
-        self.approve_new("many.example", out_pass(categories=["arts", "photography", "architecture"],
+        self.approve_new("many.example", out_pass(categories=["photography", "architecture", "news"],  # not "arts": a parent next to its child is dropped (#137)
                                                   tags=["T1", "t2", "t3", "t4", "t5"]))
         self.approve_new("onlycat.example", out_pass(categories=["news"], tags=[]), name="r6.json")
         self.approve_new("onlytag.example", out_pass(categories=[], tags=["solo"]), name="r7.json")
@@ -530,7 +530,7 @@ class ExportTests(Base):
         n = lambda tbl, host: t.execute(f"SELECT count(*) FROM {tbl} WHERE site_id=?", (self.listed(t, host)[0],)).fetchone()[0]
         self.assertEqual((n("site_categories", "many.example"), n("site_tags", "many.example")), (3, 5))
         self.assertEqual((n("site_categories", "onlycat.example"), n("site_tags", "onlycat.example")), (1, 0))
-        self.assertEqual((n("site_categories", "onlytag.example"), n("site_tags", "onlytag.example")), (0, 1))
+        self.assertIsNone(self.listed(t, "onlytag.example"))  # no category at all: not listed (#137, uncategorized is a violation)
 
     def test_tags_are_deduplicated_case_insensitively_and_length_capped(self):
         rows = export_approved_sql.clean_tags(["Photo", "photo", " PHOTO ", "x" * 41, "a  b", "c", "d", "e", "f"])

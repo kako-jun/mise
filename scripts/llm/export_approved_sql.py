@@ -23,6 +23,7 @@ Per site: sites (id, url, name, description_ja/en, country_code, region_code) / 
     re-approving and re-exporting a site that is already listed never adds categories or tags to it.
   - categories are translated from old (pre-#114) ids and keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
     (case-insensitive duplicates and tags over 40 chars are dropped).
+  - Skipped: a judgement without any valid category (nothing to file the site under; the integrity gate would stop on an uncategorized site).
   - long descriptions are not exported (no column for them yet). Existing rows are never updated.
 
 Category update mode (Issue #122; a separate mode, never mixed with the INSERT output above): sites that are already listed
@@ -43,7 +44,7 @@ partial failure or a database with another category tree never leaves a site unc
                                        summary shows real changes and sites that are not listed / have a government leaf are left out
   --dry-run                            print the summary only, write no SQL
 
-Parent and child categories may be assigned together, exactly as the normal export does (no change here).
+Category sets are written in the canonical form (#137): an ancestor next to its descendant is dropped (the summary counts dropped_ancestors). Retreat ids (business / society / business-services / community) are kept: they are ordinary categories the LLM may choose.
 Never touched: ids starting with pb-, sites holding a leaf under government (guarded in SQL too), an empty judgement or one
 without any valid id (old ids are translated first, see judge.modernize_categories). Summary on stdout.
 """
@@ -61,6 +62,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "requests"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "pipeline"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "llm"))
 import judge  # noqa: E402  (category tree and the old->new id table)
+import integrity  # noqa: E402  (data integrity checks, the gate below)
 import import_requests  # noqa: E402  (key_of / match_path / block_candidates: the same keys as the intake and the request import)
 
 VALID_CATEGORIES = set(judge.category_ids(judge.load_categories()))
@@ -80,11 +82,7 @@ def norm_url(u):
     return u.replace("%7e", "~").rstrip("/")
 
 
-def norm_sql(col):
-    """SQL twin of norm_url (only the scheme and a leading www. are removed; migration 0015 removed any 'www.')."""
-    s = f"CASE WHEN lower(trim({col})) LIKE 'https://%' THEN substr(lower(trim({col})),9) " \
-        f"WHEN lower(trim({col})) LIKE 'http://%' THEN substr(lower(trim({col})),8) ELSE lower(trim({col})) END"
-    return f"rtrim(replace(CASE WHEN ({s}) LIKE 'www.%' THEN substr(({s}),5) ELSE ({s}) END,'%7e','~'),'/')"
+norm_sql = integrity.norm_sql  # one definition (scripts/llm/integrity.py)
 
 
 def as_list(urls):
@@ -142,7 +140,7 @@ def clean_tags(tags):
     return out[:5]
 
 
-def statements(row):
+def statements(row, norm=None):
     sid, url = site_id(row["key"]), row["final_url"] or row["url"]
     cc, rc = row["country_code"], row["region_code"]
     cc = cc if cc and COUNTRY.fullmatch(cc) else None
@@ -163,7 +161,7 @@ def statements(row):
         sel = " UNION ALL ".join(f"SELECT {q(sid)},{q(t)},{q(t)}" for t in tags)
         out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel}) WHERE changes()>0;")
     # Judgements stored before the taxonomy change (#114) carry old ids; translate them (see judge.modernize_categories).
-    cats = judge.modernize_categories(json.loads(row["categories"]), VALID_CATEGORIES, LEGACY_CATEGORIES)
+    cats = judge.modernize_categories(json.loads(row["categories"]), VALID_CATEGORIES, LEGACY_CATEGORIES, stats=norm)
     if cats:
         sel = " UNION ALL ".join(f"SELECT {q(sid)}{' AS site_id' if i == 0 else ''},{q(c)}{' AS category_id' if i == 0 else ''}"
                                  for i, c in enumerate(cats))
@@ -183,19 +181,22 @@ def build(db_path):
             "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()
-    stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0}
+    stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0, "skipped_no_category": 0,
+             "dropped_ancestors": 0}  # categories removed by the canonical form (#137)
     seen, body = set(), []
     for r in rows:
         if r["spam_verdict"] not in ("pass", "suspect"):
             stats["skipped_verdict"] += 1
         elif not (r["description_ja"] and r["description_en"]):
             stats["skipped_no_description"] += 1
+        elif not judge.modernize_categories(json.loads(r["categories"]), VALID_CATEGORIES, LEGACY_CATEGORIES):
+            stats["skipped_no_category"] += 1  # a site without any category is a violation (uncategorized, #137): not listed until it has one
         elif import_requests.key_of(r["final_url"] or r["url"]) in seen:
             stats["skipped_duplicate"] += 1
         else:
             seen.add(import_requests.key_of(r["final_url"] or r["url"]))
             body.append(f"-- {r['key']}")
-            body += statements(r)
+            body += statements(r, stats)
             stats["exported"] += 1
     head = ["-- Approved sites from the frontier ledger (scripts/llm/export_approved_sql.py). Derived file: do not edit.",
             "-- Idempotent: every INSERT is guarded against rows that already exist and against blocked_hosts.",
@@ -234,13 +235,13 @@ def plan_from_ledger(db_path):
             "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()
-    stats = {"approved": len(rows), "skipped_verdict": 0, "skipped_empty": 0}
+    stats = {"approved": len(rows), "skipped_verdict": 0, "skipped_empty": 0, "dropped_ancestors": 0}
     items, seen = [], set()
     for r in rows:
         if r["spam_verdict"] not in ("pass", "suspect"):
             stats["skipped_verdict"] += 1
             continue
-        cats = judge.modernize_categories(json.loads(r["categories"] or "[]"), VALID_CATEGORIES, LEGACY_CATEGORIES)
+        cats = judge.modernize_categories(json.loads(r["categories"] or "[]"), VALID_CATEGORIES, LEGACY_CATEGORIES, stats=stats)
         if not cats:
             stats["skipped_empty"] += 1
             continue
@@ -259,7 +260,7 @@ def plan_from_results(results_path, input_path, urls=None):
     _origin, loaded = import_results.load_results(results_path)
     cands = {c["id"]: c for c in import_results.read_jsonl(input_path)}
     stats = {"results": len(loaded), "no_output": 0, "rejected": 0, "skipped_verdict": 0, "skipped_empty": 0, "skipped_protected": 0,
-             "skipped_ledger_mode": 0, "skipped_url_mismatch": 0}
+             "skipped_ledger_mode": 0, "skipped_url_mismatch": 0, "dropped_ancestors": 0}
     problems, items, seen = [], [], set()
     problems_info = []
     for cid, out, _model, _err, body_limit in loaded:
@@ -277,10 +278,8 @@ def plan_from_results(results_path, input_path, urls=None):
             stats["rejected"] += 1
             problems.append(f"{cid}: candidate not in --input")
             continue
-        cats = out.get("categories") if isinstance(out, dict) else None
-        if isinstance(cats, list) and any(isinstance(c, str) and c not in VALID_CATEGORIES and c in LEGACY_CATEGORIES for c in cats):
-            out = dict(out, categories=judge.modernize_categories(cats, VALID_CATEGORIES, LEGACY_CATEGORIES)
-                       + [c for c in cats if not (isinstance(c, str) and (c in VALID_CATEGORIES or c in LEGACY_CATEGORIES))])
+        if isinstance(out, dict) and isinstance(out.get("categories"), list):
+            out = dict(out, categories=judge.canonical_categories(out["categories"], VALID_CATEGORIES, LEGACY_CATEGORIES, stats=stats))
         errs = judge.validate_output(out, VALID_CATEGORIES, judge.render_candidate(cand, body_limit))
         if errs:
             stats["rejected"] += 1
@@ -293,7 +292,7 @@ def plan_from_results(results_path, input_path, urls=None):
         if out["spam"]["verdict"] != "pass":
             stats["skipped_verdict"] += 1
             continue
-        new = judge.modernize_categories(out["categories"], VALID_CATEGORIES, LEGACY_CATEGORIES)
+        new = out["categories"]
         if not new:
             stats["skipped_empty"] += 1
         elif cid not in seen:
@@ -392,6 +391,13 @@ def main_update(a):
         print("REJECTED " + p, file=sys.stderr)
     sql, summary = build_update(items, current)
     print_summary(summary, stats, current is not None)
+    if current is None:
+        print("WARNING: no --current: the integrity gate below runs on an empty base (no fr- sites), so the UPDATE changes nothing there "
+              "and the gate cannot catch a violation. The real gate needs --current DB (use it in every unattended run).", file=sys.stderr)
+    found = integrity.gate(sql, a.current)
+    if found:
+        print("INTEGRITY: the SQL would introduce violations; nothing written (scripts/llm/integrity.py)\n" + integrity.format_violations(found), file=sys.stderr)
+        return 3
     out = a.out or os.path.join(ROOT, "var", "update-categories.sql")
     if not a.dry_run:
         os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
@@ -424,6 +430,10 @@ def main(argv=None):
     except sqlite3.OperationalError as e:
         print(f"cannot read judgements from {a.db}: {e} (import results first: scripts/llm/import_results.py)", file=sys.stderr)
         return 1
+    found = integrity.gate(sql)
+    if found:
+        print("INTEGRITY: the SQL would introduce violations; nothing written (scripts/llm/integrity.py)\n" + integrity.format_violations(found), file=sys.stderr)
+        return 3
     out = a.out or os.path.join(ROOT, "var", "approved-sites.sql")
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
