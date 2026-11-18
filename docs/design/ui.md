@@ -101,9 +101,15 @@
 
 書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。woff2 が 2.5 秒以内に届かない低速回線では、そこで見切って現在の書体で先に測って横伸ばしを済ませ（Chromium は block を約 3 秒で打ち切り代替書体を出すため）、到着後にもう一度測り直す。ライセンス全文は `public/licenses/`。woff2 は `uv run --with fonttools --with brotli python3 -m fontTools.subset <ttf> --text=<文字> --flavor=woff2 --layout-features='*' --name-IDs='*'` で作る（Noto Serif は先に `fontTools.varLib.instancer` で `wght=400 wdth=100` に固定）。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
 
+## アバウトページ
+
+フッタ右下の作者リンク列（`.author-links`）の最左に、GitHub Octicons の `info`（「i」、MIT。`public/licenses/octicons-MIT.txt`）のアイコンを置き、`/about/`（同一タブ。戻るで戻れる）へ繋ぐ。大きさ・色・ホバー・フォーカス・32px のタップ領域は他の 2 アイコンと同じ規則で、`aria-label`・`title` は `data-i18n-label="about"` で日英（`MISE について` / `About MISE`）。1200px 以上は `.corner-panel`（fixed・右下）の中に列があるので、3 アイコンになってもピックアップの下に収まり重ならない。
+
+`/about/`（`public/about.html` + `about.css` + `about.js`）は、MISE とは・載せる基準・しないこと（人気を出さない、AI 使用の有無を評価に使わない、既定の並び）・使い方・出典とライセンス・作者の順。内容は [overview.md](../concept/overview.md) と [listing-criteria.md](../concept/listing-criteria.md) の要約で、未実装の機能は書かない。出典は `public/licenses/` のファイルへの控えめなリンクだけにし、公共データの出典文そのものは画面に再掲しない（#111）。日英は両方 HTML に持ち `html[lang]` で切り替え、右上に本体と同じテーマ・言語ボタン（保存キーも共通）と、ロゴ文字の「MISE」リンク・末尾の「戻る」リンク（どちらも `/jp/`）。配色とダークは `style.css` を引き継ぐ。配信と SEO の扱いは [seo.md](seo.md)。
+
 ## アクセシビリティ
 
-- 見出し: ページ先頭に視覚的に隠した `<h1>`（言語に合わせて翻訳）。パンくずは `<nav>`、作者リンクも `<nav>`。`aria-label` は言語切替で `data-i18n-label` により日英が切り替わる。
+- 見出し: ページ先頭に視覚的に隠した `<h1>`（言語に合わせて翻訳）。パンくずは `<nav>`、フッタのリンク列（About・作者のサイト・GitHub）も `<nav>`（`aria-label` は作者に限らない中立の「Links / リンク」）。`aria-label` は言語切替で `data-i18n-label` により日英が切り替わる。
 - 検索バー: 幅 700px 以下ではコンテンツ幅いっぱい（最大 480px）に広げ、701px 以上は従来どおり幅 280px（700→701px の段差は breakpoint として許容）。タッチ端末（`pointer: coarse`）は横向きなど幅に関わらず高さ 44px 以上・文字 16px（iOS Safari が focus でズームしない下限）。キーボード表示時の位置（visualViewport）と実 iOS は未確認。
 - 検索結果のライブ領域は `#result-title` だけ（1 文字ごとの再描画で全リストを読み上げさせない）。
 - 外部リンク設定ボタン（`#external-toggle`）の状態は、不透明度でなくリング（押下時）とドットで示す。色は白背景で 4.95:1、ダークで約 12:1（実測）。操作ボタンのホバーは不透明度でなく背景の淡い色で示す。

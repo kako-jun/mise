@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
+import { renderAbout, loadCategories, loadScopes, parseScope, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
 import { receiveRequest } from './intake.js';
 import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags } from './sites.js';
@@ -51,6 +51,9 @@ app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Co
 // 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
 const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);
 app.get('/', async c => page(c, DEFAULT_SCOPE, await loadScopes(c.env.DB)));
+// アバウトページ（#118）。範囲（/:scope/）より先に登録する。/about は /about/ へ 301。理由は docs/design/seo.md。
+app.get('/about', c => { const u = new URL(c.req.url); u.pathname = '/about/'; return c.redirect(u.toString(), 301); });
+app.get('/about/', async c => renderAbout(await c.env.ASSETS.fetch(new Request(new URL('/about.html', c.req.url)))));
 // /jp/ /us/ /all/。大文字は小文字へ 301。サイトが 1 件も無い国・不正な値は 404（sitemap にも載せない）。
 // 末尾スラッシュなし（/jp）は存在する範囲だけ /jp/ へ 301（クエリは維持）。run_worker_first の拡張子なしパターンで Worker に届く。
 app.get('/:scope', async c => {
