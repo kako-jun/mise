@@ -651,6 +651,20 @@ class Ledger:
                     "or pass --init-ledger to start an empty one on purpose.")
             self._append_nolock({"kind": "init", "note": "ledger created"})
 
+    def month_total(self, month):
+        """USD of one UTC month ("YYYY-MM"): calls + open reservations (reserve - release) stamped in that month. Missing ledger = 0."""
+        t = 0.0
+        for r in self._lines():
+            if not str(r.get("ts", "")).startswith(month):
+                continue
+            if r["kind"] == "call":
+                t += r["cost_usd"]
+            elif r["kind"] == "reserve":
+                t += r["usd"]
+            elif r["kind"] == "release":
+                t -= r["usd"]
+        return t
+
     def _check_nolock(self, worst_case_usd):
         eps = 1e-9
         if self.run_spent + self.run_reserved + worst_case_usd > self.budget_run + eps:
