@@ -10,7 +10,7 @@ const dir = process.env.PLAYWRIGHT_DIR;
 const { chromium } = createRequire(dir ? dir.replace(/\/?$/, '/') : import.meta.url)('playwright');
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || undefined, args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'] });
 let total = 0, missing = 0;
-for (const path of ['/', '/us/', '/all/?category=science', '/jp/?q=a']) {
+for (const path of ['/', '/about/', '/us/', '/all/?category=science', '/jp/?q=a']) {
   const page = await (await browser.newContext({ viewport: { width: 1300, height: 900 } })).newPage();
   const found = [];
   await page.addInitScript(() => document.addEventListener('securitypolicyviolation', e => (window.__cspv = window.__cspv || []).push(`${e.violatedDirective} ${e.blockedURI} ${(e.sample || '').slice(0, 60)}`)));
