@@ -15,7 +15,7 @@
 6 llm         pipeline.py（第1段 haiku・第2段 sonnet、既定 batch）。予算ガードはここ
 7 import      import_results.py で結果を台帳へ
 8 approve     approve_policy.py --apply（自動承認 / 保留 / 古い個人サイトの却下）
-9 sql         承認済みの未出荷を key 順に --max-add 件まで -> approved-sites.sql（0 件なら作らない）
+9 sql         承認済みの未出荷をすべて（`--max-add N` を付けたときだけ key 順に N 件まで。既定は上限なし） -> approved-sites.sql（0 件なら作らない）
 10 gate       生成 SQL をメモリ DB に流す整合チェック（integrity.gate）。違反なら停止
 11 prod       --apply-prod のときだけ: bookmark 取得 -> 本番投入 -> 整合チェック(--remote)
 ```
@@ -50,7 +50,7 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 
 - 初回は `mkdir -p var/nightly` してから登録する。二重起動の防止は nightly.py 内の flock（`var/nightly/.lock`、LOCK_NB）の**一本だけ**。**外側で `flock` を付けない**（外側が持つロックを nightly.py が別に取りにいき、毎夜 exit 75 になる）。二重起動は後から来た方が即終了（exit 75）する。
 - **最初の数夜（目安 3〜7 夜）は `--apply-prod` なしで回し、朝の確認手順で人が確認する。** 問題が無ければ crontab に `--apply-prod` を足す。
-- 段階化: 最初は `--fetch-limit 100 --max-add 50`（1,000 件規模）、問題が無ければ 1 万、10 万と上限を上げる。
+- 段階化: 1 夜の量は `--fetch-limit` / `--judge-limit` と予算ガード・前日比の異常ガードで抑える（`--max-add` は既定で上限なし。最初は `--fetch-limit 100 --max-add 50`（1,000 件規模）にしてもよい）。問題が無ければ 1 万、10 万と `--fetch-limit` / `--judge-limit` を上げる。
 
 ## 朝の確認手順
 
