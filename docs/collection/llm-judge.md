@@ -94,11 +94,13 @@ uv run python3 scripts/llm/export_approved_sql.py --update-categories-from var/s
 npx wrangler d1 execute mise --local --file var/update-categories.sql   # ローカル D1 で検証（本番は --remote、承認後のみ）
 ```
 
-- **置換の SQL**: サイトごとに `DELETE FROM site_categories WHERE site_id=…` → `INSERT OR IGNORE … SELECT id FROM categories WHERE id IN (…)`。どちらも「sites に実在する」で守られ、2 回流しても同じ（冪等）。DELETE は「`government` 配下の葉を持つサイト」を除外し、INSERT は「そのサイトにカテゴリ行が無いとき」だけ入れる（DELETE が除外したサイトには何も足さない）。
-- **対象外**: id が `pb-` の官公庁、`government` 配下の葉（種別 7 葉。台帳の種別から決定論で振った分）を持つサイト、sites に無い id（挿入はしない）。(a) は掲載済みの id が `fr-` で導出できるものだけなので、手動掲載は構造的に当たらない。
+- **置換の SQL**: サイトごとに **INSERT が先、DELETE が後**: `INSERT OR IGNORE … SELECT id FROM categories WHERE id IN (新セット)` → `DELETE FROM site_categories WHERE site_id=… AND category_id NOT IN (新セット)`。どちらも「sites に実在する」「`government` 配下の葉を持たない」「`site_id NOT LIKE 'pb-%'`」で守られ、2 回流しても同じ（冪等）。DELETE にはさらに「新セットの id が対象 DB の `categories` に 1 つでも存在する」条件が付くので、途中で失敗しても、カテゴリ木が違う DB に流しても、サイトが未分類になることはない（余分な行が残るだけ）。
+- **対象外**: id が `pb-` の官公庁（SQL 側でも両モードで除外）、(b) では id が `fr-` のもの（台帳の承認を経ていない pass 判定で上書きしないため、(a) の対象。要約 `skipped_ledger_mode`）、`government` 配下の葉（種別 7 葉。台帳の種別から決定論で振った分）を持つサイト、sites に無い id（挿入はしない）。(a) は掲載済みの id が `fr-` で導出できるものだけなので、手動掲載は構造的に当たらない。
 - **判定の扱い**: カテゴリは `judge.modernize_categories` を通す（旧 id が残る行は写像）。空・有効な id が 1 つも無い判定は触れない（件数を要約に出す）。(a) は承認済みの pass / suspect、(b) は **pass のみ**（reject / suspect / deferred は触れない）で、出力は `judge.validate_output` を逐語引用込みで再検証し、通らない件は理由を出して書かない（終了コード 2）。
-- **`--current`**: 反映先の sqlite（ローカル D1 の `.wrangler/state/v3/d1/**.sqlite` など）を読み取り専用で開き、実際の増減を要約に出す。付けると、sites に無い id と `government` 配下の葉を持つサイトは SQL にも書かない。付けないと要約は計画件数だけで、除外は SQL 側の守りに任せる。
-- **要約（標準出力）**: 計画件数、変わるサイト数・変わらない数・未掲載・官公庁の葉で除外、判定が空で触れなかった件数（`skipped_empty`）、退避先から実カテゴリへ移るサイト数、カテゴリ別の増減（gained / lost の件数）。`--dry-run` は SQL を書かず要約だけ。
+- **親子の同時付与**: 親カテゴリと子カテゴリを同時に付ける判定は、通常の書き出し（INSERT 出力）と同じ挙動のまま変えない。
+- **`--out`**: 未指定ならモードの既定（更新モードは `var/update-categories.sql`）。明示した `--out` は常に尊重する。
+- **`--current`**: 反映先の sqlite（ローカル D1 の `.wrangler/state/v3/d1/**.sqlite` など）を読み取り専用で開き、実際の増減を要約に出す。付けると、sites に無い id と `government` 配下の葉を持つサイトは SQL にも書かない。(b) では候補の URL が掲載済みサイトの URL と違う件も除外する（要約 `skipped_url_mismatch`、理由は標準エラーに `SKIPPED`）。付けないと要約は計画件数だけで、除外は SQL 側の守りに任せる。
+- **要約（標準出力）**: 計画件数、変わるサイト数・変わらない数・未掲載・官公庁の葉で除外、判定が空で触れなかった件数（`skipped_empty`）、「適用前は退避先カテゴリのみ、適用後に退避先以外がある」サイト数、カテゴリ別の増減（gained / lost の件数）。`--dry-run` は SQL を書かず要約だけ。
 - **限界**: (1) 判定の質は再判定の結果次第（このモードは置換するだけ）。(2) 置換は丸ごと入れ替えで、人が付けたカテゴリ（手動掲載）の差分は残さない。(a) の対象は fr- 掲載分に限る。(3) 掲載済みの `sites` 行（名前・紹介文・タグ）は更新しない。(4) 本番の実行は承認後。実行前に `--dry-run --current` の要約でカテゴリ別の増減と退避先からの移動件数を確認する。
 
 ## トークンを減らす設計

@@ -117,7 +117,30 @@ class LedgerModeTests(UpdateBase):
         self.assertEqual(cats_of(t, self.ids["alpha.example"]), ["cities"])
         before = cats_of(t, "pb-010006")
         self.assertTrue(before)
-        self.assertNotIn("'pb-", L.read(out))
+        pb_snap = list(t.execute("SELECT * FROM site_categories WHERE site_id LIKE 'pb-%' ORDER BY 1,2"))
+        self.assertNotIn("'pb-0", L.read(out))
+        self.assertEqual(list(t.execute("SELECT * FROM site_categories WHERE site_id LIKE 'pb-%' ORDER BY 1,2")), pb_snap)
+        self.assertEqual(cats_of(t, "pb-010006"), before)
+
+    def test_sql_guards_pb_ids_itself(self):
+        t = self.target
+        before = cats_of(t, "pb-010006")
+        sql = "\n".join(ea.update_statements("pb-010006", ["astronomy"]))
+        t.executescript(sql)
+        self.assertEqual(cats_of(t, "pb-010006"), before)
+
+    def test_unknown_new_ids_never_leave_a_site_uncategorised(self):
+        t = self.target
+        sid = self.ids["alpha.example"]
+        t.executescript("\n".join(ea.update_statements(sid, ["no-such-category", "also-missing"])))
+        self.assertEqual(cats_of(t, sid), ["business"])
+        t.executescript("\n".join(ea.update_statements(sid, ["astronomy", "no-such-category"])))
+        self.assertEqual(cats_of(t, sid), ["astronomy"])
+
+    def test_explicit_out_is_respected_in_update_mode(self):
+        out = self.path("mine.sql")
+        self.run_main("--update-categories", "--db", self.dbp, "--out", out)
+        self.assertTrue(os.path.exists(out))
 
     def test_site_without_categories_gets_them(self):
         self.target.execute("DELETE FROM site_categories WHERE site_id=?", (self.ids["alpha.example"],))
@@ -132,7 +155,7 @@ class LedgerModeTests(UpdateBase):
         self.assertEqual(rc, 0)
         self.assertFalse(os.path.exists(out))
         self.assertIn("sites changed: 2", so)  # alpha, beta
-        self.assertIn("to a real one: 2", so)  # business -> astronomy/photography, society -> astronomy
+        self.assertIn("having a real category: 2", so)  # business -> astronomy/photography, society -> astronomy
         self.assertIn("astronomy: 2", so)
         self.assertIn("business: 1", so)
         self.assertIn("skipped_empty=1", so)  # gamma
@@ -201,6 +224,38 @@ class ResultsModeTests(UpdateBase):
         snap = list(t.execute("SELECT * FROM site_categories ORDER BY 1,2"))
         self.run_sql(sql_path)
         self.assertEqual(list(t.execute("SELECT * FROM site_categories ORDER BY 1,2")), snap)
+
+    def test_fr_ids_are_left_to_the_ledger_mode(self):
+        t = self.target
+        fr = self.ids["delta.example"]  # listed, business only
+        with open(self.cands, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"id": fr, "url": "https://delta.example/", "title": "d", "meta_description": "m", "lang": "ja",
+                                "body_excerpt": L.BODY, "features": {}}, ensure_ascii=False) + "\n")
+        outs = {"sample-a": L.out_pass(categories=["astronomy"]), fr: L.out_pass(categories=["astronomy"])}
+        sql_path = self.path("r.sql")
+        rc, so, _ = self.run_main("--update-categories-from", self.results(outs), "--input", self.cands, "--out", sql_path, "--current", self.curpath)
+        self.assertEqual(rc, 0)
+        self.assertIn("skipped_ledger_mode=1", so)
+        self.assertNotIn(fr, L.read(sql_path))
+        self.run_sql(sql_path)
+        self.assertEqual(cats_of(t, fr), ["business"])
+        self.assertEqual(cats_of(t, "sample-a"), ["astronomy"])
+
+    def test_url_mismatch_with_the_listed_site_is_left_out(self):
+        t = self.target
+        t.execute("UPDATE sites SET url='https://other.example/' WHERE id='sample-a'")
+        t.commit()
+        cur = self.path("c3.sqlite")
+        t.execute("VACUUM INTO ?", (cur,))
+        outs = {"sample-a": L.out_pass(categories=["astronomy"]), "sample-b": L.out_pass(categories=["astronomy"])}
+        sql_path = self.path("r.sql")
+        rc, so, err = self.run_main("--update-categories-from", self.results(outs), "--input", self.cands, "--out", sql_path, "--current", cur)
+        self.assertEqual(rc, 0)
+        self.assertIn("skipped_url_mismatch=1", so)
+        self.assertIn("sample-a: candidate URL", err)
+        self.run_sql(sql_path)
+        self.assertEqual(cats_of(t, "sample-a"), ["business"])
+        self.assertEqual(cats_of(t, "sample-b"), ["astronomy"])
 
     def test_unlisted_site_is_not_created_and_input_is_required(self):
         outs = {"sample-a": L.out_pass(categories=["astronomy"])}
