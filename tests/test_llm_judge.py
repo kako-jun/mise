@@ -27,7 +27,7 @@ def good():
         "description_ja": "小さな団体のサイト。", "description_en": "The site of a small organization.",
         "long_description_ja": None, "long_description_en": None, "long_description_evidence": [],
         "spam": {"verdict": "pass", "kind": "none", "reason": "Plain organization page."},
-        "categories": ["business-organizations"], "tags": ["organization"],
+        "categories": ["welfare"], "tags": ["organization"],
         "adult": {"value": "no", "evidence_quote": None},
         "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.",
         "confidence": "medium",
@@ -41,7 +41,7 @@ class SchemaTests(unittest.TestCase):
         schema = judge.build_schema(CATS)
         enum = schema["properties"]["categories"]["items"]["enum"]
         self.assertEqual(set(enum), IDS)
-        self.assertIn("science-astronomy", IDS)
+        self.assertIn("astronomy", IDS)
 
     def test_objects_are_closed_and_required_complete(self):
         def walk(node):
@@ -63,7 +63,7 @@ class SchemaTests(unittest.TestCase):
 
     def test_system_prompt_is_stable_and_lists_ids(self):
         self.assertEqual(judge.build_system(CATS), judge.build_system(CATS))
-        self.assertIn("science-astronomy", judge.build_system(CATS))
+        self.assertIn("astronomy", judge.build_system(CATS))
 
 
 class ValidateTests(unittest.TestCase):
@@ -275,7 +275,7 @@ import pipeline  # noqa: E402
 
 
 def tri(**kw):
-    t = {"i": 1, "v": "p", "kd": "-", "sk": "i", "ad": "n", "aq": None, "sc": "s", "cf": "m", "cat": ["science-astronomy"], "r": ""}
+    t = {"i": 1, "v": "p", "kd": "-", "sk": "i", "ad": "n", "aq": None, "sc": "s", "cf": "m", "cat": ["astronomy"], "r": ""}
     t.update(kw)
     return t
 

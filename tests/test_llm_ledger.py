@@ -43,7 +43,7 @@ def out_pass(**kw):
         "long_description_ja": "東京都にある小さな団体が活動の記録を公開している。", "long_description_en": "A small organization in Tokyo publishes records of its activities.",
         "long_description_evidence": ["活動の記録を公開しています"],
         "spam": {"verdict": "pass", "kind": "none", "reason": "Plain organization page."},
-        "categories": ["business-organizations"], "tags": ["organization", "records"],
+        "categories": ["welfare"], "tags": ["organization", "records"],
         "adult": {"value": "no", "evidence_quote": None},
         "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.",
         "confidence": "medium",
@@ -108,6 +108,22 @@ class Base(unittest.TestCase):
         return self.db.execute("SELECT * FROM llm_judgement WHERE key=?", (key,)).fetchone()
 
 
+class LegacyImportTests(Base):
+    def test_results_with_old_category_ids_are_imported_as_new_ids(self):
+        key = "oldids.example"
+        self.add(key)
+        counts, problems = self.imp(self.write_pipeline({key: out_pass(categories=["science-astronomy", "arts-photography"])}, name="old.json"))
+        self.assertEqual((counts["imported"], problems), (1, []))
+        self.assertEqual(json.loads(self.row(key)["categories"]), ["astronomy", "photography"])
+
+    def test_unknown_ids_are_still_rejected(self):
+        key = "bad.example"
+        self.add(key)
+        counts, problems = self.imp(self.write_pipeline({key: out_pass(categories=["nope", "science-astronomy"])}, name="bad.json"))
+        self.assertEqual(counts["rejected"], 1)
+        self.assertIn("unknown category ids", problems[0])
+
+
 class ImportTests(Base):
     def test_imports_pipeline_output_with_every_field(self):
         c, probs = self.imp(self.write_pipeline({"alpha.example": out_pass()}, describe="sonnet"))
@@ -115,7 +131,7 @@ class ImportTests(Base):
         r = self.row("alpha.example")
         self.assertEqual(r["spam_verdict"], "pass")
         self.assertEqual(r["description_ja"], "小さな団体のサイト。")
-        self.assertEqual(json.loads(r["categories"]), ["business-organizations"])
+        self.assertEqual(json.loads(r["categories"]), ["welfare"])
         self.assertEqual(json.loads(r["tags"]), ["organization", "records"])
         self.assertEqual(json.loads(r["long_description_evidence"]), ["活動の記録を公開しています"])
         self.assertEqual((r["country_code"], r["region_code"], r["confidence"], r["site_kind"], r["site_scope"]),
@@ -402,7 +418,7 @@ class ExportTests(Base):
         self.assertEqual(r[:5], ("Alpha Site", "小さな団体のサイト。", "The site of a small organization.", "JP", "JP-13"))
         self.assertTrue(r[5]); self.assertEqual(r[6], 0)
         sid = t.execute("SELECT id FROM sites WHERE url='https://alpha.example/'").fetchone()[0]
-        self.assertEqual(t.execute("SELECT category_id FROM site_categories WHERE site_id=?", (sid,)).fetchall(), [("business-organizations",)])
+        self.assertEqual(t.execute("SELECT category_id FROM site_categories WHERE site_id=?", (sid,)).fetchall(), [("welfare",)])
         self.assertEqual(sorted(x[0] for x in t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,))), ["organization", "records"])
         self.assertEqual(t.execute("SELECT name FROM sites WHERE url='https://adultsite.example/'").fetchone()[0], "adultsite.example")
         self.assertEqual(t.execute("SELECT name FROM sites WHERE url='https://o''brien.example/'").fetchone()[0], "O'Brien's page")
@@ -458,6 +474,19 @@ class ExportTests(Base):
     def counts(self, t):
         return [t.execute(f"SELECT count(*) FROM {x}").fetchone()[0] for x in ("sites", "site_categories", "site_tags")]
 
+    def test_old_category_ids_in_the_ledger_are_exported_as_new_ids(self):
+        # #114 より前に台帳へ入った判定は旧 59 カテゴリの id を持つ。書き出しで新しい木の id に写し、カテゴリ無しで載らないようにする
+        self.approve_new("legacy.example", out_pass(), name="r-legacy.json")
+        self.db.execute("UPDATE llm_judgement SET categories=? WHERE key='legacy.example'",
+                        (json.dumps(["business-companies", "science-astronomy", "recreation-travel"]),))
+        self.db.commit()
+        sql = self.export()
+        self.assertNotIn("science-astronomy", sql); self.assertNotIn("business-companies", sql)
+        t = self.target()
+        t.executescript(sql)
+        got = sorted(r[0] for r in t.execute("SELECT category_id FROM site_categories WHERE site_id LIKE 'fr-legacy%'"))
+        self.assertEqual(got, ["astronomy", "travel"])  # 運営主体の「企業」は、ほかに残る id があるので足されない
+
     def test_reapproved_site_that_is_already_listed_gets_no_new_children(self):
         t = self.target()
         t.executescript(self.export())
@@ -465,7 +494,7 @@ class ExportTests(Base):
         before = (t.execute("SELECT category_id FROM site_categories WHERE site_id=?", (sid,)).fetchall(),
                   sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall()))
         # new model -> new hash -> pending; approve again; different categories and tags
-        p = self.write_pipeline({"alpha.example": out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+        p = self.write_pipeline({"alpha.example": out_pass(categories=["arts", "photography", "architecture"],
                                                            tags=["a", "b", "c", "d", "e"])}, name="rr.json", model="sonnet")
         self.imp(p)
         self.assertEqual(review_state.set_state(self.db, ["alpha.example"], "approved")[0][1], True)
@@ -476,7 +505,7 @@ class ExportTests(Base):
                           sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall())), before)
 
     def test_new_site_gets_at_most_3_categories_and_5_tags_and_each_alone_works(self):
-        self.approve_new("many.example", out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+        self.approve_new("many.example", out_pass(categories=["arts", "photography", "architecture"],
                                                   tags=["T1", "t2", "t3", "t4", "t5"]))
         self.approve_new("onlycat.example", out_pass(categories=["news"], tags=[]), name="r6.json")
         self.approve_new("onlytag.example", out_pass(categories=[], tags=["solo"]), name="r7.json")
@@ -607,7 +636,7 @@ class ExportTests(Base):
         write(sqlfile, self.export())
         r = run("execute", "mise", "--file", sqlfile)
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-800:])
-        self.imp(self.write_pipeline({"alpha.example": out_pass(categories=["arts", "arts-photography", "arts-architecture"],
+        self.imp(self.write_pipeline({"alpha.example": out_pass(categories=["arts", "photography", "architecture"],
                                                                 tags=["a", "b", "c", "d", "e"])}, name="rr-w.json", model="sonnet"))
         self.assertEqual(review_state.set_state(self.db, ["alpha.example"], "approved")[0][1], True)
         self.approve_new("zeta.example", out_pass(), name="r12.json")

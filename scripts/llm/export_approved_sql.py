@@ -21,7 +21,7 @@ Per site: sites (id, url, name, description_ja/en, country_code, region_code) / 
     whatever it misses is absorbed by the SQL-side already-listed check (and by the changes() guard on the child rows).
   - Children (tags, then categories) are inserted only when the sites INSERT right before inserted a row (changes()), so
     re-approving and re-exporting a site that is already listed never adds categories or tags to it.
-  - categories keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
+  - categories are translated from old (pre-#114) ids and keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
     (case-insensitive duplicates and tags over 40 chars are dropped).
   - long descriptions are not exported (no column for them yet). Existing rows are never updated.
 """
@@ -37,8 +37,12 @@ import urllib.parse
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "requests"))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "pipeline"))
+sys.path.insert(0, os.path.join(ROOT, "scripts", "llm"))
+import judge  # noqa: E402  (category tree and the old->new id table)
 import import_requests  # noqa: E402  (key_of / match_path / block_candidates: the same keys as the intake and the request import)
 
+VALID_CATEGORIES = set(judge.category_ids(judge.load_categories()))
+LEGACY_CATEGORIES = judge.load_legacy_map()
 COUNTRY = re.compile(r"[A-Z]{2}")
 REGION = re.compile(r"[A-Z]{2}-[A-Z0-9]{1,3}")
 
@@ -136,7 +140,8 @@ def statements(row):
     if tags:
         sel = " UNION ALL ".join(f"SELECT {q(sid)},{q(t)},{q(t)}" for t in tags)
         out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel}) WHERE changes()>0;")
-    cats = list(dict.fromkeys(json.loads(row["categories"])))[:3]
+    # Judgements stored before the taxonomy change (#114) carry old ids; translate them (see judge.modernize_categories).
+    cats = judge.modernize_categories(json.loads(row["categories"]), VALID_CATEGORIES, LEGACY_CATEGORIES)
     if cats:
         sel = " UNION ALL ".join(f"SELECT {q(sid)}{' AS site_id' if i == 0 else ''},{q(c)}{' AS category_id' if i == 0 else ''}"
                                  for i, c in enumerate(cats))

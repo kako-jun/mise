@@ -79,12 +79,12 @@ mismatch の多くは「旧ドメイン（J-LIS）と新ドメイン `.lg.jp`（
 
 ## D1 への投入と追従
 
-- 投入範囲: `status=active` の都道府県・市・町・村・特別区・国の機関・独立行政法人。カテゴリは既存の `government-government-agencies`（政府 > 政府機関）で、新カテゴリは作らない。`country_code=JP`。`region_code` は団体コードの上 2 桁から決定論で付与し（`JP-13` など）、国の機関・独立行政法人には付けない。タグは種別と都道府県。紹介文は「○○県○○市の公式サイト。」の定型（英語は台帳の `name_en` があるものだけ。無いものは NULL で、画面は日本語にフォールバックする）。`last_crawled_at`・`source_updated_at` は未設定（トップページ未取得）、`registered_at` は台帳の出典確認日で、`bulk_import=1`（0015 で追加する列）を付けて直近登録の集計・ACTIVITY・NEW タグ・既定の並びの先頭から外す（一括投入が HUD を埋めないため）。
+- 投入範囲: `status=active` の都道府県・市・町・村・特別区・国の機関・独立行政法人。カテゴリは、0015 では旧 `government-government-agencies`（政府 > 政府機関）を付けた。**#114 の 0021 で種別ごとの葉に移した**（行政・公的機関 > 国の機関・独立行政法人・都道府県・市・特別区・町・村。種別は 0015 が付けたタグから決定論で振る）。以後の差分 migration（`--since`）は種別の葉を付ける。`country_code=JP`。`region_code` は団体コードの上 2 桁から決定論で付与し（`JP-13` など）、国の機関・独立行政法人には付けない。タグは種別と都道府県。紹介文は「○○県○○市の公式サイト。」の定型（英語は台帳の `name_en` があるものだけ。無いものは NULL で、画面は日本語にフォールバックする）。`last_crawled_at`・`source_updated_at` は未設定（トップページ未取得）、`registered_at` は台帳の出典確認日で、`bulk_import=1`（0015 で追加する列）を付けて直近登録の集計・ACTIVITY・NEW タグ・既定の並びの先頭から外す（一括投入が HUD を埋めないため）。
 - 政令市の行政区は既定で投入しない。理由: (1) 区のサイトは市サイトの配下のパスで、ホストが市と同じため独立 2 出典の一致が弱い証拠になる、(2) 区を載せると同じ市サイトが 1 市あたり複数件になり一覧を水増しする、(3) 掲載単位（市のみか区も載せるか）は未決。維持する。含めるときは `--include-wards`。台帳には行政区も残る（さいたま市浦和区はリダイレクトで昇格したが、この方針で投入されない）。
-- id は `pb-<団体コード>`。重複判定はホスト（`www.` 除去・小文字）＋パス（index 系・末尾スラッシュ除去）の正規化キーで行い、すでに別 id で掲載されているサイトは INSERT せず、その既存行に政府機関カテゴリだけを追加する（国立国会図書館など。カテゴリは多重所属できる: [data-model.md](../design/data-model.md)）。同名の団体（府中市・伊達市など）はホストが違うので区別できている。台帳内でも正規化キーの重複はテストで禁止している。
+- id は `pb-<団体コード>`。重複判定はホスト（`www.` 除去・小文字）＋パス（index 系・末尾スラッシュ除去）の正規化キーで行い、すでに別 id で掲載されているサイトは INSERT せず、その既存行に官公庁のカテゴリだけを追加する（国立国会図書館など。カテゴリは多重所属できる: [data-model.md](../design/data-model.md)）。同名の団体（府中市・伊達市など）はホストが違うので区別できている。台帳内でも正規化キーの重複はテストで禁止している。
 - 初回: `uv run python3 scripts/public_bodies_sql.py > migrations/0015_public_bodies.sql`。`test_public_bodies.py` が、コミット済み migration が台帳から再現できることを検査する（台帳だけ変えると落ちる）。
 - 台帳が変わったとき（月次の差分で新設・合併・廃止・名称変更・URL 移転を確認して台帳を確定した後）: 適用済みの migration は書き換えず、適用時点の台帳を `git show <commit>:data/public-bodies/ledger.csv` で取り出して `public_bodies_sql.py --since 旧台帳.csv > migrations/00NN_public_bodies_update.sql` で差分 migration を作る。新設は INSERT、active でなくなったもの（合併・廃止・要確認への降格）は掲載から DELETE、名称・URL の変更は UPDATE。
-- 適用の確認: ローカルで `npm run db:migrate` → `npm run dev` で `/api/sites`・`/jp/?category=government&category=government-government-agencies` を見る。本番は [deploy.md](../operations/deploy.md)。
+- 適用の確認: ローカルで `npm run db:migrate` → `npm run dev` で `/api/sites`・`/jp/?category=government&category=cities` などを見る。本番は [deploy.md](../operations/deploy.md)。
 
 ## 利用条件と出典表示
 
@@ -99,6 +99,7 @@ PDL1.0 は出典記載に加え、加工した旨の記載を求める。台帳�
 
 ## 既知の限界
 
+- 台帳の `type` が変わった団体（町が市制施行で市になったなど）を `--since` の差分は追わない。D1 には旧種別の葉・タグが残る（#121）。政令市の行政区は既定では投入せず、投入した場合は市の葉（`cities`）に寄せる（0021 と `public_bodies_sql.py` の `LEAF` は同じ）。
 - 廃止・合併の履歴は総務省の改正一覧表（2005年4月以降）の 1 出典のみ。Wikidata の終了日はごく一部にしか無い。
 - 一部事務組合等コード（取得済み）は台帳の対象外。必要になったら別の type として追加する。
 - 各団体のトップページへは、mismatch の解消に必要な一部を除いてまだアクセスしていない（到達性、title/meta description、リダイレクト先は次段）。取得するときは robots.txt 遵守・UA `MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)`・1 団体 1 リクエスト・待機あり・並列なし。

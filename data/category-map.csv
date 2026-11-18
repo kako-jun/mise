@@ -1,0 +1,60 @@
+old_id,new_id,mode,note
+arts,arts,keep,1:1(同じ id を引き継ぐ)
+arts-humanities,humanities,map,上位へ。再判定で philosophy/history 等へ
+arts-photography,photography,map,1:1
+arts-architecture,architecture,map,1:1
+arts-museums-and-galleries,museums,map,1:1
+news,news-media,map,1:1
+news-world-news,news-sites,map,統合(国は範囲で絞る)。0件
+news-newspapers,newspapers,map,1:1
+news-current-affairs,news-sites,map,統合。0件
+business,business,keep,1:1(同じ id を引き継ぐ)
+business-companies,business,fallback,主題でなく運営主体。他に新カテゴリが無い場合だけ business に退避(再判定で主題へ)
+business-organizations,society,fallback,主題でなく運営主体。他に新カテゴリが無い場合だけ society に退避(再判定で主題へ)
+business-products-and-services,business-services,fallback,主題が広すぎる。他に新カテゴリが無い場合だけ business-services に退避(再判定で扱う品・サービスの主題へ)
+business-jobs,jobs,map,1:1
+recreation,hobbies,map,1:1
+recreation-sports,sports,map,1:1
+recreation-games,video-games,map,既定 video-games(再判定で tabletop-games と分ける)
+recreation-travel,travel,map,1:1(宿・観光地は再判定で lodging/sightseeing)
+recreation-cars,cars,map,1:1
+computers,computing,map,1:1
+computers-internet,internet,map,1:1
+computers-software,software,map,1:1
+computers-multimedia,,drop,0件。film/music/software に吸収
+reference,reference,keep,1:1(同じ id を引き継ぐ)
+reference-libraries,libraries,map,1:1
+reference-dictionaries,dictionaries,map,1:1
+education,education,keep,1:1(同じ id を引き継ぐ)
+education-universities,universities,map,1:1
+education-schools,schools,map,1:1
+education-courses,lessons,map,1:1(学習サイトは再判定で online-learning)
+local,community,fallback,地域は範囲(都道府県)の軸へ。他に新カテゴリが無い場合だけ community に退避
+local-japan,community,fallback,地域は範囲の軸へ。他に新カテゴリが無い場合だけ community に退避(再判定で community/sightseeing)
+local-world,,drop,0件。国は範囲で扱う
+entertainment,entertainment,keep,1:1(同じ id を引き継ぐ)
+entertainment-television,broadcasting,map,既定 broadcasting(再判定で tv-shows と分ける)
+entertainment-film,film,map,1:1
+entertainment-music,music,map,1:1
+entertainment-magazines,magazines,map,1:1(news-media 配下へ移動)
+science,science,keep,1:1(同じ id を引き継ぐ)
+science-computing,computing,map,上位へ。再判定で programming 等へ
+science-biology,biology,map,1:1
+science-astronomy,astronomy,map,1:1
+science-engineering,engineering,map,上位へ。再判定で mechanical/electrical 等へ(電子工作は hardware)
+government,government,keep,1:1(同じ id を引き継ぐ)
+government-politics,politics,map,1:1(society 配下へ移動)
+government-government-agencies,,rule,官公庁台帳の種別(サイトのタグ)から 7 葉へ決定論で振る(LLM 不要)
+government-research-institutes,,drop,0件。研究機関は主題(astronomy 等)で扱う
+social-science,society,map,1:1
+social-science-economics,economy,map,1:1(business 配下へ移動)
+social-science-sociology,sociology,map,1:1
+social-science-archaeology,archaeology,map,1:1(humanities 配下へ移動)
+health,health,keep,1:1(同じ id を引き継ぐ)
+health-medicine,medicine,map,1:1
+health-hospitals,hospitals,map,1:1
+health-healthcare,care,map,既定 care(再判定で fitness/pharmacy 等へ)
+health-nutrition,nutrition,map,1:1
+society,society,keep,1:1(同じ id を引き継ぐ)
+society-environment,environment,map,1:1
+society-religion,religion,map,1:1(humanities 配下へ移動)

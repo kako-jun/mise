@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS llm_judgement (
   long_description_ja TEXT,                -- adult=yes では保存しない（本文の再現を避ける）
   long_description_en TEXT,
   long_description_evidence TEXT,          -- JSON 配列（原文からの逐語引用）。adult=yes では保存しない
-  categories     TEXT NOT NULL,            -- JSON 配列（migrations/0001 の木の id、最大3）
+  categories     TEXT NOT NULL,            -- JSON 配列（data/categories.csv の木の id、最大3。#114 より前の判定は旧 59 カテゴリの id が残り、judge.modernize_categories が書き出し時に写す）
   tags           TEXT NOT NULL,            -- JSON 配列（最大5）
   adult          TEXT NOT NULL CHECK (adult IN ('yes','no','unknown')),   -- 根拠引用は保存しない
   site_kind      TEXT NOT NULL CHECK (site_kind IN ('individual','business','organization','company','unknown')),

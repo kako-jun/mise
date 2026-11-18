@@ -50,10 +50,7 @@ def split_rules(template):
 
 
 def category_block(cats):
-    lines = []
-    for c in cats:
-        lines.append(("" if c["parent"] is None else "  ") + f"{c['id']} = {c['en']} / {c['ja']}")
-    return "\n".join(lines)
+    return judge.category_lines(cats)
 
 
 GROUP_NOTE = ("You receive several candidates at once, each in <candidate i=\"N\"> ... </candidate>. Return one result per "
@@ -80,7 +77,7 @@ def triage_system(cats):
             "r = reason: empty string when v is p and cf is m or h; otherwise ONE short English sentence (max 20 words)\n\n"
             "Definitions follow. Keep every definition, but answer with the codes above.\n\n"
             + R["4"] + "\n" + R["4a"] + "\n" + R["4b"] + "\n" + R["4c"] + "\n" + R["5"] + "\n" + R["8"]
-            + "\n\nALLOWED CATEGORY IDS (id = English name / Japanese name; indentation = child of the previous top-level id)\n"
+            + "\n\nALLOWED CATEGORY IDS (id = English name / Japanese name; each 2-space indent = one level deeper, a child of the nearest less-indented line above)\n"
             + category_block(cats) + "\n")
 
 
