@@ -77,7 +77,31 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 - **指示文**（規則 5）: カテゴリは主題で選ぶ（運営主体で選ばない。店は扱う品の主題へ）、**最も深い（具体的な）id を優先**し、合う子が無いときだけ親、同じ枝からは原則 1 つ、最大 3 つ。一覧は 1 レベル 2 スペースの字下げで木の深さを示す（`category_lines`。`pipeline.py` の第1段も同じ）。
 - **トークン**: 一覧は 59 個 約 980 → 153 個 約 3,030 トークン（`count_tokens` で実測、2026-11-18）。差は約 +2,050 で、キャッシュ読み（$0.01/M）ならほぼ 0、キャッシュ無しでも 77 リクエスト（381 件、`--group 5`）で約 $0.016。`system` はキャッシュの最小長 512 トークンを十分に超え、Haiku の 100K トークン階層にも遠い。見積り（`--dry-run`）は文字数ベースで一覧の増加分が自動で入る。木を変えると system が変わるので、結果の入力ハッシュキャッシュ（`var/llm-cache/`）は全件が外れる（一覧が 300 個になっても約 6,000 トークンで費用は誤差。上限を決めるのは費用でなく選び間違いの率なので、育てるときは `exp_summary.py` の category overlap で見る）。
 - **旧カテゴリ id の互換**（#114）: 旧 59 → 新の対応表は `data/category-map.csv`。`judge.modernize_categories` が旧 id を新 id に写す（`map`/`keep` は常に、`fallback`（企業・団体・製品とサービス・地域）は他に残る id が無いときだけ、`rule`（官公庁の旧 id）は行政・公的機関 `government`（トップ）に写し（種別の葉は台帳で決まる。0021 の退避と同じ）、`drop` は消す。最大 3、重複なし。0021 の退避先付与（SQL）と同じ結果になることを `tests/test_taxonomy.py` が検査する）。使う場所は 2 つ: (1) `export_approved_sql.py` — 台帳に残る旧 id の承認済み判定を書き出すときに新 id へ写す（写さないと `category_id IN (SELECT id FROM categories)` で黙って落ち、カテゴリ無しで載る）。(2) `import_results.py` — 旧 id を含む過去の結果ファイルの取り込みで、検証の前に写す。**台帳 `llm_judgement.categories` に残る既存の判定そのものは書き換えない**。全件の LLM 再判定（非官公庁 307 件、Haiku 第1段だけで約 $0.05〜0.1）で主題に振り直すのは別作業（#114 Q5）。
-- **注意（再判定と掲載済みサイト）**: (a) `exp_summary.py` の「カテゴリ重なり」は、比較元の判定が旧 id だと 0 になる（新 id との一致を数えるため。旧 id を写してから比べる）。(b) `export_approved_sql.py` は掲載済みのサイトを除外するので、**全件再判定（Q5）をしても、既に掲載済みのサイトの `site_categories` は変わらない**（0021 で機械的に移した状態のまま）。既存サイトのカテゴリを更新するには、別のカテゴリ更新用の書き出し（`--update-categories`）が要る: #122。
+- **注意（再判定と掲載済みサイト）**: (a) `exp_summary.py` の「カテゴリ重なり」は、比較元の判定が旧 id だと 0 になる（新 id との一致を数えるため。旧 id を写してから比べる）。(b) `export_approved_sql.py` は掲載済みのサイトを除外するので、**全件再判定（Q5）をしても、既に掲載済みのサイトの `site_categories` は変わらない**（0021 で機械的に移した状態のまま）。既存サイトのカテゴリを更新するには、別モードの書き出し（`--update-categories`）を使う（次節、#122）。
+
+## 掲載済みサイトのカテゴリ更新（#122）
+
+0021 は旧カテゴリを新カテゴリへ機械的に移しただけで、企業/団体系は退避先（`business` / `society` / `business-services` / `community`）に付いたまま。再判定の結果を掲載済みサイトへ反映する、`export_approved_sql.py` の**別モード**（通常の INSERT 出力とは混ぜない。同時指定は不可）。出力は `var/update-categories.sql`（git 管理外）。
+
+流れ: 再判定（`pipeline.py`）→ `import_results.py` / `review_state.py approve`（台帳の掲載候補）→ **`--update-categories`** → ローカル D1 で検証 → （kako-jun の承認後に）本番。
+
+```sh
+# (a) 台帳の承認済み（frontier.state='candidate'、verdict pass / suspect）で、sites に fr-<host>-<キーの sha1 先頭8桁> で掲載済みのサイト
+uv run python3 scripts/llm/export_approved_sql.py --update-categories --current LOCAL_D1.sqlite --dry-run   # 要約だけ
+uv run python3 scripts/llm/export_approved_sql.py --update-categories --current LOCAL_D1.sqlite             # -> var/update-categories.sql
+# (b) 台帳に無い掲載済み（sample-*、collected-* など。export_sites.py が出す入力の id = サイト id）。結果 JSON をそのまま使う
+uv run python3 scripts/llm/export_approved_sql.py --update-categories-from var/sites-results.json --input var/sites-candidates.jsonl --current LOCAL_D1.sqlite
+npx wrangler d1 execute mise --local --file var/update-categories.sql   # ローカル D1 で検証（本番は --remote、承認後のみ）
+```
+
+- **置換の SQL**: サイトごとに **INSERT が先、DELETE が後**: `INSERT OR IGNORE … SELECT id FROM categories WHERE id IN (新セット)` → `DELETE FROM site_categories WHERE site_id=… AND category_id NOT IN (新セット)`。どちらも「sites に実在する」「`government` 配下の葉を持たない」「`site_id NOT LIKE 'pb-%'`」で守られ、2 回流しても同じ（冪等）。DELETE にはさらに「新セットの id が対象 DB の `categories` に 1 つでも存在する」条件が付くので、途中で失敗しても、カテゴリ木が違う DB に流しても、サイトが未分類になることはない（余分な行が残るだけ）。
+- **対象外**: id が `pb-` の官公庁（SQL 側でも両モードで除外）、(b) では id が `fr-` のもの（台帳の承認を経ていない pass 判定で上書きしないため、(a) の対象。要約 `skipped_ledger_mode`）、`government` 配下の葉（種別 7 葉。台帳の種別から決定論で振った分）を持つサイト、sites に無い id（挿入はしない）。(a) は掲載済みの id が `fr-` で導出できるものだけなので、手動掲載は構造的に当たらない。
+- **判定の扱い**: カテゴリは `judge.modernize_categories` を通す（旧 id が残る行は写像）。空・有効な id が 1 つも無い判定は触れない（件数を要約に出す）。(a) は承認済みの pass / suspect、(b) は **pass のみ**（reject / suspect / deferred は触れない）で、出力は `judge.validate_output` を逐語引用込みで再検証し、通らない件は理由を出して書かない（終了コード 2）。
+- **親子の同時付与**: 親カテゴリと子カテゴリを同時に付ける判定は、通常の書き出し（INSERT 出力）と同じ挙動のまま変えない。
+- **`--out`**: 未指定ならモードの既定（更新モードは `var/update-categories.sql`）。明示した `--out` は常に尊重する。
+- **`--current`**: 反映先の sqlite（ローカル D1 の `.wrangler/state/v3/d1/**.sqlite` など）を読み取り専用で開き、実際の増減を要約に出す。付けると、sites に無い id と `government` 配下の葉を持つサイトは SQL にも書かない。(b) では候補の URL が掲載済みサイトの URL と違う件も除外する（要約 `skipped_url_mismatch`、理由は標準エラーに `SKIPPED`）。付けないと要約は計画件数だけで、除外は SQL 側の守りに任せる。
+- **要約（標準出力）**: 計画件数、変わるサイト数・変わらない数・未掲載・官公庁の葉で除外、判定が空で触れなかった件数（`skipped_empty`）、「適用前は退避先カテゴリのみ、適用後に退避先以外がある」サイト数、カテゴリ別の増減（gained / lost の件数）。`--dry-run` は SQL を書かず要約だけ。
+- **限界**: (1) 判定の質は再判定の結果次第（このモードは置換するだけ）。(2) 置換は丸ごと入れ替えで、人が付けたカテゴリ（手動掲載）の差分は残さない。(a) の対象は fr- 掲載分に限る。(3) 掲載済みの `sites` 行（名前・紹介文・タグ）は更新しない。(4) 本番の実行は承認後。実行前に `--dry-run --current` の要約でカテゴリ別の増減と退避先からの移動件数を確認する。
 
 ## トークンを減らす設計
 
