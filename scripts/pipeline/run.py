@@ -145,6 +145,9 @@ def report(db, sample):
         print(f'{r["host"]} | {title} | {desc} | kind={r["site_kind"]} adult={r["adult"]} ads={r["ad_hits"]} len={r["text_len"]}')
 
 
+WIKIDATA_ABORT_EXIT = 3   # nightly.py の同名定数と同じ値
+
+
 def discover_wikidata_cmd(db, a):
     rows = discover_wikidata.load_map()
     errs = discover_wikidata.validate_map(rows)
@@ -179,7 +182,11 @@ def main():
     db = frontier.connect(a.db)
     if a.cmd == 'discover-cc': print(discover.discover_commoncrawl(db, a.part_file, a.sample_every, a.limit))
     elif a.cmd == 'discover-links': print(discover.discover_links(db, max_links=a.max_links))
-    elif a.cmd == 'discover-wikidata': print(json.dumps(discover_wikidata_cmd(db, a), ensure_ascii=False))
+    elif a.cmd == 'discover-wikidata':
+        res = discover_wikidata_cmd(db, a)
+        print(json.dumps(res, ensure_ascii=False))
+        if res.get('aborted'):
+            sys.exit(WIKIDATA_ABORT_EXIT)   # 429/503 で中断(Retry-After を尊重)。呼び出し側(夜間ジョブ)は続行できる
     elif a.cmd == 'triage': print(dict(triage(db, a.redo)))
     elif a.cmd == 'fetch': print('fetched', fetch(db, a.limit, a.workers))
     elif a.cmd == 'judge': print(dict(judge(db)))

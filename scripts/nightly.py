@@ -235,11 +235,17 @@ class Night:
             if rc != 0:
                 self.status["guards"].append("discover-cc 失敗(続行)")
         if a.wikidata_leaves > 0:  # Wikidata の公式サイト(#128)。失敗しても続行(取得済みの台帳で後段が進む)
-            leaves, how = wikidata_leaf_order(a.wikidata_leaves)
+            leaves, how = wikidata_leaf_order(a.wikidata_leaves, db=self.db)
+            if not leaves:
+                note += f" / wikidata: 0 葉({how}、スキップ)"
+                self.status["guards"].append(f"discover-wikidata スキップ({how})")
+                return {"note": note}
             rc, o = run_cmd([PY, os.path.join(ROOT, "scripts/pipeline/run.py"), "discover-wikidata", "--db", self.db,
                              "--leaves", ",".join(leaves), "--limit-leaves", str(a.wikidata_leaves)])
-            note += f" / wikidata({how}: {','.join(leaves)}): " + (o.strip()[-120:] if rc == 0 else f"失敗(exit {rc}、続行)")
-            if rc != 0:
+            note += f" / wikidata({how}: {','.join(leaves)}): " + (o.strip()[-120:] if rc == 0 else (f"中断(exit {rc}、続行): " + o.strip()[-100:] if rc == WIKIDATA_ABORT_EXIT else f"失敗(exit {rc}、続行)"))
+            if rc == WIKIDATA_ABORT_EXIT:
+                self.status["guards"].append("Wikidata が中断した(429/503・Retry-After。続行)")
+            elif rc != 0:
                 self.status["guards"].append("discover-wikidata 失敗(続行)")
         return {"note": note}
 
@@ -525,14 +531,38 @@ def render_report(st):
 
 
 # ------------------------------------------------------------------ Wikidata の葉の順(#128)
+WIKIDATA_ABORT_EXIT = 3                            # run.py discover-wikidata が 429/503 で中断したときの終了コード
 LEAF_TARGET = 100                                  # 非官公庁の各葉の最低ライン(#124)
 CATEGORIES_URL = "https://mise.llll-ll.com/api/categories"   # 読み取りのみ
 
 
-def wikidata_leaf_order(n, fetch=None, map_path=None):
-    """今夜 Wikidata から取る葉を最大 n 個。本番の site_count が LEAF_TARGET 未満の葉を少ない順に。API が取れなければ対応表の順(固定)。"""
+def wikidata_done_leaves(rows, db_path):
+    """対応表の行がすべて source_cursor で done の葉の集合。台帳が無ければ空。"""
     import discover_wikidata
-    leaves = list(dict.fromkeys(r["leaf_id"] for r in discover_wikidata.load_map(map_path or discover_wikidata.MAP_PATH)))
+    con = ro_connect(db_path) if db_path else None
+    if con is None:
+        return set()
+    try:
+        cur = {k: v for k, v in con.execute("SELECT cursor_key, cursor_value FROM source_cursor WHERE source=?", (discover_wikidata.SOURCE,))}
+    except sqlite3.Error:
+        return set()
+    finally:
+        con.close()
+    by_leaf = {}
+    for r in rows:
+        by_leaf.setdefault(r["leaf_id"], []).append(cur.get(discover_wikidata.cursor_name(r)) == "done")
+    return {l for l, flags in by_leaf.items() if all(flags)}
+
+
+def wikidata_leaf_order(n, fetch=None, map_path=None, db=None):
+    """今夜 Wikidata から取る葉を最大 n 個。対応表の行が全部 done の葉は除く。残りのうち本番の site_count が LEAF_TARGET 未満の葉を少ない順に
+    (不足の葉が無ければ 0 件=スキップ)。API が取れなければ対応表の順(固定)。全葉が完了なら 0 件。"""
+    import discover_wikidata
+    rows = discover_wikidata.load_map(map_path or discover_wikidata.MAP_PATH)
+    done = wikidata_done_leaves(rows, db)
+    leaves = [l for l in dict.fromkeys(r["leaf_id"] for r in rows) if l not in done]
+    if not leaves:
+        return [], "完了"
     try:
         if fetch is None:
             import urllib.request
@@ -541,7 +571,7 @@ def wikidata_leaf_order(n, fetch=None, map_path=None):
         counts = {c["id"]: c["site_count"] for c in fetch()}
         short = [l for l in leaves if counts.get(l, 0) < LEAF_TARGET]
         short.sort(key=lambda l: counts.get(l, 0))   # 安定ソート: 同数なら対応表の順
-        return (short or leaves)[:n], "不足順"
+        return short[:n], ("不足順" if short else "不足なし")
     except Exception:
         return leaves[:n], "固定順(API 不可)"
 

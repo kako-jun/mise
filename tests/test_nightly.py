@@ -17,6 +17,8 @@ import nightly
 import integrity
 
 REAL_LEAF_ORDER = nightly.wikidata_leaf_order
+import discover_wikidata
+nightly_dw = lambda: discover_wikidata
 
 JCOLS = ("key, input_hash, origin, model, judged_at, imported_at, spam_verdict, spam_kind, spam_reason, categories, tags, adult, "
          "site_kind, site_kind_reason, site_scope, confidence, review_state")
@@ -538,3 +540,58 @@ class WikidataStage(Env):
         order, how = REAL_LEAF_ORDER(2, fetch=boom)
         self.assertEqual(order, ['libraries', 'shrines'])       # 対応表の先頭から(固定順)
         self.assertIn('固定', how)
+
+    def _leaf_order_db(self, done_leaves):
+        rows = nightly_dw().load_map()
+        for r in rows:
+            if r['leaf_id'] in done_leaves:
+                frontier.set_cursor(self.db, 'wikidata', nightly_dw().cursor_name(r), 'done')
+        self.db.commit()
+
+    def test_leaf_order_skips_done_leaves_and_picks_next(self):
+        leaves = list(dict.fromkeys(r['leaf_id'] for r in nightly_dw().load_map()))
+        self.assertGreater(len(leaves), 6)
+        self._leaf_order_db(set(leaves[:3]))
+        order, how = REAL_LEAF_ORDER(3, fetch=lambda: [], db=str(self.db_path))   # 全葉 0 件(不足)なので対応表の順
+        self.assertEqual(order, leaves[3:6])
+
+    def test_leaf_order_partial_leaf_stays_and_all_done_is_zero(self):
+        rows = nightly_dw().load_map()
+        leaves = list(dict.fromkeys(r['leaf_id'] for r in rows))
+        multi = next(l for l in leaves if sum(r['leaf_id'] == l for r in rows) > 1)
+        frontier.set_cursor(self.db, 'wikidata', nightly_dw().cursor_name(next(r for r in rows if r['leaf_id'] == multi)), 'done')
+        self.db.commit()
+        self.assertIn(multi, REAL_LEAF_ORDER(50, fetch=lambda: [], db=str(self.db_path))[0])   # 行の一部だけ done なら未完了
+        self._leaf_order_db(set(leaves))
+        self.assertEqual(REAL_LEAF_ORDER(3, fetch=lambda: [], db=str(self.db_path)), ([], '完了'))
+        self.assertEqual(REAL_LEAF_ORDER(3, fetch=lambda: (_ for _ in ()).throw(OSError()), db=str(self.db_path)), ([], '完了'))   # 固定順でも完了は 0 件
+
+    def test_no_short_leaf_means_empty_but_api_failure_falls_back(self):
+        rows = nightly_dw().load_map()
+        full = [{'id': l, 'site_count': 500} for l in dict.fromkeys(r['leaf_id'] for r in rows)]
+        self.assertEqual(REAL_LEAF_ORDER(3, fetch=lambda: full)[0], [])        # 全部 100 件以上 -> スキップ
+        def boom():
+            raise OSError('offline')
+        self.assertEqual(len(REAL_LEAF_ORDER(3, fetch=boom)[0]), 3)            # API 不可のときだけ固定順
+
+    def test_stage_skips_when_no_leaves_and_records_guard(self):
+        self.p_leaf.stop()
+        with mock.patch.object(nightly, 'wikidata_leaf_order', return_value=([], '完了')):
+            n = nightly.Night(self.args('--wikidata-leaves', '2'))
+            n.s_discover()
+        self.assertFalse([c for c in self.calls if 'discover-wikidata' in c])
+        self.assertTrue(any('スキップ' in g for g in n.status['guards']))
+        self.p_leaf.start()
+
+    def test_exit_3_is_recorded_as_abort_and_continues(self):
+        orig = self.fake
+        def fake(cmd, env=None, timeout=None):
+            if 'discover-wikidata' in cmd:
+                self.calls.append(cmd); return 3, '{"aborted": "WDQS 429 retry_after=60"}'
+            return orig(cmd, env, timeout)
+        with mock.patch.object(nightly, 'run_cmd', side_effect=fake):
+            n = nightly.Night(self.args('--wikidata-leaves', '2'))
+            r = n.s_discover()
+        self.assertTrue(any('Wikidata が中断' in g and 'Retry-After' in g for g in n.status['guards']))
+        self.assertFalse(any('失敗' in g for g in n.status['guards']))
+        self.assertIn('中断', r['note'])
