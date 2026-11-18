@@ -111,7 +111,9 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
    npx wrangler d1 execute mise --remote --command "SELECT category_id, count(*) FROM site_categories WHERE category_id IN ('national-agencies','independent-agencies','prefectures','cities','special-wards','towns','villages','government') GROUP BY 1"
    ```
    官公庁の葉は 46 / 51 / 46 / 779 / 23 / 728 / 179、`government` 直下は 0 件（2026-11-18 の本番）。ずれたら 0015 の適用後に官公庁の掲載が変わっている。退避先（`business` `society` `business-services` `community`）の件数は、手順 2 (c) の旧カテゴリ件数（企業・団体・製品とサービス・地域）から見込める。
-5. **マージ**: 手順 4 が想定どおりなら PR をマージする（自動デプロイ）。キャッシュ: 画面のページ HTML は CDN で 60 秒、`/api/*` は無し・`sitemap.xml` は 1 時間。この変更の JS/CSS は `app.js?v=43`・`style.css?v=42` に上げてある（古い JS がカテゴリ名を空白区切りで出さないように）。サイトマップのカテゴリ URL は新 id に替わり、旧カテゴリ URL はトップを返す（転送表なし）。LLM 側（`scripts/llm/`）の取り込み・書き出しは、本番に 0021 を適用してから回す。
+5. **マージ**: 手順 4 が想定どおりなら PR をマージする（自動デプロイ）。キャッシュ: 画面のページ HTML は CDN で 60 秒、`/api/*` は無し・`sitemap.xml` は 1 時間。この変更の JS/CSS は `app.js?v=44`・`style.css?v=43` に上げてある（古い JS がカテゴリ名を空白区切りで出さないように）。サイトマップのカテゴリ URL は新 id に替わり、旧カテゴリ URL はトップを返す（転送表なし）。LLM 側（`scripts/llm/`）の取り込み・書き出しは、本番に 0021 を適用してから回す。
+
+> 0021 は適用後に凍結する。手動で再実行すると `ON CONFLICT DO UPDATE` が、その後に木へ加えたカテゴリ名の変更を元に戻す。木を直すときは新しい migration を足す。
 6. **失敗したとき**: 手順 3 が失敗したら、まず `npx wrangler d1 execute mise --remote --command "SELECT name FROM d1_migrations WHERE name LIKE '0021%'"` で **0021 が記録されていない**ことを確認する（記録が無ければ全体が取り消されていて、DB は適用前のまま。原因の行を直して再適用）。中途半端に変わっていた場合は、手順 1 の Time Travel bookmark へ `npx wrangler d1 time-travel restore mise --bookmark=…` で戻す（バックアップの `d1 execute --file` で戻すのは最後の手段）。0021 だけを戻す逆 migration は持たない（旧→新は多対一で、元に戻せない）。
 
 ## プレビュービルド（ブランチごと）
