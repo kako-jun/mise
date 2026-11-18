@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """独立サイトの発見パイプライン（決定論。LLM/エージェントのトークンは使わない）。
 
-  uv run python3 scripts/pipeline/run.py init|discover-cc|discover-links|triage|fetch|judge|report [options]
+  uv run python3 scripts/pipeline/run.py init|discover-cc|discover-links|discover-wikidata|triage|fetch|judge|report [options]
 """
 import argparse
 import collections
@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import discover
+import discover_wikidata
 import features
 import fetcher
 import freshness
@@ -43,7 +44,7 @@ def triage(db, redo=False):
     exempt |= {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
     fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
-        reason = prefilter(r['host'], jp_only=r['source'] not in ('links', 'request'))   # 申請の推薦は .jp 以外も許す（国は掲載時の country_code が決める）
+        reason = prefilter(r['host'], jp_only=r['source'] not in ('links', 'request', 'wikidata'))   # 申請の推薦・Wikidata(日本の項目の公式サイト)は .jp 以外も許す（国は掲載時の country_code が決める）
         if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
             reason = 'shared_service_user'   # 台帳内で同じドメイン配下のホストが多い = 共有サービスの利用者領域の可能性
         if reason in DEFERRED_REASONS:
@@ -144,14 +145,31 @@ def report(db, sample):
         print(f'{r["host"]} | {title} | {desc} | kind={r["site_kind"]} adult={r["adult"]} ads={r["ad_hits"]} len={r["text_len"]}')
 
 
+def discover_wikidata_cmd(db, a):
+    rows = discover_wikidata.load_map()
+    errs = discover_wikidata.validate_map(rows)
+    if errs:
+        sys.exit('data/wikidata-leaf-map.csv が不正:\n' + '\n'.join(errs))
+    leaves = [l for l in (a.leaves or '').split(',') if l]
+    unknown = set(leaves) - {r['leaf_id'] for r in rows}
+    if unknown:
+        sys.exit(f'対応表に無い葉: {sorted(unknown)}')
+    sel = discover_wikidata.select_rows(rows, leaves or None, a.limit_leaves)
+    return discover_wikidata.discover_wikidata(db, sel, discover_wikidata.Client(), a.max_rows, listed=discover_wikidata.listed_keys(), ignore_cursor=a.ignore_cursor)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report'])
+    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'discover-wikidata', 'triage', 'fetch', 'judge', 'report'])
     ap.add_argument('--db', default=None)
     ap.add_argument('--part-file', help='discover-cc: ローカルの vertices パート (.gz)。省略時は自動取得（約40MB）')
     ap.add_argument('--sample-every', type=int, default=1000, help='discover-cc: ホスト名のハッシュで 1/N を決定論的に抽出')
     ap.add_argument('--limit', type=int, default=100, help='discover-cc: 追加上限 / fetch: 取得ホスト数上限')
     ap.add_argument('--max-links', type=int, default=300, help='discover-links: 1 シードあたりの発見上限')
+    ap.add_argument('--leaves', help='discover-wikidata: 取る葉の id(カンマ区切り。この順)。省略時は対応表の順')
+    ap.add_argument('--limit-leaves', type=int, default=3, help='discover-wikidata: 1 回に取る葉の数の上限')
+    ap.add_argument('--max-rows', type=int, default=1000, help='discover-wikidata: 1 回に取る SPARQL 行数の合計の上限')
+    ap.add_argument('--ignore-cursor', action='store_true', help='discover-wikidata: 取り終えた行も先頭から取り直す')
     ap.add_argument('--workers', type=int, default=3, help='fetch: 並列数（2〜4。ホストは重複しない）')
     ap.add_argument('--redo', action='store_true', help='triage: 未取得の rejected を引き直す')
     ap.add_argument('--sample', type=int, default=20, help='report: 候補サンプル件数')
@@ -161,6 +179,7 @@ def main():
     db = frontier.connect(a.db)
     if a.cmd == 'discover-cc': print(discover.discover_commoncrawl(db, a.part_file, a.sample_every, a.limit))
     elif a.cmd == 'discover-links': print(discover.discover_links(db, max_links=a.max_links))
+    elif a.cmd == 'discover-wikidata': print(json.dumps(discover_wikidata_cmd(db, a), ensure_ascii=False))
     elif a.cmd == 'triage': print(dict(triage(db, a.redo)))
     elif a.cmd == 'fetch': print('fetched', fetch(db, a.limit, a.workers))
     elif a.cmd == 'judge': print(dict(judge(db)))

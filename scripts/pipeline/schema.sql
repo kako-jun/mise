@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   adult          TEXT,                     -- yes|no|unknown。属性のみ（拒否に使わない）。決定論は yes/unknown まで、no は後段
   site_kind      TEXT,                     -- 個人|事業|団体|企業|不明（属性。拒否には使わない。決定論で分かる範囲のみ）
   freshness_signal_at TEXT,                -- 更新の兆候の最新日 YYYY-MM-DD（#129。header/footer/sitemap/feed のうち最新。無ければ NULL）
+  hint_leaf      TEXT,                     -- 発見元が持つ葉のヒント(#128。wikidata の対応表の葉 id。判定を誘導しない弱い手がかり。無ければ NULL)
   freshness_source    TEXT                 -- header | footer_updated(最終更新表記) | footer_copyright(©年のみ・弱い) | sitemap | feed
 );
 CREATE INDEX IF NOT EXISTS frontier_state_next ON frontier (state, next_fetch_at, priority DESC);

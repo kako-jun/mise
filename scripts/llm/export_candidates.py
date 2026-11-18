@@ -37,6 +37,8 @@ def export(db_path, state="candidate"):
         if "freshness_signal_at" in keys and r["freshness_signal_at"]:  # #129: 決定論で取れた更新の兆候（無ければキーごと渡さない）
             features["freshness_signal_at"] = r["freshness_signal_at"]
             features["freshness_source"] = r["freshness_source"]
+        if "hint_leaf" in keys and r["hint_leaf"]:  # #128: 発見元の葉のヒント(Wikidata の対応表)。判定を誘導しない弱い手がかり。無ければキーごと渡さない
+            features["leaf_hint"] = r["hint_leaf"]
         out.append({"id": cand_id(r["key"]), "url": r["final_url"] or r["url"], "title": r["title"],
                     "meta_description": r["description"], "lang": r["lang"],
                     "body_excerpt": r["text_head"] or "", "features": features})
