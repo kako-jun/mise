@@ -23,6 +23,7 @@ Per site: sites (id, url, name, description_ja/en, country_code, region_code) / 
     re-approving and re-exporting a site that is already listed never adds categories or tags to it.
   - categories are translated from old (pre-#114) ids and keep only ids that exist in categories; tags (English keywords from the LLM) go to label_ja and label_en
     (case-insensitive duplicates and tags over 40 chars are dropped).
+  - Skipped: a judgement without any valid category (nothing to file the site under; the integrity gate would stop on an uncategorized site).
   - long descriptions are not exported (no column for them yet). Existing rows are never updated.
 
 Category update mode (Issue #122; a separate mode, never mixed with the INSERT output above): sites that are already listed
@@ -180,7 +181,7 @@ def build(db_path):
             "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()
-    stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0,
+    stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0, "skipped_no_category": 0,
              "dropped_ancestors": 0, "dropped_retreat": 0}  # the last two: categories removed by the canonical form (#137)
     seen, body = set(), []
     for r in rows:
@@ -188,6 +189,8 @@ def build(db_path):
             stats["skipped_verdict"] += 1
         elif not (r["description_ja"] and r["description_en"]):
             stats["skipped_no_description"] += 1
+        elif not judge.modernize_categories(json.loads(r["categories"]), VALID_CATEGORIES, LEGACY_CATEGORIES):
+            stats["skipped_no_category"] += 1  # a site without any category is a violation (uncategorized, #137): not listed until it has one
         elif import_requests.key_of(r["final_url"] or r["url"]) in seen:
             stats["skipped_duplicate"] += 1
         else:

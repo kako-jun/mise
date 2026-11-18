@@ -530,7 +530,7 @@ class ExportTests(Base):
         n = lambda tbl, host: t.execute(f"SELECT count(*) FROM {tbl} WHERE site_id=?", (self.listed(t, host)[0],)).fetchone()[0]
         self.assertEqual((n("site_categories", "many.example"), n("site_tags", "many.example")), (3, 5))
         self.assertEqual((n("site_categories", "onlycat.example"), n("site_tags", "onlycat.example")), (1, 0))
-        self.assertEqual((n("site_categories", "onlytag.example"), n("site_tags", "onlytag.example")), (0, 1))
+        self.assertIsNone(self.listed(t, "onlytag.example"))  # no category at all: not listed (#137, uncategorized is a violation)
 
     def test_tags_are_deduplicated_case_insensitively_and_length_capped(self):
         rows = export_approved_sql.clean_tags(["Photo", "photo", " PHOTO ", "x" * 41, "a  b", "c", "d", "e", "f"])
