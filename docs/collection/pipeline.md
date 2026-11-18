@@ -21,6 +21,7 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 | `scripts/pipeline/schema.sql` | frontier 台帳のスキーマ（正本はコミット済みのこの定義。LLM の判定結果の表 `llm_judgement` を含む） |
 | `scripts/pipeline/frontier.py` | SQLite ラッパー。台帳の実体は `var/frontier.sqlite`（`.gitignore`、再生成可能。旧い台帳は接続時に追従） |
 | `scripts/pipeline/discover.py` | 発見元 |
+| `scripts/pipeline/discover_wikidata.py` | 発見元: Wikidata の公式サイト(P856)を葉ごとに取る（対応表 `data/wikidata-leaf-map.csv`） |
 | `scripts/pipeline/hostnames.py` | ホスト名の正規化と取得前フィルタ |
 | `scripts/pipeline/fetcher.py` | 行儀のよい取得（robots・UA・内部IP拒否・上限） |
 | `scripts/pipeline/features.py` | 取得後の特徴抽出と判定ルール（閾値はこのファイルの定数） |
@@ -43,6 +44,12 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 
 - **`discover-cc`（実装済み）**: Common Crawl のホストレベルのウェブグラフ（`cc-main-2026-jul-aug-sep`）の vertices から `.jp` ホストを取り、ホスト名の CRC32 で 1/N を決定論的に抽出する（既定 N=1000）。パート（約27〜40MB）は一時ファイルに落として完了後に rename し、`--max-filesize` 100MB で打ち切る。`--limit` で打ち切ると、パート内で先に出るホストへ偏る（再現はできる）。**`.jp` が入っているパート番号**（`CC_JP_PART`）はリリースごとに違う: `…-host-vertices.paths.gz` の各パートの先頭 3KB を Range 取得して `zcat | head -1` し、`jp.` が現れる境界のパートを選ぶ（`.jp` はそのパートと直前パートの末尾にまたがる）。
 - **`discover-links`（実装済み）**: 既存掲載サイト（`data/collection-*.json`）のトップページから外部リンク先ホストを深さ1で発見する。`.jp` 以外も許し、日本語かは取得後に判定する（申請の推薦 `source='request'` も同様に `not_jp` を適用しない）。
+- **`discover-wikidata`（実装済み、#128）**: Wikidata の公式ウェブサイト(P856)を、項目の種類(P31、人物は職業 P106)ごとに SPARQL で取り、新しい木の**葉**に対応づける発見元。他の発見元が会社・団体に偏るのに対し、**足りない葉（神社・博物館・天文台・大学・図書館・鉄道会社・出版社・漫画家 等）を狙って集める**ためにある。
+  - **対応表 `data/wikidata-leaf-map.csv` が正本**（1 つ）。列は `leaf_id`（`data/categories.csv` の assign=llm の葉）、`qid`（Wikidata のクラス。Wikidata のページで英語ラベルを確認したものだけ）、`rel`（`P31` か `P106`）、`country_prop`（日本との関係を見る property。組織は `P17|P495`、人物は `P27`。値は Japan = Q17）、`subclass`（1 なら `wdt:P31/wdt:P279*` で子クラスも含める。WDQS のタイムアウトを見て行ごとに選ぶ）、`label_en`（確認用）、`note`、`max_rows`（その行から取る SPARQL 行数の上限）。形式・葉の実在・assign=llm の葉であることはテストが検査する。日本語の主題で Wikidata に項目が少ないもの、合う葉が無いもの（学会・研究所など）は対応づけない。
+  - 台帳には `source='wikidata'`、`hint_leaf`（対応表の葉 id）で入れる。ホスト単位（パスは捨てる）。既掲載（`data/collection-*.json`・`var/nightly/shipped.txt`）のホストは入れず、台帳に既にあるキーは触らない。**`.jp` 以外も通す**（日本の項目の公式サイトなので。日本語かどうかは取得後に判定）。官公庁（`.go.jp`/`.lg.jp`）・共有サービス配下は既存の取得前フィルタ（triage）が落とす。
+  - **`hint_leaf` は LLM を誘導しない弱い手がかり**: `export_candidates` が候補の features に `leaf_hint` として渡す（無ければキーごと渡さない）が、`judge.py` の指示文は変えていない。判定は本文から行う。
+  - **WDQS の利用ルール**: UA は `MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)`、クエリは 1 つずつ直列で、ネットワークに出る呼び出しの間は 5 秒以上あける、`ORDER BY ?item LIMIT 200 OFFSET n` のページング、クライアント側のタイムアウト 60 秒、**429/503 は Retry-After を記録して全体を中断**（他の失敗＝タイムアウトや 5xx はその行だけ諦めて次へ）。結果は `var/wikidata-cache/`（`.gitignore` の `var/` 配下）に 30 日キャッシュし、同じクエリを連打しない。行ごとの「次の OFFSET」を `source_cursor` に持ち、夜をまたいで続きから取る（取り終えた行は `done`。`--ignore-cursor` で取り直し）。1 回の上限は `--limit-leaves`（葉の数、既定 3）と `--max-rows`（SPARQL 行数の合計、既定 1000）。
+  - **出典・ライセンス**: Wikidata のデータは CC0。台帳の `source_detail` に項目の QID を残す。画面には出さない（#111 と整合）。
 - Wayback CDX / CT ログ（crt.sh）: 大量発見には不向き（TLD 全体の走査が遅い・拒否される／巨大）。個別ドメインの裏取りや補完用として、`discover.py` に関数を足す口だけがある（未実装）。
 
 ## フィルタ
@@ -69,6 +76,7 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 ```sh
 uv run python3 scripts/pipeline/run.py discover-cc --sample-every 1000 --limit 1000   # 発見（約40MBを取得してキャッシュ）
 uv run python3 scripts/pipeline/run.py discover-links                                 # 既掲載サイトの外部リンク
+uv run python3 scripts/pipeline/run.py discover-wikidata --leaves shrines,temples --max-rows 400   # Wikidata の公式サイト（WDQS に数クエリ。5 秒間隔）
 uv run python3 scripts/pipeline/run.py triage                                         # 取得前フィルタ
 uv run python3 scripts/pipeline/run.py fetch --limit 400 --workers 3                  # 取得（実サイトにアクセスする）
 uv run python3 scripts/pipeline/run.py judge                                          # 取得後フィルタ・属性付与
