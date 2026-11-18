@@ -93,31 +93,19 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 0. **適用前の確認**: 適用は **PR ブランチ（`126-category-counts`）をチェックアウトした状態で行う**（`main` にはまだ 0022 のファイルが無い）。`npx wrangler d1 migrations list mise --remote` で**未適用が 0022 だけ**であることを確かめる（他に未適用があれば、それも一緒に流れてしまうので止めて原因を調べる）。
 1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
 2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
-3. **一致確認**（`--remote` の SELECT だけ。**下の 5 本それぞれ結果 0 行**が正。`expected` が数え直した値、`cached` が表の値）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）。複合 SELECT は 3 項以下に保つ:
-   - [1] `category_counts`（`all`）
-     ```sh
-     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id), want AS (SELECT t.root_id cid, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id JOIN sites s ON s.id=x.site_id GROUP BY t.root_id) SELECT k.id, COALESCE(w.n,0) expected, COALESCE(cc.n,0) cached FROM categories k LEFT JOIN want w ON w.cid=k.id LEFT JOIN category_counts cc ON cc.category_id=k.id AND cc.scope='all' WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0)"
-     ```
-   - [2] `category_counts`（各国。サイトの無い国に残った行も検出）
-     ```sh
-     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id), want AS (SELECT t.root_id cid, s.country_code scope, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id JOIN sites s ON s.id=x.site_id WHERE s.country_code IS NOT NULL GROUP BY t.root_id, s.country_code) SELECT COALESCE(w.cid,cc.category_id) id, COALESCE(w.scope,cc.scope) scope, COALESCE(w.n,0) expected, COALESCE(cc.n,0) cached FROM want w LEFT JOIN category_counts cc ON cc.category_id=w.cid AND cc.scope=w.scope WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0) UNION ALL SELECT cc.category_id, cc.scope, 0, cc.n FROM category_counts cc WHERE cc.scope<>'all' AND NOT EXISTS (SELECT 1 FROM sites s JOIN site_categories x ON x.site_id=s.id WHERE s.country_code=cc.scope)"
-     ```
-   - [3] `scope_counts`（各国）
-     ```sh
-     npx wrangler d1 execute mise --remote --command "SELECT sc.scope, sc.n cached, (SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope) expected FROM scope_counts sc WHERE sc.scope<>'all' AND sc.n<>(SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope)"
-     ```
-   - [4] `scope_counts`（`all`）
-     ```sh
-     npx wrangler d1 execute mise --remote --command "SELECT sc.n cached,(SELECT COUNT(*) FROM sites) expected FROM scope_counts sc WHERE sc.scope='all' AND sc.n<>(SELECT COUNT(*) FROM sites)"
-     ```
-   - [5] 閉包表の欠け（`missing`）・余り（`extra`）を再帰 CTE と両方向で比較
-     ```sh
-     npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id,id) AS (SELECT id,id FROM categories UNION SELECT tree.root_id,c.id FROM tree JOIN categories c ON c.parent_id=tree.id) SELECT 'missing' kind, t.root_id, t.id FROM tree t WHERE NOT EXISTS (SELECT 1 FROM category_closure cl WHERE cl.ancestor_id=t.root_id AND cl.descendant_id=t.id) UNION ALL SELECT 'extra', cl.ancestor_id, cl.descendant_id FROM category_closure cl WHERE NOT EXISTS (SELECT 1 FROM tree t WHERE t.root_id=cl.ancestor_id AND t.id=cl.descendant_id)"
-     ```
-   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 5 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
+3. **一致確認**（`--remote` の SELECT だけ）: `uv run python3 scripts/check-data-integrity.py --remote`。**検査ごとに結果 0 行**が正で、1 つでも FAIL なら終了コードが 0 以外になる（`warn` は表示のみ）。検査の定義の正本は `scripts/llm/integrity.py`（検査一覧と意味は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）ので、スクリプトは検査ごとに 1 本ずつ流す。このうち 0022 の確認は `category_counts_all` / `category_counts_country` / `scope_counts_country` / `scope_counts_all` / `category_closure` の 5 本（`expected` が数え直した値、`cached` が表の値）。ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 5 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_integrity.py`、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
 4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
 5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。マージ後、**手元の dev DB でも `npm run db:migrate` を流す**（流さないと手元の `/api/categories` が表なしでエラーになる）。
 6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。
+
+## 冗長なカテゴリ所属の一度きりの整理（Issue #137）を本番へ適用する手順
+
+**承認を取ってから実行する。** `scripts/fix-redundant-categories.sql`（単純な DELETE 2 文）で、(a) 親と子の両方が付いたサイトの親、(b) 実カテゴリと並んだ退避先（`business` / `society` / `business-services` / `community`）を消す。`pb-` は対象外、サイトは最後のカテゴリを失わない、2 回流しても 2 回目は何も消さない。
+
+1. **適用前**: `uv run python3 scripts/check-data-integrity.py --remote`（`ancestor_duplicate` と `retreat_with_real` 以外は 0 行であること）。`npx wrangler d1 time-travel info mise` の bookmark を控える。集計表の写しを取る: `npx wrangler d1 execute mise --remote --json --file scripts/category-counts-snapshot.sql > before.json`。
+2. **適用**（ローカル D1 で先に同じ手順を通す）: `npx wrangler d1 execute mise --remote --file scripts/fix-redundant-categories.sql`。
+3. **適用後**: 同じ `check-data-integrity.py --remote` が **全 error 検査で 0 行**（`ancestor_duplicate` `retreat_with_real` も 0 に）。写しをもう一度 `after.json` に取って `diff before.json after.json`。**差が出てよいのは退避先 4 カテゴリ（`business` `society` `business-services` `community`）の行だけ**（(b) で退避先の所属が減るため。実カテゴリと、(a) で外した親の件数は、親が子孫を数えるので変わらない）。ほかの行に差が出たら止めて原因を調べる。
+4. **戻し方**: Time Travel の bookmark へ戻す（`npx wrangler d1 time-travel restore mise --bookmark=…`）。
 
 ### 0022 の戻し方と作り直し方
 

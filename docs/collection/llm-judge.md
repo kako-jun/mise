@@ -103,6 +103,34 @@ npx wrangler d1 execute mise --local --file var/update-categories.sql   # ロー
 - **要約（標準出力）**: 計画件数、変わるサイト数・変わらない数・未掲載・官公庁の葉で除外、判定が空で触れなかった件数（`skipped_empty`）、「適用前は退避先カテゴリのみ、適用後に退避先以外がある」サイト数、カテゴリ別の増減（gained / lost の件数）。`--dry-run` は SQL を書かず要約だけ。
 - **限界**: (1) 判定の質は再判定の結果次第（このモードは置換するだけ）。(2) 置換は丸ごと入れ替えで、人が付けたカテゴリ（手動掲載）の差分は残さない。(a) の対象は fr- 掲載分に限る。(3) 掲載済みの `sites` 行（名前・紹介文・タグ）は更新しない。(4) 本番の実行は承認後。実行前に `--dry-run --current` の要約でカテゴリ別の増減と退避先からの移動件数を確認する。
 
+## カテゴリ所属の正規形とデータ整合チェック（#137）
+
+**正規形**（正本は [data-model.md](../design/data-model.md#カテゴリ所属の正規形)）: (a) 親と子の両方が付いたら子だけ残す（祖先の除去）、(b) 実カテゴリがあるときは退避先（`business` / `society` / `business-services` / `community`。定義の正本は `data/category-map.csv` の `fallback` 行）を付けない。官公庁の種別葉（`assign=rule`）はそのまま。判定が空・無効なら今までどおり触れない。
+
+- 正規化は `judge.normalize_categories`（木は `data/categories.csv` の `parent_id`）の 1 箇所。`judge.modernize_categories`（旧 id の翻訳 + 正規化、そのあと最大 3 に切る）と `judge.canonical_categories`（出力 1 件分）が通す。`import_results.py`（台帳に入る時点）と `export_approved_sql.py` の 3 モード（通常の INSERT・`--update-categories`・`--update-categories-from`）が同じ関数を使う。
+- 要約（`--update-categories*` の `--dry-run` を含む標準出力、通常モードは標準エラー）に `dropped_ancestors`（外した親）と `dropped_retreat`（外した退避先）の件数が出る。
+- **取り込み・書き出しの門**: `import_results.py` は正規形でない categories を台帳に入れず `REJECTED` にする。`export_approved_sql.py` は SQL を書く前に、生成した SQL を全 migration 適用済みのメモリ DB（`--current` があればその sqlite の写し）に流して下の検査を走らせ、**その SQL が新たに作った違反**があれば SQL を書かずに標準エラーへ出して終了コード 3 で止まる（もとから DB にあった違反は止めない＝一度きりの整理を待つ古いデータで夜間ジョブが止まらない）。門を飛ばすフラグは設けない。夜間ジョブ（#124）の件数ガードは、この終了コード 3 を異常として扱う。
+- 既存データの一度きりの整理は `scripts/fix-redundant-categories.sql`（手順は [deploy.md](../operations/deploy.md)）。
+
+### データ整合チェック（#137）
+
+`uv run python3 scripts/check-data-integrity.py --local [--persist-to DIR]` / `--remote`（SELECT のみ）/ `--sqlite FILE`。定義の正本は `scripts/llm/integrity.py`（検査ごとに単純な 1 SELECT。D1 本番の複合 SELECT 項数上限のため）。**0 行が正**。error が 1 つでもあれば終了コード 1、warn は表示のみ。
+
+| 検査 | 意味 | 重さ |
+|---|---|---|
+| `ancestor_duplicate` | 親と子の両方が付いている所属（`pb-` 除く） | error |
+| `retreat_with_real` | 退避先と実カテゴリが併存（`pb-` 除く） | error |
+| `uncategorized` | カテゴリが 1 つも無いサイト | error |
+| `orphan_site_categories` | 存在しないカテゴリ・サイトを指す `site_categories` | error |
+| `category_counts_all` / `category_counts_country` | `category_counts` が再帰 CTE の数え直しと違う（国別は、サイトの無い国に残った n>0 の行も） | error |
+| `scope_counts_country` / `scope_counts_all` | `scope_counts` が実サイト数と違う | error |
+| `category_closure` | 閉包表の欠け・余りを再帰 CTE と比較 | error |
+| `duplicate_site_category` | 同じ (サイト, カテゴリ) の二重（主キーで防がれているはずの確認） | error |
+| `duplicate_url` | 正規化後（scheme・`www.`・末尾スラッシュ・大文字小文字を無視）の URL が同じサイト | error |
+| `public_body_not_leaf` | 官公庁 `pb-` が `government` 直下の種別葉以外に付いている | error |
+| `empty_text` | name か `description_ja` が空 | error |
+| `no_country` | `country_code` が NULL（正規の状態だが国別の画面に出ない） | warn |
+
 ## トークンを減らす設計
 
 - 固定の英語指示文を `system` に置き、`cache_control` でプロンプトキャッシュに載せる（`--cache-ttl 1h` も可）。最小の長さは Haiku 5.5・Sonnet 5.5 とも 512 トークン（公式 prompt-caching、2026-11-13 確認）。
