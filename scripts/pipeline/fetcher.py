@@ -8,6 +8,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.robotparser
@@ -193,7 +194,11 @@ def fetch_site(host, scheme_order=('https', 'http'), path='/'):
                 out['error'] = 'robots_disallowed'; return out
             res = _follow(out, origin + path, robots, delay)
             if not res['error'] and res['status'] == 200 and 'html' in res['headers'].get('content-type', 'html').lower():
-                res['freshness'] = collect_freshness(res, robots)
+                try:
+                    res['freshness'] = collect_freshness(res, robots)
+                except Exception as e:  # 兆候は付随情報。失敗してもトップ取得の結果は捨てない
+                    print(f'freshness: {host}: {type(e).__name__}: {e}', file=sys.stderr)
+                    res['freshness'] = []
             return res
     return out
 
@@ -224,7 +229,7 @@ def collect_freshness(out, robots, today=None):
             break
         up = urllib.parse.urlsplit(u)
         try:
-            st, ok, delay = robots.check(f'{up.scheme}://{up.netloc}', up.path or '/')
+            st, ok, delay = robots.check(f'{up.scheme}://{up.netloc}', (up.path or '/') + (f'?{up.query}' if up.query else ''))
             if not ok:
                 continue
             time.sleep(max(HOST_WAIT, delay)); done += 1

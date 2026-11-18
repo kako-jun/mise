@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS frontier (
   adult          TEXT,                     -- yes|no|unknown。属性のみ（拒否に使わない）。決定論は yes/unknown まで、no は後段
   site_kind      TEXT,                     -- 個人|事業|団体|企業|不明（属性。拒否には使わない。決定論で分かる範囲のみ）
   freshness_signal_at TEXT,                -- 更新の兆候の最新日 YYYY-MM-DD（#129。header/footer/sitemap/feed のうち最新。無ければ NULL）
-  freshness_source    TEXT                 -- header | footer | sitemap | feed
+  freshness_source    TEXT                 -- header | footer_updated(最終更新表記) | footer_copyright(©年のみ・弱い) | sitemap | feed
 );
 CREATE INDEX IF NOT EXISTS frontier_state_next ON frontier (state, next_fetch_at, priority DESC);
 -- どこまで探したか（発見元ごとのカーソル）
@@ -72,6 +72,6 @@ CREATE TABLE IF NOT EXISTS llm_judgement (
   reviewed_at    TEXT,
   freshness      TEXT CHECK (freshness IN ('active','stale','unknown')),      -- #129。既存行は NULL（未判定）
   exempt         TEXT CHECK (exempt IN ('rare_genre','notable','none')),
-  review_reason  TEXT                      -- approve_policy.py が自動で rejected にした理由（stale_individual）。人の操作では NULL
+  review_reason  TEXT                      -- approve_policy.py が自動で更新した理由（rejected: stale_individual / approved: auto_approved）。人の操作（review_state.py）では NULL
 );
 CREATE INDEX IF NOT EXISTS llm_judgement_review ON llm_judgement (review_state, spam_verdict);

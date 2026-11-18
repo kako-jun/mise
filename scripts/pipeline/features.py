@@ -83,13 +83,13 @@ def extract(host, text, headers):
         'adult_text': next((m for m in blocklist('adult_markers.txt')['strong'] if has_marker(m, low)), None),
         'adult_weak': sum(1 for m in blocklist('adult_markers.txt')['weak'] if has_marker(m, low)),
     }
-    footer_at = freshness.footer_date(visible)
+    footer_at, footer_src = freshness.footer_signal(visible)
     return {
         'title': re.sub(r'\s+', ' ', p.title).strip()[:300], 'description': (p.desc or '').strip()[:500], 'lang': (p.lang or '').lower()[:20],
         'kana_count': len(KANA.findall(visible)), 'text_len': len(visible), 'ad_hits': ad_hits, 'ext_refs': ext,
         'flags': json.dumps(flags, ensure_ascii=False), 'text_head': visible[:300],
         'personal_score': sum(1 for w in PERSONAL_WORDS if w in low),
-        'freshness_signal_at': footer_at, 'freshness_source': 'footer' if footer_at else None,   # 本文由来の兆候。run.process が header/feed/sitemap と合成して最新を採る
+        'freshness_signal_at': footer_at, 'freshness_source': footer_src,   # 本文由来の兆候。run.process が header/feed/sitemap と合成して最新を採る
     }
 
 

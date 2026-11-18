@@ -55,6 +55,21 @@ class FooterDate(unittest.TestCase):
         self.assertIsNone(self.f('最終更新 2021年13月'))
 
 
+class FooterSignal(unittest.TestCase):
+    def test_source_distinguishes_copyright_and_updated(self):
+        self.assertEqual(fr.footer_signal('(c) 2019 Taro', TODAY), ('2019-12-31', 'footer_copyright'))
+        self.assertEqual(fr.footer_signal('最終更新 2021年3月', TODAY), ('2021-03-31', 'footer_updated'))
+        self.assertEqual(fr.footer_signal('© 2015 ... 最終更新 2018年8月10日', TODAY), ('2018-08-10', 'footer_updated'))
+        self.assertEqual(fr.footer_signal('最終更新 2018年8月10日 © 2022', TODAY), ('2022-12-31', 'footer_copyright'))   # 新しい方を採る
+        self.assertEqual(fr.footer_signal('© 2020 最終更新 2020年12月31日', TODAY), ('2020-12-31', 'footer_updated'))   # 同日は更新表記
+        self.assertEqual(fr.footer_signal('nothing', TODAY), (None, None))
+
+    def test_features_keep_the_source(self):
+        import features
+        f = features.extract('a.example', '<html><body><p>hello</p><footer>© 2019</footer></body></html>', {})
+        self.assertEqual((f['freshness_signal_at'], f['freshness_source']), ('2019-12-31', 'footer_copyright'))
+
+
 class HeaderDate(unittest.TestCase):
     def test_old_last_modified(self):
         self.assertEqual(fr.header_date({'last-modified': 'Tue, 05 Mar 2019 10:00:00 GMT', 'date': 'Wed, 18 Nov 2026 01:00:00 GMT'}, TODAY), '2019-03-05')
@@ -129,6 +144,34 @@ class CollectFreshness(unittest.TestCase):
     def test_robots_denied_is_not_fetched(self):
         found, calls = self.run_it({}, deny=('/sitemap.xml', '/rss.xml'))
         self.assertEqual(calls, [])
+
+    def test_robots_check_includes_the_query(self):
+        html = '<link rel="alternate" type="application/rss+xml" href="/?feed=rss2">'
+        rb = self.Robots(deny=('/?feed=rss2',))
+        import fetcher
+        from unittest import mock
+        out = {'status': 200, 'final_url': 'https://a.example/', 'headers': {}, 'body': html.encode()}
+        calls = []
+        with mock.patch.object(fetcher, 'http_get', lambda u, max_body=0: (calls.append(u), (404, {}, b''))[1]), mock.patch.object(fetcher.time, 'sleep', lambda s: None):
+            fetcher.collect_freshness(out, rb, TODAY)
+        self.assertIn('/?feed=rss2', rb.asked)
+        self.assertNotIn('https://a.example/?feed=rss2', calls)
+
+    def test_unexpected_exception_keeps_the_top_page(self):
+        import fetcher
+        from unittest import mock
+        top = {'error': None, 'status': 200, 'headers': {'content-type': 'text/html'}, 'body': b'<html></html>', 'final_url': 'https://a.example/'}
+
+        class RB:
+            def check(self, origin, path): return 'allowed', True, 0
+        with mock.patch.object(fetcher, 'RobotsCache', lambda sleep: RB()), \
+             mock.patch.object(fetcher, 'collect_freshness', side_effect=ValueError('boom')), \
+             mock.patch.object(fetcher, '_follow', lambda out, url, robots, delay: dict(out, **top)), \
+             mock.patch.object(fetcher, 'check_public_host', lambda h: None), \
+             mock.patch.object(fetcher.time, 'sleep', lambda s: None):
+            res = fetcher.fetch_site('a.example')
+        self.assertEqual(res['status'], 200)
+        self.assertEqual(res['freshness'], [])
 
     def test_offsite_feed_ignored(self):
         html = '<link rel="alternate" type="application/rss+xml" href="https://other.example/f.xml">'

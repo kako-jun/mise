@@ -50,23 +50,34 @@ def _ymd(y, m=None, d=None, today=None):
     return out
 
 
-def footer_date(text, today=None):
-    """可視テキストから最新の「© 年」「最終更新 年月日」類の日付を返す（なければ None）。"""
+def footer_signal(text, today=None):
+    """可視テキストから最新の日付を (iso, source) で返す（なければ (None, None)）。
+    source は 'footer_updated'（「最終更新」類の表記）か 'footer_copyright'（© 年のみ。弱い兆候）。同日は更新表記を優先。"""
     if not text:
-        return None
-    found = []
+        return None, None
+    found = []  # (date, rank, source) rank 大きいほど優先
     for m in _COPY.finditer(text[-4000:] + ' ' + text[:1500]):
         for g in m.groups():
             if g:
-                found.append(_ymd(g, today=today))
+                found.append((_ymd(g, today=today), 0, 'footer_copyright'))
+    upd = []
     for m in _UPD.finditer(text):
-        found.append(_ymd(m.group(1), m.group(2), m.group(3), today))
+        upd.append(_ymd(m.group(1), m.group(2), m.group(3), today))
     for m in _UPD_ERA.finditer(text):
         base = _ERA[m.group(1)]
         n = 1 if m.group(2) == '元' else int(m.group(2))
-        found.append(_ymd(base + n, m.group(3), m.group(4), today))
-    found = [d for d in found if d]
-    return max(found).isoformat() if found else None
+        upd.append(_ymd(base + n, m.group(3), m.group(4), today))
+    found += [(d, 1, 'footer_updated') for d in upd]
+    found = [f for f in found if f[0]]
+    if not found:
+        return None, None
+    d, _, src = max(found, key=lambda f: (f[0], f[1]))
+    return d.isoformat(), src
+
+
+def footer_date(text, today=None):
+    """footer_signal の日付だけ。"""
+    return footer_signal(text, today)[0]
 
 
 def header_date(headers, today=None):
