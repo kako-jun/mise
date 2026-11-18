@@ -10,6 +10,7 @@ this file prints, logs or stores it. See docs/collection/llm-judge.md.
 """
 import argparse
 import contextlib
+import csv
 import datetime
 import fcntl
 import hashlib
@@ -57,17 +58,52 @@ REJECT_KINDS = {"advertising", "affiliate", "mass_produced", "parking", "spam"}
 
 # ---------------------------------------------------------------- category tree
 def load_categories(root=ROOT):
-    """Category tree from migrations/0001 (the single source of ids)."""
-    path = os.path.join(root, "migrations", "0001_initial.sql")
+    """Category tree the LLM may choose from, in tree order (data/categories.csv is the single source of ids; migration
+    0021 is generated from it). Rows with assign=rule (the 7 government type leaves) are placed by a fixed rule from the
+    public-body ledger and are NOT offered to the LLM. Each row has "depth" (0 = top level)."""
+    path = os.path.join(root, "data", "categories.csv")
+    with open(path, encoding="utf-8", newline="") as f:
+        src = list(csv.DictReader(f))
+    if not src:
+        raise SystemExit("no categories found in data/categories.csv")
+    depth = {}
     rows = []
-    pat = re.compile(r"INSERT INTO categories VALUES \('([^']+)',(NULL|'[^']*'),'([^']*)','([^']*)',(\d+)\)")
-    with open(path, encoding="utf-8") as f:
-        for m in pat.finditer(f.read()):
-            parent = None if m.group(2) == "NULL" else m.group(2).strip("'")
-            rows.append({"id": m.group(1), "parent": parent, "ja": m.group(3), "en": m.group(4)})
-    if not rows:
-        raise SystemExit("no categories found in migrations/0001_initial.sql")
+    for r in src:
+        parent = r["parent_id"] or None
+        depth[r["id"]] = 0 if parent is None else depth[parent] + 1  # parents come before children in the file
+        if r["assign"] == "rule":
+            continue
+        rows.append({"id": r["id"], "parent": parent, "ja": r["name_ja"], "en": r["name_en"], "depth": depth[r["id"]]})
     return rows
+
+
+def load_legacy_map(root=ROOT):
+    """Old (pre-#114, 59-category) id -> {"new": id or None, "mode": keep|map|fallback|drop|rule} from data/category-map.csv."""
+    with open(os.path.join(root, "data", "category-map.csv"), encoding="utf-8", newline="") as f:
+        return {r["old_id"]: {"new": r["new_id"] or None, "mode": r["mode"]} for r in csv.DictReader(f)}
+
+
+def modernize_categories(ids, valid_ids, legacy):
+    """Translate category ids stored by judgements made before the taxonomy change (#114) into the current tree.
+    Ids that are already valid pass through; old ids map through the table (map/keep always; fallback only when nothing
+    else remains; drop/rule vanish); anything unknown is dropped. Order is kept, duplicates removed, at most 3."""
+    out, fallbacks = [], []
+    for i in ids:
+        if i in valid_ids:
+            t = i
+        else:
+            m = legacy.get(i)
+            if not m or not m["new"] or m["mode"] in ("drop", "rule"):
+                continue
+            if m["mode"] == "fallback":
+                fallbacks.append(m["new"])
+                continue
+            t = m["new"]
+        if t in valid_ids and t not in out:
+            out.append(t)
+    if not out:
+        out = [t for t in dict.fromkeys(fallbacks) if t in valid_ids]
+    return out[:3]
 
 
 def category_ids(cats):
@@ -94,24 +130,25 @@ GROUND RULES
 4c. site_scope: "standalone" (a site on its own domain), "service_top" (the front page or main site of a social network, blog or hosting service itself, for example a social network's own home page; these are fine to list and judged like any other site), or "user_page" (one individual user's page or blog on a shared service, on a sub-domain or a path of that service). A user_page gets verdict "deferred" with kind "none"; write the reason as a short note on why. Any other scope never gets "deferred".
 4a. adult is an ATTRIBUTE: an object with value and evidence_quote. value "yes" only when the candidate text itself shows the site is adult-oriented (age gate, explicit self-description, adult flag in features), with an exact verbatim quote in evidence_quote; "no" when the text shows nothing adult (evidence_quote null); "unknown" when you cannot tell (evidence_quote null). Never reproduce adult content in any output field: descriptions stay neutral, factual and euphemistic (for example "a site of illustrations for adult readers"), with no explicit words.
 4b. site_kind is an ATTRIBUTE of who seems to run the site; it is never a reason to reject. Choose from the text only: "individual" (a person's own site, blog, hobby or personal works), "business" (a shop, studio, clinic, freelancer or other business site), "organization" (association, society, union, NPO, social-welfare body, school, public body, club, community group), "company" (a company's corporate or product site), "unknown" (the text does not show it). Do not judge or mention size or fame. site_kind_reason: one short English sentence pointing at the text.
-5. categories: choose 1 to 3 ids from the allowed list below, most fitting first. Use only ids from the list, exactly as written. If nothing fits or the text is too thin, return an empty array. Prefer the specific child ids over the top-level ids.
+5. categories: choose 1 to 3 ids from the allowed list below, most fitting first. Choose by SUBJECT: what the site is about, or what it sells, teaches, reports or provides. Never choose by who runs it: a shop, a company, an association, a school or an individual has no category of its own, so file it under the subject of its products, services or activity (a bakery under food, a clinic under hospitals, a builder under construction). Use only ids from the list, exactly as written. If nothing fits or the text is too thin, return an empty array. Always prefer the deepest (most specific) id that fits; use a parent id only when none of its children fits. Use at most one id from the same branch unless the site clearly covers two different subjects. `government` is only for public bodies that no subject id describes; municipalities and national agencies are placed by a separate fixed rule and are not in the list.
 6. tags: 0 to 5 short lowercase English keywords taken from the topics the text actually mentions. No category names unless the text mentions them.
 7. location: set country_code (ISO 3166-1 alpha-2, uppercase) and region_code (ISO 3166-2 first level, e.g. JP-13) ONLY when the candidate text explicitly states where the site's operator is located (for example an address, "based in Tokyo", an institution's stated location). Put an exact, verbatim quote of that statement from the candidate text in evidence_quote. The domain suffix, the page language, the currency, the hosting or an assumed nationality are NOT evidence. If the text does not state it, set all three location fields to null. region_code requires country_code with the same two-letter prefix; if only the country is stated, region_code is null.
 8. confidence: "high" only when the text clearly supports the whole judgement; "low" when you had to be cautious about several fields.
 9. notes: one short English sentence on anything missing or uncertain that a reviewer should know; empty string if nothing.
 When unsure about any field, use null (or an empty array) instead of guessing.
 
-ALLOWED CATEGORY IDS (id = English name / Japanese name; indentation = child of the previous top-level id)
+ALLOWED CATEGORY IDS (id = English name / Japanese name; each 2-space indent = one level deeper, a child of the nearest less-indented line above)
 {category_lines}
 """
 
 
+def category_lines(cats):
+    """One line per category: 2 spaces of indent per tree level, then "id = English / Japanese"."""
+    return "\n".join("  " * c["depth"] + f"{c['id']} = {c['en']} / {c['ja']}" for c in cats)
+
+
 def build_system(cats):
-    lines = []
-    for c in cats:
-        pad = "" if c["parent"] is None else "  "
-        lines.append(f"{pad}{c['id']} = {c['en']} / {c['ja']}")
-    return SYSTEM_TEMPLATE.format(category_lines="\n".join(lines))
+    return SYSTEM_TEMPLATE.format(category_lines=category_lines(cats))
 
 
 def build_schema(cats):
