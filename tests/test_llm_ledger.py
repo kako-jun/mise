@@ -517,7 +517,7 @@ class ExportTests(Base):
                           sorted(t.execute("SELECT label_en FROM site_tags WHERE site_id=?", (sid,)).fetchall())), before)
 
     def test_new_site_gets_at_most_3_categories_and_5_tags_and_each_alone_works(self):
-        self.approve_new("many.example", out_pass(categories=["arts", "photography", "architecture"],
+        self.approve_new("many.example", out_pass(categories=["photography", "architecture", "news"],  # not "arts": a parent next to its child is dropped (#137)
                                                   tags=["T1", "t2", "t3", "t4", "t5"]))
         self.approve_new("onlycat.example", out_pass(categories=["news"], tags=[]), name="r6.json")
         self.approve_new("onlytag.example", out_pass(categories=[], tags=["solo"]), name="r7.json")
