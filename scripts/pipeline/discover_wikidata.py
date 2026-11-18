@@ -7,8 +7,11 @@
 - Wikidata のデータは CC0。画面には出さない(#111)。
 """
 import csv
+import datetime
+import email.utils
 import hashlib
 import json
+import os
 import re
 import time
 import urllib.error
@@ -40,6 +43,22 @@ class WdqsAbort(Exception):
     def __init__(self, status, retry_after=None):
         super().__init__(f'WDQS {status} retry_after={retry_after}')
         self.status, self.retry_after = status, retry_after
+
+
+def parse_retry_after(value):
+    """Retry-After(秒数または HTTP 日付) -> 秒。読めなければ None。"""
+    v = (value or '').strip()
+    if v.isdigit():
+        return int(v)
+    try:
+        dt = email.utils.parsedate_to_datetime(v)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return max(0, int((dt - datetime.datetime.now(datetime.timezone.utc)).total_seconds()))
 
 
 class WdqsSkip(Exception):
@@ -89,8 +108,10 @@ def build_query(row, limit, offset):
     """日本に関係する(国/原産国/国籍が Japan Q17)項目で、公式サイト P856 を持ち、対応表のクラスに属するもの。"""
     cls = f'wdt:P31/wdt:P279*' if row['subclass'] == '1' and row['rel'] == 'P31' else f'wdt:{row["rel"]}'
     country = '|'.join(f'wdt:{p}' for p in row['country_prop'].split('|'))
-    return (f'SELECT ?item ?url ?label WHERE {{ ?item {cls} wd:{row["qid"]} ; ({country}) wd:Q17 ; wdt:P856 ?url . '
-            f'OPTIONAL {{ ?item rdfs:label ?label FILTER(lang(?label)="ja") }} }} ORDER BY ?item LIMIT {int(limit)} OFFSET {int(offset)}')
+    # ラベルは台帳に使わないので取らない(取ると ja ラベル複数の項目で行が増え、LIMIT/OFFSET の境目で抜け・重複が出る)。
+    # P856 が複数ある項目も 1 行 1 URL にし、(?item ?url) で全順序にする。
+    return (f'SELECT DISTINCT ?item ?url WHERE {{ ?item {cls} wd:{row["qid"]} ; ({country}) wd:Q17 ; wdt:P856 ?url . }} '
+            f'ORDER BY ?item ?url LIMIT {int(limit)} OFFSET {int(offset)}')
 
 
 def parse_results(data):
@@ -137,6 +158,19 @@ class Client:
     def _cache_path(self, query):
         return self.cache_dir / (hashlib.sha256(query.encode()).hexdigest()[:32] + '.json')
 
+    def purge_old(self):
+        """保持期間(CACHE_TTL_DAYS)の 2 倍より古いキャッシュを消す。"""
+        if not self.cache_dir.exists():
+            return 0
+        limit, n = time.time() - 2 * CACHE_TTL_DAYS * 86400, 0
+        for p in self.cache_dir.glob('*.json*'):
+            try:
+                if p.stat().st_mtime < limit:
+                    p.unlink(); n += 1
+            except OSError:
+                pass
+        return n
+
     def query(self, query):
         """結果 JSON を返す。キャッシュがあればネットワークに出ない。429/503 は WdqsAbort、その他の失敗は WdqsSkip。"""
         path = self._cache_path(query)
@@ -156,7 +190,7 @@ class Client:
         self.last = self.clock()
         if status in (429, 503):
             ra = {k.lower(): v for k, v in headers.items()}.get('retry-after')
-            raise WdqsAbort(status, int(ra) if ra and ra.isdigit() else None)
+            raise WdqsAbort(status, parse_retry_after(ra))
         if status != 200:
             raise WdqsSkip(f'http_{status}')
         try:
@@ -197,8 +231,12 @@ def select_rows(rows, leaves=None, limit_leaves=None):
     return [r for leaf in order for r in rows if r['leaf_id'] == leaf]
 
 
-def discover_wikidata(db, rows, client, max_rows=1000, page_size=PAGE_SIZE, listed=None, ignore_cursor=False):
-    """対応表の行ごとに、続きの OFFSET から max_rows(全体)まで取り、台帳へ入れる。返り値は行ごとの統計と中断理由。"""
+def discover_wikidata(db, rows, client, max_rows=1000, page_size=PAGE_SIZE, listed=None, ignore_cursor=False, categories_path=CATEGORIES_PATH):
+    """対応表の行ごとに、続きの OFFSET から max_rows(この 1 回の実行の合計)まで取り、台帳へ入れる。返り値は行ごとの統計と中断理由。"""
+    errs = validate_map(rows, categories_path)
+    if errs:
+        raise ValueError('対応表が不正: ' + '; '.join(errs))
+    client.purge_old()
     listed = listed if listed is not None else set()
     stats, remaining, aborted = [], max_rows, None
     for row in rows:

@@ -55,6 +55,16 @@ class Parse(unittest.TestCase):
         q2 = dw.build_query(dict(ROW, rel='P106', country_prop='P27', subclass='0', qid='Q191633'), 10, 0)
         self.assertIn('wdt:P106 wd:Q191633', q2)
         self.assertNotIn('P279', q2)
+        self.assertIn('ORDER BY ?item ?url', q)               # 全順序(P856 複数の項目でも LIMIT/OFFSET の境目で抜けない)
+        self.assertNotIn('label', q)                          # ラベルは使わない(行が増えて境目がずれるため)
+        self.assertIn('SELECT DISTINCT', q)
+
+    def test_retry_after_forms(self):
+        self.assertEqual(dw.parse_retry_after('120'), 120)
+        self.assertIsNone(dw.parse_retry_after(None)); self.assertIsNone(dw.parse_retry_after('soon'))
+        import email.utils, time
+        self.assertTrue(50 <= dw.parse_retry_after(email.utils.formatdate(time.time() + 60, usegmt=True)) <= 61)
+        self.assertEqual(dw.parse_retry_after(email.utils.formatdate(time.time() - 600, usegmt=True)), 0)
 
 
 class Flow(unittest.TestCase):
@@ -150,6 +160,29 @@ class Flow(unittest.TestCase):
         self.assertEqual(c[0]['features']['leaf_hint'], 'shrines')
         self.db.execute("UPDATE frontier SET hint_leaf=NULL"); self.db.commit()
         self.assertNotIn('leaf_hint', export_candidates.export(db_path)[0]['features'])   # ヒントが無ければキーごと渡さない
+
+    def test_http_date_retry_after_is_read(self):
+        import email.utils, time
+        self.responses = [(429, {'Retry-After': email.utils.formatdate(time.time() + 90, usegmt=True)}, b'')]
+        out = dw.discover_wikidata(self.db, [ROW], self.client(), page_size=100)
+        self.assertRegex(out['aborted'], r'retry_after=(8\d|9\d)')
+
+    def test_invalid_map_is_rejected_in_function(self):
+        with self.assertRaises(ValueError):
+            dw.discover_wikidata(self.db, [dict(ROW, leaf_id='no-such-leaf')], self.client())
+        self.assertEqual(self.urls, [])
+
+    def test_old_cache_files_are_purged(self):
+        import os, time
+        cache = Path(self.tmp.name) / 'cache'; cache.mkdir()
+        old, new = cache / 'old.json', cache / 'new.json'
+        old.write_text('{}'); new.write_text('{}')
+        t = time.time() - 61 * 86400
+        os.utime(old, (t, t))
+        os.utime(new, (time.time() - 31 * 86400, time.time() - 31 * 86400))   # TTL 切れだが保持期間の 2 倍には届かない
+        self.responses = []
+        dw.discover_wikidata(self.db, [], self.client())
+        self.assertFalse(old.exists()); self.assertTrue(new.exists())
 
     def test_old_ledger_gets_hint_column(self):
         p = Path(self.tmp.name) / 'old.sqlite'
