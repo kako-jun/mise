@@ -110,6 +110,12 @@ class Sql(unittest.TestCase):
         self.assertIn("rtrim(replace(replace(replace(lower(url)", psql.generate([PREF, a]))
     def test_category_added_to_existing_by_normalized_url(self):
         self.assertIn("SELECT id,'government-government-agencies' FROM sites WHERE rtrim(", psql.generate([PREF, lrow()]))
+    def test_since_diff_uses_type_leaf_categories(self):
+        # 0021(#114)で旧カテゴリ government-government-agencies は消えた。差分 migration は種別の葉を付ける(初回の 0015 だけ旧カテゴリ)
+        sql = psql.generate([PREF, lrow()], [PREF])
+        self.assertNotIn('government-government-agencies', sql)
+        self.assertIn("SELECT id,'cities' FROM sites WHERE rtrim(", sql)
+        self.assertNotIn("'prefectures'", sql)  # 追加は市だけ
     def test_ledger_ids_and_urls_unique(self):
         listed = psql.listed(psql.load(LEDGER), False).values()
         listed = list(listed)

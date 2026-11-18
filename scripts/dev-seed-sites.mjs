@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 開発用: ローカル D1 に合成サイトを投入/削除する（ページングの負荷確認用。本番には絶対に流さない: --local 固定）。
 // 使い方: node scripts/dev-seed-sites.mjs [件数=2000]   /   node scripts/dev-seed-sites.mjs --clean
-// 合成サイトの id は `dev-seed-` で始まる。政府機関カテゴリ (government-government-agencies) に全件、一部に NULL の更新日と他カテゴリ併載を混ぜる。
+// 合成サイトの id は `dev-seed-` で始まる。市カテゴリ (cities) に全件、一部に NULL の更新日と他カテゴリ併載を混ぜる。
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,8 +20,8 @@ if (arg === '--clean') {
     const rec = { name: `合成サイト ${i}`, description_ja: `合成データ ${i} の紹介文です。`, description_en: `Synthetic site ${i}.`, url: `https://dev-seed-${i}.example.jp/` };
     const upd = i % 10 === 0 ? 'NULL' : `'${day}'`;
     lines.push(`INSERT INTO sites (id,url,name,description_ja,description_en,country_code,source_updated_at,registered_at,search_text) VALUES ('${id}','https://dev-seed-${i}.example.jp/','合成サイト ${i}','合成データ ${i} の紹介文です。','Synthetic site ${i}.','JP',${upd},'${day}T00:00:00Z','${searchText(rec)}');`);
-    lines.push(`INSERT INTO site_categories VALUES ('${id}','government-government-agencies');`);
-    if (i % 7 === 0) lines.push(`INSERT INTO site_categories VALUES ('${id}','government-politics');`);
+    lines.push(`INSERT INTO site_categories VALUES ('${id}','cities');`);
+    if (i % 7 === 0) lines.push(`INSERT INTO site_categories VALUES ('${id}','politics');`);
   }
   run(lines.join('\n'));
 }

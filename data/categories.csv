@@ -1,0 +1,154 @@
+id,parent_id,name_ja,name_en,sort_order,assign
+reference,,調べもの・総記,Reference,0,llm
+libraries,reference,図書館,Libraries,0,llm
+dictionaries,reference,辞書・事典,Dictionaries and encyclopedias,1,llm
+archives,reference,アーカイブ・データベース,Archives and databases,2,llm
+web-directories,reference,リンク集・ディレクトリ,Web directories,3,llm
+news-media,,ニュース・メディア,News and media,1,llm
+newspapers,news-media,新聞,Newspapers,0,llm
+news-sites,news-media,ニュースサイト・時事,News sites and current affairs,1,llm
+broadcasting,news-media,テレビ・ラジオ,Television and radio,2,llm
+magazines,news-media,雑誌,Magazines,3,llm
+publishing,news-media,本・出版・書店,Books and publishing,4,llm
+computing,,コンピュータ・インターネット,Computers and Internet,2,llm
+software,computing,ソフトウェア・アプリ,Software and apps,0,llm
+programming,computing,プログラミング・開発,Programming and development,1,llm
+internet,computing,インターネット・Webサービス,Internet and web services,2,llm
+hardware,computing,ハードウェア・電子工作,Hardware and electronics projects,3,llm
+ai-data,computing,AI・データ,AI and data,4,llm
+security,computing,情報セキュリティ,Information security,5,llm
+science,,自然科学,Science,3,llm
+mathematics,science,数学,Mathematics,0,llm
+physics,science,物理学,Physics,1,llm
+chemistry,science,化学,Chemistry,2,llm
+astronomy,science,天文・宇宙,Astronomy and space,3,llm
+earth-sciences,science,地球科学・気象,Earth sciences and weather,4,llm
+biology,science,生物学,Biology,5,llm
+plants,science,植物,Plants,6,llm
+animals,science,動物・昆虫,Animals and insects,7,llm
+engineering,,技術・工学,Engineering and technology,4,llm
+civil-engineering,engineering,土木・建設技術,Civil engineering,0,llm
+mechanical,engineering,機械・ロボット,Machinery and robotics,1,llm
+electrical,engineering,電気・電子工学,Electrical and electronic engineering,2,llm
+energy,engineering,エネルギー,Energy,3,llm
+materials,engineering,素材・化学工業,Materials and chemical industry,4,llm
+health,,健康・医療,Health and medicine,5,llm
+medicine,health,医学・病気,Medicine and diseases,0,llm
+hospitals,health,病院・診療所,Hospitals and clinics,1,llm
+dentistry,health,歯科,Dentistry,2,llm
+pharmacy,health,薬・薬局,Pharmacy,3,llm
+mental-health,health,こころの健康,Mental health,4,llm
+care,health,看護・介護,Nursing and elder care,5,llm
+fitness,health,健康づくり・フィットネス,Fitness and wellness,6,llm
+nutrition,health,栄養・食生活,Nutrition,7,llm
+veterinary,health,動物病院,Veterinary care,8,llm
+business,,ビジネス・産業,Business and industry,6,llm
+economy,business,経済・統計,Economy and statistics,0,llm
+agriculture,business,農業・畜産,Agriculture and livestock,1,llm
+forestry-fisheries,business,林業・水産業,Forestry and fisheries,2,llm
+manufacturing,business,製造業・ものづくり,Manufacturing,3,llm
+construction,business,建設・工務店,Construction,4,llm
+real-estate,business,不動産,Real estate,5,llm
+retail,business,小売・流通,Retail and distribution,6,llm
+transport,business,運輸・物流,Transport and logistics,7,llm
+telecom,business,通信,Telecommunications,8,llm
+finance,business,金融・保険,Finance and insurance,9,llm
+professional-services,business,士業・コンサルティング,Professional services,10,llm
+advertising-design,business,広告・デザイン制作,Advertising and design services,11,llm
+business-services,business,法人向けサービス,Business services,12,llm
+jobs,business,求人・働き方,Jobs and work,13,llm
+government,,行政・公的機関,Government and public bodies,7,llm
+national-agencies,government,国の機関,National government agencies,0,rule
+independent-agencies,government,独立行政法人,Incorporated administrative agencies,1,rule
+prefectures,government,都道府県,Prefectures,2,rule
+cities,government,市,Cities,3,rule
+special-wards,government,特別区,Special wards,4,rule
+towns,government,町,Towns,5,rule
+villages,government,村,Villages,6,rule
+society,,社会,Society,8,llm
+politics,society,政治・選挙,Politics and elections,0,llm
+law,society,法律,Law,1,llm
+welfare,society,福祉・社会保障,Social welfare,2,llm
+civic-activities,society,市民活動・ボランティア,Civic activities and volunteering,3,llm
+community,society,地域づくり・まちづくり,Community and local development,4,llm
+family,society,子育て・家族,Parenting and family,5,llm
+human-rights,society,人権・ジェンダー,Human rights and gender,6,llm
+disaster-safety,society,防災・防犯・安全,Disaster preparedness and safety,7,llm
+environment,society,環境,Environment,8,llm
+international,society,国際・国際交流,International relations and exchange,9,llm
+defense,society,防衛・軍事,Defense,10,llm
+sociology,society,社会学,Sociology,11,llm
+education,,教育・学び,Education,9,llm
+universities,education,大学・大学院,Universities,0,llm
+schools,education,小・中・高校,Schools,1,llm
+early-childhood,education,幼稚園・保育,Early childhood education,2,llm
+vocational,education,専門学校・資格,Vocational schools and qualifications,3,llm
+cram-schools,education,塾・予備校,Cram schools,4,llm
+lessons,education,習い事・講座,Lessons and courses,5,llm
+online-learning,education,学習サイト・教材,Online learning,6,llm
+humanities,,歴史・思想・言葉,Humanities,10,llm
+philosophy,humanities,哲学・思想,Philosophy,0,llm
+psychology,humanities,心理学,Psychology,1,llm
+religion,humanities,宗教,Religion,2,llm
+shrines,religion,神社・神道,Shinto and shrines,0,llm
+temples,religion,寺院・仏教,Buddhism and temples,1,llm
+christianity,religion,キリスト教,Christianity,2,llm
+history,humanities,歴史,History,3,llm
+japanese-history,history,日本史,Japanese history,0,llm
+local-history,history,郷土史・郷土資料,Local history,1,llm
+archaeology,humanities,考古学,Archaeology,4,llm
+biography,humanities,人物・伝記,Biography,5,llm
+geography,humanities,地理・地図,Geography and maps,6,llm
+languages,humanities,言語・語学,Languages,7,llm
+folklore,humanities,民俗・風習,Folklore and customs,8,llm
+arts,,芸術・文化,Arts and culture,11,llm
+fine-arts,arts,美術・絵画,Fine arts and painting,0,llm
+illustration,arts,イラスト,Illustration,1,llm
+calligraphy,arts,書道,Calligraphy,2,llm
+crafts,arts,工芸,Crafts,3,llm
+photography,arts,写真,Photography,4,llm
+design,arts,デザイン,Design,5,llm
+architecture,arts,建築,Architecture,6,llm
+music,arts,音楽,Music,7,llm
+performing-arts,arts,演劇・舞踊・伝統芸能,"Theatre, dance and traditional performing arts",8,llm
+film,arts,映画・映像,Film and video,9,llm
+literature,arts,文学,Literature,10,llm
+fiction,literature,小説,Fiction,0,llm
+poetry,literature,詩・短歌・俳句,Poetry,1,llm
+essays,literature,エッセイ・日記,Essays and diaries,2,llm
+museums,arts,博物館・美術館,Museums and galleries,11,llm
+entertainment,,エンタメ,Entertainment,12,llm
+anime-manga,entertainment,アニメ・マンガ,Anime and manga,0,llm
+video-games,entertainment,ゲーム,Video games,1,llm
+tv-shows,entertainment,番組・配信,TV shows and streaming,2,llm
+celebrities,entertainment,芸能・タレント,Celebrities and entertainers,3,llm
+comedy,entertainment,お笑い・演芸,Comedy,4,llm
+fan-works,entertainment,同人・創作活動,Fan works and doujin,5,llm
+hobbies,,趣味・レジャー,Hobbies and recreation,13,llm
+sports,hobbies,スポーツ,Sports,0,llm
+ball-sports,sports,球技,Ball sports,0,llm
+martial-arts,sports,武道・格闘技,Martial arts and combat sports,1,llm
+athletics,sports,陸上・水泳・その他の競技,"Athletics, swimming and other sports",2,llm
+outdoors,hobbies,アウトドア・登山・釣り,"Outdoors, hiking and fishing",1,llm
+travel,hobbies,旅行・観光,Travel and tourism,2,llm
+lodging,travel,宿泊施設,Lodging,0,llm
+sightseeing,travel,観光地・観光案内,Sightseeing and tourist information,1,llm
+vehicles,hobbies,乗り物,Vehicles,3,llm
+cars,vehicles,自動車・バイク,Cars and motorcycles,0,llm
+railways,vehicles,鉄道,Railways,1,llm
+aviation-ships,vehicles,飛行機・船,Aviation and ships,2,llm
+tabletop-games,hobbies,囲碁・将棋・ボードゲーム,"Go, shogi and tabletop games",4,llm
+collecting,hobbies,収集・模型・おもちゃ,"Collecting, models and toys",5,llm
+pets,hobbies,ペット,Pets,6,llm
+gardening,hobbies,ガーデニング・園芸,Gardening,7,llm
+diy-handicrafts,hobbies,DIY・手芸,DIY and handicrafts,8,llm
+living,,暮らし,Home and living,14,llm
+food,living,料理・食べ物,Food and cooking,0,llm
+restaurants,living,飲食店,Restaurants and cafes,1,llm
+food-products,living,食品・お菓子・酒,"Food, sweets and drinks",2,llm
+fashion,living,ファッション,Fashion,3,llm
+beauty,living,美容・理容,Beauty and hair,4,llm
+housing,living,住まい・インテリア,Housing and interiors,5,llm
+ceremonies,living,冠婚葬祭,"Weddings, funerals and ceremonies",6,llm
+shopping,living,ショッピング・通販,Shopping and online stores,7,llm
+money,living,家計・マネー,Personal finance,8,llm

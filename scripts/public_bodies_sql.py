@@ -11,13 +11,16 @@
 適用済みの migration は書き換えない。台帳が変わったら --since で新しい migration を足す。
   新設 -> INSERT / 廃止・合併・要確認へ降格(active でなくなった) -> 掲載から DELETE / 名称・URL の変更 -> UPDATE。
 id は台帳の団体コードから決まる(pb-<コード>)。ホスト(www. 除去・小文字)+パスが既に別の掲載サイトにある団体は INSERT しない(重複掲載しない)。
-その既存サイトには政府機関カテゴリだけを追加する(カテゴリは多重所属できる)。
+その既存サイトには種別の葉カテゴリ(--since。初回の 0015 は旧カテゴリ政府機関。0021 で葉へ移した #114)だけを追加する(カテゴリは多重所属できる)。
 """
 import argparse, csv, pathlib, re, sys
 from public_bodies_common import clean_url
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'data' / 'public-bodies'
-CATEGORY = 'government-government-agencies'
+CATEGORY = 'government-government-agencies'  # 初回(0015)が付けた旧カテゴリ。0021(#114)で消えたので、--since の差分では下の LEAF を使う
+# 差分 migration で付ける葉(#114 第1段の「行政・公的機関 > 種別」。正本は data/categories.csv)
+LEAF = {'都道府県': 'prefectures', '市': 'cities', '特別区': 'special-wards', '町': 'towns', '村': 'villages',
+        '国の機関': 'national-agencies', '独立行政法人': 'independent-agencies', '行政区': 'cities'}
 LOCAL = ('都道府県', '市', '町', '村', '特別区')
 NATIONAL = ('国の機関', '独立行政法人')
 TYPE_EN = {'都道府県': 'Prefecture', '市': 'City', '町': 'Town', '村': 'Village', '特別区': 'Special ward', '行政区': 'Ward',
@@ -80,13 +83,16 @@ def insert_sql(r, pen):
     # URL が既にあるサイトと重複する場合は何も入れない(後続の category/tag は id で結合するので空振りになる)
     return f"INSERT INTO sites ({cols}) SELECT {vals} WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')}={q(norm(r['url']))});"
 
-def child_sql(rs, pen):
-    """カテゴリとタグ。投入された id にだけ付くよう sites と結合する。"""
+def child_sql(rs, pen, leaf=False):
+    """カテゴリとタグ。投入された id にだけ付くよう sites と結合する。leaf=True は種別ごとの葉(0021 以降)、False は初回の旧カテゴリ。"""
     out = []
     # カテゴリは URL の正規化キーで付ける: 新規に入れた行と、すでに別 id で掲載されている同じサイト(例: 国立国会図書館)の両方に付く
-    for i in range(0, len(rs), 150):
-        keys = ','.join(q(norm(r['url'])) for r in rs[i:i + 150])
-        out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT id,{q(CATEGORY)} FROM sites WHERE {norm_sql('url')} IN ({keys});")
+    by = {}
+    for r in rs: by.setdefault(LEAF[r['type']] if leaf else CATEGORY, []).append(r)
+    for cat, grp in by.items():
+        for i in range(0, len(grp), 150):
+            keys = ','.join(q(norm(r['url'])) for r in grp[i:i + 150])
+            out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT id,{q(cat)} FROM sites WHERE {norm_sql('url')} IN ({keys});")
     for i in range(0, len(rs), 100):
         vals = ','.join(f"({q(site_id(r['code']))},{q(ja)},{q(en) if en else 'NULL'})" for r in rs[i:i + 100] for ja, en in tags(r, pen))
         out.append(f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT v.a,v.b,v.c FROM (SELECT column1 AS a,column2 AS b,column3 AS c FROM (VALUES {vals})) v WHERE v.a IN (SELECT id FROM sites);")
@@ -105,7 +111,7 @@ def generate(rows, old_rows=None, include_wards=False):
            f'-- 新設/追加 {len(added)} 件' + (f' / 掲載から外す {len(removed)} 件 / 名称・URL変更 {len(changed)} 件' if old_rows is not None else '') + '。']
     if old_rows is None: out.append("ALTER TABLE sites ADD COLUMN bulk_import INTEGER NOT NULL DEFAULT 0 CHECK (bulk_import IN (0, 1));")
     for r in added: out.append(insert_sql(r, pen))
-    if added: out += child_sql(added, pen)
+    if added: out += child_sql(added, pen, leaf=old_rows is not None)
     for r in changed:
         ja, en = describe(r, pen)
         out.append(f"UPDATE sites SET url={q(r['url'])},name={q(r['name_ja'])},description_ja={q(ja)},description_en={q(en) if en else 'NULL'} WHERE id={q(site_id(r['code']))};")
