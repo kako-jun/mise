@@ -433,7 +433,7 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
-  for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';p.textContent=categories.filter(x=>x.parent_id===c.id).map(name).join(' ');div.append(p);} box.append(div); }
+  for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';p.textContent=categories.filter(x=>x.parent_id===c.id).map(name).join(' / ');div.append(p);} box.append(div); }
   $('#picks').hidden=false; renderPick();
   const pageNo=path.length ? pageFromLocation() : 1;
   startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
