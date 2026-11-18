@@ -79,7 +79,7 @@ function pathOf(categories, id) {
 // 範囲ごと（all と、サイトが 1 件以上ある国）に、範囲トップと、その範囲内に 1 サイト以上あるカテゴリの URL を載せる。`/` は `/jp/` の別名なので載せない。
 export async function sitemapXml(db) {
   const scopes = await loadScopes(db);
-  const urls = [];
+  const urls = [ORIGIN + '/about/']; // アバウトページ（静的な説明ページ。索引に載せてよい。#118）
   for (const [scope, cc] of [['all', null], ...scopes.countries.map(r => [r.code.toLowerCase(), r.code])]) {
     const categories = await loadCategories(db, cc);
     urls.push(ORIGIN + categoryHref([], scope));
@@ -183,6 +183,15 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   res.headers.delete('ETag');
   res.headers.delete('Last-Modified');
   res.headers.set('Cache-Control', 'public, max-age=0, must-revalidate, s-maxage=60');
+  for (const [k, v] of Object.entries(securityHeaders(csp))) res.headers.set(k, v);
+  return res;
+}
+
+// アバウトページ（/about/）。静的な public/about.html に、このページ用の CSP（インラインスクリプトのハッシュ入り）を付けて返す。DB は使わない。
+export async function renderAbout(assetResponse) {
+  const html = await assetResponse.text();
+  const csp = pageCsp(await inlineScriptHashes(html));
+  const res = new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=0, must-revalidate, s-maxage=60' } });
   for (const [k, v] of Object.entries(securityHeaders(csp))) res.headers.set(k, v);
   return res;
 }
