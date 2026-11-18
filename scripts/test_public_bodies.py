@@ -134,7 +134,7 @@ class Sql(unittest.TestCase):
                 self.assertIn('reach', names, r['code'])
     def test_credit_does_not_cite_jlis(self):
         root = LEDGER.parent.parent.parent
-        for f in ('public/app.js', 'public/index.html'):
+        for f in ('public/app.js', 'public/index.html', 'public/licenses/public-data-credits.txt'):
             self.assertNotIn('J-LIS', (root / f).read_text(encoding='utf-8'), f)
     def test_listed_rows_have_ok_reachability(self):
         ev = {e['code']: e for e in csv.DictReader(open(LEDGER.with_name('evidence') / 'reachability.csv', encoding='utf-8'))}
@@ -180,5 +180,15 @@ class Resolve(unittest.TestCase):
     def test_not_promoted_otherwise(self):
         for kw in ({'final_url': 'https://other.example.jp/'}, {'http_status': '503'}, {'robots': 'disallowed'}, {'final_url': 'http://old.example.jp/'}):
             self.assertIsNone(pres.promotable(self.R, self.ev(**kw)), kw)
+
+class Credits(unittest.TestCase):
+    ROOT = pathlib.Path(__file__).resolve().parent.parent / 'public'
+    def test_not_on_screen(self):
+        for f in ('app.js', 'index.html'):
+            self.assertNotIn('編集・加工', (self.ROOT / f).read_text(encoding='utf-8'), f)
+    def test_static_file_has_credits(self):
+        t = (self.ROOT / 'licenses' / 'public-data-credits.txt').read_text(encoding='utf-8')
+        for w in ('総務省「全国地方公共団体コード」', 'e-Gov', '公共データ利用規約 第1.0版', 'Wikidata(CC0)', '編集・加工'):
+            self.assertIn(w, t, w)
 
 if __name__ == '__main__': unittest.main()
