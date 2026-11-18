@@ -199,20 +199,27 @@ export async function querySites(db, { cc = null, category = null, q = null, tag
 }
 
 // ピックアップ用: 範囲内からランダムに n 件。ピックアップは「発見」の表示なので、台帳などの一括投入（bulk_import=1）は除く。
-// 読み取りが件数に比例しないよう、`ORDER BY RANDOM()`（全件を読む）をやめ、rowid の乱数位置から該当する最初の 1 件を n 回引く（#126 第2段）。
-// 厳密な一様抽選ではない（欠番や、該当しない行が続いた直後の行が当たりやすい）。ピックアップは目安の「発見」なので許容する。位置が重なって n 件に足りないときは先頭から補う。
+// 読み取りが件数に比例しないよう、`ORDER BY RANDOM()`（全件を読む）をやめ、乱数の rowid を PICK_BATCHES[0] 個（足りなければ増やして引き直し）まとめて `rowid IN (…)` で引き、条件（一括投入でない・範囲内）に合う行だけを残す棄却抽選にする（#126 第2段）。
+// 各 rowid は同じ確率で選ばれ、合う行だけが残るので、合う行の中で一様になる（「乱数位置の次の該当行」方式は、一括投入の塊の直後の 1 件に偏った）。足りなければ PICK_BATCHES の回数まで引き直す（引くたびに増やす）。
+// 範囲内の件数が PICK_RANDOM_MAX 以下（棄却が多く、全件でも少ない）なら従来の `ORDER BY RANDOM()`。それでも n 件に足りなければ、足りない分だけ `ORDER BY RANDOM()` で補う（件数が少ないときだけ起きる）。
+const PICK_BATCHES = [40, 80], PICK_RANDOM_MAX = 50; // 1 回に引く rowid の数（D1 のバインド値は 1 文 100 個まで）。合う行が少ない範囲（本番では日本の非一括は 3%）ほど引き直しが要る
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }; // Fisher-Yates
 export async function randomSites(db, cc, n = 3) {
-  if (cc && !((await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(cc).first())?.n > 0)) return [];
+  let scopeN = null;
+  if (cc) { scopeN = (await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(cc).first())?.n ?? 0; if (!(scopeN > 0)) return []; }
+  const cond = `s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1)`;
+  const byRandom = async (excludeIds, k) => (await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE ${cond}${excludeIds.length ? ` AND s.id NOT IN (${excludeIds.map((_, i) => '?' + (i + 2)).join(',')})` : ''} ORDER BY RANDOM() LIMIT ${Number(k)}`).bind(cc, ...excludeIds).all()).results;
+  if (scopeN !== null && scopeN <= PICK_RANDOM_MAX) return shuffle(await byRandom([], n)).map(shape);
   const max = (await db.prepare(`SELECT MAX(rowid) AS m FROM sites`).bind().first())?.m ?? 0;
   if (!max) return [];
-  // `+s.bulk_import` は、並びの索引（bulk_import 先頭）を選ばせず rowid の順で走査させるため。
-  const from = `FROM sites s WHERE s.rowid >= ?1 AND +s.bulk_import = 0 AND (?2 IS NULL OR s.country_code = ?2)`;
-  const found = await Promise.all(Array.from({ length: n }, () => db.prepare(`SELECT ${COLUMNS} ${from} ORDER BY s.rowid LIMIT 1`).bind(Math.floor(Math.random() * max) + 1, cc).all()));
-  const rows = [...new Map(found.flatMap(r => r.results).map(r => [r.id, r])).values()];
-  if (rows.length < n) {
-    const have = JSON.stringify(rows.map(r => r.id));
-    const { results } = await db.prepare(`SELECT ${COLUMNS} ${from} AND s.id NOT IN (SELECT value FROM json_each(?3)) ORDER BY s.rowid LIMIT ?4`).bind(0, cc, have, n - rows.length).all();
-    rows.push(...results);
+  // `+s.bulk_import` は、並びの索引（bulk_import が先頭）を選ばせず rowid の点引きにするため（ローカルの D1 で、付けないと非一括の全件を走査して 300 行余り読んだ）。
+  const found = new Map();
+  for (let round = 0; round < PICK_BATCHES.length && found.size < n; round++) {
+    const rowids = Array.from({ length: PICK_BATCHES[round] }, () => Math.floor(Math.random() * max) + 1);
+    const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.rowid IN (${rowids.map((_, i) => '?' + (i + 2)).join(',')}) AND +s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1)`).bind(cc, ...rowids).all();
+    for (const r of results) if (!found.has(r.id)) found.set(r.id, r);
   }
-  return rows.sort(() => Math.random() - 0.5).map(shape);
+  const rows = shuffle([...found.values()]).slice(0, n);
+  if (rows.length < n) rows.push(...await byRandom(rows.map(r => r.id), n - rows.length));
+  return shuffle(rows).map(shape);
 }

@@ -235,3 +235,25 @@ test('同値の多いデータ: 続きのページはタグの該当数のプロ
   assert.equal(skLog.filter(x => /SELECT COUNT\(\*\) AS n FROM \(SELECT site_id FROM site_tags/.test(x.sql)).length, 0);
 });
 
+test('同値の多いデータ: ピックアップは一括投入の塊の直後に偏らず、非一括の全サイトにほぼ一様に当たる（600 回）', async () => {
+  const nonBulk = sk.prepare('SELECT COUNT(*) n FROM sites WHERE bulk_import = 0').get().n;
+  for (const cc of [null, 'JP']) {
+    const cnt = new Map(); let short = 0;
+    for (let i = 0; i < 600; i++) { const r = await randomSites(skd, cc, 3); if (r.length < 3) short++; assert.ok(r.every(x => x.bulk_import === 0)); for (const x of r) cnt.set(x.id, (cnt.get(x.id) ?? 0) + 1); }
+    const max = Math.max(...cnt.values()) / 600;
+    assert.equal(short, 0);
+    assert.ok(max <= 0.05, `最大の出現率 ${max}（一様なら約 ${(3 / nonBulk).toFixed(3)}。偏った旧方式は 0.85）`);
+    assert.ok(cnt.size >= nonBulk * 0.85, `当たったサイト ${cnt.size} / ${nonBulk}`);
+  }
+  // 乱数 rowid の引きは rowid の点引き（並びの索引で非一括の全件を走査しない。走査すると 1 回で 300 行余り読む）
+  skLog.length = 0; await randomSites(skd, 'JP', 3);
+  const probe = skLog.find(x => /s\.rowid IN/.test(x.sql));
+  assert.ok(probe, '乱数 rowid の問い合わせがある');
+  const eqp = sk.prepare('EXPLAIN QUERY PLAN ' + probe.sql).all(...probe.args).map(x => x.detail).join(' | ');
+  assert.match(eqp, /rowid=\?/); assert.doesNotMatch(eqp, /idx_sites_/);
+  // 極端に少ない範囲（US 7 件程度）は ORDER BY RANDOM() で足りる分を返す
+  const us = sk.prepare("SELECT COUNT(*) n FROM sites WHERE country_code = 'US'").get().n;
+  const seen = new Set();
+  for (let i = 0; i < 100; i++) { const r = await randomSites(skd, 'US', 3); assert.equal(r.length, Math.min(3, us)); r.forEach(x => seen.add(x.id)); }
+  assert.equal(seen.size, us);
+});
