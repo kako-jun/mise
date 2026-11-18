@@ -29,11 +29,39 @@ def good():
         "spam": {"verdict": "pass", "kind": "none", "reason": "Plain organization page."},
         "categories": ["welfare"], "tags": ["organization"],
         "adult": {"value": "no", "evidence_quote": None},
-        "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.",
+        "site_scope": "standalone", "site_kind": "organization", "site_kind_reason": "Says it is an organization.", "freshness": "active", "exempt": "none",
         "confidence": "medium",
         "location": {"country_code": "JP", "region_code": "JP-13", "evidence_quote": "東京都に事務所のある"},
         "notes": "",
     }
+
+
+class FreshnessFieldTests(unittest.TestCase):
+    def test_values_validated(self):
+        self.assertEqual(judge.validate_output(good(), IDS, SOURCE), [])
+        for fr in judge.FRESHNESS:
+            o = good(); o["freshness"] = fr
+            self.assertEqual(judge.validate_output(o, IDS, SOURCE), [])
+        for ex in judge.EXEMPT:
+            o = good(); o["exempt"] = ex
+            self.assertEqual(judge.validate_output(o, IDS, SOURCE), [])
+        o = good(); o["freshness"] = "old"
+        self.assertIn("freshness invalid", judge.validate_output(o, IDS, SOURCE))
+        o = good(); o["exempt"] = "famous"
+        self.assertIn("exempt invalid", judge.validate_output(o, IDS, SOURCE))
+
+    def test_missing_keys_rejected_and_schema_has_them(self):
+        o = good(); del o["exempt"]
+        self.assertTrue(any("keys mismatch" in e for e in judge.validate_output(o, IDS, SOURCE)))
+        props = judge.build_schema(CATS)["properties"]
+        self.assertEqual(props["freshness"]["enum"], ["active", "stale", "unknown"])
+        self.assertEqual(props["exempt"]["enum"], ["rare_genre", "notable", "none"])
+
+    def test_prompt_states_the_rule(self):
+        sysmsg = judge.build_system(CATS)
+        self.assertIn("3 years", sysmsg)
+        self.assertIn("NEVER base exempt on popularity", sysmsg)
+        self.assertIn("individual", sysmsg.split("4d.")[1])
 
 
 class SchemaTests(unittest.TestCase):
@@ -275,7 +303,7 @@ import pipeline  # noqa: E402
 
 
 def tri(**kw):
-    t = {"i": 1, "v": "p", "kd": "-", "sk": "i", "ad": "n", "aq": None, "sc": "s", "cf": "m", "cat": ["astronomy"], "r": ""}
+    t = {"i": 1, "v": "p", "kd": "-", "sk": "i", "ad": "n", "aq": None, "sc": "s", "fr": "a", "ex": "-", "cf": "m", "cat": ["astronomy"], "r": ""}
     t.update(kw)
     return t
 
@@ -293,6 +321,12 @@ class PipelineTests(unittest.TestCase):
                                        cache_dir="/nonexistent/c", ledger="/nonexistent/l", budget_run=1.0,
                                        budget_total=90.0, mode="single"))()
         self.p = pipeline.Pipeline(self.args, CATS)
+
+    def test_triage_carries_freshness_and_exempt_codes(self):
+        full = pipeline.triage_to_full(tri(fr="s", ex="r"))
+        self.assertEqual((full["freshness"], full["exempt"]), ("stale", "rare_genre"))
+        self.assertIn("4d", pipeline.split_rules(judge.build_system(CATS)))
+        self.assertIn("fr = freshness", self.p.systems["triage"])
 
     def test_wrapper_schemas_closed_and_codes_in_enums(self):
         for stage in ("triage", "describe", "full"):

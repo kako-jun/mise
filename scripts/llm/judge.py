@@ -53,6 +53,8 @@ SPAM_KINDS = ["none", "advertising", "affiliate", "mass_produced",
 ADULT_VALUES = ["yes", "no", "unknown"]
 SITE_KINDS = ["individual", "business", "organization", "company", "unknown"]
 CONFIDENCE = ["low", "medium", "high"]
+FRESHNESS = ["active", "stale", "unknown"]
+EXEMPT = ["rare_genre", "notable", "none"]
 REJECT_KINDS = {"advertising", "affiliate", "mass_produced", "parking", "spam"}
 
 
@@ -191,6 +193,7 @@ GROUND RULES
 5. categories: choose 1 to 3 ids from the allowed list below, most fitting first. Choose by SUBJECT: what the site is about, or what it sells, teaches, reports or provides. Never choose by who runs it: a shop, a company, an association, a school or an individual has no category of its own, so file it under the subject of its products, services or activity (a bakery under food, a clinic under hospitals, a builder under construction). Use only ids from the list, exactly as written. If nothing fits or the text is too thin, return an empty array. Always prefer the deepest (most specific) id that fits; use a parent id only when none of its children fits. Use at most one id from the same branch unless the site clearly covers two different subjects. `government` is only for public bodies that no subject id describes; municipalities and national agencies are placed by a separate fixed rule and are not in the list.
 6. tags: 0 to 5 short lowercase English keywords taken from the topics the text actually mentions. No category names unless the text mentions them.
 7. location: set country_code (ISO 3166-1 alpha-2, uppercase) and region_code (ISO 3166-2 first level, e.g. JP-13) ONLY when the candidate text explicitly states where the site's operator is located (for example an address, "based in Tokyo", an institution's stated location). Put an exact, verbatim quote of that statement from the candidate text in evidence_quote. The domain suffix, the page language, the currency, the hosting or an assumed nationality are NOT evidence. If the text does not state it, set all three location fields to null. region_code requires country_code with the same two-letter prefix; if only the country is stated, region_code is null.
+4d. freshness and exempt are ATTRIBUTES for a human reviewer (Issue #129); they are never a reason to reject by themselves. features may contain freshness_signal_at (the newest date a deterministic fetcher found: HTTP Last-Modified, a copyright year or "last updated" text in the page, a sitemap lastmod or a feed entry date) and freshness_source (header / footer / sitemap / feed); both are absent when nothing was found. Today is {today}. freshness: "active" when a signal exists and is less than 3 years before today, or when the text itself shows recent activity; "stale" when the newest signal or the text's own dates are 3 years or more before today; "unknown" when there is no signal and the text shows no date. For an individual site (site_kind "individual") whose newest signal is 3 years or more old, or missing, use "stale" or "unknown" accordingly; do not guess that it is active. Put one short English sentence naming the date, or the lack of one, in notes. exempt: "rare_genre" only when few alternatives on the same subject are likely to exist (a niche field, craft, dialect, a rare hobby), judged from the subject in the text; "notable" only when the site itself carries an independent explanatory reference, like an encyclopedia, a database or a long-standing archive that is valuable regardless of new posts; otherwise "none". NEVER base exempt on popularity, page views, followers or fame, and never on how old the site is alone.
 8. confidence: "high" only when the text clearly supports the whole judgement; "low" when you had to be cautious about several fields.
 9. notes: one short English sentence on anything missing or uncertain that a reviewer should know; empty string if nothing.
 When unsure about any field, use null (or an empty array) instead of guessing.
@@ -206,7 +209,7 @@ def category_lines(cats):
 
 
 def build_system(cats):
-    return SYSTEM_TEMPLATE.format(category_lines=category_lines(cats))
+    return SYSTEM_TEMPLATE.format(category_lines=category_lines(cats), today=datetime.date.today().isoformat())
 
 
 def build_schema(cats):
@@ -242,6 +245,8 @@ def build_schema(cats):
             "site_scope": {"type": "string", "enum": SITE_SCOPES},
             "site_kind": {"type": "string", "enum": SITE_KINDS},
             "site_kind_reason": {"type": "string"},
+            "freshness": {"type": "string", "enum": FRESHNESS},
+            "exempt": {"type": "string", "enum": EXEMPT},
             "confidence": {"type": "string", "enum": CONFIDENCE},
             "location": {
                 "type": "object",
@@ -257,7 +262,7 @@ def build_schema(cats):
         },
         "required": ["description_ja", "description_en", "long_description_ja",
                      "long_description_en", "long_description_evidence", "spam", "categories", "tags",
-                     "adult", "site_scope", "site_kind", "site_kind_reason", "confidence", "location", "notes"],
+                     "adult", "site_scope", "site_kind", "site_kind_reason", "freshness", "exempt", "confidence", "location", "notes"],
         "additionalProperties": False,
     }
 
@@ -355,7 +360,7 @@ def validate_output(obj, valid_ids, source_text):
     source_text = quote_source(source_text)
     want = {"description_ja", "description_en", "long_description_ja", "long_description_en",
             "long_description_evidence", "spam", "categories", "tags",
-            "adult", "site_scope", "site_kind", "site_kind_reason", "confidence", "location", "notes"}
+            "adult", "site_scope", "site_kind", "site_kind_reason", "freshness", "exempt", "confidence", "location", "notes"}
     if set(obj) != want:
         errs.append(f"keys mismatch: {sorted(set(obj) ^ want)}")
         return errs
@@ -434,6 +439,10 @@ def validate_output(obj, valid_ids, source_text):
         errs.append("site_kind invalid")
     if not isinstance(obj["site_kind_reason"], str) or not obj["site_kind_reason"].strip():
         errs.append("site_kind_reason empty")
+    if obj["freshness"] not in FRESHNESS:
+        errs.append("freshness invalid")
+    if obj["exempt"] not in EXEMPT:
+        errs.append("exempt invalid")
     if obj["confidence"] not in CONFIDENCE:
         errs.append("confidence invalid")
     if not isinstance(obj["notes"], str):
