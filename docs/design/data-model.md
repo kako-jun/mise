@@ -40,11 +40,12 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 ### カテゴリの木（#114 第1段、0021）
 
 - **正本は `data/categories.csv`**（`id, parent_id, name_ja, name_en, sort_order, assign`。現在 153 カテゴリ: トップ 15・第2階層 122・第3階層 16）。D1 の `categories` はこの写しで、`tests/test_taxonomy.py` が「全 migration を適用した結果 = CSV」を検査する。**木を変える migration を足すときは CSV も同じ変更にする**。LLM 判定の選択肢（`scripts/llm/judge.py` の `load_categories`）もこの CSV から読む。
-- 旧 59 → 新の対応表は `data/category-map.csv`（`keep` 同じ id を引き継ぐ / `map` 常にその新 id へ / `fallback` 主題でなく運営主体・地域だった旧カテゴリで、他に新カテゴリが無いサイトにだけ退避先を付ける / `drop` 0 件で廃止 / `rule` 官公庁）。0021（`scripts/taxonomy_sql.py` が生成した一回限りの migration。適用後は凍結）が使い、LLM 側は旧 id の判定を新 id に写すのに使う（[llm-judge.md](../collection/llm-judge.md#カテゴリの木と指示文)）。
+- 旧 59 → 新の対応表は `data/category-map.csv`（`keep` 同じ id を引き継ぐ / `map` 常にその新 id へ / `fallback` 主題でなく運営主体・地域だった旧カテゴリで、退避先でない新カテゴリ（keep/map/rule）を 1 つも持たないサイトにだけ、退避先をすべて付ける / `drop` 0 件で廃止 / `rule` 官公庁。LLM 側の旧 id 互換では行政・公的機関 `government`（トップ）に写す）。0021（`scripts/taxonomy_sql.py` が生成した一回限りの migration。適用後は凍結）が使い、LLM 側は旧 id の判定を新 id に写すのに使う（[llm-judge.md](../collection/llm-judge.md#カテゴリの木と指示文)）。
 - **主題の木**: カテゴリは「そのサイトが何について書いているか・何を扱っているか」。運営主体（企業・団体・個人サイト・店）は木に置かず、`site_kind` とタグで扱う。店は扱う品・サービスの主題、学校は教育、病院は健康に入れる。国・地域は木に入れない（国は範囲、県は第2段で範囲の第2階層）。1 サイトは最大 3 カテゴリ。合う葉が無いときだけ親に置く。
-- **id 規則**: 英語の kebab-case の短い slug。**親の id を前に付けない**（親子は `parent_id` だけで持つ。ノードを移しても id と URL が変わらない）。一意にならないときだけ語を足す。**`all` と 2 文字の id は使わない**（範囲の URL `/all/` `/jp/` と衝突する）。トップのうち `arts business reference education science government health society` は旧 id を引き継ぎ、それ以外の旧 id（`親-子` 形式）は木に残らない。日本語名は 12 字程度まで、「・」で並べるのは 2〜3 語まで。英語名は sentence case。
-- **官公庁**: `government`（行政・公的機関）の下に種別 7 葉（`national-agencies` `independent-agencies` `prefectures` `cities` `special-wards` `towns` `villages`）。台帳の `type`（0015 が各サイトにタグとして付けたもの）から決定論で振り、LLM には渡さない（`assign=rule`）。台帳に無い公的機関（公社など）は LLM が `government`（トップ）か主題を選ぶ。以後の官公庁の差分 migration（`public_bodies_sql.py --since`）も種別の葉を付ける。
+- **id 規則**: 英語の kebab-case の短い slug。**親の id を前に付けない**（親子は `parent_id` だけで持つ。ノードを移しても id と URL が変わらない）。一意にならないときだけ語を足す。**`all` と 2 文字の id は使わない**（範囲の URL `/all/` `/jp/` と衝突する）。トップのうち `arts business reference education science government health society entertainment`（9 個）は旧 id を引き継ぎ、それ以外の旧 id（`親-子` 形式）は木に残らない。日本語名は 12 字程度まで、「・」で並べるのは 2〜3 語まで。英語名は sentence case。
+- **官公庁**: `government`（行政・公的機関）の下に種別 7 葉（`national-agencies` `independent-agencies` `prefectures` `cities` `special-wards` `towns` `villages`）。台帳の `type`（0015 が各サイトにタグとして付けたもの）から決定論で振り、LLM には渡さない（`assign=rule`）。台帳に無い公的機関（公社など）は LLM が `government`（トップ）か主題を選ぶ。以後の官公庁の差分 migration（`public_bodies_sql.py --since`）も種別の葉を付ける（政令市の行政区は既定では投入せず、投入した場合は 0021・`--since` とも `cities` に寄せる）。既知の限界: 台帳で団体の種別が変わったとき（町→市など）の葉・タグの付け替えは未対応（#121）。
 - **成長則**（葉の件数は、範囲を「全世界」にしたときの `/api/categories?scope=all` の `site_count`、つまり配下を含む件数で見る）:
+  - **例外: `assign=rule` の葉（官公庁の種別 7 葉）は成長則の対象外**。件数は台帳で決まり、分け方は主題でなく地域なので、子は足さない。多くなった種別（`cities` `towns` など）は、第2段の都道府県の範囲（`/jp/` の第2階層）で分ける。
   - 葉が **50 件を超えたら分割を検討**する。**100 件を超えたら次の追加ラウンドの前に必ず子を足す**。
   - 分けるときは、その葉の中で多い主題を 3〜8 個の子にする。子に入らない残りは親に置いたままでよい。
   - 深さは現在最大 3 だが、**3 を超えてもよい**（件数が必要とする所だけ深くする。トップは 15 のまま保つ）。UI・URL・件数の再帰集計は任意の深さで動く。
