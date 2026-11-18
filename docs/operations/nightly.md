@@ -51,7 +51,7 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊文字、Windows パスは絶対パス）:
 
 ```cron
-37 22 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd"' >> /tmp/mise-nightly.log 2>&1
+37 0 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd"' >> /tmp/mise-nightly.log 2>&1
 ```
 
 手動の確認は `ssh kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd --dry-run"'`（`--dry-run` はラッパーの先頭の `git reset` は走るが、何も書かず API も呼ばない）。
