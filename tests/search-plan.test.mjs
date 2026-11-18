@@ -1,0 +1,166 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readdirSync, readFileSync } from 'node:fs';
+import { querySites, planQuery, randomSites, decodeCursor, siteOrder, TOTAL_CAP, TAG_DRIVE_MAX, PAGE_SIZE, cleanQuery } from '../src/sites.js';
+
+// 検索計画と総件数の上限（#126 第2段）。全 migration を適用したメモリ SQLite（索引・集計表・トリガ込み）で、
+//  (1) どの計画（カテゴリの IN/EXISTS、タグの索引/EXISTS）でも、全ページ連結 = 独立に書いた SQL の並びと同一
+//  (2) total の上限（TOTAL_CAP）と、末尾まで届いたときの正確な件数
+//  (3) ピックアップ（rowid の乱数位置）の性質
+// を検査する。
+const MIG = new URL('../migrations/', import.meta.url);
+const db = new DatabaseSync(':memory:');
+db.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)');
+for (const f of readdirSync(MIG).filter(f => f.endsWith('.sql')).sort()) db.exec(readFileSync(new URL(f, MIG), 'utf8'));
+const d = {
+  prepare: sql => { const mk = args => ({ bind: (...a) => mk(a), all: async () => ({ results: db.prepare(sql).all(...args) }), first: async () => db.prepare(sql).get(...args) }); return mk([]); },
+};
+const leafIds = db.prepare(`SELECT id FROM categories c WHERE NOT EXISTS (SELECT 1 FROM categories k WHERE k.parent_id = c.id) ORDER BY id`).all().map(r => r.id);
+const BIG = leafIds[0], SMALL = leafIds[1], NONLEAF = db.prepare('SELECT parent_id p FROM categories WHERE id = ?').get(BIG).p;
+db.exec('DELETE FROM site_categories; DELETE FROM site_tags; DELETE FROM sites;');
+const N = TOTAL_CAP + 300;
+db.exec('BEGIN');
+const insS = db.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,source_updated_at,country_code,bulk_import) VALUES (?,?,?,?,?,?,?,?)');
+const insC = db.prepare('INSERT INTO site_categories (site_id,category_id) VALUES (?,?)'), insT = db.prepare('INSERT INTO site_tags (site_id,label_ja,label_en) VALUES (?,?,?)');
+for (let i = 0; i < N; i++) {
+  const id = 't' + String(i).padStart(4, '0');
+  // 日時は重複・NULL・不正値を混ぜる（キーセットの NULL・同値の扱い）。bulk_import は一部だけ 1。
+  const day = i % 40, reg = i % 29 === 0 ? 'bad' : `2026-0${1 + (day % 9)}-1${day % 9}T00:00:00Z`, upd = i % 3 === 0 ? null : `2026-0${1 + (i % 7)}-2${i % 8}T00:00:00Z`;
+  insS.run(id, `https://${id}.example/`, 'n' + id, `d${i} ${i % 2 ? 'apple' : 'pear'} site`, reg, upd, i % 17 === 0 ? null : (i % 3 === 0 ? 'US' : 'JP'), i % 13 === 0 ? 1 : 0);
+  if (i % 50 !== 0) insC.run(id, BIG);
+  if (i % 260 === 5) insC.run(id, SMALL);
+  if (i % 11 !== 0) insT.run(id, 'common', 'Common');
+  if (i % 200 === 7) insT.run(id, 'rare', 'Rare');
+  if (i % 200 === 7 || i % 11 === 3) insT.run(id, 'extra', 'Extra');
+}
+insS.run('fr-only', 'https://fr.example/', 'fr', 'd', '2026-01-01T00:00:00Z', null, 'FR', 0);
+db.exec('COMMIT');
+
+// 独立した参照実装: 絞り込みを素朴な SQL で書き、並びは siteOrder() で全件を取る。
+const ref = ({ cc, category, q, tags = [] }) => {
+  const w = [], a = [];
+  if (cc) { w.push('s.country_code = ?'); a.push(cc); }
+  if (category) { w.push('(SELECT COUNT(*) FROM site_categories x WHERE x.site_id = s.id AND x.category_id = ?) > 0'); a.push(category); }
+  if (q) { w.push('instr(s.search_text, ?) > 0'); a.push(q); }
+  for (const t of tags) { w.push('(SELECT COUNT(*) FROM site_tags x WHERE x.site_id = s.id AND (x.label_ja = ? OR x.label_en = ?)) > 0'); a.push(t, t); }
+  return db.prepare(`SELECT s.id FROM sites s ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ${siteOrder()}`).all(...a).map(r => r.id);
+};
+const pagesOf = async (o, limit = PAGE_SIZE) => {
+  const ids = []; let cur = null, first;
+  for (let g = 0; g < 200; g++) { const r = await querySites(d, { ...o, limit, cursor: cur ? decodeCursor(cur) : null }); if (g === 0) first = r; ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; if (!cur) break; }
+  return { ids, first };
+};
+
+const cases = [
+  ['q 多ヒット（上限超え）', { q: cleanQuery('site') }],
+  ['q 中ヒット（上限未満）', { q: cleanQuery('apple') }],
+  ['q 1 件', { q: cleanQuery('d1299') }],
+  ['q 0 件', { q: cleanQuery('zzz') }],
+  ['カテゴリ 大（EXISTS 形）', { category: BIG }],
+  ['カテゴリ 小（IN 形）', { category: SMALL }],
+  ['カテゴリ 大 + 範囲', { category: BIG, cc: 'US' }],
+  ['カテゴリ 小 + 範囲', { category: SMALL, cc: 'JP' }],
+  ['カテゴリ 大 + q', { category: BIG, q: cleanQuery('apple') }],
+  ['葉でないカテゴリ（直下に所属なし）', { category: NONLEAF }],
+  ['タグ 稀（索引から）', { tags: ['rare'] }],
+  ['タグ 稀（英語名）', { tags: ['Rare'] }],
+  ['タグ 多（EXISTS 形・上限超え）', { tags: ['common'] }],
+  ['タグ 多 + 範囲', { tags: ['common'], cc: 'JP' }],
+  ['タグ 稀 AND 多', { tags: ['common', 'rare'] }],
+  ['タグ 中（extra）+ q', { tags: ['extra'], q: cleanQuery('apple') }],
+  ['タグ 稀 + カテゴリ大', { tags: ['rare'], category: BIG }],
+  ['範囲だけ', { cc: 'JP' }],
+  ['絞り込みなし', {}],
+];
+
+for (const [label, o] of cases) {
+  test(`全ページ連結が参照実装の並びと同一・total の意味: ${label}`, async () => {
+    const want = ref(o), { ids, first } = await pagesOf(o);
+    assert.deepEqual(ids, want);
+    if (want.length <= PAGE_SIZE) { assert.equal(first.total, want.length); assert.equal(first.total_capped, false); assert.equal(first.next_cursor, null); return; }
+    assert.ok(first.total_capped === (first.total === TOTAL_CAP && want.length > TOTAL_CAP) || first.total_capped === false);
+    if (first.total_capped) { assert.equal(first.total, TOTAL_CAP); assert.ok(want.length > TOTAL_CAP, '上限を超える絞り込みだけが capped'); }
+    else assert.equal(first.total, want.length, '上限以下、または集計表から正確に出せる経路は正確な件数');
+    // limit を変えても、100 件ずつでも同じ並び（カーソルの項の切れ目をまたぐ）
+    assert.deepEqual((await pagesOf(o, 7)).ids, want);
+  });
+}
+
+test('total: 上限を超える q・単独のタグは total_capped = true で TOTAL_CAP、末尾まで読むと件数は正確', async () => {
+  for (const o of [{ q: cleanQuery('site') }, { tags: ['common'] }]) {
+    const r = await querySites(d, o);
+    assert.equal(r.total, TOTAL_CAP); assert.equal(r.total_capped, true);
+    assert.equal(ref(o).length > TOTAL_CAP, true);
+  }
+  // 葉カテゴリ・範囲だけは集計表から正確（上限を超えても capped にしない）
+  const big = await querySites(d, { category: BIG });
+  assert.equal(big.total, ref({ category: BIG }).length); assert.ok(big.total > TOTAL_CAP); assert.equal(big.total_capped, false);
+  const all = await querySites(d, {});
+  assert.equal(all.total, N + 1); assert.equal(all.total_capped, false);
+  // q の中ヒット（上限未満）は正確に数える
+  const apple = await querySites(d, { q: cleanQuery('apple') });
+  assert.equal(apple.total, ref({ q: cleanQuery('apple') }).length); assert.equal(apple.total_capped, false);
+});
+
+test('total: 末尾まで届いた先頭ページは追加の読み取りなしで正確（0 件・1 ページ以内・?page=N の末尾）', async () => {
+  let queries = 0;
+  const counting = { prepare: sql => { queries++; return d.prepare(sql); } };
+  const n0 = (queries = 0, await querySites(counting, { q: cleanQuery('zzz') }), queries);
+  assert.equal((await querySites(d, { q: cleanQuery('zzz') })).total, 0);
+  // q の 0 件: 計画の読み取りは無く、一覧 1 本で終わる（件数の数え直しをしない）
+  assert.equal(n0, 1);
+  const want = ref({ q: cleanQuery('apple') }), last = Math.floor((want.length - 1) / PAGE_SIZE) * PAGE_SIZE;
+  const r = await querySites(d, { q: cleanQuery('apple'), offset: last });
+  assert.equal(r.total, want.length); assert.equal(r.next_cursor, null);
+  const past = await querySites(d, { q: cleanQuery('apple'), offset: 100000 }); // 範囲外の ?page=N（行なし）でも件数は出る（0 を返さない）
+  assert.equal(past.items.length, 0); assert.equal(past.total, want.length);
+});
+
+test('検索計画: カテゴリは小さければ IN、大きければ EXISTS。タグは稀なものだけ索引から', async () => {
+  assert.equal((await planQuery(d, { category: BIG })).categoryMode, 'exists');
+  assert.equal((await planQuery(d, { category: SMALL })).categoryMode, 'in');
+  assert.equal((await planQuery(d, { category: BIG })).categoryLeafCount, ref({ category: BIG }).length);
+  assert.equal((await planQuery(d, { category: NONLEAF })).categoryLeafCount, null, '葉でないカテゴリの件数は集計表（子孫を含む）では出せない');
+  assert.equal((await planQuery(d, { tags: ['rare'] })).driveTag, 'rare');
+  assert.equal((await planQuery(d, { tags: ['common'] })).driveTag, null);
+  assert.equal((await planQuery(d, { tags: ['common'] })).tagsOverCap, true);
+  assert.equal((await planQuery(d, { tags: ['common', 'rare'] })).driveTag, 'rare');
+  assert.ok(ref({ tags: ['common'] }).length > TAG_DRIVE_MAX && ref({ tags: ['rare'] }).length <= TAG_DRIVE_MAX);
+});
+
+test('カーソルは項ごとに索引を引いて連結: 深い位置・NULL・同値キーでも欠落と重複がない', async () => {
+  const want = ref({});
+  for (const limit of [13, 100]) assert.deepEqual((await pagesOf({}, limit)).ids, want);
+  // 任意の位置のカーソル（全位置）から始めて、その次から最後まで同じ並び
+  for (const at of [0, 1, 39, 40, 41, 600, want.length - 2]) {
+    const row = db.prepare(`SELECT ${require_keys()} FROM sites s WHERE s.id = ?`).get(want[at]);
+    const cur = Buffer.from(JSON.stringify([row.k0, row.k1, row.k2])).toString('base64url');
+    const ids = []; let c = cur;
+    for (let g = 0; g < 100 && c; g++) { const r = await querySites(d, { cursor: decodeCursor(c), limit: 100 }); ids.push(...r.items.map(i => i.id)); c = r.next_cursor; }
+    assert.deepEqual(ids, want.slice(at + 1), `位置 ${at} の次から`);
+  }
+});
+import { SORT_KEYS } from '../src/sites.js';
+function require_keys() { return SORT_KEYS.map((k, i) => `${k.expr} AS k${i}`).join(', '); }
+
+test('ピックアップ: 重複なく n 件・一括投入を除く・範囲を守る・該当が少なければ少なく返す', async () => {
+  for (let i = 0; i < 30; i++) {
+    const r = await randomSites(d, null, 3);
+    assert.equal(r.length, 3); assert.equal(new Set(r.map(x => x.id)).size, 3);
+    assert.ok(r.every(x => x.bulk_import === 0));
+    const us = await randomSites(d, 'US', 3);
+    assert.equal(us.length, 3); assert.ok(us.every(x => x.country_code === 'US' && x.bulk_import === 0));
+  }
+  assert.deepEqual((await randomSites(d, 'ZZ', 3)).map(x => x.id), []);
+  assert.deepEqual((await randomSites(d, 'FR', 3)).map(x => x.id), ['fr-only']);
+});
+
+test('migration 0023〜0025: 索引が作られ、検索計画が使う形のクエリが索引で引かれる', () => {
+  const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all().map(r => r.name);
+  for (const n of ['idx_site_tags_label_ja', 'idx_site_tags_label_en', 'idx_sites_activity']) assert.ok(idx.includes(n), n);
+  const plan = sql => db.prepare('EXPLAIN QUERY PLAN ' + sql).all('x').map(r => r.detail).join(' | ');
+  assert.match(plan('SELECT site_id FROM site_tags WHERE label_ja = ?'), /idx_site_tags_label_ja/);
+  assert.match(plan('SELECT site_id FROM site_tags WHERE label_en = ?'), /idx_site_tags_label_en/);
+  assert.match(db.prepare("EXPLAIN QUERY PLAN SELECT date(registered_at) FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND date(registered_at) >= date('now','-6 days') GROUP BY date(registered_at)").all().map(r => r.detail).join(' | '), /idx_sites_activity/);
+});

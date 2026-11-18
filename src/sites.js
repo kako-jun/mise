@@ -8,6 +8,12 @@
 export const PAGE_SIZE = 40, MAX_LIMIT = 100;
 // 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの。
 export const ALL_SCOPE = 'all';
+// 絞り込み（q・tag・直下以外のカテゴリ）の総件数の上限（#126 第2段）。これを超えるときは数えず total = TOTAL_CAP・total_capped = true で返し、画面は「1,000+」と出す。
+// 全件を数えると読み取りがヒット件数に比例して増えるため（docs/design/architecture.md）。変えるときは app.js の表示（formatCap）と docs/design/ui.md も確認する。
+export const TOTAL_CAP = 1000;
+// タグ絞り込みの計画の切替点: タグ 1 つの該当サイト数がこれ以下なら「タグの索引から引く」計画（一覧も件数もタグの索引を読むので該当数に比例）、超えたら「並びの索引を走査して EXISTS で確かめる」計画（#126）。
+// 総件数の上限と同じ値にしてある: 上限以下なら件数をタグの索引で正確に数えられ、超えれば総件数は上限付きで返すので数えなくてよい（単独のタグのとき）。
+export const TAG_DRIVE_MAX = TOTAL_CAP;
 // dir は SQLite の NULL の並びに合わせる: ASC では NULL が先頭、DESC では NULL が末尾。
 export const SORT_KEYS = [
   // 台帳などからの一括投入（bulk_import=1。官公庁の名簿など）は後ろ。通常のサイト（0）が先（NULL なし、DEFAULT 0）
@@ -55,26 +61,65 @@ export function cleanTags(raw) {
   return out.length > MAX_TAGS ? null : out;
 }
 
-// 「cursor の次」の条件。キーを辞書式に比較する（先頭から: 前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
-function afterCursor(vals) {
-  const alts = [], args = [];
-  SORT_KEYS.forEach((k, i) => {
-    const eq = [], a = [];
-    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); a.push(vals[j]); } }
-    let after;
-    if (k.dir === 'ASC') { if (vals[i] === null) after = `${k.expr} IS NOT NULL`; else { after = `${k.expr} > ?`; a.push(vals[i]); } } // ASC: NULL が先頭
-    else { if (vals[i] === null) after = null; else { after = `(${k.expr} < ? OR ${k.expr} IS NULL)`; a.push(vals[i]); } } // DESC: NULL が末尾
-    if (after) { alts.push(`(${[...eq, after].join(' AND ')})`); args.push(...a); }
-  });
-  return { sql: `(${alts.join(' OR ')})`, args };
+// 「cursor の次」を、並びの順に連結できる範囲条件の列にする（#126 第2段）。キーを辞書式に比較する（前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
+// 1 つの `A OR B OR C` にすると SQLite は並びの索引を先頭から走査してしまう（深いページほど読み取りが増える。実測: 9,000 件目の次で 3.4 万行）。
+// そこで項ごとに別の問い合わせにする。各項は「前のキーが等しい」+「このキーが後ろ」の等値と範囲だけなので索引を直接引ける（SEARCH）。
+// 項は並びの順に並べてある（最も深いキーの項が先、最初のキーの項が最後。DESC のキーでは NULL の項が「値が小さい」項の後）ので、前から順に取って連結すれば並びと同じになる。
+function cursorTerms(vals) {
+  const terms = [];
+  for (let i = SORT_KEYS.length - 1; i >= 0; i--) {
+    const k = SORT_KEYS[i], eq = [], eqArgs = [];
+    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); eqArgs.push(vals[j]); } }
+    const push = (cond, args = []) => terms.push({ sql: `(${[...eq, cond].join(' AND ')})`, args: [...eqArgs, ...args] });
+    if (k.dir === 'ASC') { if (vals[i] === null) push(`${k.expr} IS NOT NULL`); else push(`${k.expr} > ?`, [vals[i]]); } // ASC: NULL が先頭
+    else if (vals[i] !== null) { push(`${k.expr} < ?`, [vals[i]]); push(`${k.expr} IS NULL`); } // DESC: NULL が末尾。値の小さい行の後に NULL の行が続く
+  }
+  return terms;
 }
 
-function filters({ cc, category, q, tags }) {
+// ---- 検索計画（#126 第2段）----
+// SQLite の計画器は件数を知らないので、重い経路は件数に応じてアプリが形を選ぶ。結果と並びはどの形でも同じ（読み取り行数だけが変わる）。
+//   カテゴリ: 小さい（直下の所属サイトが少ない）→ `IN (所属サイト)` で所属から引いて並べ替える / 大きい → 並びの索引を走査して `EXISTS` で確かめ、1 ページ分で止まる。
+//   タグ: 稀（該当サイトが TAG_DRIVE_MAX 以下）→ タグの索引（0023・0024）から引く / よく使われる → 並びの索引を走査して `EXISTS`。
+// 費用の見積り（10 万件の実測から。Issue #126）: IN 形 ≒ 所属数 × 7 行、EXISTS 形 ≒ 41 件が見つかるまでの走査 = 41 × 母数 ÷ 該当数 × 3 行。
+const CATEGORY_IN_COST = 7, CATEGORY_EXISTS_COST = 3;
+export async function planQuery(db, { cc = null, category = null, tags = [] }) {
+  const plan = { categoryMode: 'in', categoryLeafCount: null, driveTag: null, tagsOverCap: false };
+  const jobs = [];
+  if (category) jobs.push((async () => {
+    const scope = cc ?? ALL_SCOPE;
+    const r = await db.prepare(`SELECT (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = 'all') AS n_all, (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = ?2) AS n_scope, (SELECT n FROM scope_counts WHERE scope = ?2) AS n_base, EXISTS (SELECT 1 FROM categories WHERE parent_id = ?1) AS has_child`).bind(category, scope).first();
+    const nAll = r?.n_all ?? 0, nScope = r?.n_scope ?? 0, base = r?.n_base ?? 0;
+    // 葉カテゴリの category_counts は「直下の所属サイト数」と同じ（子孫が無いので）。総件数はこれをそのまま使える。
+    if (r && !r.has_child) plan.categoryLeafCount = nScope;
+    const costIn = nAll * CATEGORY_IN_COST, costExists = nScope > 0 ? CATEGORY_EXISTS_COST * 41 * Math.max(base, 1) / nScope : Infinity;
+    plan.categoryMode = costExists < costIn ? 'exists' : 'in';
+  })());
+  if (tags.length) jobs.push((async () => {
+    // タグごとに該当サイト数を TAG_DRIVE_MAX + 1 まで数え（索引 0023・0024 で最大 TAG_DRIVE_MAX + 1 行）、一番稀なものを索引から引く（超えたタグは対象外）。
+    const counts = await Promise.all(tags.map(t => db.prepare(`SELECT COUNT(*) AS n FROM (SELECT site_id FROM site_tags WHERE label_ja = ?1 UNION SELECT site_id FROM site_tags WHERE label_en = ?1 LIMIT ?2)`).bind(t, TAG_DRIVE_MAX + 1).first()));
+    let best = null;
+    tags.forEach((t, i) => { const n = counts[i]?.n ?? 0; if (n <= TAG_DRIVE_MAX && (best === null || n < best.n)) best = { t, n }; });
+    plan.driveTag = best?.t ?? null;
+    plan.tagsOverCap = tags.length === 1 && best === null; // 単独のタグが上限を超える（他の絞り込みが無ければ総件数は上限付きと分かる）
+  })());
+  await Promise.all(jobs);
+  return plan;
+}
+
+function filters({ cc, category, q, tags }, plan = {}) {
   const where = [], args = [];
   if (cc) { where.push('s.country_code = ?'); args.push(cc); }
-  if (category) { where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)'); args.push(category); }
+  if (category) {
+    if (plan.categoryMode === 'exists') where.push('EXISTS (SELECT 1 FROM site_categories sc WHERE sc.category_id = ? AND sc.site_id = s.id)');
+    else where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)');
+    args.push(category);
+  }
   if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
-  for (const t of tags ?? []) { where.push('EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = ? OR t.label_en = ?))'); args.push(t, t); } // 複数タグは AND（タグごとに 1 条件）
+  for (const t of tags ?? []) { // 複数タグは AND（タグごとに 1 条件）
+    if (t === plan.driveTag) { where.push('s.id IN (SELECT site_id FROM site_tags WHERE label_ja = ? UNION SELECT site_id FROM site_tags WHERE label_en = ?)'); args.push(t, t); }
+    else { where.push('EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = ? OR t.label_en = ?))'); args.push(t, t); }
+  }
   return { where, args };
 }
 
@@ -83,26 +128,54 @@ const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favi
 const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; return { ...r, category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
-// total は先頭ページ（カーソルなし）のときだけ数える。q は cleanQuery 済み、tags は cleanTags 済みであること。
+// total は先頭ページ（カーソルなし）のときだけ入れる。q は cleanQuery 済み、tags は cleanTags 済みであること。
+// total の出し方（読み取りが件数に比例しないように。#126 第2段）:
+//   1. 末尾まで届いた（次ページなし）なら、読んだ行数から正確に分かる（追加の読み取りなし。0 ヒットも 1 回の走査で済む）
+//   2. 範囲（国）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
+//   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
 export async function querySites(db, { cc = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
-  const { where, args } = filters({ cc, category, q, tags });
-  const conds = [...where], a = [...args], hasCursor = cursor && !cursor.none;
-  if (hasCursor) { const c = afterCursor(cursor.vals); conds.push(c.sql); a.push(...c.args); }
-  const sql = `SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${siteOrder()} LIMIT ? OFFSET ?`;
-  const { results } = await db.prepare(sql).bind(...a, limit + 1, hasCursor ? 0 : offset).all();
+  const plan = await planQuery(db, { cc, category, tags });
+  const { where, args } = filters({ cc, category, q, tags }, plan);
+  const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
+  const run = async (extra, extraArgs, lim, off) => {
+    const conds = [...where, ...extra];
+    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${siteOrder()} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
+  };
+  let results;
+  if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
+  else results = await run([], [], limit + 1, start);
   const more = results.length > limit, rows = results.slice(0, limit);
   const next_cursor = more ? encodeCursor(SORT_KEYS.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
   const out = { items: rows.map(shape), next_cursor };
   if (!hasCursor) {
-    // 絞り込みが範囲（国）だけなら集計表 scope_counts から読む（COUNT(*) が全行を読むのを避ける。#126）。カテゴリ（直下のみ）・q・tag は従来どおり数える。
-    if (!category && !q && !tags?.length) out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(cc ?? ALL_SCOPE).first())?.total ?? 0;
-    else out.total = (await db.prepare(`SELECT COUNT(*) AS total FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`).bind(...args).first())?.total ?? 0;
+    const plain = !category && !q && !tags?.length;
+    if (!more && (start === 0 || rows.length > 0)) { out.total = start + rows.length; out.total_capped = false; }
+    else if (plain) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(cc ?? ALL_SCOPE).first())?.total ?? 0; out.total_capped = false; }
+    else if (plan.categoryLeafCount !== null && !q && !tags?.length) { out.total = plan.categoryLeafCount; out.total_capped = false; }
+    else if (plan.tagsOverCap && !q && !category && !cc) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
+    else {
+      const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''} LIMIT ${TOTAL_CAP + 1})`).bind(...args).first())?.n ?? 0;
+      out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
+    }
   }
   return out;
 }
 
 // ピックアップ用: 範囲内からランダムに n 件。ピックアップは「発見」の表示なので、台帳などの一括投入（bulk_import=1）は除く。
+// 読み取りが件数に比例しないよう、`ORDER BY RANDOM()`（全件を読む）をやめ、rowid の乱数位置から該当する最初の 1 件を n 回引く（#126 第2段）。
+// 厳密な一様抽選ではない（欠番や、該当しない行が続いた直後の行が当たりやすい）。ピックアップは目安の「発見」なので許容する。位置が重なって n 件に足りないときは先頭から補う。
 export async function randomSites(db, cc, n = 3) {
-  const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) ORDER BY RANDOM() LIMIT ?2`).bind(cc, n).all();
-  return results.map(shape);
+  if (cc && !((await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(cc).first())?.n > 0)) return [];
+  const max = (await db.prepare(`SELECT MAX(rowid) AS m FROM sites`).bind().first())?.m ?? 0;
+  if (!max) return [];
+  // `+s.bulk_import` は、並びの索引（bulk_import 先頭）を選ばせず rowid の順で走査させるため。
+  const from = `FROM sites s WHERE s.rowid >= ?1 AND +s.bulk_import = 0 AND (?2 IS NULL OR s.country_code = ?2)`;
+  const found = await Promise.all(Array.from({ length: n }, () => db.prepare(`SELECT ${COLUMNS} ${from} ORDER BY s.rowid LIMIT 1`).bind(Math.floor(Math.random() * max) + 1, cc).all()));
+  const rows = [...new Map(found.flatMap(r => r.results).map(r => [r.id, r])).values()];
+  if (rows.length < n) {
+    const have = JSON.stringify(rows.map(r => r.id));
+    const { results } = await db.prepare(`SELECT ${COLUMNS} ${from} AND s.id NOT IN (SELECT value FROM json_each(?3)) ORDER BY s.rowid LIMIT ?4`).bind(0, cc, have, n - rows.length).all();
+    rows.push(...results);
+  }
+  return rows.sort(() => Math.random() - 0.5).map(shape);
 }
