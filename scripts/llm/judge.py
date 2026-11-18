@@ -89,7 +89,9 @@ _TREE = None
 def load_tree(root=ROOT):
     """(parent {id: parent id or None} for EVERY row of data/categories.csv including the assign=rule leaves, retreat ids).
     Retreat ids = the new_id of every fallback row of data/category-map.csv (business / society / business-services / community):
-    where 0021 parked the old company / organisation ids. The csv files are the single source (#137)."""
+    where 0021 parked the old company / organisation ids. They are ALSO ordinary categories the LLM may choose (assign=llm), so the
+    canonical form does not drop them; the set is used only to report a coexistence as information (integrity check retreat_with_real).
+    The csv files are the single source (#137)."""
     with open(os.path.join(root, "data", "categories.csv"), encoding="utf-8", newline="") as f:
         parent = {r["id"]: r["parent_id"] or None for r in csv.DictReader(f)}
     retreat = frozenset(m["new"] for m in load_legacy_map(root).values() if m["mode"] == "fallback" and m["new"])
@@ -97,14 +99,16 @@ def load_tree(root=ROOT):
 
 
 def normalize_categories(ids, tree=None, stats=None):
-    """Canonical form of a category set (#137): (a) when a parent and its descendant are both present, only the descendant stays
-    (the count tables count descendants, so the parent's count does not change); (b) a retreat id is dropped when any real
-    category remains. Order is kept. stats (optional dict) gets "dropped_ancestors" / "dropped_retreat" added up."""
+    """Canonical form of a category set (#137): when a parent and its descendant are both present, only the descendant stays
+    (the count tables count descendants, so the parent's count does not change). Retreat ids (business / society / ...) are NOT
+    dropped here: the LLM chooses them in the current tree on purpose. The only retreat ids that were ever "not chosen" are the
+    ones modernize_categories gets from an old id's fallback, and those are used only when nothing else remains (alone).
+    Order is kept. stats (optional dict) gets "dropped_ancestors" added up."""
     global _TREE
     if tree is None:
         _TREE = _TREE or load_tree()
         tree = _TREE
-    parent, retreat = tree
+    parent, _retreat = tree
     ids = list(dict.fromkeys(ids))
     ancestors = set()
     for i in ids:
@@ -115,11 +119,6 @@ def normalize_categories(ids, tree=None, stats=None):
     out = [i for i in ids if i not in ancestors]
     if stats is not None:
         stats["dropped_ancestors"] = stats.get("dropped_ancestors", 0) + len(ids) - len(out)
-    if any(i not in retreat for i in out):
-        kept = [i for i in out if i not in retreat]
-        if stats is not None:
-            stats["dropped_retreat"] = stats.get("dropped_retreat", 0) + len(out) - len(kept)
-        out = kept
     return out
 
 

@@ -44,7 +44,7 @@ partial failure or a database with another category tree never leaves a site unc
                                        summary shows real changes and sites that are not listed / have a government leaf are left out
   --dry-run                            print the summary only, write no SQL
 
-Category sets are written in the canonical form (#137): an ancestor next to its descendant is dropped, and a retreat id (business / society / business-services / community) is dropped when a real category remains. The summary counts both (dropped_ancestors / dropped_retreat).
+Category sets are written in the canonical form (#137): an ancestor next to its descendant is dropped (the summary counts dropped_ancestors). Retreat ids (business / society / business-services / community) are kept: they are ordinary categories the LLM may choose.
 Never touched: ids starting with pb-, sites holding a leaf under government (guarded in SQL too), an empty judgement or one
 without any valid id (old ids are translated first, see judge.modernize_categories). Summary on stdout.
 """
@@ -182,7 +182,7 @@ def build(db_path):
     finally:
         con.close()
     stats = {"approved": len(rows), "exported": 0, "skipped_verdict": 0, "skipped_no_description": 0, "skipped_duplicate": 0, "skipped_no_category": 0,
-             "dropped_ancestors": 0, "dropped_retreat": 0}  # the last two: categories removed by the canonical form (#137)
+             "dropped_ancestors": 0}  # categories removed by the canonical form (#137)
     seen, body = set(), []
     for r in rows:
         if r["spam_verdict"] not in ("pass", "suspect"):
@@ -235,7 +235,7 @@ def plan_from_ledger(db_path):
             "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()
-    stats = {"approved": len(rows), "skipped_verdict": 0, "skipped_empty": 0, "dropped_ancestors": 0, "dropped_retreat": 0}
+    stats = {"approved": len(rows), "skipped_verdict": 0, "skipped_empty": 0, "dropped_ancestors": 0}
     items, seen = [], set()
     for r in rows:
         if r["spam_verdict"] not in ("pass", "suspect"):
@@ -260,7 +260,7 @@ def plan_from_results(results_path, input_path, urls=None):
     _origin, loaded = import_results.load_results(results_path)
     cands = {c["id"]: c for c in import_results.read_jsonl(input_path)}
     stats = {"results": len(loaded), "no_output": 0, "rejected": 0, "skipped_verdict": 0, "skipped_empty": 0, "skipped_protected": 0,
-             "skipped_ledger_mode": 0, "skipped_url_mismatch": 0, "dropped_ancestors": 0, "dropped_retreat": 0}
+             "skipped_ledger_mode": 0, "skipped_url_mismatch": 0, "dropped_ancestors": 0}
     problems, items, seen = [], [], set()
     problems_info = []
     for cid, out, _model, _err, body_limit in loaded:
@@ -391,6 +391,9 @@ def main_update(a):
         print("REJECTED " + p, file=sys.stderr)
     sql, summary = build_update(items, current)
     print_summary(summary, stats, current is not None)
+    if current is None:
+        print("WARNING: no --current: the integrity gate below runs on an empty base (no fr- sites), so the UPDATE changes nothing there "
+              "and the gate cannot catch a violation. The real gate needs --current DB (use it in every unattended run).", file=sys.stderr)
     found = integrity.gate(sql, a.current)
     if found:
         print("INTEGRITY: the SQL would introduce violations; nothing written (scripts/llm/integrity.py)\n" + integrity.format_violations(found), file=sys.stderr)

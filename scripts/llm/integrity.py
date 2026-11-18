@@ -8,7 +8,8 @@ Used by
     violation it introduces stops the output (see gate())
   - docs/operations/deploy.md          the before / after check of every application refers to the script, not to copies of the SQL
 
-severity "error" fails the check (and the gate); "warn" is printed but never fails (a site without a country is legal).
+severity "error" fails the check (and the gate); "warn" is printed but never fails (a site without a country is legal; a retreat
+category next to a real one may be the LLM's own choice).
 """
 import os
 import sqlite3
@@ -45,8 +46,8 @@ CHECKS = [
      "SELECT a.site_id, a.category_id parent_id, b.category_id child_id FROM site_categories a "
      "JOIN category_closure cl ON cl.ancestor_id=a.category_id AND cl.descendant_id<>a.category_id "
      "JOIN site_categories b ON b.site_id=a.site_id AND b.category_id=cl.descendant_id WHERE a.site_id NOT LIKE 'pb-%'"),
-    ("retreat_with_real", "error",
-     f"a site holds a retreat category ({'/'.join(sorted(RETREAT))}) next to a real category (pb- is exempt)",
+    ("retreat_with_real", "warn",
+     f"information: a site holds a retreat category ({'/'.join(sorted(RETREAT))}) next to another category (the LLM may have chosen it; pb- is exempt)",
      f"SELECT a.site_id, a.category_id FROM site_categories a WHERE a.site_id NOT LIKE 'pb-%' AND a.category_id IN ({RETREAT_LIST}) "
      f"AND EXISTS (SELECT 1 FROM site_categories b WHERE b.site_id=a.site_id AND b.category_id NOT IN ({RETREAT_LIST}))"),
     ("uncategorized", "error", "a site without any category",

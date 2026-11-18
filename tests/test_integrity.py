@@ -14,6 +14,7 @@ for _sub in ("scripts/llm", "scripts/pipeline"):
 
 import contextlib  # noqa: E402
 import io  # noqa: E402
+import subprocess  # noqa: E402
 import json  # noqa: E402
 
 import export_approved_sql as ea  # noqa: E402
@@ -21,6 +22,7 @@ import integrity  # noqa: E402
 import judge  # noqa: E402
 import review_state  # noqa: E402
 import test_llm_ledger as L  # noqa: E402
+import test_update_categories as U  # noqa: E402
 
 VALID = {c["id"] for c in judge.load_categories()}
 LEGACY = judge.load_legacy_map()
@@ -42,13 +44,17 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(canon(["humanities", "religion", "shrines"]), ["shrines"])
         self.assertEqual(canon(["humanities", "shrines"]), ["shrines"])  # a grandparent too, not only the direct parent
 
-    def test_retreat_is_dropped_next_to_a_real_category(self):
-        self.assertEqual(canon(["business-services", "manufacturing"]), ["manufacturing"])
-        self.assertEqual(canon(["society", "community", "hospitals"]), ["hospitals"])
+    def test_retreat_chosen_by_the_llm_is_kept_next_to_a_real_category(self):
+        # business-services / community etc. are ordinary categories of the current tree (assign=llm): a new id is never dropped
+        self.assertEqual(canon(["business-services", "manufacturing"]), ["business-services", "manufacturing"])
+        self.assertEqual(canon(["jobs", "business-services"]), ["jobs", "business-services"])
+        self.assertEqual(canon(["community", "hospitals"]), ["community", "hospitals"])
+        self.assertEqual(canon(["society", "community"]), ["community"])  # society is the parent of community: the ancestor rule, not a retreat rule
 
-    def test_retreat_alone_stays(self):
-        self.assertEqual(canon(["society"]), ["society"])
-        self.assertEqual(canon(["business-companies"]), ["business"])  # old id falling back
+    def test_old_id_fallback_is_used_only_when_nothing_else_remains(self):
+        self.assertEqual(canon(["business-companies"]), ["business"])  # alone: the retreat id stays
+        self.assertEqual(canon(["business-companies", "hospitals"]), ["hospitals"])  # a real category: the fallback is not added
+        self.assertEqual(canon(["business-companies", "business-products-and-services"]), ["business-services"])  # business is the parent
 
     def test_ancestor_first_then_retreat(self):
         # business is the parent of business-services: only the child stays, which is a retreat id alone, so it stays
@@ -56,7 +62,7 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(canon(["business", "manufacturing"]), ["manufacturing"])
 
     def test_multiple_real_categories_and_the_limit(self):
-        self.assertEqual(canon(["hospitals", "manufacturing", "health", "society"]), ["hospitals", "manufacturing"])
+        self.assertEqual(canon(["hospitals", "manufacturing", "health", "society"]), ["hospitals", "manufacturing", "society"])
         self.assertEqual(len(canon(["hospitals", "manufacturing", "agriculture", "construction"])), 3)
 
     def test_removal_makes_room_for_the_limit(self):
@@ -73,15 +79,13 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(parent["cities"], "government")
         self.assertEqual(judge.normalize_categories(["government", "cities"]), ["cities"])
 
-    def test_stats_count_both_kinds(self):
+    def test_stats_count_dropped_ancestors_only(self):
         st = {}
         canon(["health", "hospitals", "society", "manufacturing"], st)
-        self.assertEqual(st, {"dropped_ancestors": 1, "dropped_retreat": 1})
+        self.assertEqual(st, {"dropped_ancestors": 1})
 
     def test_retreat_set_is_the_fallback_rows_of_the_map(self):
         self.assertEqual(set(RETREAT), set(judge.load_tree()[1]))
-        for r in RETREAT:  # the cleanup SQL spells the same four ids
-            self.assertIn(f"'{r}'", FIX_SQL)
 
     def test_canonical_categories_keeps_unknown_for_validation(self):
         self.assertEqual(judge.canonical_categories(["health", "hospitals"], VALID, LEGACY), ["hospitals"])
@@ -115,7 +119,7 @@ class FixSqlTests(unittest.TestCase):
         self.db = new_db()
         self.addCleanup(self.db.close)
         add(self.db, "s1", ["health", "hospitals"])
-        add(self.db, "s2", ["business-services", "manufacturing"])
+        add(self.db, "s2", ["business-services", "manufacturing"])  # retreat + real: both stay (the LLM may have chosen it)
         add(self.db, "s3", ["business", "society", "hospitals", "agriculture"])  # ancestor + retreat + real, 2 real
         add(self.db, "s4", ["society"], cc="US")  # retreat alone: stays
         add(self.db, "s5", ["hospitals"])  # already canonical
@@ -125,7 +129,7 @@ class FixSqlTests(unittest.TestCase):
         self.db.commit()
 
     def test_statements_are_simple_single_deletes(self):
-        self.assertEqual(len(STATEMENTS), 2)
+        self.assertEqual(len(STATEMENTS), 1)
         for s in STATEMENTS:
             self.assertTrue(s.startswith("DELETE FROM site_categories"))
             self.assertNotIn("UNION", s)
@@ -137,35 +141,33 @@ class FixSqlTests(unittest.TestCase):
         n0 = self.db.execute("SELECT count(*) FROM site_categories").fetchone()[0]
         before = found(self.db)
         # ancestor pairs: s1 1, s3 business>agriculture 1, s6 humanities>religion/shrines and religion>shrines 3;
-        # retreat rows next to a real one: s2 1, s3 society and business 2
+        # retreat rows next to another category (information only): s2 1, s3 society and business 2
         self.assertEqual((len(before["ancestor_duplicate"]), len(before["retreat_with_real"])), (5, 3))
         counts = snap(self.db)
         self.db.executescript(FIX_SQL)
         n1 = self.db.execute("SELECT count(*) FROM site_categories").fetchone()[0]
         self.assertLess(n1, n0)
         self.assertEqual(self.cats("s1"), ["hospitals"])
-        self.assertEqual(self.cats("s2"), ["manufacturing"])
-        self.assertEqual(self.cats("s3"), ["agriculture", "hospitals"])
+        self.assertEqual(self.cats("s2"), ["business-services", "manufacturing"])  # untouched
+        self.assertEqual(self.cats("s3"), ["agriculture", "hospitals", "society"])  # only the ancestor business goes
         self.assertEqual(self.cats("s4"), ["society"])
         self.assertEqual(self.cats("s5"), ["hospitals"])
         self.assertEqual(self.cats("s6"), ["shrines"])
         self.assertEqual(self.cats("pb-9"), ["cities", "government"])  # pb- untouched
-        self.assertEqual(found(self.db, ("ancestor_duplicate", "retreat_with_real", "uncategorized")), {})
+        self.assertEqual(found(self.db, ("ancestor_duplicate", "uncategorized")), {})
+        self.assertEqual(len(found(self.db, ("retreat_with_real",))["retreat_with_real"]), 2)  # s2 and s3: warn only, still there
         # the count tables follow by their triggers and still equal the recursive count
         self.assertEqual(found(self.db, [c[0] for c in integrity.CHECKS if "count" in c[0] or c[0] == "category_closure"]), {})
-        # (a) alone never changes any count; (b) lowers only the retreat categories (and the ancestors of those)
-        after = dict(((c, s), n) for c, s, n in snap(self.db))
-        changed = {k[0] for k, n in after.items() if dict(((c, s), n) for c, s, n in counts).get(k) != n}
-        self.assertEqual(changed - set(RETREAT), set())
+        # removing an ancestor row next to its descendant never changes any count: category_counts is identical row for row
+        self.assertEqual(snap(self.db), counts)
         # a second run changes nothing
         self.db.executescript(FIX_SQL)
         self.assertEqual(self.db.execute("SELECT count(*) FROM site_categories").fetchone()[0], n1)
 
-    def test_ancestor_statement_alone_keeps_every_count(self):
-        counts = snap(self.db)
-        self.db.execute(STATEMENTS[0])
-        self.assertEqual(snap(self.db), counts)
-        self.assertEqual(found(self.db, ("ancestor_duplicate",)), {})
+    def test_scope_counts_are_identical_too(self):
+        scopes = self.db.execute("SELECT scope,n FROM scope_counts ORDER BY 1").fetchall()
+        self.db.executescript(FIX_SQL)
+        self.assertEqual(self.db.execute("SELECT scope,n FROM scope_counts ORDER BY 1").fetchall(), scopes)
 
 
 class CheckTests(unittest.TestCase):
@@ -193,17 +195,20 @@ class CheckTests(unittest.TestCase):
         add(db, "dupb", ["hospitals"], url="http://www.dup.example/x")
         add(db, "empty", ["hospitals"], name=" ", desc="")
         add(db, "pb-1", ["government", "hospitals"])
+        add(db, "pb-2", ["government"])  # government itself is not a leaf under government either
+        add(db, "pb-3", ["cities"])  # a real leaf: fine
+        add(db, "desc", ["hospitals"], name="named", desc=" ")  # only the Japanese description is empty
         db.execute("PRAGMA foreign_keys=OFF")
         db.execute("INSERT INTO site_categories VALUES ('anc','ghost')")
         db.execute("INSERT INTO site_categories VALUES ('ghost-site','hospitals')")
         got = found(db)
         self.assertEqual({r[0] for r in got["ancestor_duplicate"]}, {"anc"})
         self.assertEqual({r[0] for r in got["retreat_with_real"]}, {"ret"})
+        self.assertEqual({r[0] for r in got["public_body_not_leaf"]}, {"pb-1", "pb-2"})
         self.assertEqual({r[0] for r in got["uncategorized"]}, {"none"})
         self.assertEqual({r[1] for r in got["orphan_site_categories"]}, {"ghost", "hospitals"})
         self.assertEqual([r[0] for r in got["duplicate_url"]], ["dup.example/x"])
-        self.assertEqual({r[0] for r in got["public_body_not_leaf"]}, {"pb-1"})
-        self.assertEqual({r[0] for r in got["empty_text"]}, {"empty"})
+        self.assertEqual({r[0] for r in got["empty_text"]}, {"empty", "desc"})
 
     def test_count_tables_are_detected_when_they_drift(self):
         add(self.db, "a", ["hospitals"])
@@ -248,7 +253,7 @@ class GateTests(unittest.TestCase):
             db.backup(disk)
             disk.close()
             self.assertEqual(integrity.gate("SELECT 1;", path), {})
-            self.assertEqual(list(integrity.gate("INSERT INTO site_categories VALUES ('old','society');", path)), ["retreat_with_real"])
+            self.assertEqual(list(integrity.gate("INSERT INTO site_categories VALUES ('old','medicine');", path)), ["ancestor_duplicate"])
         finally:
             db.close()
             if os.path.exists(path):
@@ -273,11 +278,11 @@ class PipelineTests(L.Base):
         self.add("a.example")
         counts, problems = self.imp(self.write_pipeline({"a.example": L.out_pass(categories=["health", "hospitals", "society"])}, name="c.json"))
         self.assertEqual((counts["imported"], problems), (1, []))
-        self.assertEqual(json.loads(self.row("a.example")["categories"]), ["hospitals"])
+        self.assertEqual(json.loads(self.row("a.example")["categories"]), ["hospitals", "society"])  # society is kept: not an old-id fallback
 
     def test_export_writes_the_canonical_form_and_the_gate_passes(self):
         self.approve("a.example", ["health", "hospitals", "business-services"])
-        # a judgement stored before this change (not canonical) is normalized again at export time
+        # a judgement stored before this change (not canonical) is normalized again at export time; the retreat id stays (LLM choice)
         self.db.execute("UPDATE llm_judgement SET categories=? WHERE key='a.example'", (json.dumps(["health", "hospitals", "business-services"]),))
         self.db.commit()
         out = self.path("a.sql")
@@ -286,15 +291,15 @@ class PipelineTests(L.Base):
         t = integrity.base_memory_db()
         self.addCleanup(t.close)
         t.executescript(L.read(out))
-        self.assertEqual(sorted(r[0] for r in t.execute("SELECT category_id FROM site_categories WHERE site_id LIKE 'fr-a-%'")), ["hospitals"])
+        self.assertEqual(sorted(r[0] for r in t.execute("SELECT category_id FROM site_categories WHERE site_id LIKE 'fr-a-%'")), ["business-services", "hospitals"])
         self.assertIn("dropped_ancestors=1", err)
-        self.assertIn("dropped_retreat=1", err)
+        self.assertNotIn("dropped_retreat", err)
 
     def test_export_stops_without_writing_when_the_sql_would_break_integrity(self):
         self.approve("a.example", ["hospitals"])
         out = self.path("a.sql")
         orig = ea.statements
-        # force a violation: a duplicate parent/child pair written into the SQL
+        # force a violation: a category row that points at no category (an orphan) is injected into the SQL
         ea.statements = lambda row, norm=None: orig(row, norm) + ["INSERT OR IGNORE INTO site_categories VALUES ('fr-a-example-xx','x')"]
         try:
             rc, _o, err = self.export("--db", self.path("f.sqlite"), "--out", out)
@@ -303,6 +308,79 @@ class PipelineTests(L.Base):
         self.assertEqual(rc, 3)
         self.assertIn("INTEGRITY", err)
         self.assertFalse(os.path.exists(out))
+
+
+class UpdateModeGateTests(U.UpdateBase):
+    """--update-categories: the gate only works with --current (without it the base has no fr- site and the UPDATE changes nothing)."""
+
+    def inject(self):
+        """A violation in the generated SQL: alpha gets its category's parent next to the child."""
+        orig = ea.build_update
+        sid = self.ids["alpha.example"]
+        ea.build_update = lambda items, current=None: (lambda r: (r[0] + f"INSERT OR IGNORE INTO site_categories VALUES ('{sid}','science');\n", r[1]))(orig(items, current))
+        self.addCleanup(setattr, ea, "build_update", orig)
+
+    def test_gate_stops_the_update_with_current(self):
+        self.inject()
+        out = self.path("u.sql")
+        rc, _o, err = self.run_main("--update-categories", "--db", self.dbp, "--current", self.curpath, "--out", out)
+        self.assertEqual(rc, 3, err)
+        self.assertIn("INTEGRITY", err)
+        self.assertIn("ancestor_duplicate", err)
+        self.assertFalse(os.path.exists(out))
+
+    def test_clean_update_passes_with_current(self):
+        out = self.path("u.sql")
+        rc, _o, err = self.run_main("--update-categories", "--db", self.dbp, "--current", self.curpath, "--out", out)
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn("WARNING", err)
+        self.assertTrue(os.path.exists(out))
+
+    def test_without_current_a_warning_says_the_gate_is_blind(self):
+        out = self.path("u.sql")
+        rc, _o, err = self.run_main("--update-categories", "--db", self.dbp, "--out", out)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("WARNING: no --current", err)
+
+
+class CliExitCodeTests(unittest.TestCase):
+    """scripts/check-data-integrity.py: exit 1 on an error-level violation, 0 when only warnings remain."""
+
+    def run_cli(self, setup):
+        db = new_db()
+        setup(db)
+        db.commit()
+        path = os.path.join(tempfile.gettempdir(), f"integrity-cli-{os.getpid()}.sqlite")
+        try:
+            disk = sqlite3.connect(path)
+            db.backup(disk)
+            disk.close()
+            p = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check-data-integrity.py"), "--sqlite", path],
+                               capture_output=True, text=True)
+            return p.returncode, p.stdout
+        finally:
+            db.close()
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_error_exits_1(self):
+        rc, out = self.run_cli(lambda db: add(db, "a", ["health", "hospitals"]))
+        self.assertEqual(rc, 1)
+        self.assertIn("[FAIL] ancestor_duplicate", out)
+
+    def test_warnings_only_exit_0(self):
+        def setup(db):
+            add(db, "a", ["business-services", "manufacturing"])  # retreat next to another: warn
+            add(db, "b", ["hospitals"], cc=None)  # no country: warn
+        rc, out = self.run_cli(setup)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("[warn] retreat_with_real", out)
+        self.assertIn("[warn] no_country", out)
+
+    def test_clean_exits_0(self):
+        rc, out = self.run_cli(lambda db: add(db, "a", ["hospitals"]))
+        self.assertEqual(rc, 0, out)
+        self.assertIn("all error-level checks passed", out)
 
 
 if __name__ == "__main__":

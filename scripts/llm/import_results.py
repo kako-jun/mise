@@ -145,16 +145,14 @@ def import_results(db, results_path, input_path, allow_older=False):
             reject(cid, "candidate url differs from the ledger row (stale input)")
             continue
         text = judge.render_candidate(cand, body_limit)
-        # Old ids (pre-#114) are translated and the set is put in the canonical form (#137: no ancestor next to its descendant,
-        # no retreat id next to a real category). Unknown ids stay and are rejected by validate_output as before.
+        # Old ids (pre-#114) are translated and the set is put in the canonical form (#137: no ancestor next to its descendant;
+        # duplicates are merged silently). Unknown ids stay and are rejected by validate_output as before. Because of this step
+        # the result always is canonical: there is no separate "not canonical" rejection.
         if isinstance(out.get("categories"), list):
             out = dict(out, categories=judge.canonical_categories(out["categories"], valid_ids, legacy))
         errs = judge.validate_output(out, valid_ids, text)
         if errs:
             reject(cid, "invalid output: " + "; ".join(errs))
-            continue
-        if judge.normalize_categories(out["categories"]) != out["categories"]:  # gate (#137): only the canonical form enters the ledger
-            reject(cid, f"categories are not in the canonical form: {out['categories']}")
             continue
         h = input_hash(origin, model, text)
         old = db.execute("SELECT input_hash, judged_at FROM llm_judgement WHERE key=?", (row["key"],)).fetchone()
