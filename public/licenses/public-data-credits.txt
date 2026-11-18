@@ -4,4 +4,4 @@ MISE の官公庁・自治体の掲載データの出典です。公共データ
 
 官公庁・自治体の掲載は、総務省「全国地方公共団体コード」とデジタル庁 e-Gov「政府機関関連情報」(いずれも公共データ利用規約 第1.0版)、Wikidata(CC0)をもとに、MISE が編集・加工したものです。
 
-Government and municipal sites: based on MIC "National Local Government Codes" and Digital Agency e-Gov "Government Directory" (both under the Public Data License 1.0) and Wikidata (CC0); compiled and processed by MISE.
+Government and municipal sites: based on MIC “National Local Government Codes” and Digital Agency e-Gov “Government Directory” (both under the Public Data License 1.0) and Wikidata (CC0); compiled and processed by MISE.
