@@ -116,6 +116,28 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 > 0021 は適用後に凍結する。手動で再実行すると `ON CONFLICT DO UPDATE` が、その後に木へ加えたカテゴリ名の変更を元に戻す。木を直すときは新しい migration を足す。
 6. **失敗したとき**: 手順 3 が失敗したら、まず `npx wrangler d1 execute mise --remote --command "SELECT name FROM d1_migrations WHERE name LIKE '0021%'"` で **0021 が記録されていない**ことを確認する（記録が無ければ全体が取り消されていて、DB は適用前のまま。原因の行を直して再適用）。中途半端に変わっていた場合は、手順 1 の Time Travel bookmark へ `npx wrangler d1 time-travel restore mise --bookmark=…` で戻す（バックアップの `d1 execute --file` で戻すのは最後の手段）。0021 だけを戻す逆 migration は持たない（旧→新は多対一で、元に戻せない）。
 
+## カテゴリ件数の集計表（0022）を本番へ適用する手順（Issue #126 第1段）
+
+**承認を取ってから実行する。** 0022 は表 3 つ（`category_closure` `category_counts` `scope_counts`）とトリガを足し、現在の `sites` / `site_categories` から初期集計する（既存の表は変えない。10 万件でも初期集計は読み約 290 万行・書き約 3,000 行）。
+
+**順序は 1 つ**: バックアップ → migration 適用 → 集計表と再帰 CTE の一致確認 → マージ。**新しいコードは `category_counts` / `scope_counts` が無いと `/api/categories` `/api/scopes` などがエラーになる**ので、migration を先に適用してからマージする（旧コードは新しい表を使わないので、migration だけ先に入っても壊れない）。
+
+1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
+2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
+3. **一致確認**（`--remote` の SELECT だけ。どちらも**結果 0 行**が正）:
+   ```sh
+   # (a) カテゴリ件数（全世界）: 再帰 CTE との差。国別は s.country_code = 'JP' を LEFT JOIN sites の ON に足し、k.scope を 'JP' にして同様に確かめる
+   npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id), t AS (SELECT c.id AS id, COUNT(DISTINCT s.id) AS n FROM categories c LEFT JOIN tree ON tree.root_id = c.id LEFT JOIN site_categories sc ON sc.category_id = tree.id LEFT JOIN sites s ON s.id = sc.site_id GROUP BY c.id) SELECT t.id, t.n, COALESCE(k.n, 0) AS cached FROM t LEFT JOIN category_counts k ON k.category_id = t.id AND k.scope = 'all' WHERE t.n <> COALESCE(k.n, 0)"
+   # (b) 範囲件数: sites の総数・国別との差
+   npx wrangler d1 execute mise --remote --command "SELECT 'all' AS scope, (SELECT COUNT(*) FROM sites) AS n, COALESCE((SELECT n FROM scope_counts WHERE scope = 'all'), 0) AS cached WHERE n <> cached UNION ALL SELECT s.country_code, COUNT(*), COALESCE((SELECT n FROM scope_counts WHERE scope = s.country_code), 0) FROM sites s WHERE s.country_code IS NOT NULL GROUP BY s.country_code HAVING COUNT(*) <> COALESCE((SELECT n FROM scope_counts WHERE scope = s.country_code), 0)"
+   ```
+   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
+4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
+5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。
+6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。適用後に戻すときは、**先にコードを戻し**、そのあとトリガ（`category_closure_*` `category_counts_*`）と 3 表を `DROP` する（正本は変えていないので件数は失われない）。
+
+> 0022 は適用後に凍結する。カテゴリの木や集計の意味を変えるときは新しい migration で表とトリガを作り直す。
+
 ## プレビュービルド（ブランチごと）
 
 Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ダッシュボードで確認済み、2026-11-14: プレビューブランチのビルドも Build コマンドは「なし」、プレビューコマンドは `npx wrangler preview`、ルートディレクトリ `/`。プレビュー URL は現在「無効」で、ビルドは実行されるが URL は有効化するまで作られない）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
