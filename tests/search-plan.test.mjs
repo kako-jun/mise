@@ -164,3 +164,74 @@ test('migration 0023〜0025: 索引が作られ、検索計画が使う形のク
   assert.match(plan('SELECT site_id FROM site_tags WHERE label_en = ?'), /idx_site_tags_label_en/);
   assert.match(db.prepare("EXPLAIN QUERY PLAN SELECT date(registered_at) FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND date(registered_at) >= date('now','-6 days') GROUP BY date(registered_at)").all().map(r => r.detail).join(' | '), /idx_sites_activity/);
 });
+
+// ---- 同値の多いデータ（本番の形）での回帰（#126 レビュー）----
+// 本番は台帳の一括投入（bulk_import=1）が rowid の連続した塊で、日時がほぼ全部同値。散らばったデータでは出なかった 2 つの問題を固定する:
+//  (1) キーセットの項が一時 B-tree になり、同日時の塊を毎回全部読む / IN で引く計画に範囲条件を足すと並びの索引の走査になる
+//  (2) ピックアップが塊の直後の 1 件に偏る
+// メモリ SQLite は読んだ行数を数えられないので、読み取り量は実行計画で検査する（一時 B-tree が無い・IN で引く計画は並びの索引を走査しない）。
+// 行数そのものは scripts/bench/bench-traverse.mjs（ローカル D1 の rows_read）で測る。
+const sk = new DatabaseSync(':memory:');
+sk.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)');
+for (const f of readdirSync(MIG).filter(f => f.endsWith('.sql')).sort()) sk.exec(readFileSync(new URL(f, MIG), 'utf8'));
+sk.exec('DELETE FROM site_categories; DELETE FROM site_tags; DELETE FROM sites;');
+const SK_N = 2200, SK_BULK_FROM = 37, SK_BULK_TO = 1887; // 本番: 2,158 件中 1,851 件が rowid 38〜1888 の一括投入
+const skCat = sk.prepare(`SELECT id FROM categories c WHERE NOT EXISTS (SELECT 1 FROM categories k WHERE k.parent_id = c.id) ORDER BY id`).all().map(r => r.id);
+sk.exec('BEGIN');
+{
+  const iS = sk.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,source_updated_at,country_code,bulk_import) VALUES (?,?,?,?,?,?,?,?)');
+  const iC = sk.prepare('INSERT INTO site_categories (site_id,category_id) VALUES (?,?)'), iT = sk.prepare('INSERT INTO site_tags (site_id,label_ja,label_en) VALUES (?,?,?)');
+  for (let i = 0; i < SK_N; i++) {
+    const bulk = i >= SK_BULK_FROM && i < SK_BULK_TO, id = (bulk ? 'fr-' : 'pb-') + String(i).padStart(4, '0');
+    const cc = !bulk && i % 40 === 3 ? 'US' : 'JP';
+    iS.run(id, `https://${id}.example/`, 'n' + id, 'd' + i, bulk ? '2026-11-13 00:00:00' : `2026-0${1 + (i % 9)}-1${i % 9} 00:00:00`, bulk || i % 3 ? null : '2026-05-05', cc, bulk ? 1 : 0);
+    if (i % 10 !== 0) iC.run(id, skCat[0]);
+    if (i % 90 === 1) iC.run(id, skCat[1]);
+    if (i % 5 !== 0) iT.run(id, 'common', 'Common');
+    if (i % 150 === 7) iT.run(id, 'rare', 'Rare');
+  }
+}
+sk.exec('COMMIT');
+const skLog = [];
+const skd = { prepare: sql => { const mk = args => ({ bind: (...a) => mk(a), all: async () => { skLog.push({ sql, args }); return { results: sk.prepare(sql).all(...args) }; }, first: async () => { skLog.push({ sql, args }); return sk.prepare(sql).get(...args); } }); return mk([]); } };
+const skRef = ({ cc, category, tags = [] }) => {
+  const w = [], a = [];
+  if (cc) { w.push('s.country_code = ?'); a.push(cc); }
+  if (category) { w.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)'); a.push(category); }
+  for (const t of tags) { w.push('s.id IN (SELECT site_id FROM site_tags WHERE label_ja = ? OR label_en = ?)'); a.push(t, t); }
+  return sk.prepare(`SELECT s.id FROM sites s ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ${siteOrder()}`).all(...a).map(r => r.id);
+};
+const skCases = [
+  ['既定', {}, false], ['範囲 JP', { cc: 'JP' }, false], ['大カテゴリ（EXISTS 形）', { category: skCat[0] }, false], ['大カテゴリ + JP', { category: skCat[0], cc: 'JP' }, false],
+  ['小カテゴリ（IN 形）', { category: skCat[1] }, true], ['よく使うタグ', { tags: ['common'] }, false], ['稀なタグ（索引から）', { tags: ['rare'] }, true], ['稀なタグ + JP', { tags: ['rare'], cc: 'JP' }, true],
+];
+for (const [label, o, inDriven] of skCases) {
+  test(`同値の多いデータ: ${label} は全ページ連結が参照実装と同一で、続きのページは一時 B-tree を作らない / IN の計画は並びの索引を走査しない`, async () => {
+    const want = skRef(o), ids = []; let cur = null, pages = 0;
+    for (let g = 0; g < 200; g++) {
+      skLog.length = 0;
+      const r = await querySites(skd, { ...o, limit: inDriven ? 3 : PAGE_SIZE, cursor: cur ? decodeCursor(cur) : null });
+      ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; pages++;
+      if (g > 0) for (const { sql, args } of skLog.filter(x => /LIMIT \? OFFSET \?/.test(x.sql))) {
+        const eqp = sk.prepare('EXPLAIN QUERY PLAN ' + sql).all(...args).map(x => x.detail).join(' | ');
+        if (inDriven) assert.doesNotMatch(eqp, /idx_sites_sort/, `IN で引く計画が並びの索引の走査になっている: ${eqp}`);
+        else assert.doesNotMatch(eqp, /TEMP B-TREE/, `項の ORDER BY が索引と合わず一時 B-tree になっている（同日時の塊を毎回読む）: ${eqp}`);
+      }
+      if (!cur) break;
+    }
+    assert.deepEqual(ids, want);
+    assert.ok(pages > 3 || inDriven && pages > 2, '続きのページを複数たどっている');
+  });
+}
+
+test('同値の多いデータ: 続きのページはタグの該当数のプローブをやり直さない（計画は先頭ページで決める）', async () => {
+  const o = { tags: ['common', 'rare'], limit: 10 };
+  skLog.length = 0;
+  const first = await querySites(skd, o);
+  const probes = skLog.filter(x => /UNION SELECT site_id FROM site_tags WHERE label_en = \?1 LIMIT/.test(x.sql)).length;
+  assert.ok(probes >= 1 && first.next_cursor);
+  skLog.length = 0;
+  await querySites(skd, { ...o, cursor: decodeCursor(first.next_cursor) });
+  assert.equal(skLog.filter(x => /SELECT COUNT\(\*\) AS n FROM \(SELECT site_id FROM site_tags/.test(x.sql)).length, 0);
+});
+

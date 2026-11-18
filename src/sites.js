@@ -14,6 +14,8 @@ export const TOTAL_CAP = 1000;
 // タグ絞り込みの計画の切替点: タグ 1 つの該当サイト数がこれ以下なら「タグの索引から引く」計画（一覧も件数もタグの索引を読むので該当数に比例）、超えたら「並びの索引を走査して EXISTS で確かめる」計画（#126）。
 // 総件数の上限と同じ値にしてある: 上限以下なら件数をタグの索引で正確に数えられ、超えれば総件数は上限付きで返すので数えなくてよい（単独のタグのとき）。
 export const TAG_DRIVE_MAX = TOTAL_CAP;
+// 続きのページ（カーソルあり）で、稀なタグを索引（IN）から引くのは、該当サイト数がこれ以下のとき。
+export const TAG_IN_MAX = 300;
 // dir は SQLite の NULL の並びに合わせる: ASC では NULL が先頭、DESC では NULL が末尾。
 export const SORT_KEYS = [
   // 台帳などからの一括投入（bulk_import=1。官公庁の名簿など）は後ろ。通常のサイト（0）が先（NULL なし、DEFAULT 0）
@@ -61,18 +63,35 @@ export function cleanTags(raw) {
   return out.length > MAX_TAGS ? null : out;
 }
 
-// 「cursor の次」を、並びの順に連結できる範囲条件の列にする（#126 第2段）。キーを辞書式に比較する（前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
+// 「cursor の次」の条件。キーを辞書式に比較する（先頭から: 前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
+// 1 本の `A OR B OR C` なので、IN（所属サイト・稀なタグ）で引く計画のときに使う（IN で引いて並べ替える計画のまま、cursor の次だけを返せる）。
+function afterCursor(vals) {
+  const alts = [], args = [];
+  SORT_KEYS.forEach((k, i) => {
+    const eq = [], a = [];
+    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); a.push(vals[j]); } }
+    let after;
+    if (k.dir === 'ASC') { if (vals[i] === null) after = `${k.expr} IS NOT NULL`; else { after = `${k.expr} > ?`; a.push(vals[i]); } } // ASC: NULL が先頭
+    else { if (vals[i] === null) after = null; else { after = `(${k.expr} < ? OR ${k.expr} IS NULL)`; a.push(vals[i]); } } // DESC: NULL が末尾
+    if (after) { alts.push(`(${[...eq, after].join(' AND ')})`); args.push(...a); }
+  });
+  return { sql: `(${alts.join(' OR ')})`, args };
+}
+
+// 「cursor の次」を、並びの順に連結できる範囲条件の列にする（#126 第2段）。afterCursor と同じ条件を項ごとに分けたもの。
 // 1 つの `A OR B OR C` にすると SQLite は並びの索引を先頭から走査してしまう（深いページほど読み取りが増える。実測: 9,000 件目の次で 3.4 万行）。
 // そこで項ごとに別の問い合わせにする。各項は「前のキーが等しい」+「このキーが後ろ」の等値と範囲だけなので索引を直接引ける（SEARCH）。
 // 項は並びの順に並べてある（最も深いキーの項が先、最初のキーの項が最後。DESC のキーでは NULL の項が「値が小さい」項の後）ので、前から順に取って連結すれば並びと同じになる。
+// 各項の order は、その項で「まだ決まっていないキー」だけの並び（前のキーは等しいので並べ替えは要らない）。全キーで並べると、同じ日時が大量に続く塊で
+// 索引の並びと一致せず一時 B-tree（USE TEMP B-TREE FOR LAST 2 TERMS）になり、同値の行を毎回全部読む（本番相当データで main の最大 14 倍）。
 function cursorTerms(vals) {
-  const terms = [];
+  const terms = [], order = from => `ORDER BY ${SORT_KEYS.slice(from).map(k => `${k.expr} ${k.dir}`).join(', ')}`;
   for (let i = SORT_KEYS.length - 1; i >= 0; i--) {
     const k = SORT_KEYS[i], eq = [], eqArgs = [];
     for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); eqArgs.push(vals[j]); } }
-    const push = (cond, args = []) => terms.push({ sql: `(${[...eq, cond].join(' AND ')})`, args: [...eqArgs, ...args] });
-    if (k.dir === 'ASC') { if (vals[i] === null) push(`${k.expr} IS NOT NULL`); else push(`${k.expr} > ?`, [vals[i]]); } // ASC: NULL が先頭
-    else if (vals[i] !== null) { push(`${k.expr} < ?`, [vals[i]]); push(`${k.expr} IS NULL`); } // DESC: NULL が末尾。値の小さい行の後に NULL の行が続く
+    const push = (cond, ord, args = []) => terms.push({ sql: `(${[...eq, cond].join(' AND ')})`, args: [...eqArgs, ...args], order: ord });
+    if (k.dir === 'ASC') { if (vals[i] === null) push(`${k.expr} IS NOT NULL`, order(i)); else push(`${k.expr} > ?`, order(i), [vals[i]]); } // ASC: NULL が先頭
+    else if (vals[i] !== null) { push(`${k.expr} < ?`, order(i), [vals[i]]); push(`${k.expr} IS NULL`, order(i + 1)); } // DESC: NULL が末尾。値の小さい行の後に NULL の行が続く（NULL の項はこのキーが全部 NULL なので次のキーから）
   }
   return terms;
 }
@@ -83,6 +102,18 @@ function cursorTerms(vals) {
 //   タグ: 稀（該当サイトが TAG_DRIVE_MAX 以下）→ タグの索引（0023・0024）から引く / よく使われる → 並びの索引を走査して `EXISTS`。
 // 費用の見積り（10 万件の実測から。Issue #126）: IN 形 ≒ 所属数 × 7 行、EXISTS 形 ≒ 41 件が見つかるまでの走査 = 41 × 母数 ÷ 該当数 × 3 行。
 const CATEGORY_IN_COST = 7, CATEGORY_EXISTS_COST = 3;
+// 計画は先頭ページ（カーソルなし）で決めて覚え、続きのページ（カーソルあり）はそれを使う。ページごとにタグの該当数を数え直さない（よく使うタグ 5 個で 1 ページ約 1 万行）。
+// 計画は読み取りの形を選ぶだけで結果は変えないので、isolate ごとのメモリに短時間覚えるだけでよい（別の isolate に当たったら計画し直す）。件数が変わって古くなっても結果は同じ。
+const PLAN_TTL_MS = 10 * 60 * 1000, PLAN_CACHE_MAX = 500, planCache = new Map();
+const planKey = ({ cc, category, tags }) => JSON.stringify([cc ?? null, category ?? null, tags ?? []]);
+async function planFor(db, o, fresh) {
+  const key = planKey(o), hit = planCache.get(key);
+  if (!fresh && hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan;
+  const plan = await planQuery(db, o);
+  if (planCache.size >= PLAN_CACHE_MAX) planCache.clear();
+  planCache.set(key, { plan, at: Date.now() });
+  return plan;
+}
 export async function planQuery(db, { cc = null, category = null, tags = [] }) {
   const plan = { categoryMode: 'in', categoryLeafCount: null, driveTag: null, tagsOverCap: false };
   const jobs = [];
@@ -100,7 +131,7 @@ export async function planQuery(db, { cc = null, category = null, tags = [] }) {
     const counts = await Promise.all(tags.map(t => db.prepare(`SELECT COUNT(*) AS n FROM (SELECT site_id FROM site_tags WHERE label_ja = ?1 UNION SELECT site_id FROM site_tags WHERE label_en = ?1 LIMIT ?2)`).bind(t, TAG_DRIVE_MAX + 1).first()));
     let best = null;
     tags.forEach((t, i) => { const n = counts[i]?.n ?? 0; if (n <= TAG_DRIVE_MAX && (best === null || n < best.n)) best = { t, n }; });
-    plan.driveTag = best?.t ?? null;
+    plan.driveTag = best?.t ?? null; plan.driveN = best?.n ?? null;
     plan.tagsOverCap = tags.length === 1 && best === null; // 単独のタグが上限を超える（他の絞り込みが無ければ総件数は上限付きと分かる）
   })());
   await Promise.all(jobs);
@@ -134,15 +165,21 @@ const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r))
 //   2. 範囲（国）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
 //   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
 export async function querySites(db, { cc = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
-  const plan = await planQuery(db, { cc, category, tags });
-  const { where, args } = filters({ cc, category, q, tags }, plan);
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
-  const run = async (extra, extraArgs, lim, off) => {
+  const basePlan = await planFor(db, { cc, category, tags }, !hasCursor);
+  // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
+  // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
+  const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
+  const { where, args } = filters({ cc, category, q, tags }, plan);
+  const run = async (extra, extraArgs, lim, off, order = siteOrder()) => {
     const conds = [...where, ...extra];
-    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${siteOrder()} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
+    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
   };
+  // IN（所属サイト・稀なタグの索引）で引く計画は、範囲条件を足すと SQLite が並びの索引の走査に切り替えて IN が効かなくなる。1 本の `A OR B OR C`（afterCursor）なら IN で引いたまま並べ替える。
+  const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag;
   let results;
-  if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
+  if (hasCursor && inDriven) { const c = afterCursor(cursor.vals); results = await run([c.sql], c.args, limit + 1, 0); }
+  else if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0, t.order)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
   else results = await run([], [], limit + 1, start);
   const more = results.length > limit, rows = results.slice(0, limit);
   const next_cursor = more ? encodeCursor(SORT_KEYS.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
