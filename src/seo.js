@@ -66,7 +66,7 @@ export function resolvePath(categories, raw) {
 // cc を渡すと、その国のサイトだけを数える（空のカテゴリも 0 件で返す）。null は全世界。
 // 件数は集計表 category_counts（migration 0022。そのカテゴリ自身と全子孫の所属サイト数、重複なし。旧: 再帰 CTE）から読む。
 export async function loadCategories(db, cc = null) {
-  const { results } = await db.prepare(`SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COALESCE(k.n, 0) AS site_count FROM categories c LEFT JOIN category_counts k ON k.category_id = c.id AND k.scope = ?1 ORDER BY c.sort_order`).bind(cc ?? ALL_SCOPE).all();
+  const { results } = await db.prepare(`SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COALESCE(k.n, 0) AS site_count FROM categories c LEFT JOIN category_counts k ON k.category_id = c.id AND k.scope = ?1 ORDER BY c.sort_order, c.id`).bind(cc ?? ALL_SCOPE).all();
   return results;
 }
 
