@@ -80,7 +80,7 @@ html[data-theme="dark"] .new-tag { color: #ff9a8d; }
 
 .picks { width: 560px; max-width: 100%; margin: 22px auto; }
 .picks h2 { font-size: 14px; }
-#picks { touch-action: pan-y; }
+#picks { touch-action: pan-y pinch-zoom; }
 #pick-list { list-style: none; padding: 0; }
 #pick-list li { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0; }
 #pick-list li p { margin: 3px 0; }

@@ -483,26 +483,36 @@ function nudgePick() {
   $('#pick-list').animate?.([{transform:'translateX(0)'},{transform:'translateX(10px)'},{transform:'translateX(0)'}],{duration:180,easing:'ease-out'});
 }
 let pickDrag=null;
+// 言語切替で古い言語の読み上げ文言が残らないよう、切替時に空にする
+$('#language-toggle').addEventListener('click',()=>{ pickStatus.textContent=''; });
+const abortPickDrag=()=>{
+  pickDrag=null;
+  removeEventListener('pointerup',endPickDrag,true); removeEventListener('pointercancel',endPickDrag,true);
+};
+// 枠外で離した等で pointerup が届かなくても、window で受けて後始末する
+function endPickDrag(e){ if(pickDrag && pickDrag.id===e.pointerId) abortPickDrag(); }
 picks.addEventListener('pointerdown',e=>{
-  if(e.pointerType==='mouse' && e.button!==0) return;
+  if(pickDrag && !e.isPrimary) { abortPickDrag(); return; } // 2 本目以降の指（ピンチ等）はスワイプにしない
+  if(!e.isPrimary || (e.pointerType==='mouse' && e.button!==0)) return;
   pickSwiped=false; clearTimeout(pickSwipedTimer);
   pickDrag={id:e.pointerId,x:e.clientX,y:e.clientY,done:false};
+  addEventListener('pointerup',endPickDrag,true); addEventListener('pointercancel',endPickDrag,true);
 });
 picks.addEventListener('pointermove',e=>{
-  const d=pickDrag; if(!d || d.id!==e.pointerId || d.done) return;
+  const d=pickDrag; if(!d || d.id!==e.pointerId) return;
+  if(e.pointerType==='mouse' && e.buttons===0) { abortPickDrag(); return; } // ボタンが離れているのに状態が残った場合
+  if(d.done) return;
   const dx=e.clientX-d.x, dy=e.clientY-d.y;
   if(Math.abs(dx)<SWIPE_MIN_PX || Math.abs(dx)<Math.abs(dy)*SWIPE_DOMINANCE) return;
   d.done=true; pickSwiped=true; tagDown=null;
   clearTimeout(pickSwipedTimer); pickSwipedTimer=setTimeout(()=>{pickSwiped=false;},600);
-  getSelection()?.removeAllRanges();
+  const sel=getSelection(); if(sel && sel.rangeCount && picks.contains(sel.getRangeAt(0).commonAncestorContainer)) sel.removeAllRanges();
   if(!stepPick(dx<0 ? 1 : -1, true)) nudgePick();
 });
-const endPickDrag=e=>{ if(pickDrag && pickDrag.id===e.pointerId) pickDrag=null; };
-picks.addEventListener('pointerup',endPickDrag); picks.addEventListener('pointercancel',endPickDrag);
-// マウスの横ドラッグでリンクがネイティブにドラッグされるのを防ぐ
-picks.addEventListener('dragstart',e=>e.preventDefault());
-// スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）
-picks.addEventListener('click',e=>{ if(pickSwiped) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
+// スワイプ判定が進行中（pickDrag あり）のときだけネイティブのリンクドラッグを止める（ブックマークバー等へのドラッグは塞がない）
+picks.addEventListener('dragstart',e=>{ if(pickDrag) e.preventDefault(); });
+// スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）。キーボード由来（detail 0）は対象外
+picks.addEventListener('click',e=>{ if(pickSwiped && e.detail!==0) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
 picks.addEventListener('keydown',e=>{
   if(e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')) return;
   e.preventDefault(); stepPick(e.key==='ArrowRight' ? 1 : -1, true);

@@ -133,6 +133,31 @@ await scenario('PC1280: ピックアップ内にフォーカス時の左右キ�
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   assert.equal(await current(page), 'Pick One', '検索欄の矢印キーでは動かない');
 });
+await scenario('PC1280: 枠外で離したドラッグの状態が残らない（後のボタンなしホバーで切り替わらない）。dragstart は判定中だけ止める', desktop, async (page) => {
+  await settled(page); const b = await box(page, '#pick-list li'); const x = b.x + b.w / 2, y = b.y + b.h / 2;
+  await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 5, y - 10, { steps: 3 }); // 縦気味で判定は成立しない
+  await page.mouse.move(5, 5, { steps: 5 }); await page.mouse.up(); // 枠外で離す
+  await page.mouse.move(x + 60, y, { steps: 4 }); await page.mouse.move(x - 60, y, { steps: 10 }); // ボタンなしで 120px 横に動かす
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  assert.equal(await current(page), 'Pick One', 'ホバーだけでは切り替わらない');
+  assert.equal(await page.evaluate(() => { const e = new Event('dragstart', { bubbles: true, cancelable: true }); document.querySelector('#pick-list li a').dispatchEvent(e); return e.defaultPrevented; }), false, '判定中でなければ dragstart を止めない');
+});
+await scenario('スマホ390: 2 本指（2 本目の指で判定を破棄）では切り替わらない', mobile, async (page) => {
+  const cdp = await page.context().newCDPSession(page); const [x, y] = await startPoint(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }, { x: x + 30, y, id: 2 }] });
+  for (let i = 1; i <= 8; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x - i * 10, y, id: 1 }, { x: x + 30 - i * 10, y, id: 2 }] });
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  assert.equal(await current(page), 'Pick One');
+  assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('#picks')).touchAction), 'pan-y pinch-zoom');
+});
+await scenario('言語切替で role=status の古い文言が残らない', desktop, async (page) => {
+  await page.focus('#pick-list li a'); await page.keyboard.press('ArrowRight'); await untilPick(page, 'Pick Two');
+  assert.match(await page.textContent('#picks [role=status]'), /2 \/ 3/);
+  await page.click('#language-toggle');
+  assert.equal((await page.textContent('#picks [role=status]')).trim(), '');
+});
 await scenario('reduced-motion: アニメなしで即切替（タッチ・キー）', { ...mobile, reducedMotion: 'reduce' }, async (page) => {
   const cdp = await page.context().newCDPSession(page); const [x, y] = await startPoint(page);
   assert.equal(await page.evaluate(() => document.querySelector('#pick-list li').getAnimations().length), 0);
