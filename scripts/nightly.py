@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """夜間ジョブ（Issue #124）。発見 -> 取得 -> LLM 判定 -> 自動承認 -> 投入 SQL -> 整合チェック -> (任意で)本番反映。
 
-  uv run python3 scripts/nightly.py [--date YYYY-MM-DD] [--max-add 300] [--dry-run] [--apply-prod]
+  uv run python3 scripts/nightly.py [--date YYYY-MM-DD] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
 
 運用の正本は docs/operations/nightly.md。
 - 本番 D1 に触れるのは --apply-prod のときだけ（wrangler の呼び出しは prod 段の 1 か所に閉じている）。既定は SQL と報告を作るだけ。
@@ -333,7 +333,8 @@ class Night:
             src.close()
         rows = dst.execute("SELECT j.key FROM llm_judgement j JOIN frontier f ON f.key=j.key WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
         eligible = [r[0] for r in rows if r[0] not in shipped]
-        keep, cut = eligible[:self.a.max_add], eligible[self.a.max_add:]
+        # --max-add 0 は上限なし(既定)。1 夜の量は fetch/judge の上限・予算ガード・前日比の異常ガードで抑える
+        keep, cut = (eligible, []) if self.a.max_add == 0 else (eligible[:self.a.max_add], eligible[self.a.max_add:])
         if cut:
             self.status["guards"].append(f"1夜の追加上限 {self.a.max_add} 件: 承認済み {len(eligible)} 件のうち {len(cut)} 件は翌夜以降")
         drop = [r[0] for r in rows if r[0] in shipped] + cut
@@ -530,19 +531,19 @@ def plan(a):
           f"  4 judge      取得後フィルタ（fetched: {snap['state'].get('fetched', 0)}）",
           f"  5 candidates 今夜の判定対象（未判定の candidate）: {n} 件（candidate 全体 {snap['state'].get('candidate', 0)}、判定上限 {a.judge_limit}）",
           f"  6 llm        haiku -> sonnet / mode={a.judge_mode}", "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
-          f"  9 sql        承認済み未出荷を最大 {a.max_add} 件 -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
+          f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)")]
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
-          f"1 夜の追加上限: {a.max_add} 件", "ANTHROPIC_API_KEY: " + ("設定あり" if os.environ.get("ANTHROPIC_API_KEY") else "未設定(LLM 段で失敗する)")]
+          f"1 夜の追加上限: {a.max_add if a.max_add else 'なし'}", "ANTHROPIC_API_KEY: " + ("設定あり" if os.environ.get("ANTHROPIC_API_KEY") else "未設定(LLM 段で失敗する)")]
     return "\n".join(L)
 
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前(既定: UTC の今日)。再開は同じ日付で")
-    ap.add_argument("--max-add", type=int, default=300, help="1 夜に出荷する追加サイト数の上限")
+    ap.add_argument("--max-add", type=int, default=0, help="1 夜に出荷する追加サイト数の上限(0=上限なし。既定)")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
@@ -560,8 +561,8 @@ def parse_args(argv=None):
     a = ap.parse_args(argv)
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
         ap.error("--date は YYYY-MM-DD")
-    if a.max_add < 1 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
-        ap.error("上限は 1 以上")
+    if a.max_add < 0 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
+        ap.error("上限は 1 以上(--max-add のみ 0=上限なし)")
     if a.dry_run and a.apply_prod:
         ap.error("--dry-run と --apply-prod は同時に使えない")
     return a

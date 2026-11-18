@@ -266,6 +266,17 @@ class Run(Env):
         self.assertEqual(real.execute("SELECT count(*) FROM llm_judgement WHERE review_state='approved'").fetchone()[0], 3)
         real.close()
 
+    def test_default_has_no_add_cap(self):
+        # 既定は上限なし(--max-add 0)。承認済み未出荷はすべて出荷用コピーに残る
+        self.seed()
+        self.assertEqual(self.run_night(), 0)
+        st = self.status()
+        self.assertFalse(any('1夜の追加上限' in g for g in st['guards']))
+        import sqlite3
+        con = sqlite3.connect(self.var / 'nightly' / '2026-11-18' / 'export.sqlite')
+        self.assertEqual(con.execute("SELECT count(*) FROM llm_judgement WHERE review_state='approved'").fetchone()[0], 3)
+        con.close()
+
     def test_unexpected_exception_is_recorded_as_failed_stage(self):
         self.seed()
         with mock.patch.object(nightly, 'unjudged_candidates', side_effect=RuntimeError('boom')):
