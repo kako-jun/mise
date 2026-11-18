@@ -100,11 +100,11 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 ## 冗長なカテゴリ所属の一度きりの整理（Issue #137）を本番へ適用する手順
 
-**承認を取ってから実行する。** `scripts/fix-redundant-categories.sql`（単純な DELETE 2 文）で、(a) 親と子の両方が付いたサイトの親、(b) 実カテゴリと並んだ退避先（`business` / `society` / `business-services` / `community`）を消す。`pb-` は対象外、サイトは最後のカテゴリを失わない、2 回流しても 2 回目は何も消さない。
+**承認を取ってから実行する。** `scripts/fix-redundant-categories.sql`（単純な DELETE 1 文）で、親と子の両方が付いたサイトの**親の行だけ**を消す。退避先（`business` / `society` / `business-services` / `community`）は新しい木で LLM が選ぶ正規のカテゴリなので消さない。`pb-` は対象外、サイトは最後のカテゴリを失わない、2 回流しても 2 回目は何も消さない。本番相当の再現（公開 API の 2,158 件）では 102 サイト・103 行が消え、`site_categories` は 2,429 行 → 2,326 行。
 
-1. **適用前**: `uv run python3 scripts/check-data-integrity.py --remote`（`ancestor_duplicate` と `retreat_with_real` 以外は 0 行であること）。`npx wrangler d1 time-travel info mise` の bookmark を控える。集計表の写しを取る: `npx wrangler d1 execute mise --remote --json --file scripts/category-counts-snapshot.sql > before.json`。
+1. **適用前**: `uv run python3 scripts/check-data-integrity.py --remote`（`ancestor_duplicate` 以外の error 検査は 0 行であること。`retreat_with_real` は warn の情報で、整理の対象ではない）。`npx wrangler d1 time-travel info mise` の bookmark を控える。集計表の写しを取る: `npx wrangler d1 execute mise --remote --json --file scripts/category-counts-snapshot.sql > before.json`。
 2. **適用**（ローカル D1 で先に同じ手順を通す）: `npx wrangler d1 execute mise --remote --file scripts/fix-redundant-categories.sql`。
-3. **適用後**: 同じ `check-data-integrity.py --remote` が **全 error 検査で 0 行**（`ancestor_duplicate` `retreat_with_real` も 0 に）。写しをもう一度 `after.json` に取って `diff before.json after.json`。**差が出てよいのは退避先 4 カテゴリ（`business` `society` `business-services` `community`）の行だけ**（(b) で退避先の所属が減るため。実カテゴリと、(a) で外した親の件数は、親が子孫を数えるので変わらない）。ほかの行に差が出たら止めて原因を調べる。
+3. **適用後**: 同じ `check-data-integrity.py --remote` が **全 error 検査で 0 行**（`ancestor_duplicate` も 0 に。`retreat_with_real` の warn は残ってよい）。写しをもう一度 `after.json` に取って `diff before.json after.json`。**差は 1 行も出ないのが正**（外すのは親の行だけで、親の件数は子孫を数えるので `category_counts` も `scope_counts` も完全に不変）。差が出たら止めて原因を調べる。
 4. **戻し方**: Time Travel の bookmark へ戻す（`npx wrangler d1 time-travel restore mise --bookmark=…`）。
 
 ### 0022 の戻し方と作り直し方

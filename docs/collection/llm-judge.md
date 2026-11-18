@@ -97,7 +97,7 @@ npx wrangler d1 execute mise --local --file var/update-categories.sql   # ロー
 - **置換の SQL**: サイトごとに **INSERT が先、DELETE が後**: `INSERT OR IGNORE … SELECT id FROM categories WHERE id IN (新セット)` → `DELETE FROM site_categories WHERE site_id=… AND category_id NOT IN (新セット)`。どちらも「sites に実在する」「`government` 配下の葉を持たない」「`site_id NOT LIKE 'pb-%'`」で守られ、2 回流しても同じ（冪等）。DELETE にはさらに「新セットの id が対象 DB の `categories` に 1 つでも存在する」条件が付くので、途中で失敗しても、カテゴリ木が違う DB に流しても、サイトが未分類になることはない（余分な行が残るだけ）。
 - **対象外**: id が `pb-` の官公庁（SQL 側でも両モードで除外）、(b) では id が `fr-` のもの（台帳の承認を経ていない pass 判定で上書きしないため、(a) の対象。要約 `skipped_ledger_mode`）、`government` 配下の葉（種別 7 葉。台帳の種別から決定論で振った分）を持つサイト、sites に無い id（挿入はしない）。(a) は掲載済みの id が `fr-` で導出できるものだけなので、手動掲載は構造的に当たらない。
 - **判定の扱い**: カテゴリは `judge.modernize_categories` を通す（旧 id が残る行は写像）。空・有効な id が 1 つも無い判定は触れない（件数を要約に出す）。(a) は承認済みの pass / suspect、(b) は **pass のみ**（reject / suspect / deferred は触れない）で、出力は `judge.validate_output` を逐語引用込みで再検証し、通らない件は理由を出して書かない（終了コード 2）。
-- **親子の同時付与**: 親カテゴリと子カテゴリを同時に付ける判定は、通常の書き出し（INSERT 出力）と同じ挙動のまま変えない。
+- **親子の同時付与**: 親カテゴリと子カテゴリを同時に付ける判定は、通常の書き出し（INSERT 出力）と同じく子だけに畳む（#137。下の「カテゴリ所属の正規形」）。
 - **`--out`**: 未指定ならモードの既定（更新モードは `var/update-categories.sql`）。明示した `--out` は常に尊重する。
 - **`--current`**: 反映先の sqlite（ローカル D1 の `.wrangler/state/v3/d1/**.sqlite` など）を読み取り専用で開き、実際の増減を要約に出す。付けると、sites に無い id と `government` 配下の葉を持つサイトは SQL にも書かない。(b) では候補の URL が掲載済みサイトの URL と違う件も除外する（要約 `skipped_url_mismatch`、理由は標準エラーに `SKIPPED`）。付けないと要約は計画件数だけで、除外は SQL 側の守りに任せる。
 - **要約（標準出力）**: 計画件数、変わるサイト数・変わらない数・未掲載・官公庁の葉で除外、判定が空で触れなかった件数（`skipped_empty`）、「適用前は退避先カテゴリのみ、適用後に退避先以外がある」サイト数、カテゴリ別の増減（gained / lost の件数）。`--dry-run` は SQL を書かず要約だけ。
@@ -105,21 +105,23 @@ npx wrangler d1 execute mise --local --file var/update-categories.sql   # ロー
 
 ## カテゴリ所属の正規形とデータ整合チェック（#137）
 
-**正規形**（正本は [data-model.md](../design/data-model.md#カテゴリ所属の正規形)）: (a) 親と子の両方が付いたら子だけ残す（祖先の除去）、(b) 実カテゴリがあるときは退避先（`business` / `society` / `business-services` / `community`。定義の正本は `data/category-map.csv` の `fallback` 行）を付けない。官公庁の種別葉（`assign=rule`）はそのまま。判定が空・無効なら今までどおり触れない。
+**正規形**（正本は [data-model.md](../design/data-model.md#カテゴリ所属の正規形)）: 親と子の両方が付いたら子だけ残す（祖先の除去）。退避先（`business` / `society` / `business-services` / `community`。定義の正本は `data/category-map.csv` の `fallback` 行）は**外さない**: 新しい木ではこれも LLM が選べる正規のカテゴリで、LLM が選んだものを捨てると正しい分類を失う。旧 id の fallback が退避先を付けるのは他に何も残らないときだけ（単独なので外す対象にならない）。官公庁の種別葉（`assign=rule`）はそのまま。判定が空・無効なら今までどおり触れない。
 
 - 正規化は `judge.normalize_categories`（木は `data/categories.csv` の `parent_id`）の 1 箇所。`judge.modernize_categories`（旧 id の翻訳 + 正規化、そのあと最大 3 に切る）と `judge.canonical_categories`（出力 1 件分）が通す。`import_results.py`（台帳に入る時点）と `export_approved_sql.py` の 3 モード（通常の INSERT・`--update-categories`・`--update-categories-from`）が同じ関数を使う。
-- 要約（`--update-categories*` の `--dry-run` を含む標準出力、通常モードは標準エラー）に `dropped_ancestors`（外した親）と `dropped_retreat`（外した退避先）の件数が出る。
-- **取り込み・書き出しの門**: `import_results.py` は正規形でない categories を台帳に入れず `REJECTED` にする。`export_approved_sql.py` は SQL を書く前に、生成した SQL を全 migration 適用済みのメモリ DB（`--current` があればその sqlite の写し）に流して下の検査を走らせ、**その SQL が新たに作った違反**があれば SQL を書かずに標準エラーへ出して終了コード 3 で止まる（もとから DB にあった違反は止めない＝一度きりの整理を待つ古いデータで夜間ジョブが止まらない）。門を飛ばすフラグは設けない。夜間ジョブ（#124）の件数ガードは、この終了コード 3 を異常として扱う。
+- 要約（`--update-categories*` の `--dry-run` を含む標準出力、通常モードは標準エラー）に `dropped_ancestors`（外した親）の件数が出る。
+- **取り込み**: `import_results.py` は検証の前に categories を黙って正規形にして台帳に入れる（旧 id は新 id に写し、親子は子だけ、同じ id の重複は 1 つに畳む）。「正規形でないから `REJECTED`」という分岐は無い（直前で必ず正規化するため）。未知の id と、親子でない 4 個以上の列は従来どおり `validate_output` が `REJECTED` にする。`validate_output` の重複 id・4 個以上の検査は、正規化を通らない経路（`judge.py` が LLM の生の出力を検証するとき）で効く。
+- **書き出しの門**: `export_approved_sql.py` は SQL を書く前に、生成した SQL を全 migration 適用済みのメモリ DB（`--current` があればその sqlite の写し）に流して下の検査を走らせ、**その SQL が新たに作った違反**があれば SQL を書かずに標準エラーへ出して終了コード 3 で止まる（もとから DB にあった違反は止めない＝一度きりの整理を待つ古いデータで夜間ジョブが止まらない）。門を飛ばすフラグは設けない。夜間ジョブの件数ガード（#124。未実装）は、この終了コード 3 を異常として扱う**予定**。
+- **`--update-categories` の門は `--current` を付けたときだけ本当に効く**: `--current` が無いと、門が使う基の DB（全 migration 適用済みの空の DB）に `fr-` のサイトが無いので UPDATE は何も変えず、違反を見つけられない（素通し）。`--current` なしで実行すると標準エラーに警告を出す。**夜間ジョブでは `--current` を必須にする**。通常の INSERT 出力は基が空でも新規 INSERT を検査できるので、この制約はない。
 - 既存データの一度きりの整理は `scripts/fix-redundant-categories.sql`（手順は [deploy.md](../operations/deploy.md)）。
 
 ### データ整合チェック（#137）
 
-`uv run python3 scripts/check-data-integrity.py --local [--persist-to DIR]` / `--remote`（SELECT のみ）/ `--sqlite FILE`。定義の正本は `scripts/llm/integrity.py`（検査ごとに単純な 1 SELECT。D1 本番の複合 SELECT 項数上限のため）。**0 行が正**。error が 1 つでもあれば終了コード 1、warn は表示のみ。
+`uv run python3 scripts/check-data-integrity.py --local [--persist-to DIR]` / `--remote`（SELECT のみ）/ `--sqlite FILE`。定義の正本は `scripts/llm/integrity.py`（検査ごとに単純な 1 SELECT。D1 本番の複合 SELECT 項数上限のため）。**0 行が正**。error が 1 つでもあれば終了コード 1、warn（`retreat_with_real` `no_country`）は表示のみで終了コードは 0。
 
 | 検査 | 意味 | 重さ |
 |---|---|---|
 | `ancestor_duplicate` | 親と子の両方が付いている所属（`pb-` 除く） | error |
-| `retreat_with_real` | 退避先と実カテゴリが併存（`pb-` 除く） | error |
+| `retreat_with_real` | 退避先と他のカテゴリが併存（`pb-` 除く）。LLM が選んだ可能性があり、違反ではなく情報 | warn |
 | `uncategorized` | カテゴリが 1 つも無いサイト | error |
 | `orphan_site_categories` | 存在しないカテゴリ・サイトを指す `site_categories` | error |
 | `category_counts_all` / `category_counts_country` | `category_counts` が再帰 CTE の数え直しと違う（国別は、サイトの無い国に残った n>0 の行も） | error |
