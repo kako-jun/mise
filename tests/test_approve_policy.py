@@ -28,6 +28,17 @@ class Decide(unittest.TestCase):
     def d(self, **kw):
         return ap.explain(row(**kw), TODAY)
 
+    def test_municipal_phrases_are_held(self):
+        # 自治体が設置・運営するサイトは、市立などの語が無くても保留にする(2026-11-18 の初回夜間で 2 件すり抜けた)
+        for desc in ('都道府県が設置する15〜39歳の若年求職者向け就職支援施設を解説するサイト。',
+                     '宮崎県日向市への移住を検討する人向けの、暮らしや支援制度を紹介する移住情報サイト。',
+                     '市が運営する子育て情報サイト。'):
+            self.assertEqual(self.d(site_kind='organization', description_ja=desc)[0], 'hold', desc)
+
+    def test_ordinary_sites_not_caught_by_municipal_patterns(self):
+        for desc in ('静岡県浜松市で葉ねぎの生産と加工を行う農業生産法人のサイト。', '個人の趣味サイト。'):
+            self.assertEqual(self.d(description_ja=desc)[0], 'approve', desc)
+
     def test_active_individual_approved(self):
         self.assertEqual(self.d(), ('approve', 'ok'))
         self.assertEqual(ap.decide(row(), TODAY), 'approve')

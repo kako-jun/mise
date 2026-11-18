@@ -23,6 +23,7 @@ import collections
 import datetime
 import json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +39,10 @@ STALE_YEARS = 3  # an individual site whose newest sign of life is this many yea
 # (docs/concept/listing-criteria.md); the LLM-derived approval never auto-lists them.
 PUBLIC_WORDS = ("市立", "県立", "府立", "都立", "道立", "区立", "町立", "村立", "広域連合", "消防", "役場", "市役所", "区役所", "町役場", "村役場",
                 "県庁", "都庁", "自治体", "教育委員会", "警察", "保健所", "公民館", "図書館", "議会", "水道局", "広域組合", "一部事務組合")
+# 自治体が運営する/設置するサイトを、名前や説明の言い回しで拾う(市立などの語では拾えないもの。
+# 例: 「都道府県が設置する若年者向け就職支援施設」「宮崎県日向市への移住を検討する人向けの移住情報サイト」)。
+PUBLIC_PATTERNS = (re.compile(r"(都道府県|府|県|市|区|町|村)が(設置|運営|開設|管理)"),
+                   re.compile(r"(市|区|町|村)への(移住|定住)"), re.compile(r"移住(・定住)?(支援|情報|促進)"))
 PUBLIC_HOST_SUFFIXES = (".lg.jp", ".go.jp", ".ed.jp", ".gov", ".gov.jp", ".pref.jp")
 PUBLIC_HOST_LABELS = ("city", "town", "village", "pref", "vill")  # city.xxx.jp / town.xxx.jp / pref.xxx.jp
 
@@ -64,7 +69,7 @@ def public_looking(row):
     if host.endswith(".jp") and host.split(".")[0] in PUBLIC_HOST_LABELS:
         return True
     text = (row.get("title") or "") + (row.get("description_ja") or "")
-    return any(w in text for w in PUBLIC_WORDS)
+    return any(w in text for w in PUBLIC_WORDS) or any(r.search(text) for r in PUBLIC_PATTERNS)
 
 
 _VALID = None
