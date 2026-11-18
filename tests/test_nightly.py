@@ -374,10 +374,10 @@ class Run(Env):
         self.assertEqual(self.run_night('--current-db', str(cur) + '.none', '--from-stage', 'gate'), 1)
 
     def test_lock_prevents_double_run(self):
-        import fcntl
+        import filelock
         (self.var / 'nightly').mkdir(parents=True)
         with open(self.var / 'nightly' / '.lock', 'w') as lf:
-            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            filelock.lock(lf, blocking=False)
             self.assertEqual(self.run_night(), 75)
         self.assertEqual(self.calls, [])
 
@@ -388,8 +388,8 @@ class LockAcrossProcesses(Env):
     def test_second_process_exits_75_and_single_passes(self):
         import subprocess
         (self.var / 'nightly').mkdir(parents=True)
-        code = ("import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f, fcntl.LOCK_EX); print('ready', flush=True); sys.stdin.read()")
-        holder = subprocess.Popen([sys.executable, '-c', code, str(self.var / 'nightly' / '.lock')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        code = ("import sys; sys.path.insert(0,sys.argv[2]); import filelock; f=open(sys.argv[1],'w'); filelock.lock(f); print('ready', flush=True); sys.stdin.read()")
+        holder = subprocess.Popen([sys.executable, '-c', code, str(self.var / 'nightly' / '.lock'), str(ROOT / 'scripts' / 'llm')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         try:
             self.assertEqual(holder.stdout.readline().strip(), 'ready')
             self.assertEqual(nightly.main(['--date', '2026-11-18', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger)]), 75)
