@@ -270,6 +270,7 @@ def build_schema(cats):
 
 # ------------------------------------------------------------------- candidates
 BODY_LIMIT = 9000
+LLM_HIDDEN_FEATURES = ("leaf_hint",)   # 台帳の hint_leaf / export には残すが、LLM には見せない(#128)
 
 
 def read_candidates(path):
@@ -295,6 +296,8 @@ def render_candidate(c, body_limit=BODY_LIMIT):
     for key in ("title", "meta_description", "lang"):
         parts.append(f"{key}: {c.get(key) if c.get(key) is not None else '(none)'}")
     feats = c.get("features")
+    if feats:
+        feats = {k: v for k, v in feats.items() if k not in LLM_HIDDEN_FEATURES}   # 発見元のヒントで LLM を誘導しない
     parts.append("features: " + (json.dumps(feats, ensure_ascii=False, sort_keys=True) if feats else "(none)"))
     parts.append("body_excerpt:")
     parts.append(body if body else "(none)")

@@ -1,0 +1,52 @@
+leaf_id,qid,rel,country_prop,subclass,label_en,note,max_rows
+libraries,Q7075,P31,P17|P495,1,library,図書館(公共・大学図書館などの下位クラスを含む),400
+shrines,Q845945,P31,P17|P495,1,Shinto shrine,神社,600
+temples,Q5393308,P31,P17|P495,1,Buddhist temple,寺院,600
+museums,Q33506,P31,P17|P495,0,museum,博物館(美術館・科学館は別行),600
+museums,Q207694,P31,P17|P495,0,art museum,美術館,400
+museums,Q588140,P31,P17|P495,0,science museum,科学館,200
+astronomy,Q62832,P31,P17|P495,1,observatory,天文台,200
+astronomy,Q148319,P31,P17|P495,0,planetarium,プラネタリウム,200
+universities,Q3918,P31,P17|P495,0,university,大学,400
+universities,Q875538,P31,P17|P495,0,public university,公立大学,200
+universities,Q38723,P31,P17|P495,0,higher education institution,高等教育機関(短大・高専を含む),400
+schools,Q9826,P31,P17|P495,0,high school,高等学校,400
+schools,Q9842,P31,P17|P495,0,primary school,小学校,400
+early-childhood,Q126807,P31,P17|P495,0,kindergarten,幼稚園,300
+hospitals,Q16917,P31,P17|P495,0,hospital,病院,400
+railways,Q249556,P31,P17|P495,1,railway company,鉄道会社,300
+transport,Q10438042,P31,P17|P495,0,bus company,バス会社,300
+aviation-ships,Q46970,P31,P17|P495,0,airline,航空会社,100
+aviation-ships,Q1248784,P31,P17|P495,0,airport,空港,200
+publishing,Q2085381,P31,P17|P495,1,publishing house,出版社,400
+publishing,Q200764,P31,P17|P495,0,book vendor,書店,300
+magazines,Q41298,P31,P17|P495,0,magazine,雑誌,300
+newspapers,Q11032,P31,P17|P495,0,newspaper,新聞,300
+broadcasting,Q1616075,P31,P17|P495,0,television station,テレビ局,300
+broadcasting,Q14350,P31,P17|P495,0,radio station,ラジオ局,300
+performing-arts,Q24354,P31,P17|P495,0,theatre building,劇場,300
+music,Q215380,P31,P17|P495,0,musical group,バンド・音楽グループ,500
+music,Q42998,P31,P17|P495,0,orchestra,オーケストラ,200
+music,Q18127,P31,P17|P495,0,record label,レコードレーベル,200
+film,Q41253,P31,P17|P495,0,movie theater,映画館,300
+anime-manga,Q1107679,P31,P17|P495,0,animation studio,アニメ制作会社,300
+anime-manga,Q191633,P106,P27,0,mangaka,漫画家(個人サイト),500
+video-games,Q210167,P31,P17|P495,0,video game developer,ゲーム開発会社,300
+video-games,Q1137109,P31,P17|P495,0,video game publisher,ゲーム販売会社,200
+fiction,Q36180,P106,P27,0,writer,作家(個人サイト),500
+sightseeing,Q2281788,P31,P17|P495,0,public aquarium,水族館,200
+sightseeing,Q43501,P31,P17|P495,0,zoo,動物園,200
+sightseeing,Q23413,P31,P17|P495,1,castle,城,300
+sightseeing,Q1107656,P31,P17|P495,0,garden,庭園,300
+sightseeing,Q177380,P31,P17|P495,0,hot spring,温泉,300
+sightseeing,Q655311,P31,P17|P495,0,onsen,温泉(日本語の onsen),300
+plants,Q167346,P31,P17|P495,0,botanical garden,植物園,200
+lodging,Q562930,P31,P17|P495,0,ryokan,旅館,300
+lodging,Q27686,P31,P17|P495,0,hotel,ホテル,300
+outdoors,Q130003,P31,P17|P495,0,ski resort,スキー場,300
+food-products,Q29850536,P31,P17|P495,0,sake brewery,酒造,300
+food-products,Q131734,P31,P17|P495,0,brewery,醸造所,300
+civic-activities,Q163740,P31,P17|P495,0,nonprofit organization,NPO・非営利団体,500
+athletics,Q847017,P31,P17|P495,0,sports club,スポーツクラブ,300
+ball-sports,Q476028,P31,P17|P495,0,association football club,サッカークラブ,300
+business-services,Q2178147,P31,P17|P495,0,trade association,業界団体,300
