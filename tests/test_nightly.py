@@ -41,7 +41,9 @@ class Env(unittest.TestCase):
         self.addCleanup(self.db.close)
         self.calls = []
         self.worst = 1.0
-        self.integrity_rc = 0
+        self.integrity_rc = 0          # 投入後の本番整合チェック
+        self.integrity_before_rc = 0   # 投入前の本番整合チェック
+        self.llm_rc = 0
         self.exported = 2
         self.p_run = mock.patch.object(nightly, 'run_cmd', side_effect=self.fake)
         self.p_run.start()
@@ -65,18 +67,21 @@ class Env(unittest.TestCase):
         if 'wrangler' in s:
             return 0, 'ok'
         if 'check-data-integrity' in s:
-            return self.integrity_rc, 'all error-level checks passed' if not self.integrity_rc else '[FAIL] x'
+            rc = self.integrity_rc if any('execute' in c for c in self.calls) else self.integrity_before_rc
+            return rc, 'all error-level checks passed' if not rc else '[FAIL] x'
         if 'pipeline.py' in s and '--dry-run' in cmd:
             return 0, f'TOTAL expected ${self.worst / 2:.4f}, worst case ${self.worst:.4f}'
         if 'llm/pipeline.py' in s:
             Path(cmd[cmd.index('--out') + 1]).write_text('{"results": []}')
-            return 0, ''
+            return self.llm_rc, ''
         if 'import_results' in s:
             return 0, 'imported=1'
         if 'approve_policy' in s:
             return 0, 'applied: approve=2, hold=1, reject_stale=0'
         if 'export_approved_sql' in s:
-            Path(cmd[cmd.index('--out') + 1]).write_text('-- sql\n')
+            out = Path(cmd[cmd.index('--out') + 1])
+            keys = (out.parent / 'keys.txt').read_text().split()[:self.exported]
+            out.write_text('-- Approved sites\n' + ''.join(f'-- {k}\nINSERT 1;\n' for k in keys))
             return 0, f'approved=2, exported={self.exported} -> out'
         return 0, '{}'
 
@@ -135,6 +140,19 @@ class Budget(Env):
         self.assertAlmostEqual(nightly.month_spent(str(self.ledger), '2026-10'), 5.0)
         self.assertEqual(nightly.month_spent(str(self.ledger) + '.none', '2026-11'), 0.0)
 
+    def test_month_total_nets_release_against_original_reserve_month(self):
+        self.write_ledger([{'kind': 'reserve', 'batch': 'a', 'usd': 4.0, 'ts': '2026-10-31T23:00:00Z'},
+                           {'kind': 'release', 'batch': 'a', 'usd': 4.0, 'ts': '2026-11-01T00:30:00Z'},
+                           {'kind': 'call', 'cost_usd': 3.0, 'ts': '2026-11-01T00:20:00Z'}])
+        self.assertAlmostEqual(nightly.month_spent(str(self.ledger), '2026-11'), 3.0)   # 解放が当月をマイナスにしない
+        self.assertAlmostEqual(nightly.month_spent(str(self.ledger), '2026-10'), 0.0)
+
+    def test_open_reservation_of_previous_month_not_mixed_into_current(self):
+        self.write_ledger([{'kind': 'reserve', 'batch': 'a', 'usd': 4.0, 'ts': '2026-10-31T23:00:00Z'},
+                           {'kind': 'call', 'cost_usd': 1.0, 'ts': '2026-11-02T00:00:00Z'}])
+        self.assertAlmostEqual(nightly.month_spent(str(self.ledger), '2026-11'), 1.0)
+        self.assertAlmostEqual(nightly.month_spent(str(self.ledger), '2026-10'), 4.0)
+
     def test_guard_skips_llm_stage(self):
         self.seed()
         self.write_ledger([{'kind': 'call', 'cost_usd': 99.5, 'ts': '2026-11-03T00:00:00Z'}])
@@ -185,7 +203,7 @@ class Run(Env):
             self.assertIn(k, st)
         for s in st['stages']:
             self.assertEqual({'name', 'status', 'seconds', 'count', 'note'} <= set(s), True)
-            self.assertIn(s['status'], ('ok', 'failed', 'skipped'))
+            self.assertIn(s['status'], ('ok', 'failed', 'skipped', 'partial'))
         self.assertEqual(st['added'], 2)
         self.assertEqual(st['candidates_tonight'], 2)
 
@@ -248,6 +266,102 @@ class Run(Env):
         self.assertEqual(real.execute("SELECT count(*) FROM llm_judgement WHERE review_state='approved'").fetchone()[0], 3)
         real.close()
 
+    def test_unexpected_exception_is_recorded_as_failed_stage(self):
+        self.seed()
+        with mock.patch.object(nightly, 'unjudged_candidates', side_effect=RuntimeError('boom')):
+            self.assertEqual(self.run_night(), 1)
+        st = self.status()
+        cand = next(s for s in st['stages'] if s['name'] == 'candidates')
+        self.assertEqual(cand['status'], 'failed')
+        self.assertIn('boom', cand['note'])
+        self.assertIn('失敗あり', (self.var / 'nightly' / '2026-11-18' / 'report.md').read_text())
+
+    def test_corrupt_ledger_is_recorded_not_traceback(self):
+        self.seed()
+        self.ledger.write_text('not json\n')
+        self.assertEqual(self.run_night(), 1)
+        st = self.status()
+        self.assertFalse(st['ok'])
+        self.assertEqual(next(s for s in st['stages'] if s['name'] == 'llm')['status'], 'failed')
+        self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'report.md').exists())
+
+    def test_llm_exit2_is_partial_and_resumes_on_rerun(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        names = {s['name']: s['status'] for s in st['stages']}
+        self.assertEqual(names['llm'], 'partial')
+        self.assertEqual(names['prod'], 'skipped')          # 未解決の夜は本番に触れない
+        self.assertEqual(self.wrangler_calls(), [])
+        self.assertIn('続きから', st['next_action'])
+        n_llm = sum('llm/pipeline.py' in ' '.join(c) and '--dry-run' not in c for c in self.calls)
+        self.llm_rc = 0
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(sum('llm/pipeline.py' in ' '.join(c) and '--dry-run' not in c for c in self.calls), n_llm + 1)   # llm 段が再実行された
+        st = self.status()
+        names = {s['name']: s['status'] for s in st['stages']}
+        self.assertEqual((names['llm'], names['prod']), ('ok', 'ok'))
+        self.assertEqual(sum('import_results' in ' '.join(c) for c in self.calls), 2)   # 後段もやり直された
+
+    def test_candidates_not_rebuilt_after_llm_ok(self):
+        self.seed()
+        self.run_night()
+        cj = (self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').read_text()
+        self.assertEqual(self.run_night(), 0)
+        self.assertEqual((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').read_text(), cj)
+        self.assertEqual(self.status()['candidates_tonight'], 2)
+
+    def test_from_stage_reruns_without_deleting_status(self):
+        self.seed()
+        self.run_night()
+        n_sql = sum('export_approved_sql' in ' '.join(c) for c in self.calls)
+        n_disc = sum('discover-links' in c for c in self.calls)
+        self.assertEqual(self.run_night('--from-stage', 'sql'), 0)
+        self.assertEqual(sum('export_approved_sql' in ' '.join(c) for c in self.calls), n_sql + 1)
+        self.assertEqual(sum('discover-links' in c for c in self.calls), n_disc)
+        with self.assertRaises(SystemExit):
+            self.args('--from-stage', 'nope')
+
+    def test_only_shipped_keys_recorded_when_export_skips(self):
+        self.seed()
+        self.exported = 1
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual((self.var / 'nightly' / 'shipped.txt').read_text().split(), ['c.jp'])
+
+    def test_pending_batch_ignores_lock_files(self):
+        self.seed()
+        d = self.var / 'llm-batches'
+        d.mkdir(parents=True)
+        (d / 'pipeline-triage.lock').write_text('')
+        n = nightly.Night(self.args())
+        self.assertFalse(n.pending_batch())
+        (d / 'pipeline-triage-run1.json').write_text(json.dumps({'settled': False, 'batch_id': 'b', 'chunks': [[{'id': 'zz_jp'}]]}))
+        self.assertTrue(n.pending_batch())
+        (d / 'pipeline-triage-run1.json').write_text(json.dumps({'settled': True, 'chunks': []}))
+        self.assertFalse(n.pending_batch())
+
+    def test_unsettled_batch_candidates_forced_into_tonights_input(self):
+        for i in range(5):
+            add_site(self.db, f's{i}.jp')
+        d = self.var / 'llm-batches'
+        d.mkdir(parents=True)
+        (d / 'pipeline-triage-run1.json').write_text(json.dumps({'settled': False, 'batch_id': 'b', 'chunks': [[{'id': 's4_jp'}, {'id': 'gone_jp'}]]}))
+        self.assertEqual(self.run_night('--judge-limit', '2'), 0)
+        ids = [json.loads(x)['id'] for x in (self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').read_text().splitlines()]
+        self.assertEqual(ids, ['s4_jp', 's0_jp'])   # 未精算分は上限の外でも必ず含む
+        self.assertTrue(any('未精算' in g for g in self.status()['guards']))
+
+    def test_gate_receives_current_db(self):
+        self.seed()
+        cur = Path(self.tmp.name) / 'prod.sqlite'
+        cur.write_bytes(b'')
+        seen = []
+        with mock.patch.object(integrity, 'gate', side_effect=lambda sql, current=None: seen.append(current) or {}):
+            self.assertEqual(self.run_night('--current-db', str(cur)), 0)
+        self.assertEqual(seen, [str(cur)])
+        self.assertEqual(self.run_night('--current-db', str(cur) + '.none', '--from-stage', 'gate'), 1)
+
     def test_lock_prevents_double_run(self):
         import fcntl
         (self.var / 'nightly').mkdir(parents=True)
@@ -255,6 +369,30 @@ class Run(Env):
             fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
             self.assertEqual(self.run_night(), 75)
         self.assertEqual(self.calls, [])
+
+
+class LockAcrossProcesses(Env):
+    """cron は外側の flock なしで nightly.py を直接起動する。別プロセスがロックを持つ間は 75、居なければ通る。"""
+
+    def test_second_process_exits_75_and_single_passes(self):
+        import subprocess
+        (self.var / 'nightly').mkdir(parents=True)
+        code = ("import fcntl,sys; f=open(sys.argv[1],'w'); fcntl.flock(f, fcntl.LOCK_EX); print('ready', flush=True); sys.stdin.read()")
+        holder = subprocess.Popen([sys.executable, '-c', code, str(self.var / 'nightly' / '.lock')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), 'ready')
+            self.assertEqual(nightly.main(['--date', '2026-11-18', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger)]), 75)
+        finally:
+            holder.stdin.close()
+            holder.wait(timeout=10)
+        self.seed()
+        self.assertEqual(nightly.main(['--date', '2026-11-18', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger)]), 0)
+
+    def test_cron_example_has_no_outer_flock(self):
+        doc = (ROOT / 'docs' / 'operations' / 'nightly.md').read_text()
+        cron = [ln for ln in doc.splitlines() if 'scripts/nightly.py' in ln and ln.startswith('10 3')]
+        self.assertEqual(len(cron), 1)
+        self.assertNotIn('flock', cron[0])
 
 
 class Prod(Env):
@@ -265,15 +403,17 @@ class Prod(Env):
         self.seed()
         self.assertEqual(self.run_night('--apply-prod'), 0)
         w = [' '.join(c) for c in self.wrangler_calls()]
-        self.assertEqual(len(w), 3)
-        self.assertIn('time-travel info mise', w[0])
-        self.assertIn('d1 execute mise --remote', w[1])
-        self.assertIn('check-data-integrity.py', w[2])
+        self.assertEqual(len(w), 4)
+        self.assertIn('check-data-integrity.py', w[0])      # 投入前の読み取りチェック
+        self.assertIn('time-travel info mise', w[1])
+        self.assertIn('d1 execute mise --remote', w[2])
+        self.assertIn('check-data-integrity.py', w[3])
         st = self.status()
         self.assertTrue(st['prod_applied'])
         self.assertTrue(st['bookmark'].startswith('00000085'))
         shipped = (self.var / 'nightly' / 'shipped.txt').read_text().split()
-        self.assertEqual(shipped, ['c.jp', 'd.jp', 'e.jp'])
+        self.assertEqual(shipped, ['c.jp', 'd.jp'])   # export が実際に出荷した key だけ(3 件承認のうち 2 件)
+        self.assertEqual((self.var / 'nightly' / '2026-11-18' / 'keys.txt').read_text().split(), ['c.jp', 'd.jp'])
 
     def test_remote_integrity_error_fails_and_keeps_bookmark(self):
         self.seed()
@@ -281,8 +421,49 @@ class Prod(Env):
         self.assertEqual(self.run_night('--apply-prod'), 1)
         st = self.status()
         self.assertFalse(st['ok'])
+        self.assertTrue(st['prod_applied'])
         self.assertTrue(st['bookmark'].startswith('00000085'))
         self.assertIn('bookmark', next(s for s in st['stages'] if s['name'] == 'prod')['note'])
+
+    def test_previous_night_integrity_error_blocks_apply(self):
+        self.seed()
+        self.integrity_before_rc = 1
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertFalse(any('execute' in c or 'time-travel' in c for c in self.calls))
+        self.assertFalse(self.status()['prod_applied'])
+        self.assertFalse((self.var / 'nightly' / 'shipped.txt').exists())
+
+    def test_rerun_after_prod_failure_keeps_bookmark_and_refuses_reapply(self):
+        self.seed()
+        self.integrity_rc = 1
+        self.run_night('--apply-prod')
+        bm = (self.var / 'nightly' / '2026-11-18' / 'bookmark.txt').read_text()
+        st1 = self.status()['bookmark']
+        n_exec = sum('execute' in c for c in self.calls)
+        self.integrity_rc = 0
+        self.assertEqual(self.run_night('--apply-prod'), 1)    # 再投入は拒否
+        self.assertEqual((self.var / 'nightly' / '2026-11-18' / 'bookmark.txt').read_text(), bm)
+        self.assertEqual(self.status()['bookmark'], st1)
+        self.assertEqual(sum('execute' in c for c in self.calls), n_exec)
+        self.assertIn('nightly.md', next(s for s in self.status()['stages'] if s['name'] == 'prod')['note'])
+
+    def test_retry_after_execute_failure_keeps_first_bookmark(self):
+        self.seed()
+        orig = self.fake
+        state = {'fail': True}
+
+        def flaky(cmd, env=None, timeout=None):
+            if 'execute' in cmd and state['fail']:
+                self.calls.append(cmd)
+                return 1, 'boom'
+            return orig(cmd, env, timeout)
+        with mock.patch.object(nightly, 'run_cmd', side_effect=flaky):
+            self.assertEqual(self.run_night('--apply-prod'), 1)
+            bm = (self.var / 'nightly' / '2026-11-18' / 'bookmark.txt').read_text()
+            state['fail'] = False
+            self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual((self.var / 'nightly' / '2026-11-18' / 'bookmark.txt').read_text(), bm)
+        self.assertEqual(sum('time-travel' in c for c in self.calls), 1)
 
     def test_no_bookmark_no_execute(self):
         self.seed()

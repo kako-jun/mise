@@ -21,10 +21,12 @@
 ```
 
 - 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は UTC の日付。
-- **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も同コマンドの再実行で再開される（`var/llm-batches/`。別の日付で再開しない）。
+- **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
+- **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
+- 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
 - 本番 D1 に触れるコードは prod 段の 1 か所だけで、`--apply-prod` が無ければ `wrangler` は一切呼ばれない（テストで固定）。`--dry-run` と `--apply-prod` は併用できない。
-- 「出荷済み」は `var/nightly/shipped.txt`（本番反映に成功した key）。承認済みで未出荷のものを 1 夜 `--max-add` 件まで出す。本物の台帳は変えず、`export.sqlite`（台帳のコピー）で上限をかけて書き出す。
+- 「出荷済み」は `var/nightly/shipped.txt`（本番反映に成功した key のうち、**`export_approved_sql.py` が実際に SQL へ出した key だけ**。カテゴリ無し・重複で外れた key は記録しない。`keys.txt` も同じ）。承認済みで未出荷のものを 1 夜 `--max-add` 件まで出す。本物の台帳は変えず、`export.sqlite`（台帳のコピー）で上限をかけて書き出す。
 
 ## コマンド
 
@@ -35,7 +37,7 @@ uv run python3 scripts/nightly.py --apply-prod              # 本番反映まで
 uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の再開
 ```
 
-主なオプション: `--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--fetch-limit 600`、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
+主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--fetch-limit 600`、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
 ## cron の登録（kako-jun が行う）
 
@@ -43,10 +45,10 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 
 ```cron
 # 毎日 03:10 UTC。最初は --apply-prod を付けない
-10 3 * * *  cd /path/to/mise && set -a && . ~/.config/mise/anthropic.env && set +a && flock -n var/nightly/.lock uv run python3 scripts/nightly.py >> var/nightly/cron.log 2>&1
+10 3 * * *  cd /path/to/mise && set -a && . ~/.config/mise/anthropic.env && set +a && uv run python3 scripts/nightly.py >> var/nightly/cron.log 2>&1
 ```
 
-- 初回は `mkdir -p var/nightly` してから登録する。`flock -n` と nightly.py 内の flock は同じファイルで、二重起動は後から来た方が即終了する。
+- 初回は `mkdir -p var/nightly` してから登録する。二重起動の防止は nightly.py 内の flock（`var/nightly/.lock`、LOCK_NB）の**一本だけ**。**外側で `flock` を付けない**（外側が持つロックを nightly.py が別に取りにいき、毎夜 exit 75 になる）。二重起動は後から来た方が即終了（exit 75）する。
 - **最初の数夜（目安 3〜7 夜）は `--apply-prod` なしで回し、朝の確認手順で人が確認する。** 問題が無ければ crontab に `--apply-prod` を足す。
 - 段階化: 最初は `--fetch-limit 100 --max-add 50`（1,000 件規模）、問題が無ければ 1 万、10 万と上限を上げる。
 
@@ -58,7 +60,7 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 4. 保留のサンプル確認: `uv run python3 scripts/llm/review_state.py list --state pending --limit 20`。保留の理由が妥当か、本来通すべきものが落ちていないかを見る。
 5. 却下のサンプル確認: `report.md` の「却下理由別」で多い理由を選び、台帳から数件を見る（`sqlite3 var/frontier.sqlite "SELECT key,title FROM frontier WHERE state='rejected' AND reject_reason='<理由>' ORDER BY random() LIMIT 10"`）。
 6. 出荷 SQL の確認: `var/nightly/<date>/approved-sites.sql` の件数（`keys.txt` の行数）と先頭数件のサイトを実際に開いて見る。
-7. 問題があれば、該当する key を `review_state.py` で却下してから再実行する（`--date` を変えず再実行すれば SQL が作り直される。成功済みの段は飛ばされるので、`sql` 以降を作り直したいときは `var/nightly/<date>/status.json` を消す）。
+7. 問題があれば、該当する key を `review_state.py` で却下してから再実行する（`--date` を変えず再実行すれば SQL が作り直される。成功済みの段は飛ばされるので、`sql` 以降を作り直したいときは `--from-stage sql` を付ける）。
 
 ## 本番反映の前後確認（--apply-prod）
 
@@ -67,6 +69,10 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 1. `wrangler d1 time-travel info mise --json` で bookmark を取り、`bookmark.txt` に保存して `status.json` の `bookmark` に記録（取れなければ反映しない）。
 2. `wrangler d1 execute mise --remote --yes --file approved-sites.sql`（ログは `prod-execute.log`）。SQL は冪等なので、途中で失敗しても再実行で増えない。
 3. `scripts/check-data-integrity.py --remote`（ログは `prod-integrity.log`）。error があれば exit 1。
+
+投入の前に、読み取りだけの `check-data-integrity.py --remote` を走らせる（ログは `prod-integrity-before.log`）。**error なら投入しない**（前の夜の error を放置したまま重ねない）。
+
+再実行の扱い: 投入が失敗した夜（`prod_applied` が false で `bookmark.txt` あり）の再実行は、最初に取った bookmark を**上書きせず**そのまま使って再投入する。**`prod_applied` が true の夜は同じ `--date` での再投入を拒否**する（投入後の整合 error など。bookmark も保持）。手順は下の「ロールバック」。
 
 人が見るもの: 反映前後で `SELECT count(*) FROM sites` の差が `added` と一致するか、サイトの一覧に新規が出るか（`--remote` は SELECT のみで）。
 
@@ -81,10 +87,10 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 
 | 症状 | 見る場所 / 対処 |
 |---|---|
-| exit 75 | 別の夜間ジョブが動いている。`ps` で確認。残骸なら待つ（flock はプロセス終了で自動解除） |
+| exit 75 | 別の夜間ジョブが動いている。`ps` で確認。残骸なら待つ（flock はプロセス終了で自動解除）。cron に外側の `flock` を付けていると毎夜これになる |
 | llm 段が `ANTHROPIC_API_KEY が無い` | cron のラッパーで `anthropic.env` を読み込めていない |
 | llm 段が skipped「予算ガード」 | 当月の台帳合計 + 最悪費用が `--budget-month` を超える。台帳は `~/.config/mise/llm-ledger.jsonl`。月が変われば自動で再開 |
-| llm 段が「未解決あり」 | 一部が不正出力。同じ `--date` で再実行すると続きから（キャッシュ済みは課金されない） |
+| llm 段が `partial`「未解決あり」 | 一部が不正出力。同じ `--date` で再実行すると続きから（キャッシュ済みは課金されない）。それまで prod 段は止まる |
 | 開いたままの予約（台帳） | `scripts/llm/ledger_release.py --list` で確認してから解放 |
 | sql 段 / gate 段が整合チェック違反 | `report.md` の違反行を見る。ほとんどは台帳側の判定データ。該当 key を却下して再実行 |
 | discover-cc が失敗 | 続行される（`guards` に記録）。ネットワークか Common Crawl 側 |
@@ -93,6 +99,7 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 
 ## 未対応（v1）
 
+- **Issue #124 の段 6（ローカル D1 で検証してから本番）は未対応**。現状の gate 段は生成 SQL を**空 DB（マイグレーションのみ）**に流す整合チェックで、本番の既存データでの検証ではない。`--current-db`（本番再現の sqlite）を渡せば、その上で SQL を流して判定する。cron の既定では未使用。
 - 葉（カテゴリ）の目標未達を優先した選抜（各葉 100 件の最低ライン）。今は key 順。
 - Wikidata からの発見（#128）、ファビコン取得（#125）。
 - 再巡回（[recrawl](../collection/recrawl.md)）の夜間組み込み。

@@ -8,7 +8,7 @@
 - 各段は冪等・再開可能。同じ --date で再実行すると、成功済みの段は飛ばして失敗した段から続ける（バッチの未精算も再開される）。
 - 決定論の段（発見・取得・承認・SQL）に LLM は使わない。LLM は判定の 1 工程（scripts/llm/pipeline.py）だけ。鍵は環境変数のみ。
 - --dry-run は外部アクセス・API・書き込みをせず、計画と見積りだけ出す。
-Exit code: 0 正常 / 1 段の失敗（status.json に記録） / 75 多重起動。
+Exit code: 0 正常（LLM 未解決が残る partial を含む） / 1 段の失敗（status.json に記録） / 75 多重起動（このスクリプトの内側のロックだけで防ぐ。外側で flock しない）。
 """
 import argparse
 import datetime
@@ -34,6 +34,7 @@ EST_USD_PER_CANDIDATE = 0.01      # --dry-run だけの粗い概算（実行時�
 ANOMALY_FACTOR = 5                # 追加数が直近 7 夜の平均のこの倍を超えたら本番反映を止める
 ANOMALY_MIN_NIGHTS = 3            # 履歴がこれ未満の夜は比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
+AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
 STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod"]
 
 
@@ -160,6 +161,19 @@ class Night:
         self.failed = False
         self.stop = False          # 以降の段は進めない（整合違反・失敗）
         self.exported_keys = []
+        self.partial = False       # llm 段が未解決を残した（本番反映は止める）
+        self.llm_ran = False       # 今回 llm 段を実際に動かした
+        self.from_idx = STAGE_NAMES.index(a.from_stage) if a.from_stage else None
+
+    def spent(self):
+        """当月の台帳合計。台帳が壊れていれば 0 を返して理由を guards に残す（llm 段は自分で失敗する）。"""
+        try:
+            return month_spent(self.a.ledger, self.month)
+        except judge.LedgerError as e:
+            msg = f"台帳が読めない: {e}"[:300]
+            if msg not in self.status["guards"]:
+                self.status["guards"].append(msg)
+            return 0.0
 
     # -- 段の枠
     def stage(self, name, fn, resumable=True):
@@ -169,6 +183,8 @@ class Night:
             self.status["stages"].append(rec)
             return
         old = self.prev.get(name)
+        if name in AFTER_LLM and self.llm_ran:
+            resumable = False
         if resumable and old and old.get("status") == "ok":
             old = dict(old, note=("再実行: 成功済みのため飛ばした " + (old.get("note") or "")).strip())
             self.status["stages"].append(old)
@@ -181,6 +197,14 @@ class Night:
             rec.update(status="failed", note=str(e)[:600])
             self.failed = True
             self.stop = True
+        except (Exception, judge.LedgerError) as e:   # 台帳の破損(SystemExit 系)・想定外の例外も段の失敗として記録する
+            rec.update(status="failed", note=f"{type(e).__name__}: {e}"[:600])
+            self.failed = True
+            self.stop = True
+        if name == "llm" and rec["status"] in ("ok", "partial"):
+            self.llm_ran = True
+        if rec["status"] == "partial":
+            self.partial = True
         rec["seconds"] = round(time.monotonic() - t0, 2)
         self.status["stages"].append(rec)
         self.save()
@@ -201,7 +225,7 @@ class Night:
     # -- 各段
     def s_discover(self):
         a = self.a
-        out = self.run_py("discover-links", "scripts/pipeline/run.py", "discover-links", "--db", self.db)
+        out = self.run_py("discover-links", "scripts/pipeline/run.py", "discover-links", "--db", self.db, "--max-links", a.max_links)
         note = "links: " + out.strip()[-120:]
         if a.discover_limit > 0:  # discover-cc の失敗は続行できる（取得済みの台帳で後段が進む）
             rc, o = run_cmd([PY, os.path.join(ROOT, "scripts/pipeline/run.py"), "discover-cc", "--sample-every", "1000",
@@ -220,8 +244,23 @@ class Night:
     def s_judge(self):
         return {"note": self.run_py("judge", "scripts/pipeline/run.py", "judge", "--db", self.db).strip()[-300:]}
 
+    def unsettled_ids(self):
+        """未精算の LLM バッチ(日付に関係なく var/llm-batches の pipeline-*)が抱えている候補 id。"""
+        ids = set()
+        for _p, st in judge.unsettled_states(os.path.join(self.var, "llm-batches")):
+            if os.path.basename(_p).startswith("pipeline-"):
+                for ch in st.get("chunks") or []:
+                    ids.update(x["id"] for x in ch if isinstance(x, dict) and "id" in x)
+        return ids
+
     def s_candidates(self):
-        cands = unjudged_candidates(self.db)[:self.a.judge_limit]
+        allc = unjudged_candidates(self.db)
+        must = self.unsettled_ids()    # 前夜の未精算バッチの候補は上限に関係なく今夜の入力に含める(pipeline.py が id で引くため)
+        first = [c for c in allc if c["id"] in must]
+        cands = first + [c for c in allc if c["id"] not in must][:max(0, self.a.judge_limit - len(first))]
+        lost = must - {c["id"] for c in first}
+        if lost:
+            self.status["guards"].append(f"未精算バッチの候補 {len(lost)} 件が台帳の candidate に無い(状態が変わった)。pipeline.py が引けない場合は ledger_release.py で整理する")
         self.status["candidates_tonight"] = len(cands)
         with open(self.p("candidates.jsonl"), "w", encoding="utf-8") as f:
             for c in cands:
@@ -236,7 +275,7 @@ class Night:
         n = self.status["candidates_tonight"]
         if n == 0 and not self.pending_batch():
             return {"status": "skipped", "note": "今夜の判定対象 0 件"}
-        spent = month_spent(a.ledger, self.month)
+        spent = month_spent(a.ledger, self.month)    # 台帳が壊れていれば LedgerError -> 段の失敗として記録される
         remaining = a.budget_month - spent
         base = [PY, os.path.join(ROOT, "scripts/llm/pipeline.py"), self.p("candidates.jsonl"), "--model", "haiku", "--describe-model", "sonnet",
                 "--mode", "batch" if a.judge_mode == "batch" else "single", "--var-dir", self.var, "--ledger", a.ledger]
@@ -259,14 +298,14 @@ class Night:
             raise StageFailed(f"llm: exit {rc}\n" + "\n".join(out.strip().splitlines()[-5:]))
         cost = month_spent(a.ledger, self.month) - spent
         self.status["cost_usd"] = round(cost, 4)
-        return {"count": {"cost_usd": round(cost, 4), "unresolved": 1 if rc == 2 else 0}, "note": "未解決あり(再実行で続き)" if rc == 2 else ""}
+        res = {"count": {"cost_usd": round(cost, 4), "unresolved": 1 if rc == 2 else 0}}
+        if rc == 2:   # 未解決あり = 未完了。同じ --date で再実行すると、この段から続きを再開する
+            res.update(status="partial", note="未解決あり(同じ --date で再実行すると続きから)")
+        return res
 
     def pending_batch(self):
-        d = os.path.join(self.var, "llm-batches")
-        try:
-            return any(f.startswith("pipeline-") for f in os.listdir(d))
-        except OSError:
-            return False
+        """未精算の LLM バッチ状態があるか(常在の *.lock などでは true にならない)。"""
+        return any(os.path.basename(p).startswith("pipeline-") for p, _ in judge.unsettled_states(os.path.join(self.var, "llm-batches")))
 
     def s_import(self):
         res = self.p("results.json")
@@ -283,11 +322,7 @@ class Night:
 
     def select_export(self):
         """承認済みのうち未出荷を key 順に --max-add 件まで。残りは出荷用の台帳コピーで pending に戻す（本物の台帳は変えない）。"""
-        shipped = set()
-        try:
-            shipped = set(open(os.path.join(self.nightly, "shipped.txt"), encoding="utf-8").read().split())
-        except OSError:
-            pass
+        shipped = set(read_keys(os.path.join(self.nightly, "shipped.txt")))
         src = ro_connect(self.db)
         if src is None:
             raise StageFailed("sql: 台帳がない")
@@ -329,7 +364,17 @@ class Night:
         self.status["approved"] = len(keep)
         if n == 0 and os.path.exists(sql_path):
             os.remove(sql_path)
+            self.exported_keys = []
+            os.remove(self.p("keys.txt"))
             return {"status": "skipped", "note": "書き出せる承認 0 件", "count": {"exported": 0}}
+        # 出荷済みとして記録するのは SQL に実際に入った key だけ(カテゴリ無し・重複などで外れたものを除く)
+        with open(sql_path, encoding="utf-8") as f:
+            in_sql = {ln[3:].strip() for ln in f.read().splitlines() if ln.startswith("-- ")}
+        self.exported_keys = [k for k in keep if k in in_sql]
+        if n and not self.exported_keys:
+            raise StageFailed("sql: 出荷 SQL から key を読めない(出力形式の変更?)")
+        with open(self.p("keys.txt"), "w", encoding="utf-8") as f:
+            f.write("\n".join(self.exported_keys) + "\n")
         return {"count": {"exported": n}, "note": out.strip()[-200:]}
 
     def s_gate(self):
@@ -337,12 +382,15 @@ class Night:
         if not os.path.exists(sql_path):
             return {"status": "skipped", "note": "SQL なし"}
         import integrity
+        cur = self.a.current_db
+        if cur and not os.path.exists(cur):
+            raise StageFailed(f"gate: --current-db が無い: {cur}")
         with open(sql_path, encoding="utf-8") as f:
-            found = integrity.gate(f.read())
+            found = integrity.gate(f.read(), current=cur) if cur else integrity.gate(f.read())
         if found:
             self.status["guards"].append("整合チェック違反で停止")
             raise StageFailed("gate: 整合チェック違反\n" + integrity.format_violations(found))
-        return {"note": "違反なし"}
+        return {"note": "違反なし(" + (f"本番再現 DB {os.path.basename(cur)} 上" if cur else "空 DB 上。--current-db 未指定") + ")"}
 
     def s_prod(self):
         a = self.a
@@ -351,16 +399,34 @@ class Night:
             return {"status": "skipped", "note": "--apply-prod なし(本番には触れない)"}
         if not os.path.exists(sql_path):
             return {"status": "skipped", "note": "SQL なし"}
+        if self.partial:
+            self.status["guards"].append("llm 段に未解決が残るため本番反映を止めた(再実行で続きを解決してから)")
+            return {"status": "skipped", "note": "LLM 未解決あり(完了後に反映)"}
+        if self.status["prod_applied"]:
+            raise StageFailed("prod: この夜(--date)は本番へ投入済み。同じ --date での再投入は拒否する(bookmark は保持)。"
+                              "整合 error 後の対処は docs/operations/nightly.md の「ロールバック」を見る")
         if is_anomalous(self.status["added"], history_added(self.nightly, self.date)):
             self.status["guards"].append(f"前日比の異常: 追加 {self.status['added']} 件が直近平均の {ANOMALY_FACTOR} 倍超。本番反映を止めた")
             return {"status": "skipped", "note": "異常ガード(人の確認待ち)"}
-        npx = ["npx", "wrangler", "d1"]
-        rc, out = run_cmd(npx + ["time-travel", "info", a.d1_name, "--json"])
-        with open(self.p("bookmark.txt"), "w", encoding="utf-8") as f:
+        # 投入前に本番の整合を読み取りだけで確認する。前の夜の error が残っているなら重ねて投入しない
+        rc, out = run_cmd([PY, os.path.join(ROOT, "scripts/check-data-integrity.py"), "--remote", "--db", a.d1_name])
+        with open(self.p("prod-integrity-before.log"), "w", encoding="utf-8") as f:
             f.write(out)
         if rc != 0:
-            raise StageFailed("prod: Time Travel の bookmark が取れないため反映しない\n" + out.strip()[-300:])
-        self.status["bookmark"] = parse_bookmark(out)
+            self.status["guards"].append("投入前の本番整合チェックで error。投入しなかった")
+            raise StageFailed("prod: 投入前の本番整合チェックが error のため投入しない(nightly.md「ロールバック」参照)\n" + out.strip()[-400:])
+        npx = ["npx", "wrangler", "d1"]
+        bm_path = self.p("bookmark.txt")
+        if os.path.exists(bm_path):   # 投入に失敗した夜の再実行: 最初に取った bookmark を上書きしない
+            with open(bm_path, encoding="utf-8") as f:
+                self.status["bookmark"] = parse_bookmark(f.read())
+        else:
+            rc, out = run_cmd(npx + ["time-travel", "info", a.d1_name, "--json"])
+            if rc != 0:
+                raise StageFailed("prod: Time Travel の bookmark が取れないため反映しない\n" + out.strip()[-300:])
+            with open(bm_path, "w", encoding="utf-8") as f:
+                f.write(out)
+            self.status["bookmark"] = parse_bookmark(out)
         rc, out = run_cmd(npx + ["execute", a.d1_name, "--remote", "--yes", "--file", sql_path])
         with open(self.p("prod-execute.log"), "w", encoding="utf-8") as f:
             f.write(out)
@@ -381,16 +447,19 @@ class Night:
     def run(self):
         os.makedirs(self.dir, exist_ok=True)
         before = snapshot(self.db)
-        self.status["month_spent_usd"] = round(month_spent(self.a.ledger, self.month), 4)
+        self.status["month_spent_usd"] = round(self.spent(), 4)
         table = [("discover", self.s_discover), ("triage", self.s_triage), ("fetch", self.s_fetch), ("judge", self.s_judge),
                  ("candidates", self.s_candidates), ("llm", self.s_llm), ("import", self.s_import), ("approve", self.s_approve),
                  ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod)]
-        for name, fn in table:
-            self.stage(name, fn, resumable=name not in ("candidates",))
+        llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
+        for i, (name, fn) in enumerate(table):
+            force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
+            # candidates は llm 段が済むまでだけ作り直す(済んだ後に作り直すと import の入力 candidates.jsonl が縮む)
+            self.stage(name, fn, resumable=not force and (name != "candidates" or llm_prev_ok))
         after = snapshot(self.db)
         self.status["rejected_by_reason"] = {k: v - before["rejected"].get(k, 0) for k, v in after["rejected"].items() if v > before["rejected"].get(k, 0)}
         self.status["held"] = after["review"].get("pending", 0)
-        self.status["month_spent_usd"] = round(month_spent(self.a.ledger, self.month), 4)
+        self.status["month_spent_usd"] = round(self.spent(), 4)
         self.status["ok"] = not self.failed
         self.status["finished_at"] = utcnow()
         self.status["next_action"] = self.next_action()
@@ -403,6 +472,8 @@ class Night:
         failed = [s for s in self.status["stages"] if s["status"] == "failed"]
         if failed:
             return f"段 {failed[0]['name']} の失敗を直し、同じ --date {self.date} で再実行する(成功済みの段は飛ばされる)。docs/operations/nightly.md のトラブルシュート参照"
+        if any(s["status"] == "partial" for s in self.status["stages"]):
+            return f"LLM 判定に未解決が残っている。同じ --date {self.date} で再実行すると続きから再開する(本番反映はそれまで止まる)"
         if self.status["prod_applied"]:
             return "本番の件数と保留サンプルを朝の手順で確認する"
         if self.status["added"]:
@@ -412,7 +483,8 @@ class Night:
 
 def read_keys(path):
     try:
-        return open(path, encoding="utf-8").read().split()
+        with open(path, encoding="utf-8") as f:
+            return f.read().split()
     except OSError:
         return []
 
@@ -428,7 +500,7 @@ def utcnow():
 
 def render_report(st):
     L = [f"# 夜間ジョブ報告 {st['date']}", "",
-         f"- 結果: {'成功' if st['ok'] else '失敗あり'} / モード: dry_run={st['mode']['dry_run']} apply_prod={st['mode']['apply_prod']} judge={st['mode']['judge_mode']}",
+         f"- 結果: {('未完了あり(再実行で続き)' if any(s['status'] == 'partial' for s in st['stages']) else '成功') if st['ok'] else '失敗あり'} / モード: dry_run={st['mode']['dry_run']} apply_prod={st['mode']['apply_prod']} judge={st['mode']['judge_mode']}",
          f"- 今夜の判定対象: {st['candidates_tonight']} 件 / 追加(SQL): {st['added']} 件 / 本番反映: {'済' if st['prod_applied'] else 'していない'}",
          f"- 費用: 今夜 ${st['cost_usd']:.4f} / 当月 ${st['month_spent_usd']:.2f} / 予算 ${st['budget_month_usd']:.2f}",
          f"- 保留(pending): {st['held']} 件", f"- Time Travel bookmark: {st['bookmark'] or '-'}", "", "## 段", "",
@@ -472,7 +544,10 @@ def parse_args(argv=None):
     ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前(既定: UTC の今日)。再開は同じ日付で")
     ap.add_argument("--max-add", type=int, default=300, help="1 夜に出荷する追加サイト数の上限")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
+    ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
+    ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
+    ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
     ap.add_argument("--judge-mode", choices=["batch", "sync"], default="batch")
     ap.add_argument("--budget-month", type=float, default=100.0, help="月(UTC)の LLM 予算 USD")
@@ -485,7 +560,7 @@ def parse_args(argv=None):
     a = ap.parse_args(argv)
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
         ap.error("--date は YYYY-MM-DD")
-    if a.max_add < 1 or a.fetch_limit < 1 or a.judge_limit < 1:
+    if a.max_add < 1 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
         ap.error("上限は 1 以上")
     if a.dry_run and a.apply_prod:
         ap.error("--dry-run と --apply-prod は同時に使えない")
