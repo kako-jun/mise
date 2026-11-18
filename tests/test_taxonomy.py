@@ -116,7 +116,8 @@ class ModernizeTests(unittest.TestCase):
     def test_drop_unknown_duplicates_and_limit(self):
         self.assertEqual(self.m(["computers-multimedia", "nope"]), [])
         self.assertEqual(self.m(["computers-software", "software"]), ["software"])
-        self.assertEqual(self.m(["government-government-agencies"]), [])  # 官公庁は LLM が選ばない(台帳の種別で決まる)
+        self.assertEqual(self.m(["government-government-agencies"]), ["government"])  # 官公庁は行政・公的機関(トップ)へ。種別の葉は台帳で決まる(0021 の退避と同じ)
+        self.assertEqual(self.m(["government-government-agencies", "science-astronomy"]), ["government", "astronomy"])
         self.assertEqual(len(self.m(["arts", "photography", "architecture", "museums"])), 3)
 
 
@@ -180,7 +181,42 @@ class MigrationTests(unittest.TestCase):
         ids = {r[0] for r in self.post.execute("SELECT id FROM categories")}
         new = {r["id"] for r in TREE}
         self.assertEqual(ids, new)
-        self.assertTrue({"arts", "business", "reference", "education", "science", "government", "health", "society"} <= ids)
+        self.assertTrue({"arts", "business", "reference", "education", "science", "government", "health", "society", "entertainment"} <= ids)
+
+    def test_fallback_gets_every_destination_and_matches_modernize(self):
+        # 0021 の退避先付与(SQL)と judge.modernize_categories(Python)は同じ結果になる。本番相当の組合せ(企業+製品とサービス、団体+企業+地域 など)を全部流して比べる
+        files = sorted(glob.glob(str(ROOT / "migrations" / "*.sql")))
+        db = fresh_db(files, upto_before_0021=True)
+        self.addCleanup(db.close)
+        old = sorted(tx.old_ids())
+        dropped = {r["old_id"] for r in tx.read_map() if r["mode"] == "drop"}
+        combos = [
+            ("business-companies", "business-products-and-services"), ("business-organizations", "business-products-and-services"),
+            ("business-organizations", "business-companies"), ("business-organizations", "business-companies", "local-japan"),
+            ("business-companies", "local-japan"), ("local",), ("local-japan",), ("business-products-and-services",),
+            ("business-companies", "health-hospitals"), ("business", "business-companies"), ("society", "business-organizations"),
+            ("business-organizations", "business-products-and-services", "business-companies"),
+            ("government-government-agencies", "business-companies"), ("business-companies", "science-astronomy", "local-japan"),
+        ] + [(o,) for o in old if o not in dropped]  # 行き先の無い(drop)だけのサイトは CHECK で失敗するので除く(別テスト)
+        legacy = {r["old_id"]: r for r in tx.read_map()}
+        legacy = {k: {"new": v["new_id"] or None, "mode": v["mode"]} for k, v in legacy.items()}
+        valid = {r["id"] for r in TREE}
+        leaves = set(tx.GOV_LEAF.values())
+        for n, ids in enumerate(combos):
+            db.execute("INSERT INTO sites (id,url,name,description_ja) VALUES (?,?,?,?)", (f"c{n}", f"https://c{n}.example/", "t", "t"))
+            if "government-government-agencies" in ids:  # 台帳の種別タグ(市)を付けておく
+                db.execute("INSERT INTO site_tags (site_id,label_ja,label_en) VALUES (?,?,?)", (f"c{n}", "市", "City"))
+            db.executemany("INSERT INTO site_categories VALUES (?,?)", [(f"c{n}", i) for i in ids])
+        db.commit()
+        db.executescript(MIG.read_text(encoding="utf-8"))
+        for n, ids in enumerate(combos):
+            got = {("government" if c in leaves else c) for (c,) in db.execute("SELECT category_id FROM site_categories WHERE site_id=?", (f"c{n}",))}
+            want = set(judge.modernize_categories(list(ids), valid, legacy))
+            self.assertEqual(got, want, ids)
+        two = {c for (c,) in db.execute("SELECT category_id FROM site_categories WHERE site_id='c0'")}
+        self.assertEqual(two, {"business", "business-services"})
+        three = {c for (c,) in db.execute("SELECT category_id FROM site_categories WHERE site_id='c3'")}
+        self.assertEqual(three, {"society", "business", "community"})
 
     def test_failure_leaves_nothing_half_done(self):
         # 旧カテゴリしか持たない(対応表で行き先の無い)サイトがあれば、CHECK で migration 全体が失敗する(中途半端に消さない)

@@ -22,6 +22,8 @@ OLD_GOV = 'government-government-agencies'
 # 官公庁台帳の type(= 0015 が各サイトに付けたタグ label_ja) -> 行政・公的機関の葉
 GOV_LEAF = {'国の機関': 'national-agencies', '独立行政法人': 'independent-agencies', '都道府県': 'prefectures', '市': 'cities',
             '特別区': 'special-wards', '町': 'towns', '村': 'villages'}
+# 0015 は既定では政令市の行政区を入れないが、入れてあれば(--include-wards)市の葉に寄せる(scripts/public_bodies_sql.py の LEAF と同じ)
+GOV_TYPE_LEAF = {**GOV_LEAF, '行政区': 'cities'}
 
 
 def read_tree():
@@ -70,7 +72,7 @@ def generate():
         '-- 順序: (1) 新しい木を入れる (2) 旧→新の対応表で site_categories を移す (3) 官公庁を種別の葉へ (4) 退避先(fallback)を足す (5) 取りこぼしがあれば',
         '--       CHECK で失敗させてこの migration ごと取り消す (6) 旧の行と旧カテゴリを消す。サイト(sites)・タグ・検索用テキストには触れない。',
         '',
-        '-- (1) 新しい木。同じ id を引き継ぐトップ(arts business reference education science government health society)は名前・並びを上書きする。',
+        '-- (1) 新しい木。同じ id を引き継ぐトップ(arts business reference education science government health society entertainment)は名前・並びを上書きする。',
     ]
     for r in ordered(tree):
         out.append(f"INSERT INTO categories (id,parent_id,name_ja,name_en,sort_order) VALUES ({q(r['id'])},{q(r['parent_id']) if r['parent_id'] else 'NULL'},{q(r['name_ja'])},{q(r['name_en'])},{r['sort_order']}) "
@@ -79,8 +81,8 @@ def generate():
     for r in mp:
         if r['mode'] == 'map':
             out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT site_id,{q(r['new_id'])} FROM site_categories WHERE category_id={q(r['old_id'])};")
-    types = in_list(GOV_LEAF)
-    case = ' '.join(f"WHEN {q(t)} THEN {q(l)}" for t, l in GOV_LEAF.items())
+    types = in_list(GOV_TYPE_LEAF)
+    case = ' '.join(f"WHEN {q(t)} THEN {q(l)}" for t, l in GOV_TYPE_LEAF.items())
     out += ['', f'-- (3) 官公庁({OLD_GOV})。種別は 0015 が各サイトに付けた type タグ(label_ja = 台帳の type)から振る。',
             "--     id が pb- で始まるサイトだけが対象(手動掲載の同一サイトは次の URL 照合で拾う)。",
             f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT sc.site_id, CASE t.label_ja {case} END FROM site_categories sc JOIN site_tags t ON t.site_id=sc.site_id AND t.label_ja IN ({types}) "
@@ -97,11 +99,14 @@ def generate():
             f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT sc.site_id,'government' FROM site_categories sc WHERE sc.category_id={q(OLD_GOV)} "
             f"AND NOT EXISTS (SELECT 1 FROM site_categories x WHERE x.site_id=sc.site_id AND x.category_id IN ({in_list(leaves)}));"]
     renew = ','.join(q(i) for i in old_only)
-    out += ['', '-- (4) 退避先(mode=fallback)。主題でなく運営主体・地域だった旧カテゴリ。他に新しい木のカテゴリを持たないサイトにだけ退避先を付ける(再判定で主題へ移す前提)。']
+    out += ['', '-- (4) 退避先(mode=fallback)。主題でなく運営主体・地域だった旧カテゴリ。ここまでの手順で退避先でない新カテゴリ(keep/map/rule)を 1 つも持たないサイトにだけ、退避先をすべて付ける(再判定で主題へ移す前提)。',
+            '--     1 文ずつ順に付けると先に付いた退避先が「他にある」と数えられて後の退避先が付かないので、判定は手順 4 の前に作る一時表(_taxonomy_pre)に固定する。',
+            f"CREATE TABLE _taxonomy_pre AS SELECT DISTINCT site_id FROM site_categories WHERE category_id NOT IN ({renew});"]
     for r in mp:
         if r['mode'] == 'fallback':
             out.append(f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT sc.site_id,{q(r['new_id'])} FROM site_categories sc WHERE sc.category_id={q(r['old_id'])} "
-                       f"AND NOT EXISTS (SELECT 1 FROM site_categories x WHERE x.site_id=sc.site_id AND x.category_id NOT IN ({renew}));")
+                       "AND sc.site_id NOT IN (SELECT site_id FROM _taxonomy_pre);")
+    out.append('DROP TABLE _taxonomy_pre;')
     out += ['', '-- (5) 検査。旧カテゴリしか持たないサイトが 1 件でも残っていれば CHECK 違反でこの migration 全体が失敗する(旧カテゴリを消す前に止める)。',
             'CREATE TABLE _taxonomy_check (orphans INTEGER NOT NULL CHECK (orphans = 0));',
             f"INSERT INTO _taxonomy_check SELECT count(*) FROM (SELECT site_id FROM site_categories GROUP BY site_id HAVING sum(category_id NOT IN ({renew})) = 0);",

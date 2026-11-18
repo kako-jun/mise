@@ -86,19 +86,22 @@ def load_legacy_map(root=ROOT):
 def modernize_categories(ids, valid_ids, legacy):
     """Translate category ids stored by judgements made before the taxonomy change (#114) into the current tree.
     Ids that are already valid pass through; old ids map through the table (map/keep always; fallback only when nothing
-    else remains; drop/rule vanish); anything unknown is dropped. Order is kept, duplicates removed, at most 3."""
+    else remains; rule (public bodies) -> the government top; drop vanishes); anything unknown is dropped. Order is kept, duplicates removed, at most 3."""
     out, fallbacks = [], []
     for i in ids:
         if i in valid_ids:
             t = i
         else:
             m = legacy.get(i)
-            if not m or not m["new"] or m["mode"] in ("drop", "rule"):
+            if m and m["mode"] == "rule":
+                t = "government"  # 官公庁の旧 id は行政・公的機関(トップ)に写す(種別の葉は台帳から決まる。0021 の退避と同じ)
+            elif not m or not m["new"] or m["mode"] == "drop":
                 continue
-            if m["mode"] == "fallback":
+            elif m["mode"] == "fallback":
                 fallbacks.append(m["new"])
                 continue
-            t = m["new"]
+            else:
+                t = m["new"]
         if t in valid_ids and t not in out:
             out.append(t)
     if not out:
