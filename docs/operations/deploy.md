@@ -88,53 +88,35 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 **承認を取ってから実行する。** 0021 は `categories` を旧 59 → 新 153 に入れ替え、`site_categories` を対応表で移す（`sites`・`site_tags`・`search_text` には触れない。検索用列の埋め直しは不要）。
 
-**順序は 1 つ**: バックアップ → 事前集計（CHECK 条件が 0）→ migration 適用 → 件数確認 → マージ。コード（画面）は旧 id でも新 id でも壊れない（画面は木に依存しない）ので、migration を先にしてからマージ（自動デプロイ）する。
+**順序は 1 つ**: 適用前の確認 → バックアップ → migration 適用 → 集計表と再帰 CTE の一致確認 → マージ。**新しいコードは `category_counts` / `scope_counts` が無いと `/api/categories` `/api/scopes` などがエラーになる**ので、migration を先に適用してからマージする（旧コードは新しい表を使わないので、migration だけ先に入っても壊れない）。
 
-1. **バックアップ**（失敗時の戻し先）。上の手順 1 と同じ `npx wrangler d1 export mise --remote --output=…` に加えて、D1 Time Travel の時点（bookmark）を控える: `npx wrangler d1 time-travel info mise`。
-2. **事前集計**（`--remote` の SELECT だけ。何も変わらない）。
-   ```sh
-   # (a) 旧カテゴリしか持たず、行き先が無い(drop)サイトの数。0 でなければ 0021 は CHECK 違反で全体が失敗する。想定 0
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM (SELECT site_id FROM site_categories GROUP BY site_id HAVING sum(category_id NOT IN ('computers-multimedia','local-world','government-research-institutes')) = 0)"
-   # (b) 官公庁の旧カテゴリで pb- でないサイト(URL 照合で国の機関の葉に入る)。想定 1(sample-6)
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites s JOIN site_categories c ON c.site_id=s.id AND c.category_id='government-government-agencies' WHERE s.id NOT LIKE 'pb-%'"
-   # (c) 適用前のカテゴリ別件数を控える(適用後の比較用。サイト数・カテゴリ付きサイト数も)
-   npx wrangler d1 execute mise --remote --command "SELECT category_id, count(*) FROM site_categories GROUP BY 1 ORDER BY 1"
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites"
-   ```
-   **適用前後をまたいで、LLM 側の書き出し SQL（#48 の `export_approved_sql`）を流さない**（適用前に流すと新 id が本番に無くカテゴリが付かず、適用後に流すと旧 id が使えない。0021 の適用と LLM 側の取り込み・書き出しは別の時間帯にする。LLM 側は適用後に回す）。
-3. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。0021 は 1 つのトランザクションで、途中で失敗すれば全体が取り消される。
-4. **件数確認**（`--remote` の SELECT）:
-   ```sh
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM categories"                       # 153
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites"                             # 適用前と同じ
-   npx wrangler d1 execute mise --remote --command "SELECT count(*) FROM sites WHERE id NOT IN (SELECT site_id FROM site_categories)"   # 適用前と同じ(想定 0 = 未分類なし)
-   npx wrangler d1 execute mise --remote --command "SELECT category_id, count(*) FROM site_categories WHERE category_id IN ('national-agencies','independent-agencies','prefectures','cities','special-wards','towns','villages','government') GROUP BY 1"
-   ```
-   官公庁の葉は 46 / 51 / 46 / 779 / 23 / 728 / 179、`government` 直下は 0 件（2026-11-18 の本番）。ずれたら 0015 の適用後に官公庁の掲載が変わっている。退避先（`business` `society` `business-services` `community`）の件数は、手順 2 (c) の旧カテゴリ件数（企業・団体・製品とサービス・地域）から見込める。
-5. **マージ**: 手順 4 が想定どおりなら PR をマージする（自動デプロイ）。キャッシュ: 画面のページ HTML は CDN で 60 秒、`/api/*` は無し・`sitemap.xml` は 1 時間。この変更の JS/CSS は `app.js?v=44`・`style.css?v=43` に上げてある（古い JS がカテゴリ名を空白区切りで出さないように）。サイトマップのカテゴリ URL は新 id に替わり、旧カテゴリ URL はトップを返す（転送表なし）。LLM 側（`scripts/llm/`）の取り込み・書き出しは、本番に 0021 を適用してから回す。
-
-> 0021 は適用後に凍結する。手動で再実行すると `ON CONFLICT DO UPDATE` が、その後に木へ加えたカテゴリ名の変更を元に戻す。木を直すときは新しい migration を足す。
-6. **失敗したとき**: 手順 3 が失敗したら、まず `npx wrangler d1 execute mise --remote --command "SELECT name FROM d1_migrations WHERE name LIKE '0021%'"` で **0021 が記録されていない**ことを確認する（記録が無ければ全体が取り消されていて、DB は適用前のまま。原因の行を直して再適用）。中途半端に変わっていた場合は、手順 1 の Time Travel bookmark へ `npx wrangler d1 time-travel restore mise --bookmark=…` で戻す（バックアップの `d1 execute --file` で戻すのは最後の手段）。0021 だけを戻す逆 migration は持たない（旧→新は多対一で、元に戻せない）。
-
-## カテゴリ件数の集計表（0022）を本番へ適用する手順（Issue #126 第1段）
-
-**承認を取ってから実行する。** 0022 は表 3 つ（`category_closure` `category_counts` `scope_counts`）とトリガを足し、現在の `sites` / `site_categories` から初期集計する（既存の表は変えない。10 万件でも初期集計は読み約 290 万行・書き約 3,000 行）。
-
-**順序は 1 つ**: バックアップ → migration 適用 → 集計表と再帰 CTE の一致確認 → マージ。**新しいコードは `category_counts` / `scope_counts` が無いと `/api/categories` `/api/scopes` などがエラーになる**ので、migration を先に適用してからマージする（旧コードは新しい表を使わないので、migration だけ先に入っても壊れない）。
-
+0. **適用前の確認**: 適用は **PR ブランチ（`126-category-counts`）をチェックアウトした状態で行う**（`main` にはまだ 0022 のファイルが無い）。`npx wrangler d1 migrations list mise --remote` で**未適用が 0022 だけ**であることを確かめる（他に未適用があれば、それも一緒に流れてしまうので止めて原因を調べる）。
 1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
 2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
-3. **一致確認**（`--remote` の SELECT だけ。どちらも**結果 0 行**が正）:
+3. **一致確認**（`--remote` の SELECT だけ。**結果 0 行**が正）。1 本のクエリで、`category_counts`（`all` と、サイトのある国すべて）・`scope_counts`・閉包表を、再帰 CTE / `sites` の数え直しと両方向で比べる（`kind` が不一致の種類、`expected` が数え直した値、`cached` が表の値。`(extra)` は「サイトの無い範囲に残った行」、`closure` は欠け・余り）:
    ```sh
-   # (a) カテゴリ件数（全世界）: 再帰 CTE との差。国別は s.country_code = 'JP' を LEFT JOIN sites の ON に足し、k.scope を 'JP' にして同様に確かめる
-   npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id), t AS (SELECT c.id AS id, COUNT(DISTINCT s.id) AS n FROM categories c LEFT JOIN tree ON tree.root_id = c.id LEFT JOIN site_categories sc ON sc.category_id = tree.id LEFT JOIN sites s ON s.id = sc.site_id GROUP BY c.id) SELECT t.id, t.n, COALESCE(k.n, 0) AS cached FROM t LEFT JOIN category_counts k ON k.category_id = t.id AND k.scope = 'all' WHERE t.n <> COALESCE(k.n, 0)"
-   # (b) 範囲件数: sites の総数・国別との差
-   npx wrangler d1 execute mise --remote --command "SELECT 'all' AS scope, (SELECT COUNT(*) FROM sites) AS n, COALESCE((SELECT n FROM scope_counts WHERE scope = 'all'), 0) AS cached WHERE n <> cached UNION ALL SELECT s.country_code, COUNT(*), COALESCE((SELECT n FROM scope_counts WHERE scope = s.country_code), 0) FROM sites s WHERE s.country_code IS NOT NULL GROUP BY s.country_code HAVING COUNT(*) <> COALESCE((SELECT n FROM scope_counts WHERE scope = s.country_code), 0)"
+   npx wrangler d1 execute mise --remote --command "WITH RECURSIVE tree(root_id, id) AS (SELECT id, id FROM categories UNION SELECT tree.root_id, c.id FROM tree JOIN categories c ON c.parent_id = tree.id), want AS (SELECT t.root_id AS cid, 'all' AS scope, COUNT(DISTINCT s.id) AS n FROM tree t JOIN site_categories x ON x.category_id = t.id JOIN sites s ON s.id = x.site_id GROUP BY t.root_id UNION ALL SELECT t.root_id, s.country_code, COUNT(DISTINCT s.id) FROM tree t JOIN site_categories x ON x.category_id = t.id JOIN sites s ON s.id = x.site_id WHERE s.country_code IS NOT NULL GROUP BY t.root_id, s.country_code), want_s AS (SELECT 'all' AS scope, COUNT(*) AS n FROM sites UNION ALL SELECT country_code, COUNT(*) FROM sites WHERE country_code IS NOT NULL GROUP BY country_code) SELECT 'category_counts' AS kind, w.cid AS id, w.scope AS scope, w.n AS expected, COALESCE(k.n, 0) AS cached FROM want w LEFT JOIN category_counts k ON k.category_id = w.cid AND k.scope = w.scope WHERE w.n <> COALESCE(k.n, 0) UNION ALL SELECT 'category_counts(extra)', k.category_id, k.scope, 0, k.n FROM category_counts k LEFT JOIN want w ON w.cid = k.category_id AND w.scope = k.scope WHERE w.cid IS NULL AND k.n <> 0 UNION ALL SELECT 'scope_counts', w.scope, w.scope, w.n, COALESCE(k.n, 0) FROM want_s w LEFT JOIN scope_counts k ON k.scope = w.scope WHERE w.n <> COALESCE(k.n, 0) UNION ALL SELECT 'scope_counts(extra)', k.scope, k.scope, 0, k.n FROM scope_counts k LEFT JOIN want_s w ON w.scope = k.scope WHERE w.scope IS NULL AND k.n <> 0 UNION ALL SELECT 'closure(missing)', root_id, id, 1, 0 FROM (SELECT root_id, id FROM tree EXCEPT SELECT ancestor_id, descendant_id FROM category_closure) UNION ALL SELECT 'closure(extra)', ancestor_id, descendant_id, 0, 1 FROM (SELECT ancestor_id, descendant_id FROM category_closure EXCEPT SELECT root_id, id FROM tree)"
    ```
-   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
+   ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上のクエリそのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
 4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
-5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。
-6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。適用後に戻すときは、**先にコードを戻し**、そのあとトリガ（`category_closure_*` `category_counts_*`）と 3 表を `DROP` する（正本は変えていないので件数は失われない）。
+5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。マージ後、**手元の dev DB でも `npm run db:migrate` を流す**（流さないと手元の `/api/categories` が表なしでエラーになる）。
+6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。
+
+### 0022 の戻し方と作り直し方
+
+**(i) 戻す**（適用後に不具合が出たとき。正本は変えていないので件数は失われない）: **先にコードを戻す**（PR を revert してデプロイ。新しいコードは集計表を読むので、表を先に消すとエラーになる）。そのあと次を流す（トリガ 9 本 → 表 3 つの順）:
+
+```sh
+npx wrangler d1 execute mise --remote --command "DROP TRIGGER category_closure_ai; DROP TRIGGER category_closure_au; DROP TRIGGER category_closure_ad; DROP TRIGGER category_counts_sc_ai; DROP TRIGGER category_counts_sc_ad; DROP TRIGGER category_counts_sc_au; DROP TRIGGER category_counts_sites_ai; DROP TRIGGER category_counts_sites_bd; DROP TRIGGER category_counts_sites_au; DROP TABLE category_counts; DROP TABLE scope_counts; DROP TABLE category_closure"
+```
+
+DROP しても `d1_migrations` には `0022_category_counts.sql` が残る。**同じ 0022 は二度と流れない**ので、もう一度入れ直すには、表・索引・初期集計・トリガを作る**別の migration（0023 以降。0022 の中身を元にする）**が要る。
+
+**(ii) ずれたときの作り直し**（表は残したまま、正本から集計し直す。コードは戻さなくてよい）: `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 の初期集計と同じ `INSERT`。逐語一致と結果の一致は `tests/category-counts.test.mjs` が保証）を、夜間投入を流していない時間に実行し、そのあと手順 3 のクエリで 0 行を確かめる:
+
+```sh
+npx wrangler d1 execute mise --remote --file scripts/rebuild-category-counts.sql
+```
 
 > 0022 は適用後に凍結する。カテゴリの木や集計の意味を変えるときは新しい migration で表とトリガを作り直す。
 
