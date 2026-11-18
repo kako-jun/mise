@@ -35,6 +35,8 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 
 **再取得**: `failed`（DNS・接続・robots 到達不能・5xx・429）は `next_fetch_at` が来たら `fetch` の対象になる。待ちは 1 回目の失敗後 1 日、2 回目の失敗後 2 日（`BACKOFF_DAYS` × 2^(試行-1)）で、3 回目の失敗（通算 `MAX_ATTEMPTS`=3）で打ち止めにして `failed` のまま残す。再取得で成功/確定したら `last_error` は消える。
 
+**更新の兆候（#129）**: 取得時に決定論で拾い、`freshness_signal_at`（YYYY-MM-DD、候補のうち最新）と `freshness_source`（`header` / `footer` / `sitemap` / `feed`）を保存する（旧台帳は接続時に列が付く）。実装は `scripts/pipeline/freshness.py`（純関数）。(1) `Last-Modified` ヘッダ（動的ページが取得時刻を返すので、Date ヘッダか今日から 1 日以内なら捨てる）。(2) トップページ本文の「© 2015-2019」「最終更新 2021年3月」「Updated: 2020-05」「令和3年4月1日」類（正規表現。複数あれば最新）。年だけ・年月だけは期間末（2019 -> 2019-12-31）に丸める寛容側。未来日と 1995 年より前は捨てる。(3) 宣言された feed（`link rel=alternate` の RSS/Atom、同一サイトのみ）の最新エントリ日、無ければ `/sitemap.xml` の `lastmod`、宣言が無ければ `/rss.xml` も試す。追加リクエストは**最大 2 回**、robots 遵守・ホスト別 1.5 秒待機の既存作法のまま。feed で日付が取れたら sitemap は取らない。兆候が取れなくてもエラーにはしない（NULL のまま）。判定には使わず、LLM 工程（[llm-judge.md](llm-judge.md)）の材料と自動承認（`approve_policy.py`）の突き合わせにだけ使う。
+
 ## 発見元
 
 調査の詳細（出典・利用条件・規模・限界）は Issue #39 のコメント参照。
