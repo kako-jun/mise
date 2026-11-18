@@ -133,14 +133,37 @@ await scenario('PC1280: ピックアップ内にフォーカス時の左右キ�
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   assert.equal(await current(page), 'Pick One', '検索欄の矢印キーでは動かない');
 });
-await scenario('PC1280: 枠外で離したドラッグの状態が残らない（後のボタンなしホバーで切り替わらない）。dragstart は判定中だけ止める', desktop, async (page) => {
+await scenario('PC1280: 枠外で離したドラッグの状態が残らない（後のボタンなしホバーで切り替わらない）', desktop, async (page) => {
   await settled(page); const b = await box(page, '#pick-list li'); const x = b.x + b.w / 2, y = b.y + b.h / 2;
   await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 5, y - 10, { steps: 3 }); // 縦気味で判定は成立しない
   await page.mouse.move(5, 5, { steps: 5 }); await page.mouse.up(); // 枠外で離す
   await page.mouse.move(x + 60, y, { steps: 4 }); await page.mouse.move(x - 60, y, { steps: 10 }); // ボタンなしで 120px 横に動かす
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   assert.equal(await current(page), 'Pick One', 'ホバーだけでは切り替わらない');
-  assert.equal(await page.evaluate(() => { const e = new Event('dragstart', { bubbles: true, cancelable: true }); document.querySelector('#pick-list li a').dispatchEvent(e); return e.defaultPrevented; }), false, '判定中でなければ dragstart を止めない');
+});
+await scenario('PC1280: pointerup が欠落した状態でも、ボタンなしのホバーでは切り替わらない（buttons===0 の保険）', desktop, async (page) => {
+  await settled(page); const b = await box(page, '#pick-list li'); const x = b.x + b.w / 2, y = b.y + b.h / 2;
+  await page.mouse.move(x, y);
+  await page.evaluate(() => { // pointerup を window に発生させない: pointerdown だけ合成する
+    const a = document.querySelector('#pick-list li a');
+    a.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons: 1, clientX: 0, clientY: 0 }));
+  });
+  await page.mouse.move(x + 60, y, { steps: 4 }); await page.mouse.move(x - 60, y, { steps: 10 }); // ボタンなし（buttons===0）で 120px 横に動かす
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  assert.equal(await current(page), 'Pick One', '保険で状態を捨て、切り替わらない');
+});
+await scenario('PC1280: 実マウス押下から動かしてリンクをドラッグすると dragstart が止められる', desktop, async (page) => {
+  await settled(page);
+  await page.evaluate(() => { window.__ds = []; document.addEventListener('dragstart', (e) => window.__ds.push(e.defaultPrevented), false); });
+  const b = await box(page, '#pick-list li a'); const x = b.x + b.w / 2, y = b.y + b.h / 2;
+  await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 8, y + 2, { steps: 4 }); await page.mouse.move(x + 20, y + 4, { steps: 4 });
+  const r = await page.evaluate(() => window.__ds); await page.mouse.up();
+  assert.ok(r.length > 0, 'ネイティブの dragstart が発火している');
+  assert.ok(r.every((v) => v === true), 'dragstart は defaultPrevented になる');
+});
+await scenario('PC1280: 押下なしの dragstart は止めない', desktop, async (page) => {
+  await settled(page);
+  assert.equal(await page.evaluate(() => { const e = new Event('dragstart', { bubbles: true, cancelable: true }); document.querySelector('#pick-list li a').dispatchEvent(e); return e.defaultPrevented; }), false, '押下中でなければ dragstart を止めない');
 });
 await scenario('スマホ390: 2 本指（2 本目の指で判定を破棄）では切り替わらない', mobile, async (page) => {
   const cdp = await page.context().newCDPSession(page); const [x, y] = await startPoint(page);

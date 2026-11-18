@@ -500,7 +500,8 @@ picks.addEventListener('pointerdown',e=>{
 });
 picks.addEventListener('pointermove',e=>{
   const d=pickDrag; if(!d || d.id!==e.pointerId) return;
-  if(e.pointerType==='mouse' && e.buttons===0) { abortPickDrag(); return; } // ボタンが離れているのに状態が残った場合
+  // pointerup を取り逃した場合の保険（macOS の ctrl+クリックでコンテキストメニューが mouseup を取る、ドラッグ中のフォーカス喪失など）。ボタンなしの移動で状態を捨てる
+  if(e.pointerType==='mouse' && e.buttons===0) { abortPickDrag(); return; }
   if(d.done) return;
   const dx=e.clientX-d.x, dy=e.clientY-d.y;
   if(Math.abs(dx)<SWIPE_MIN_PX || Math.abs(dx)<Math.abs(dy)*SWIPE_DOMINANCE) return;
@@ -509,7 +510,9 @@ picks.addEventListener('pointermove',e=>{
   const sel=getSelection(); if(sel && sel.rangeCount && picks.contains(sel.getRangeAt(0).commonAncestorContainer)) sel.removeAllRanges();
   if(!stepPick(dx<0 ? 1 : -1, true)) nudgePick();
 });
-// スワイプ判定が進行中（pickDrag あり）のときだけネイティブのリンクドラッグを止める（ブックマークバー等へのドラッグは塞がない）
+// ネイティブの dragstart は押下中に数 px 動いた時点で出るため、pickDrag（押下〜離すまで存在）がある間は常に止まる。
+// つまりピックアップ内リンクのマウスドラッグ（ブックマークバー/新タブへ）はできない。スワイプを優先する意図的なトレードオフ
+// （Cmd/Ctrl/中ボタン/右クリックでの新タブ・コンテキストメニュー、キーボードは従来どおり使える）
 picks.addEventListener('dragstart',e=>{ if(pickDrag) e.preventDefault(); });
 // スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）。キーボード由来（detail 0）は対象外
 picks.addEventListener('click',e=>{ if(pickSwiped && e.detail!==0) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
