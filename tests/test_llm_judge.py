@@ -36,6 +36,19 @@ def good():
     }
 
 
+class HiddenHintTests(unittest.TestCase):
+    def test_leaf_hint_is_not_shown_to_the_llm(self):
+        c = {"id": "x", "url": "https://example.org/", "title": "t", "features": {"leaf_hint": "shrines", "ad_hits": 0}}
+        text = judge.render_candidate(c)
+        self.assertNotIn("leaf_hint", text)
+        self.assertNotIn("shrines", text)
+        self.assertIn("ad_hits", text)
+        self.assertIn("leaf_hint", c["features"])          # 元の dict は壊さない
+        self.assertNotIn("leaf_hint", judge.build_system(CATS))
+        only = judge.render_candidate({"id": "y", "url": "https://e.org/", "features": {"leaf_hint": "a"}})
+        self.assertNotIn("leaf_hint", only)
+
+
 class FreshnessFieldTests(unittest.TestCase):
     def test_values_validated(self):
         self.assertEqual(judge.validate_output(good(), IDS, SOURCE), [])
