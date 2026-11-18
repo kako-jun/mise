@@ -8,7 +8,9 @@ const db = new DatabaseSync(':memory:');
 db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
 CREATE TABLE site_tags(site_id TEXT, label_ja TEXT NOT NULL, label_en TEXT, PRIMARY KEY(site_id,label_ja));
 CREATE TABLE site_categories(site_id TEXT, category_id TEXT);
-CREATE TABLE scope_counts(scope TEXT PRIMARY KEY, n INTEGER NOT NULL);`); // scope_counts: タグなし・範囲だけの total が読む集計表（本物はトリガが維持する。#126）
+CREATE TABLE scope_counts(scope TEXT PRIMARY KEY, n INTEGER NOT NULL);
+CREATE TABLE categories(id TEXT PRIMARY KEY, parent_id TEXT);
+CREATE TABLE category_counts(category_id TEXT NOT NULL, scope TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(category_id, scope));`); // scope_counts: タグなし・範囲だけの total が読む集計表（本物はトリガが維持する。#126）
 const site = (id, cc, st, cats, tags) => {
   db.prepare('INSERT INTO sites(id,url,name,description_ja,country_code,registered_at,search_text) VALUES(?,?,?,?,?,?,?)').run(id, 'https://' + id, id, 'd', cc, '2026-01-01T00:00:00Z', st);
   for (const c of cats) db.prepare('INSERT INTO site_categories VALUES(?,?)').run(id, c);
@@ -18,6 +20,9 @@ site('a', 'JP', 'apple pie', ['c1'], [['キノコ', 'Mushrooms'], ['図鑑', 'Fi
 site('b', 'JP', 'banana', ['c2'], [['キノコ', 'Mushrooms']]);
 site('c', 'US', 'cherry pie', ['c1'], [['キノコ', 'Mushrooms'], ['図鑑', 'Field guide']]);
 site('d', 'JP', 'plain', [], []);
+db.exec("INSERT INTO categories VALUES ('c1', NULL), ('c2', NULL)"); // 検索計画（planQuery）が読む表。葉カテゴリの件数は直下の所属数と同じ
+db.exec("INSERT INTO category_counts SELECT category_id, 'all', COUNT(*) FROM site_categories GROUP BY category_id");
+db.exec("INSERT INTO category_counts SELECT sc.category_id, s.country_code, COUNT(*) FROM site_categories sc JOIN sites s ON s.id = sc.site_id GROUP BY sc.category_id, s.country_code");
 db.exec("INSERT INTO scope_counts SELECT 'all', COUNT(*) FROM sites UNION ALL SELECT country_code, COUNT(*) FROM sites GROUP BY country_code");
 const d = { prepare: sql => ({ bind: (...a) => ({ all: async () => ({ results: db.prepare(sql).all(...a) }), first: async () => db.prepare(sql).get(...a) }) }) };
 const ids = async o => (await querySites(d, o)).items.map(i => i.id).sort();

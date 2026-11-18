@@ -125,6 +125,46 @@ npx wrangler d1 execute mise --remote --file scripts/rebuild-category-counts.sql
 
 > 0022 は適用後に凍結する。カテゴリの木や集計の意味を変えるときは新しい migration で表とトリガを作り直す。
 
+## 検索計画と索引（0023〜0025）を本番へ適用する手順（Issue #126 第2段）
+
+**承認を取ってから実行する。** 0023（タグ日本語名の索引）・0024（タグ英語名の索引）・0025（活動の索引）は、`CREATE INDEX IF NOT EXISTS` だけの migration で、**1 本 1 索引**に分けてある。書き込み行数 = 索引の行数（0023 = `site_tags` の行数、0024 = `label_en` が NULL でない `site_tags` の行数、0025 = `sites` の行数。10 万件で各約 24 万・24 万・10 万行）。
+
+**書き込みの小分け（Free の 1 日 10 万行）**: 現在の件数なら 3 本まとめても小さい（本番の件数は適用前に下の手順 1 で調べる）。**合計が 1 日の枠（10 万行）に収まらないときは、1 日 1 本ずつ適用する**（枠を超えるとクエリが失敗する。失敗した本がどこまで取り消されるかは未検証なので、枠に収まる見積りで適用する）。`migrations apply` は未適用を全部流すので、1 本だけ流すには、その番号までの migration を並べた一時ディレクトリを `migrations_dir` にした一時設定を使う（0015 の節の 2 のプレビュー用一時設定と同じ考え方。リポジトリの外に置く）:
+
+```sh
+rm -rf /tmp/mise-step && mkdir -p /tmp/mise-step/migrations && for f in migrations/00{01..23}_*.sql; do ln -s "$(pwd)/$f" /tmp/mise-step/migrations/; done   # 0023 まで（次の日は {01..24}、その次は {01..25}）。毎回ディレクトリごと作り直す（前の日のリンクが残ると、適用したくない migration まで流れる）
+cat > /tmp/mise-step/wrangler.jsonc <<'JSON'
+{ "name": "mise-step-tmp", "compatibility_date": "2025-01-01",
+  "d1_databases": [{ "binding": "DB", "database_name": "mise", "database_id": "<wrangler.jsonc の database_id>", "migrations_dir": "migrations" }] }
+JSON
+npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
+```
+
+**順序: 索引（0023〜0025）が先、コードは後。** 索引なしでコードだけ先に出してはいけない（結果は同じだが、本番相当のデータ 2,158 件で全ページをたどる合計の読み取りが main の 4.3 倍になる。タグの該当数のプローブがページごとに `site_tags` を全件走査するため）。現在の本番の件数（`site_tags` 4,528 行・サイト 2,158 件）なら 3 本合計の書き込みは約 1.1 万行（`site_tags` 4,528 + 4,528 以下 + `sites` 2,158）で、**1 日に 3 本まとめて入れてよい**（小分けが要るのは件数が数万を超えてから）。0022 は適用済みであること（新しいコードは `category_counts` / `scope_counts` を読む）。
+
+1. **適用前**: 件数を調べて書き込み行数を見積もる: `npx wrangler d1 execute mise --remote --command "SELECT (SELECT COUNT(*) FROM sites) AS sites, (SELECT COUNT(*) FROM site_tags) AS tags, (SELECT COUNT(*) FROM site_tags WHERE label_en IS NOT NULL) AS tags_en"`。`npx wrangler d1 migrations list mise --remote` で未適用を確かめる。バックアップ（`d1 export` と Time Travel の bookmark）は 0022 と同じ手順。索引は派生物なので失っても正本は無事。
+2. **適用**: 上の手順（または `migrations apply`）。続けて**プレビュー DB も**（0015 の節の 2）。
+3. **索引の確認**: `npx wrangler d1 execute mise --remote --command "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_site_tags_label_ja','idx_site_tags_label_en','idx_sites_activity')"`（適用した本数ぶん出る）。
+4. **新しい形のクエリを本番で一度試す**。**D1 本番は複合 SELECT の項数上限が低く、ローカルで通るクエリが `too many terms in compound SELECT`（code 7500）で落ちた前例がある。** 第 2 段で足した形を、マージ前に本番の読み取りで通す。下は値をリテラルにした同じ形で、どれも `--remote` の SELECT だけ。**エラーなく結果が返れば合格**。`--json` を付けると `meta.rows_read` も見える（索引適用後は数百行以下のはず）。各行を `npx wrangler d1 execute mise --remote --command "<SQL>"` に渡す:
+   - タグの該当数のプローブ（`planQuery`。UNION は 2 項、`LIMIT` は複合の外側）:
+     `SELECT COUNT(*) AS n FROM (SELECT site_id FROM site_tags WHERE label_ja = '個人サイト' UNION SELECT site_id FROM site_tags WHERE label_en = '個人サイト' LIMIT 1001)`
+   - カテゴリの件数の点読み（スカラー副問い合わせ 3 つと `EXISTS`）:
+     `SELECT (SELECT n FROM category_counts WHERE category_id = 'libraries' AND scope = 'all') AS n_all, (SELECT n FROM category_counts WHERE category_id = 'libraries' AND scope = 'JP') AS n_scope, (SELECT n FROM scope_counts WHERE scope = 'JP') AS n_base, EXISTS (SELECT 1 FROM categories WHERE parent_id = 'libraries') AS has_child`
+   - 稀なタグを索引から引く一覧（`IN (… UNION …)`）:
+     `SELECT s.id FROM sites s WHERE s.id IN (SELECT site_id FROM site_tags WHERE label_ja = '個人サイト' UNION SELECT site_id FROM site_tags WHERE label_en = '個人サイト') ORDER BY s.bulk_import ASC, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id ASC LIMIT 41`
+   - カテゴリの EXISTS 形の一覧:
+     `SELECT s.id FROM sites s WHERE EXISTS (SELECT 1 FROM site_categories sc WHERE sc.category_id = 'libraries' AND sc.site_id = s.id) ORDER BY s.bulk_import ASC, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id ASC LIMIT 41`
+   - 上限付きの件数（`LIMIT 1001` の副問い合わせ）:
+     `SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s WHERE instr(s.search_text, 'a') > 0 LIMIT 1001)`
+   - カーソルの項（等値 + 範囲だけの単純な条件）:
+     `SELECT s.id FROM sites s WHERE (s.bulk_import = 0 AND datetime(COALESCE(s.source_updated_at, s.registered_at)) < '2026-01-01 00:00:00') ORDER BY s.bulk_import ASC, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id ASC LIMIT 41`
+   - ピックアップ（乱数の rowid をまとめて引く棄却抽選と、足りないときの補充）:
+     `SELECT MAX(rowid) AS m FROM sites` と
+     `SELECT s.id FROM sites s WHERE s.rowid IN (5, 100, 900, 1500, 2000) AND s.bulk_import = 0 AND (NULL IS NULL OR s.country_code = NULL)` と
+     `SELECT s.id FROM sites s WHERE s.bulk_import = 0 AND (NULL IS NULL OR s.country_code = NULL) AND s.id NOT IN ('a','b') ORDER BY RANDOM() LIMIT 1`
+5. **マージ後の確認**（自動デプロイ後）: `/api/sites?q=a`（`total` が 1000 以下・上限を超えるなら `total_capped` が `true`）、`/api/sites?tag=個人サイト`、`/api/sites?category=libraries`、`/api/sites`（`total` が `/api/scopes` の `total` と同じ・`total_capped` が `false`）、`/api/picks`（3 件・重複なし）、`/api/activity` がすべて 200。`next_cursor` を使った 2 ページ目も 200。
+6. **戻し方**: 索引は派生物。`DROP INDEX idx_site_tags_label_ja;`（0024・0025 も同様）で消せる（結果は同じだが、コードが索引前提の形のままだと読み取りが main より増える。消すなら先にコードを戻す）。`d1_migrations` には残るので同じ migration は再実行されない。入れ直すときは `CREATE INDEX` を直接実行する。
+
 ## プレビュービルド（ブランチごと）
 
 Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ダッシュボードで確認済み、2026-11-14: プレビューブランチのビルドも Build コマンドは「なし」、プレビューコマンドは `npx wrangler preview`、ルートディレクトリ `/`。プレビュー URL は現在「無効」で、ビルドは実行されるが URL は有効化するまで作られない）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
