@@ -19,7 +19,7 @@ TODAY = datetime.date(2026, 11, 18)
 def row(**kw):
     base = {'key': 'example.jp', 'title': 'たろうの部屋', 'spam_verdict': 'pass', 'confidence': 'high',
             'description_ja': '個人の趣味サイト。', 'description_en': 'A personal hobby site.', 'categories': json.dumps(['astronomy']),
-            'site_kind': 'individual', 'freshness': 'active', 'exempt': 'none', 'freshness_signal_at': '2026-05-01'}
+            'site_kind': 'individual', 'freshness': 'active', 'exempt': 'none', 'freshness_signal_at': '2026-05-01', 'freshness_source': 'header'}
     base.update(kw)
     return base
 
@@ -37,13 +37,32 @@ class Decide(unittest.TestCase):
             self.assertEqual(self.d(site_kind='business', freshness=fr, freshness_signal_at=None)[0], 'approve')
 
     def test_stale_individual_without_exemption_rejected(self):
+        # 決定論の日付が古く、© 年だけではなく、stale + exempt なし + high のときだけ却下
         self.assertEqual(self.d(freshness='stale', freshness_signal_at='2019-01-01'), ('reject_stale', 'stale_individual'))
-        self.assertEqual(self.d(freshness='unknown', freshness_signal_at=None), ('reject_stale', 'stale_individual'))
+        self.assertEqual(self.d(freshness='stale', freshness_signal_at='2019-01-01', freshness_source='footer_updated')[0], 'reject_stale')
+        self.assertEqual(self.d(freshness='stale', freshness_signal_at='2019-01-01', freshness_source='feed')[0], 'reject_stale')
+
+    def test_no_signal_is_a_doubt_not_evidence(self):
+        self.assertEqual(self.d(freshness='unknown', freshness_signal_at=None, freshness_source=None)[0], 'hold')
+        self.assertEqual(self.d(freshness='stale', freshness_signal_at=None, freshness_source=None), ('hold', 'stale_without_signal'))
+        self.assertEqual(self.d(freshness='unknown', freshness_signal_at='2019-01-01')[0], 'hold')   # unknown は日付があっても却下しない
+
+    def test_copyright_only_signal_is_weak(self):
+        self.assertEqual(self.d(freshness='stale', freshness_signal_at='2019-12-31', freshness_source='footer_copyright'), ('hold', 'weak_signal'))
+
+    def test_unknown_site_kind_is_not_taken_as_non_individual(self):
+        for kind in ('unknown', None):
+            self.assertEqual(self.d(site_kind=kind, freshness='unknown', freshness_signal_at=None)[0], 'hold')
+            self.assertEqual(self.d(site_kind=kind, freshness='stale', freshness_signal_at='2019-01-01')[0], 'hold')  # 個人と確定していないので却下しない
+            self.assertEqual(self.d(site_kind=kind, freshness=None, freshness_signal_at=None)[0], 'hold')
+            self.assertEqual(self.d(site_kind=kind, freshness='active')[0], 'approve')
+        for kind in ('business', 'organization', 'company'):
+            self.assertEqual(self.d(site_kind=kind, freshness='stale', freshness_signal_at='2019-01-01')[0], 'approve')
 
     def test_exempt_values(self):
         self.assertEqual(self.d(freshness='stale', exempt='rare_genre')[0], 'hold')
         self.assertEqual(self.d(freshness='unknown', exempt='notable')[0], 'hold')
-        self.assertEqual(self.d(freshness='stale', exempt='none', freshness_signal_at=None)[0], 'reject_stale')
+        self.assertEqual(self.d(freshness='stale', exempt='none', freshness_signal_at=None)[0], 'hold')
 
     def test_stale_but_unsure_goes_to_human(self):
         self.assertEqual(self.d(freshness='stale', confidence='medium', freshness_signal_at=None)[0], 'hold')

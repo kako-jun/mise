@@ -7,11 +7,15 @@
 decide(row) -> "approve" | "hold" | "reject_stale"  (explain(row) also returns the reason).
 
 - approve: spam_verdict pass, confidence high, both descriptions, a valid category, not public-body-like, and
-  (site_kind is not individual, or freshness is active and no deterministic signal contradicts it).
-- reject_stale: individual, freshness stale/unknown, exempt none (pass + high only; a doubtful call goes to a human).
+  (site_kind is business / organization / company, or freshness is active and no deterministic signal contradicts it).
+  site_kind individual / unknown / NULL count as a possible individual site: freshness must be active.
+- reject_stale: site_kind individual, freshness stale, exempt none, confidence high, AND a deterministic date
+  (freshness_signal_at) exists, is STALE_YEARS or more old, and is not only a copyright year (freshness_source
+  footer_copyright is weak). "unknown" and a missing date are doubts, not evidence of a stop: hold.
   review_state=rejected, review_reason=stale_individual. Reversible: review_state.py pending HOST.
 - hold: everything else (a human looks): suspect / medium / low, rare_genre / notable exemptions, public-body-like names,
-  a judgement made before #129 (freshness NULL) of an individual site, a contradicting deterministic signal.
+  a judgement made before #129 (freshness NULL) of a possible individual site, stale / unknown without a usable date,
+  a contradicting deterministic signal.
 Only review_state=pending rows are touched; a row a human approved / rejected is never changed. No network.
 """
 import argparse
@@ -74,22 +78,32 @@ def valid_categories(raw):
     return bool(judge.modernize_categories(ids, _VALID[0], _VALID[1]))
 
 
+NON_INDIVIDUAL = ("business", "organization", "company")  # site_kind confirmed as not an individual: freshness is not asked
+WEAK_SOURCES = ("footer_copyright",)  # a copyright year alone is weak: it is often left unchanged on a living site
+
+
 def explain(row, today=None):
-    """-> (decision, reason). row: a llm_judgement row (dict-like) plus optional title / freshness_signal_at from frontier."""
+    """-> (decision, reason). row: a llm_judgement row (dict-like) plus optional title / freshness_signal_at / freshness_source from frontier."""
     row = dict(row)
-    individual = row.get("site_kind") == "individual"
+    confirmed_other = row.get("site_kind") in NON_INDIVIDUAL  # individual / unknown / NULL are all treated as a possible individual site
     fr, ex = row.get("freshness"), row.get("exempt")
-    sig = row.get("freshness_signal_at")
+    sig, src = row.get("freshness_signal_at"), row.get("freshness_source")
     if row.get("spam_verdict") != "pass":
         return HOLD, "not_pass"
-    if individual and fr in ("stale", "unknown") and ex == "none":
-        if row.get("confidence") != "high":
+    if not confirmed_other and fr in ("stale", "unknown"):
+        # reject_stale needs evidence of a stop: an individual site, the LLM saying stale, no exemption, high confidence and
+        # a deterministic date that is old and not only a copyright year. "unknown" and a missing date are doubts, not evidence.
+        if ex != "none":
+            return HOLD, "stale_individual_exempt"
+        if row.get("site_kind") != "individual" or fr != "stale" or row.get("confidence") != "high":
             return HOLD, "stale_individual_unsure"
-        if sig and not signal_is_stale(sig, today):
+        if not sig:
+            return HOLD, "stale_without_signal"
+        if not signal_is_stale(sig, today):
             return HOLD, "signal_conflict"  # the LLM says stale but a deterministic date is recent
+        if src in WEAK_SOURCES:
+            return HOLD, "weak_signal"
         return REJECT_STALE, "stale_individual"
-    if individual and fr in ("stale", "unknown"):
-        return HOLD, "stale_individual_exempt"
     if row.get("confidence") != "high":
         return HOLD, "not_high_confidence"
     if not (row.get("description_ja") and row.get("description_en")):
@@ -98,7 +112,7 @@ def explain(row, today=None):
         return HOLD, "no_valid_category"
     if public_looking(row):
         return HOLD, "public_body"
-    if individual:
+    if not confirmed_other:
         if fr != "active":
             return HOLD, "freshness_unjudged"
         if sig and signal_is_stale(sig, today):
@@ -112,7 +126,7 @@ def decide(row, today=None):
 
 def load_rows(db):
     return db.execute(
-        "SELECT j.*, f.title AS title, f.freshness_signal_at AS freshness_signal_at "
+        "SELECT j.*, f.title AS title, f.freshness_signal_at AS freshness_signal_at, f.freshness_source AS freshness_source "
         "FROM llm_judgement j LEFT JOIN frontier f ON f.key = j.key WHERE j.review_state='pending' ORDER BY j.key").fetchall()
 
 
