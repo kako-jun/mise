@@ -134,7 +134,7 @@ class Sql(unittest.TestCase):
                 self.assertIn('reach', names, r['code'])
     def test_credit_does_not_cite_jlis(self):
         root = LEDGER.parent.parent.parent
-        for f in ('public/app.js', 'public/index.html'):
+        for f in ('public/app.js', 'public/index.html', 'public/licenses/public-data-credits.txt'):
             self.assertNotIn('J-LIS', (root / f).read_text(encoding='utf-8'), f)
     def test_listed_rows_have_ok_reachability(self):
         ev = {e['code']: e for e in csv.DictReader(open(LEDGER.with_name('evidence') / 'reachability.csv', encoding='utf-8'))}

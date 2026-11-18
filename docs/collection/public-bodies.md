@@ -90,12 +90,12 @@ mismatch の多くは「旧ドメイン（J-LIS）と新ドメイン `.lg.jp`（
 
 | 出典 | 条件（一次資料） | 扱い |
 |---|---|---|
-| 総務省 全国地方公共団体コード | 総務省サイトの著作権ページ（https://www.soumu.go.jp/menu_kyotsuu/policy/tyosaku.html）が公共データ利用規約（第1.0版）を適用。[規約本文](https://www.digital.go.jp/resources/open_data/public_data_license_v1.0): 「複製、公衆送信、翻訳・変形等の翻案等、自由に利用できます」「商用利用も可能です」「利用する際は出典を記載」「編集・加工等して利用する場合は…編集・加工等を行ったこと及びその主体を記載」。CC BY 4.0 と互換 | 利用可。ページ下部に出典と加工の旨を日英で表示（`public/index.html` の footer、`public/app.js` の `credit`） |
+| 総務省 全国地方公共団体コード | 総務省サイトの著作権ページ（https://www.soumu.go.jp/menu_kyotsuu/policy/tyosaku.html）が公共データ利用規約（第1.0版）を適用。[規約本文](https://www.digital.go.jp/resources/open_data/public_data_license_v1.0): 「複製、公衆送信、翻訳・変形等の翻案等、自由に利用できます」「商用利用も可能です」「利用する際は出典を記載」「編集・加工等して利用する場合は…編集・加工等を行ったこと及びその主体を記載」。CC BY 4.0 と互換 | 利用可。出典と加工の旨は画面に出さず、画面外の静的ファイル `public/licenses/public-data-credits.txt`（日英）に記載（#111） |
 | e-Gov 政府機関関連情報 | https://www.e-gov.go.jp/terms: 「権利表記の記載がない限り『公共データ利用規約（第1.0版）』（PDL1.0）が適用」「出典を記載」「編集・加工した場合はその旨と主体を記載」。ロゴ等は対象外 | 同上 |
 | Wikidata | https://www.wikidata.org/wiki/Wikidata:Licensing: 構造化データは CC0（パブリックドメイン） | 利用可。出典表示は任意だが併記 |
 | J-LIS 全国自治体マップ検索 | 第1段で「出所明示で引用可・改変不可・営利目的は事前相談」と読んだ。第2段は本環境から 403 で一次資料を再確認できていない | **出典にしない**（kako-jun 承認、案 c）。build は他出典のホストと一致するかの照合にだけ使い、`sources`・footer・README の出典に載せない。掲載 URL は常に非 J-LIS の出典（e-Gov > Wikidata）か、サイト自身の最終 URL（到達確認）から取る（J-LIS の URL は同じホストの他の候補が無いときだけ使う。テストが、自治体の掲載 URL のパスが Wikidata 自身のものを除いてすべて `/` であることを検査する）。J-LIS の生データが取れず build を再実行できない間の補正は `evidence/url-overrides.csv` と `resolve.py overrides` で行う。J-LIS 固有のデータ（名称・URL の一覧）は台帳に転載しない |
 
-PDL1.0 は出典記載に加え、加工した旨の記載を求める。台帳は出典を `sources` 列に持ち、ページ側の表示は footer の 1 行で足りると判断した（個別ページごとの表示は行っていない）。
+PDL1.0 は出典記載に加え、加工した旨の記載を求める。台帳は出典を `sources` 列に持ち、出典と加工の旨は画面ではなく静的ファイル `public/licenses/public-data-credits.txt` に置く（画面の footer からは #111 で削除。フォントやアイコンのライセンスと同じ置き場）。
 
 ## 既知の限界
 
@@ -104,4 +104,4 @@ PDL1.0 は出典記載に加え、加工した旨の記載を求める。台帳�
 - 各団体のトップページへは、mismatch の解消に必要な一部を除いてまだアクセスしていない（到達性、title/meta description、リダイレクト先は次段）。取得するときは robots.txt 遵守・UA `MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)`・1 団体 1 リクエスト・待機あり・並列なし。
 - J-LIS のサーバーは第1段では `robots.txt` に 400 を返し、第2段（2026-11-14）には本環境からのページ取得自体が 403 になった。台帳の `sources` には J-LIS を記録しない。
 - 取得先は名簿の出典サイト（総務省・e-Gov・Wikidata。J-LIS は第1段の照合のみ）であり、団体のサイトではない。UA を明示し、直列・1 秒待機・合計数十リクエストに限る。出典サイトの robots.txt は取得前に確認する運用とし（e-Gov は名簿ページを禁止していない）、禁止があれば取得しない。Wikidata は公式の SPARQL エンドポイントを使う。
-- 公共データ利用規約（総務省・e-Gov）の出典記載は、台帳を元に公開ページを作るときにそのページ側にも必要。台帳の `sources` 列が出典名と取得日を持つ。
+- 公共データ利用規約（総務省・e-Gov）の出典記載は、台帳を元に公開ページを作るときにそのページ側にも必要（現状は `public/licenses/public-data-credits.txt`）。台帳の `sources` 列が出典名と取得日を持つ。
