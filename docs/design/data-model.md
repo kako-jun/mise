@@ -45,7 +45,12 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
   - `scope_counts(scope, n)`: 範囲ごとのサイト数（`/api/scopes`・`/api/activity` の `total`・範囲だけを指定した `/api/sites` の `total`）。`n = 0` の行は読み側が除く。
 - **読み取り**: `loadCategories`（`/api/categories`・SSR・sitemap）は `categories LEFT JOIN category_counts`、`loadScopes` は `scope_counts`。sitemap は範囲ごとに数え直さず、`category_counts` の `n > 0` を 1 回で読む。`/api/sites` の `total` は、カテゴリ（**直下のみ**。集計表は子孫を含むので使えない）・`q`・`tag` があるときは従来どおり数える。
 - **トリガ**（書き込み量の見積りは migration 冒頭のコメント）: `site_categories` の INSERT / DELETE（「そのサイトの、祖先の部分木に入る所属行がちょうど 1 件」の祖先だけ +1、「消した後に 0 件」の祖先だけ -1 にして二重カウントを避ける）・UPDATE（旧・新の祖先を再計算）、`sites` の INSERT / DELETE / `country_code` の UPDATE、`categories` の INSERT / `parent_id` の UPDATE（閉包表を付け替え、旧親・新親の祖先の件数を再計算）/ DELETE。1 サイトの投入は通常 +3〜+14 行の書き込み（国あり・カテゴリ 1〜3 個）。夜間の一括投入（`export_approved_sql.py` の `INSERT` と `--update-categories` の `DELETE` + `INSERT OR IGNORE`）でも同じトリガが働く。
-- **注意**: `INSERT OR REPLACE` で `sites` / `site_categories` を書き換えると、DELETE トリガは（再帰トリガが無効な既定では）発火せず集計がずれる。`INSERT OR IGNORE` か `DELETE` + `INSERT` を使う。カテゴリの木を変える migration は `categories` を INSERT / UPDATE / DELETE すれば閉包表と件数が追従する。
+- **作り直し**: ずれたら `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 の初期集計と同じ `INSERT`）で正本から作り直せる。手順・戻し方・一致確認のクエリは `docs/operations/deploy.md`。
+- **カテゴリの木を変えるときの制約**（migration で `categories` を INSERT / UPDATE / DELETE すれば閉包表と件数は追従するが、次を守る）:
+  - **親を先に INSERT する**（子の INSERT トリガは、親の閉包表の行を引いて祖先を作るため。親が無いと子の祖先が欠ける）。
+  - **カテゴリ id の変更（`UPDATE categories SET id`）は非対応**（閉包表・件数表・`site_categories` が旧 id を指したままになる）。作り直す場合は新 id を INSERT して所属を移し、旧 id を DELETE する。
+  - **親の変更や `site_categories` 行の UPDATE は、旧親・新親の祖先の部分木を数え直す**ので、10 万件規模の一括移行（#127 第2段など）では重い。大量の付け替えは、トリガに任せず、`scripts/rebuild-category-counts.sql` で最後に 1 回作り直す形を検討する。
+  - **`INSERT OR REPLACE` は使わない**（`sites` / `site_categories` / `categories` のどれも。再帰トリガが無効な既定（`recursive_triggers=0`）では、REPLACE が消す行の DELETE トリガが発火せず、集計がずれる）。`INSERT OR IGNORE` か `DELETE` + `INSERT`、`ON CONFLICT DO UPDATE` を使う。
 - 効果（10 万件、ローカル D1 の実測）: `/api/categories` 82 万 → 459 行、トップ（SSR）112 万 → 499 行、sitemap 1,670 万 → 3,262 行。
 
 ### カテゴリの木（#114 第1段、0021）
