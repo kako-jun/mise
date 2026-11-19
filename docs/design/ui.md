@@ -97,7 +97,7 @@
 
 ## サムネイル
 
-縦フィード（`?view=feed`）のカードに出す、サイトの最初の画面の縮小画像（幅 320px の横長 WebP。`sites.thumb_path`）。API の `thumb_url`（`/thumb/<hash>.webp`）を同一オリジンの絶対パスとして読み、`thumb_lqip`（極小プレースホルダ）を先にぼかして出して画像が届いたら入れ替える（フィードの試作は既にこの形で読む。`public/feed.js`）。`thumb_url` が無いサイトは、従来どおりサイトごとの代替ビジュアル（三毛猫の模様）のまま。**取れなかったサイトに、サムネイルとしての代替画像は作らない**（ファビコンと同じ）。撮影・更新は [collection/thumbnails.md](../collection/thumbnails.md)、配信は [architecture.md](architecture.md)。カードの見た目の改善は #52・#160。
+縦フィード（`?view=feed`）のカードに出す、サイトの最初の画面の縮小画像（幅 320px の横長 WebP。`sites.thumb_path`）。API の `thumb_url`（`/thumb/<k>.webp?v=<撮影時刻由来>`。`<k>` はサイト ID から決まる固定のキー）を同一オリジンの絶対パス（`?v=` 付きを含む）として読み、`thumb_lqip`（極小プレースホルダ）を先にぼかして出して画像が届いたら入れ替える（フィードの試作は既にこの形で読む。`public/feed.js`）。`thumb_url` が無いサイトは、従来どおりサイトごとの代替ビジュアル（三毛猫の模様）のまま。**取れなかったサイトに、サムネイルとしての代替画像は作らない**（ファビコンと同じ）。撮影・更新は [collection/thumbnails.md](../collection/thumbnails.md)、配信は [architecture.md](architecture.md)。カードの見た目の改善は #52・#160。
 
 ## アプリとして追加（PWA）
 

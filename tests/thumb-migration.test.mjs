@@ -6,7 +6,8 @@ import { querySites } from '../src/sites.js';
 
 // migration 0028（#130）: sites にサムネイルの列を足す。FTS5 の外部コンテンツ表・集計トリガ・並びの索引に影響しないこと。
 const MIG = new URL('../migrations/', import.meta.url);
-const H = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+import { createHash } from 'node:crypto';
+const H = createHash('sha256').update('a').digest('hex').slice(0, 32);   // サイト a のキー（sha256(site_id) の先頭 32 桁）
 const LQIP = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4IA4AAAAwAQCdASoQAAoAAUAmJZQAA3AA/v3AgAA=';
 const mkDb = () => {
   const db = new DatabaseSync(':memory:');
@@ -50,16 +51,17 @@ test('0028: thumb 列の UPDATE は他の表・索引を書かない（total_cha
 
 test('API: thumb_url / thumb_lqip を返す。列が NULL・形が違う値・画像なしのプレースホルダは null', async () => {
   const db = mkDb(), d = wrap(db);
-  const ins = db.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,country_code,thumb_path,thumb_lqip) VALUES (?,?,?,?,?,?,?,?)');
-  ins.run('a', 'https://a.example', 'a', 'd', '2026-01-01T00:00:00Z', 'JP', `${H}.webp`, LQIP);
-  ins.run('b', 'https://b.example', 'b', 'd', '2026-01-02T00:00:00Z', 'JP', null, null);
-  ins.run('c', 'https://c.example', 'c', 'd', '2026-01-03T00:00:00Z', 'JP', 'legacy.png', LQIP);
-  ins.run('d', 'https://d.example', 'd', 'd', '2026-01-04T00:00:00Z', 'JP', `${H}.webp`, 'javascript:alert(1)');
+  const ins = db.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,country_code,thumb_path,thumb_lqip,thumb_captured_at) VALUES (?,?,?,?,?,?,?,?,?)');
+  const T = '2026-11-20T03:00:00Z';
+  ins.run('a', 'https://a.example', 'a', 'd', '2026-01-01T00:00:00Z', 'JP', `${H}.webp`, LQIP, T);
+  ins.run('b', 'https://b.example', 'b', 'd', '2026-01-02T00:00:00Z', 'JP', null, null, null);
+  ins.run('c', 'https://c.example', 'c', 'd', '2026-01-03T00:00:00Z', 'JP', 'legacy.png', LQIP, T);
+  ins.run('d', 'https://d.example', 'd', 'd', '2026-01-04T00:00:00Z', 'JP', `${H}.webp`, 'javascript:alert(1)', null);
   const by = Object.fromEntries((await querySites(d, { cc: null, region: null, category: null, q: '', tags: [], limit: 10, cursor: null, offset: 0 })).items.map(i => [i.id, i]));
-  assert.equal(by.a.thumb_url, `/thumb/${H}.webp`); assert.equal(by.a.thumb_lqip, LQIP);
+  assert.equal(by.a.thumb_url, `/thumb/${H}.webp?v=${Math.floor(Date.parse(T) / 1000).toString(36)}`); assert.equal(by.a.thumb_lqip, LQIP);
   assert.equal(by.b.thumb_url, null); assert.equal(by.b.thumb_lqip, null);
   assert.equal(by.c.thumb_url, null); assert.equal(by.c.thumb_lqip, null);
-  assert.equal(by.d.thumb_url, `/thumb/${H}.webp`); assert.equal(by.d.thumb_lqip, null);
-  assert.ok(!('thumb_path' in by.a));
+  assert.equal(by.d.thumb_url, `/thumb/${H}.webp`); assert.equal(by.d.thumb_lqip, null);   // 撮影時刻が無ければ v なし
+  assert.ok(!('thumb_path' in by.a)); assert.ok(!('thumb_captured_at' in by.a));
   assert.ok('favicon_url' in by.a);
 });

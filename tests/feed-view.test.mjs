@@ -48,7 +48,7 @@ test('feed.js: public/ に画像を置かない規約(.webp は R2 経由)のた
 
 test('thumbOf: 同一オリジンの絶対パスだけ(//host・/\\host・https・data は不可)', () => {
   const O = 'https://mise.example';
-  for (const ok of ['/thumb/a.webp', '/x/y.png']) assert.equal(lib.thumbOf(ok, O), ok, ok);
+  for (const ok of ['/thumb/a.webp', '/thumb/a.webp?v=1x2y', '/x/y.png']) assert.equal(lib.thumbOf(ok, O), ok, ok);
   for (const ng of ['https://evil.example/a.png', '//evil.example/a.png', '/\\evil.example/a.png', '/\\\\evil.example/a.png', 'data:image/png;base64,AA', 'javascript:alert(1)', 'a.png', '', null, undefined, 5, '/a\n.png']) assert.equal(lib.thumbOf(ng, O), null, String(ng));
 });
 
