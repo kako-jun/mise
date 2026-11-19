@@ -474,7 +474,8 @@ class Night:
         steps.append(("sql", ["--db", fdb, "sql", "--since", a.date + "T00:00:00Z", "--out", self.p("favicons.sql")]))
         notes = []
         for name, argv in steps:
-            rc, out = run_cmd([PY, script, *argv])
+            # 夜間ジョブ本体は Pillow を持たないので、favicon.py だけ --with pillow で起動する(無ければ favicon.py が非 0 で終わり、ここで失敗として残る)
+            rc, out = run_cmd(["uv", "run", "--with", "pillow", "python3", script, *argv])
             if rc != 0:
                 self.status["guards"].append(f"favicon {name} 失敗(続行)")
                 return {"note": f"{name}: 失敗(exit {rc}、続行): " + out.strip()[-150:]}

@@ -1,7 +1,10 @@
 """ファビコン取得(#125)。ネットワークは fetcher.http_get の差し替えで全てモックする。実行: uv run --with pillow python3 -m unittest tests.test_favicon"""
 import datetime
 import io
+import os
 import sqlite3
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -69,6 +72,34 @@ class Normalize(unittest.TestCase):
             with self.assertRaises(favicon.IconError, msg=code) as c:
                 favicon.normalize_icon(data, 'image/png')
             self.assertEqual(c.exception.code, code)
+
+    @staticmethod
+    def ico_with_png(declared, png):
+        return struct.pack('<HHH', 0, 1, 1) + struct.pack('<BBBBHHII', declared, declared, 0, 0, 1, 32, len(png), 22) + png
+
+    def test_ico_declared_small_but_embedded_huge_rejected(self):
+        big = img(size=(2500, 2500), color=(1, 2, 3, 255))
+        with self.assertRaises(favicon.IconError) as c:
+            favicon.normalize_icon(self.ico_with_png(16, big), 'image/x-icon')
+        self.assertIn(c.exception.code, ('too_large_dim', 'bad_image'))
+
+    def test_embedded_actual_aspect_used(self):
+        out = favicon.normalize_icon(self.ico_with_png(32, img(size=(64, 32))), 'image/x-icon')   # 宣言 32x32、実寸 64x32
+        im = Image.open(io.BytesIO(out)).convert('RGBA')
+        self.assertEqual(im.size, (32, 32))
+        self.assertEqual(im.getpixel((16, 0))[3], 0)      # 上下は余白
+        self.assertEqual(im.getpixel((0, 16))[3], 255)    # 左右は絵が端まで
+
+    def test_disallowed_format_rejected_at_open(self):
+        b = io.BytesIO(); Image.new('RGB', (32, 32), (1, 2, 3)).save(b, 'TIFF')
+        with self.assertRaises(favicon.IconError) as c:
+            favicon.normalize_icon(b.getvalue(), 'image/tiff')
+        self.assertEqual(c.exception.code, 'bad_image')
+
+    def test_max_image_pixels_restored(self):
+        before = Image.MAX_IMAGE_PIXELS
+        favicon.normalize_icon(img())
+        self.assertEqual(Image.MAX_IMAGE_PIXELS, before)
 
     def test_deterministic_name(self):
         a = favicon.icon_name(favicon.normalize_icon(img(size=(64, 64))))
@@ -159,8 +190,15 @@ class Net(unittest.TestCase):
         self.assertEqual(self.fetch()['status'], 'none')
         self.assertFalse(any(u.endswith('/i.png') for u, _ in self.calls))
 
-    def test_ssrf_private_address_in_link(self):
+    def test_ssrf_private_link_skipped_then_favicon_ico_tried(self):
         self.page('<link rel=icon href="http://127.0.0.1/i.png">', '<link rel=icon href="http://10.0.0.5/j.png">')
+        self.put('https://a.example/favicon.ico', body=img())
+        r = self.fetch()
+        self.assertEqual((r['status'], r['icon_url']), ('ok', 'https://a.example/favicon.ico'))   # 内部アドレスの候補は試さず次へ
+
+    def test_all_candidates_blocked_is_error(self):
+        self.page('<link rel=icon href="http://127.0.0.1/i.png">')
+        self.res['https://a.example/favicon.ico'] = (302, {'location': 'http://10.0.0.5/x'}, b'')
         r = self.fetch()
         self.assertEqual((r['status'], r['error']), ('error', 'ssrf_blocked'))
 
@@ -202,6 +240,21 @@ class Net(unittest.TestCase):
         self.put('https://a.example/i.png', body=img())
         self.fetch()
         self.assertTrue(self.sleeps and all(s >= 1.9 for s in self.sleeps))
+
+    def test_top_page_5xx_is_transient_and_skips_favicon_ico(self):
+        self.res['https://a.example/'] = (503, {}, b'')
+        self.put('https://a.example/favicon.ico', body=img())
+        self.assertEqual(self.fetch(), {'status': 'error', 'error': 'http_503'})
+        self.assertFalse(any(u.endswith('/favicon.ico') for u, _ in self.calls))
+
+    def test_conditional_headers_only_on_first_hop_and_crlf_stripped(self):
+        self.res['https://a.example/i.png'] = (302, {'location': 'https://a.example/j.png'}, b'')
+        self.put('https://a.example/j.png', body=img())
+        r = self.fetch({'icon_url': 'https://a.example/i.png', 'etag': '"v\r\nX-Evil: 1"'})
+        self.assertEqual(r['status'], 'ok')
+        sent = dict(self.calls)
+        self.assertEqual(sent['https://a.example/i.png'], {'If-None-Match': '"vX-Evil: 1"'})
+        self.assertEqual(sent['https://a.example/j.png'], {})
 
     def test_connect_error_is_transient(self):
         self.res['https://a.example/'] = fetcher.FetchError('connect', 'timed out')
@@ -276,6 +329,57 @@ class Ledger(unittest.TestCase):
         self.assertEqual(favicon.import_from_recrawl(self.db, p), 1)
         self.assertIsNotNone(self.row('r1')); self.assertIsNone(self.row('r2')); self.assertIsNone(self.row('r3'))
 
+    def test_same_hash_but_missing_in_store_is_replaced(self):
+        favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
+        name = self.row('s1')['icon_hash']
+        (Path(self.tmp.name) / 'icons' / name).unlink()
+        self.assertEqual(favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0), 'same')
+        self.assertTrue(self.store.exists(name))
+
+    def test_304_but_missing_in_store_refetches_unconditionally(self):
+        favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
+        name = self.row('s1')['icon_hash']
+        (Path(self.tmp.name) / 'icons' / name).unlink()
+        self.db.execute("UPDATE favicons SET next_check_at='2099-01-01T00:00:00Z' WHERE site_id='s2'")
+        seen = []
+        class S:
+            def get(s, url, max_body, headers=None, same_site_only=False):
+                seen.append(dict(headers or {}))
+                if headers:
+                    return 304, {}, b'', url
+                return 200, {'content-type': 'image/png'}, img(color=(200, 0, 0, 255)), url
+        favicon.run(self.db, self.store, T0 + datetime.timedelta(days=31), 10, session=S(), log=lambda m: None)
+        self.assertEqual(seen[0], {'If-None-Match': 'e'}); self.assertEqual(seen[1], {})
+        self.assertTrue(self.store.exists(name))
+
+    def test_store_failure_is_per_site(self):
+        class Bad(favicon.LocalDirStore):
+            def put(self, name, data):
+                raise OSError('disk full')
+        class S:
+            def get(s, url, max_body, headers=None, same_site_only=False):
+                if url.endswith('/'):
+                    return 200, {'content-type': 'text/html'}, html('<link rel=icon href="/i.png">'), url
+                return 200, {'content-type': 'image/png'}, img(), url
+        counts = favicon.run(self.db, Bad(self.tmp.name), T0, 10, session=S(), log=lambda m: None)
+        self.assertEqual(counts, {'error': 2})
+        self.assertEqual(self.row('s1')['status'], 'store_failed')
+        self.assertIsNone(self.row('s1')['icon_hash'])
+
+    def test_import_error_is_not_swallowed(self):
+        class S:
+            def get(s, *a, **k):
+                raise ModuleNotFoundError('PIL')
+        with self.assertRaises(ImportError):
+            favicon.run(self.db, self.store, T0, 10, session=S(), log=lambda m: None)
+
+    def test_readonly_commands_create_nothing(self):
+        d = Path(self.tmp.name) / 'new'
+        db = d / 'f.sqlite'
+        for argv in (['run'], ['sql'], ['status']):
+            self.assertEqual(favicon.main(['--db', str(db), *argv]), 0)
+        self.assertFalse(d.exists())
+
     def test_run_end_to_end_mocked(self):
         class S:
             def get(s, url, max_body, headers=None, same_site_only=False):
@@ -289,6 +393,31 @@ class Ledger(unittest.TestCase):
         self.assertEqual(counts, {'changed': 1, 'error': 1})
         self.assertEqual(self.row('s1')['status'], 'ok')
         self.assertEqual(self.row('s2')['status'], 'http_404')
+
+
+class RealLaunch(unittest.TestCase):
+    """夜間ジョブと同じ起動方法(uv run)で、Pillow の有無による挙動を実際に確かめる。"""
+    SCRIPT = str(ROOT / 'scripts' / 'favicon' / 'favicon.py')
+
+    def uv(self, *args, with_pillow):
+        cmd = ['uv', 'run'] + (['--with', 'pillow'] if with_pillow else []) + ['python3', *args]
+        env = {k: v for k, v in os.environ.items() if k not in ('VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME') and not k.startswith('UV_')}   # 外側の uv run の環境を持ち込まない
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=str(ROOT), env=env)
+
+    def test_pillow_importable_with_the_nightly_launch(self):
+        r = self.uv('-c', 'import PIL.Image', with_pillow=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_apply_without_pillow_exits_nonzero_not_silently(self):
+        with tempfile.TemporaryDirectory() as t:
+            r = self.uv(self.SCRIPT, '--db', str(Path(t) / 'f.sqlite'), 'run', '--apply', '--limit', '1', with_pillow=False)
+            self.assertEqual(r.returncode, 3)
+            self.assertIn('Pillow', r.stderr)
+
+    def test_apply_with_pillow_runs(self):
+        with tempfile.TemporaryDirectory() as t:
+            r = self.uv(self.SCRIPT, '--db', str(Path(t) / 'f.sqlite'), 'run', '--apply', '--limit', '1', '--store-dir', str(Path(t) / 's'), with_pillow=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@ import io
 import sqlite3
 import sys
 import time
+import warnings
 import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
@@ -149,6 +150,14 @@ def icon_candidates(html, page_url):
 
 # ---- 画像の検証と縮小 ----
 
+def _check_dims(size):
+    w, h = size
+    if min(w, h) < MIN_SIDE:
+        raise IconError('too_small', f'{w}x{h}')
+    if max(w, h) > MAX_SIDE:
+        raise IconError('too_large_dim', f'{w}x{h}')
+
+
 def normalize_icon(data, content_type=''):
     """画像バイト列を検証し、32x32 の可逆 WebP にして返す。不採用なら IconError。"""
     from PIL import Image
@@ -162,24 +171,25 @@ def normalize_icon(data, content_type=''):
         raise IconError('not_image', 'empty')
     if len(data) > MAX_ICON_BYTES:
         raise IconError('too_large', f'{len(data)} bytes')
-    Image.MAX_IMAGE_PIXELS = MAX_SIDE * MAX_SIDE * 4
+    saved_max = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = MAX_SIDE * MAX_SIDE * 4   # この関数の中だけ(終わったら戻す)
     try:
-        im = Image.open(io.BytesIO(data))
-        if im.format not in ALLOWED_FORMATS:
-            raise IconError('unsupported_format', str(im.format))
-        if im.format == 'ICO' and im.info.get('sizes'):
-            im.size = max(im.info['sizes'])   # 入っている中で最大の絵を使う
-        w, h = im.size
-        if min(w, h) < MIN_SIDE:
-            raise IconError('too_small', f'{w}x{h}')
-        if max(w, h) > MAX_SIDE:
-            raise IconError('too_large_dim', f'{w}x{h}')
-        im.load()
-        im = im.convert('RGBA')
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)   # 警告も拒否扱い
+            im = Image.open(io.BytesIO(data), formats=sorted(ALLOWED_FORMATS))
+            if im.format == 'ICO' and im.info.get('sizes'):
+                im.size = max(im.info['sizes'])   # 入っている中で最大の絵を使う
+            _check_dims(im.size)
+            im.load()
+            _check_dims(im.size)   # 埋め込み画像の実寸で取り直す(宣言サイトと違うことがある)
+            im = im.convert('RGBA')
     except IconError:
         raise
     except Exception as e:
         raise IconError('bad_image', f'{type(e).__name__}')
+    finally:
+        Image.MAX_IMAGE_PIXELS = saved_max
+    w, h = im.size
     if im.getchannel('A').getextrema()[1] == 0:
         raise IconError('blank')
     scale = ICON_SIZE / max(w, h)
@@ -215,7 +225,7 @@ class Session:
     def get(self, url, max_body, headers=None, same_site_only=False):
         """戻り: (status, headers, body, final_url)。拒否・失敗は IconError。"""
         first = urllib.parse.urlsplit(url).hostname
-        for _ in range(MAX_REDIRECTS + 1):
+        for hop in range(MAX_REDIRECTS + 1):
             parts = urllib.parse.urlsplit(url)
             origin = f'{parts.scheme}://{parts.netloc}'
             try:
@@ -225,7 +235,7 @@ class Session:
                 if not ok:
                     raise IconError('robots_disallowed')
                 self.wait(parts.hostname, delay)
-                status, hdrs, body = fetcher.http_get(url, max_body, headers)
+                status, hdrs, body = fetcher.http_get(url, max_body, headers if hop == 0 else None)   # 条件付きヘッダは元 URL だけ
             except fetcher.FetchError as e:
                 raise IconError(e.code, e.detail)
             if 300 <= status < 400 and hdrs.get('location'):
@@ -240,6 +250,10 @@ class Session:
         raise IconError('too_many_redirects')
 
 
+def _clean(v):
+    return str(v).replace('\r', '').replace('\n', '')   # ヘッダ注入よけ(サーバーが返した値を curl へ戻すため)
+
+
 def fetch_favicon(session, site_url, prev=None):
     """1 サイト分。戻り dict: status(ok|unchanged|none|error), icon_url, etag, last_modified, webp, error。"""
     prev = prev or {}
@@ -247,9 +261,9 @@ def fetch_favicon(session, site_url, prev=None):
     if prev.get('icon_url'):
         cond = {}
         if prev.get('etag'):
-            cond['If-None-Match'] = prev['etag']
+            cond['If-None-Match'] = _clean(prev['etag'])
         if prev.get('last_modified'):
-            cond['If-Modified-Since'] = prev['last_modified']
+            cond['If-Modified-Since'] = _clean(prev['last_modified'])
         try:
             status, hdrs, body, final = session.get(prev['icon_url'], MAX_ICON_BYTES + 1, cond)
             if status == 304:
@@ -264,23 +278,28 @@ def fetch_favicon(session, site_url, prev=None):
         status, hdrs, body, final = session.get(site_url, fetcher.MAX_BODY, same_site_only=True)
     except IconError as e:
         return {'status': 'error', 'error': e.code}
+    if status >= 500 or status == 429:
+        return {'status': 'error', 'error': f'http_{status}'}   # 一時的。/favicon.ico へは進まない
     if status == 200 and 'html' in hdrs.get('content-type', 'html').lower():
         urls = icon_candidates(fetcher.decode_body(body, hdrs), final)
     else:
         parts = urllib.parse.urlsplit(final)
         urls = [f'{parts.scheme}://{parts.netloc}/favicon.ico']
-    last_err = 'no_icon'
+    last_err = 'no_icon'; blocked = []
     for u in urls[:MAX_CANDIDATES]:
         try:
             st, h, b, fin = session.get(u, MAX_ICON_BYTES + 1)
             if st != 200:
-                last_err = last_err if last_err != 'no_icon' else f'http_{st}'; continue
+                last_err = last_err if last_err != 'no_icon' else f'http_{st}'
+                blocked.append(False); continue
             webp = normalize_icon(b, h.get('content-type', ''))
             return {'status': 'ok', 'icon_url': fin, 'etag': h.get('etag'), 'last_modified': h.get('last-modified'), 'webp': webp}
         except IconError as e:
             last_err = e.code if last_err == 'no_icon' else last_err
-            if e.code in ('ssrf_blocked', 'robots_unavailable'):
-                return {'status': 'error', 'error': e.code}
+            blocked.append(e.code in ('ssrf_blocked', 'robots_unavailable'))
+            continue
+    if blocked and all(blocked):   # 全候補が内部アドレス・robots 取得不能で試せなかった: 取れなかったのでなく保留
+        return {'status': 'error', 'error': last_err}
     return {'status': 'none', 'error': last_err}
 
 
@@ -296,6 +315,14 @@ def connect(path):
         path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path)); db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    return db
+
+
+def open_readonly(path):
+    """読み取り専用で開く(台帳もディレクトリも作らない)。無ければ None。"""
+    if not Path(path).is_file():
+        return None
+    db = sqlite3.connect(f'file:{path}?mode=ro', uri=True); db.row_factory = sqlite3.Row
     return db
 
 
@@ -335,8 +362,7 @@ def record(db, store, row, res, now):
     elif res['status'] == 'ok':
         name = icon_name(res['webp'])
         out = 'same' if row['icon_hash'] == name else 'changed'
-        if out == 'changed':
-            store.put(name, res['webp'])   # 既に同じ画像(他サイトの同一アイコン)があれば書かれない
+        store.put(name, res['webp'])   # 既にあれば書かれない(同じ画像・他サイトの同一アイコン)。保存先から消えていれば同じハッシュでも置き直す
         db.execute("UPDATE favicons SET icon_url=?, etag=?, last_modified=?, icon_hash=?, status='ok', consecutive_failures=0, last_checked_at=?, next_check_at=?, changed_at=COALESCE(?, changed_at) WHERE site_id=?",
                    (res['icon_url'], res.get('etag'), res.get('last_modified'), name, t, _plus(now, OK_INTERVAL_DAYS), t if out == 'changed' else None, sid))
     elif res['status'] == 'none':
@@ -358,9 +384,18 @@ def run(db, store, now=None, limit=50, session=None, log=print):
     for row in due_sites(db, now, limit):
         try:
             res = fetch_favicon(session, row['url'], dict(row))
+            if res['status'] == 'unchanged' and row['icon_hash'] and not store.exists(row['icon_hash']):
+                # 304 だが保存先に画像が無い(消えた・別の保存先へ移した): 条件なしで取り直す
+                res = fetch_favicon(session, row['url'], dict(row, etag=None, last_modified=None))
+        except ImportError:
+            raise   # Pillow が無い等は 1 サイトの失敗ではない。握りつぶさず全体を止める
         except Exception as e:   # 1 サイトの想定外の例外で全体を止めない
             res = {'status': 'error', 'error': type(e).__name__}
-        out = record(db, store, row, res, now)
+        try:
+            out = record(db, store, row, res, now)
+        except OSError as e:   # 保存先に書けない(ディスク満杯等): このサイトだけ失敗として続行
+            out = record(db, store, row, {'status': 'error', 'error': 'store_failed'}, now)
+            res = {'error': f'store_failed: {type(e).__name__}'}
         counts[out] = counts.get(out, 0) + 1
         log(f"{row['site_id']}\t{out}\t{res.get('error') or ''}")
     return counts
@@ -392,7 +427,13 @@ def main(argv=None):
     p = sub.add_parser('sql', help='sites.favicon_path 向けの UPDATE を出す'); p.add_argument('--out'); p.add_argument('--since', help='changed_at がこれ以降のものだけ(ISO)')
     sub.add_parser('status', help='台帳の集計')
     a = ap.parse_args(argv)
-    db = connect(a.db)
+    if a.cmd == 'run' and a.apply:
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            print('Pillow が無い。uv run --with pillow python3 scripts/favicon/favicon.py ... で起動する', file=sys.stderr)
+            return 3
+    db = connect(a.db) if a.cmd == 'import' or (a.cmd == 'run' and a.apply) else open_readonly(a.db)
     if a.cmd == 'import':
         import json
         n = 0
@@ -404,21 +445,21 @@ def main(argv=None):
     elif a.cmd == 'run':
         now = datetime.datetime.now(datetime.timezone.utc)
         if not a.apply:
-            rows = due_sites(db, now, a.limit)
+            rows = due_sites(db, now, a.limit) if db else []
             print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする)')
             for r in rows[:20]:
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
         print('done ' + str(run(db, LocalDirStore(a.store_dir), now, a.limit)))
     elif a.cmd == 'sql':
-        text = sql_updates(db, a.since)
+        text = sql_updates(db, a.since) if db else ''
         if a.out:
             Path(a.out).write_text(text, encoding='utf-8')
             print(f'wrote {a.out} ({text.count(chr(10))} 行)')
         else:
             sys.stdout.write(text)
     else:
-        for r in db.execute('SELECT status, COUNT(*) n FROM favicons GROUP BY status ORDER BY n DESC'):
+        for r in (db.execute('SELECT status, COUNT(*) n FROM favicons GROUP BY status ORDER BY n DESC') if db else []):
             print(f"{r['status'] or 'pending'}\t{r['n']}")
     return 0
 

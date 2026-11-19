@@ -12,17 +12,19 @@ Issue #125。**自前で取得し、32px の画像にして保存し、月 1 回
 
 ## 使い方
 
-実装は `scripts/favicon/favicon.py`、テストは `tests/test_favicon.py`。画像の検証・縮小に Pillow を使う（リポの依存には足さず `uv run --with pillow` で渡す）。
+実装は `scripts/favicon/favicon.py`、テストは `tests/test_favicon.py`。画像の検証・縮小に Pillow を使う（リポの依存には足さず、**必ず `uv run --with pillow python3` で起動する**）。Pillow が無いと `run --apply` は終了コード 3 で止まる（1 サイトの失敗として握りつぶさない）。`nightly.py` の `favicon` 段も同じ起動方法で呼ぶ。
 
 ```sh
 uv run --with pillow python3 scripts/favicon/favicon.py import --recrawl var/recrawl.sqlite   # 再巡回台帳の listed かつ取得成功済みのサイトを対象へ(--sites JSON も可)
-uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50            # 計画だけ(ネットワーク・書き込みなし)
+uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50            # 計画だけ(ネットワークなし。台帳もディレクトリも作らない)
 uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply    # 期限が来たものを取得(実サイトにアクセスする)
 uv run --with pillow python3 scripts/favicon/favicon.py sql --since 2026-11-20T00:00:00Z --out var/favicons.sql   # sites.favicon_path の UPDATE(適用は人が行う)
 uv run --with pillow python3 scripts/favicon/favicon.py status
 ```
 
-台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<hash>.webp' WHERE id=... AND favicon_path IS NOT '<hash>.webp'`（値が同じなら書かない。D1 の書き込み行数を使わない）。取れていないサイトには触れない。migration は不要（`favicon_path` は 0002 から存在）。
+台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<hash>.webp' WHERE id=... AND favicon_path IS NOT '<hash>.webp'`（値が同じなら書かない。D1 の書き込み行数を使わない）。取れていないサイトには触れない。`run`（`--apply` なし）・`sql`・`status` は台帳を読み取り専用で開き、無ければ何も作らない。
+
+**`--since` の SQL を適用し忘れたとき**（夜間ジョブが作った `var/nightly/<date>/favicons.sql` を適用しないまま次の夜が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。`AND favicon_path IS NOT ...` があるので、すでに合っている行は書かれず、何度適用しても安全。migration は不要（`favicon_path` は 0002 から存在）。
 
 ## 取得作法
 
@@ -31,6 +33,9 @@ uv run --with pillow python3 scripts/favicon/favicon.py status
 - UA は `MiseResearchBot`、robots.txt 遵守（ページ・画像の各 URL のオリジンごとに判定）、内部 IP 拒否（`ssrf_blocked`）、ポートは 80/443 のみ。リダイレクトは 3 ホップまでで、**ホップごとに robots と SSRF を再判定**する。
 - ページ取得のリダイレクトは同一サイト内のみ（別ドメインへ出たら `redirect_offsite`）。画像は CDN など別ホストに置かれることが多いので別ホストへの転送・参照を許すが、そのホストの robots と SSRF 検査は通す。
 - 同一ホストへのリクエスト間隔は 2 秒以上。画像は 256KB まで、元画像の一辺は 16〜1024px。1 サイトで試す候補は 3 つまで。
+- トップページが 5xx・429 のときは一時的な失敗（3 日後に再試行）とし、`/favicon.ico` へは進まない。404 など他の非 200 は `/favicon.ico` だけ試す。
+- 候補のうち内部アドレス・robots 取得不能で試せないものは飛ばして次の候補へ進む。全候補がそれで試せなかったときだけ取得失敗（保留）にする。
+- 条件付き GET のヘッダは元の URL にだけ付け（転送先には付けない）、`ETag` / `Last-Modified` の値から改行を除いてから送る。
 - 直列実行（並列化は未実装。前回の画像 URL が分かるサイトは robots + 条件付き GET の 2 リクエストで済む）。
 
 ## 候補の優先順位
@@ -48,6 +53,7 @@ HTML の `<link>`（`<base href>` を考慮、相対 URL は解決）から、�
 ## 検証と縮小
 
 - 受け付ける形式: PNG・ICO・GIF・WebP・JPEG・BMP。**SVG は不採用**（Content-Type・先頭の `<svg`/`<?xml` で弾く。無害化はしない）。HTML を返す soft-404、壊れた画像、完全に透明な画像、16px 未満、上限超過は不採用。
+- 形式は `Image.open` の `formats` で限定し、辺の上限・縮小率は**読み込み後の実寸**で判定する（ICO などの埋め込み画像は宣言サイズと実寸が違いうる）。展開爆弾の警告も拒否扱い。
 - ICO は入っている中で最大の絵、GIF は最初のフレームを使う。長辺を 32px に合わせ、正方形でなければ透明で余白を足して **32x32 の可逆 WebP**（透明保持）にする。
 - ファイル名は出力画像の SHA-256 の先頭 32 桁 + `.webp`。**同じ画像（既定アイコン等）は 1 ファイルに重複排除**される（`sites.favicon_path` が同じ名前を指す）。
 
@@ -55,7 +61,8 @@ HTML の `<link>`（`<base href>` を考慮、相対 URL は解決）から、�
 
 - 次回確認は、成功・画像なしなら確認の 30 日後（月次）、取得失敗（接続・DNS・タイムアウト等）は 3 日後、robots 拒否・内部 IP などは 30 日後。
 - 前回の画像 URL・`ETag`・`Last-Modified` を台帳に持ち、**ページを取り直さず画像へ条件付き GET**（`If-None-Match` / `If-Modified-Since`）。304 なら何もしない。200 でも**出力のハッシュが前回と同じなら保存先に書かず**、`changed_at` も更新しない。画像 URL が 404 などになったらページから候補を探し直す。
-- 失敗しても前回の画像は消さない（`favicon_path` を NULL に戻す SQL は出さない）。
+- 失敗しても、画像が見つからなくなった（`none`）ときも、前回の画像は消さない（`favicon_path` を NULL に戻す SQL は出さない）。サイトの一時的な不具合で消えないことを優先する仕様で、**撤去されても古い絵は残る。消すのは取り下げ申請（#29）**。
+- 保存先に書けない（ディスク満杯等）ときは、そのサイトだけ `store_failed` として記録して続行する。保存先から画像ファイルが消えていたら、ハッシュが同じでも置き直し、304 の場合は条件なしで取り直す。
 - 再巡回との連動: 対象は `scripts/recrawl` の台帳で `state='listed'` かつ `last_ok_at` があるサイトだけ（死んだ・要確認のサイトは取りに行かない）。
 
 ## 夜間ジョブ
