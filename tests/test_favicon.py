@@ -537,6 +537,57 @@ class StoreMarks(unittest.TestCase):
             self.assertEqual(favicon.sql_updates(db, store='r2-remote'), '')
             self.assertIn('s1', favicon.sql_updates(db))
 
+    def test_same_200_twice_puts_once_on_r2(self):
+        store = favicon.R2Store(remote=True, runner=self.runner)
+        res = {'status': 'ok', 'icon_url': 'https://x.example/i.png', 'etag': None, 'webp': favicon.normalize_icon(self.png)}
+        favicon.record(self.db, store, self.db.execute("SELECT * FROM favicons WHERE site_id='s1'").fetchone(), res, T0)
+        store2 = favicon.R2Store(remote=True, runner=self.runner)   # 別の実行(実行内の記憶なし)
+        favicon.record(self.db, store2, self.db.execute("SELECT * FROM favicons WHERE site_id='s1'").fetchone(), res, T0 + datetime.timedelta(days=31))
+        self.assertEqual(len(self.puts), 1)
+
+    def test_verify_puts_even_if_marked(self):
+        res = {'status': 'ok', 'icon_url': 'https://x.example/i.png', 'etag': None, 'webp': favicon.normalize_icon(self.png)}
+        row = lambda: self.db.execute("SELECT * FROM favicons WHERE site_id='s1'").fetchone()
+        favicon.record(self.db, favicon.R2Store(remote=True, runner=self.runner), row(), res, T0)
+        favicon.record(self.db, favicon.R2Store(remote=True, runner=self.runner, verify=True), row(), res, T0)
+        self.assertEqual(len(self.puts), 2)
+
+    def test_put_failure_leaves_no_mark_and_not_due_early(self):
+        rc = {'v': 1}
+        store = favicon.R2Store(remote=True, runner=lambda a: rc['v'])
+        counts = self.go(store)
+        self.assertEqual(counts, {'error': 1})
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM icon_stored').fetchone()[0], 0)
+        self.assertEqual(favicon.due_sites(self.db, T0 + datetime.timedelta(days=1), 10, store), [])   # 3 日後の再試行まで待つ
+
+    def test_third_run_puts_nothing(self):
+        self.go(favicon.R2Store(remote=True, runner=self.runner))
+        self.go(favicon.R2Store(remote=True, runner=self.runner), days=31)
+        self.go(favicon.R2Store(remote=True, runner=self.runner), days=62)
+        self.assertEqual(len(self.puts), 1)
+
+    def test_since_and_store_combine(self):
+        self.go(favicon.R2Store(runner=self.runner))   # r2-local、changed_at=T0
+        self.assertIn('s1', favicon.sql_updates(self.db, '2026-11-01T00:00:00Z', 'r2-local'))
+        self.assertEqual(favicon.sql_updates(self.db, '2026-12-01T00:00:00Z', 'r2-local'), '')
+        self.assertEqual(favicon.sql_updates(self.db, '2026-11-01T00:00:00Z', 'r2-remote'), '')
+
+    def test_cli_sql_default_is_r2_remote(self):
+        import contextlib
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / 'f.sqlite'
+            db = favicon.connect(p)
+            favicon.import_sites(db, [('s1', 'https://a.example/')])
+            db.execute("UPDATE favicons SET icon_hash=?, status='ok'", ('a' * 32 + '.webp',))
+            favicon._mark(db, 'a' * 32 + '.webp', 'local'); db.commit(); db.close()
+            def out(*extra):
+                b = io.StringIO()
+                with contextlib.redirect_stdout(b):
+                    favicon.main(['--db', str(p), 'sql', *extra])
+                return b.getvalue()
+            self.assertEqual(out(), '')                      # 既定 r2-remote: local だけのものは出ない
+            self.assertIn('s1', out('--store', 'local'))
+
 
 class RealLaunch(unittest.TestCase):
     """夜間ジョブと同じ起動方法(uv run)で、Pillow の有無による挙動を実際に確かめる。"""

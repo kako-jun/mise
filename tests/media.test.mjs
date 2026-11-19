@@ -108,7 +108,7 @@ test('/icon/x/ のように scope 側へ落ちるパスは R2 を見ずに 404',
   const env = { MEDIA: fakeBucket({}), DB: { prepare: () => { throw new Error('no db'); } } };
   for (const p of ['/icon/x/', `/icon/${H}.webp/`, '/icon/', '/icon/a/b']) {
     const r = await app.request(p, { redirect: 'manual' }, env);
-    assert.ok([404, 500].includes(r.status) && r.status !== 200, p + ' ' + r.status);
+    assert.equal(r.status, 404, p);
     assert.notEqual(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
   }
   assert.deepEqual(env.MEDIA.calls, []);

@@ -399,6 +399,10 @@ def import_from_recrawl(db, recrawl_path):
     return import_sites(db, rows)
 
 
+def _has_marks_table(db):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='icon_stored'").fetchone() is not None
+
+
 def _marked(db, name, label):
     try:
         return db.execute('SELECT 1 FROM icon_stored WHERE name=? AND store=?', (name, label)).fetchone() is not None
@@ -439,7 +443,8 @@ def record(db, store, row, res, now):
     elif res['status'] == 'ok':
         name = icon_name(res['webp'])
         out = 'same' if row['icon_hash'] == name else 'changed'
-        store.put(name, res['webp'])   # 既にあれば書かれない(同じ画像・他サイトの同一アイコン)。保存先から消えていれば同じハッシュでも置き直す
+        if not (store.trust_ledger and _marked(db, name, store.label)):   # R2 は印があれば put しない(wrangler 起動を省く)。--r2-verify・ローカルは従来どおり
+            store.put(name, res['webp'])   # 既にあれば書かれない(同じ画像・他サイトの同一アイコン)。保存先から消えていれば同じハッシュでも置き直す
         _mark(db, name, store.label)   # この保存先に置いた印(put が例外なら印は付かない)
         db.execute("UPDATE favicons SET icon_url=?, etag=?, last_modified=?, icon_hash=?, status='ok', consecutive_failures=0, last_checked_at=?, next_check_at=?, changed_at=COALESCE(?, changed_at) WHERE site_id=?",
                    (res['icon_url'], res.get('etag'), res.get('last_modified'), name, t, _plus(now, OK_INTERVAL_DAYS), t if out == 'changed' else None, sid))
@@ -552,12 +557,15 @@ def main(argv=None):
         if not a.apply:
             store = make_store(a)
             rows = due_sites(db, now, a.limit, store) if db else []
-            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {store.label})')
+            legacy = bool(db) and not _has_marks_table(db)
+            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {store.label}' + ('。旧台帳: 保存先の印を判定できないので件数は印なしの期限だけ' if legacy else '') + ')')
             for r in rows[:20]:
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
         print('done ' + str(run(db, make_store(a), now, a.limit)))
     elif a.cmd == 'sql':
+        if db and not _has_marks_table(db):
+            print('旧台帳: 保存先の印の表が無いので --store の絞り込みは空になる(run --apply か import で書き込み可で開くと表が足される)', file=sys.stderr)
         text = sql_updates(db, a.since, a.store) if db else ''
         if a.out:
             Path(a.out).write_text(text, encoding='utf-8')

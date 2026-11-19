@@ -18,7 +18,7 @@
 9 sql         承認済みの未出荷をすべて（`--max-add N` を付けたときだけ key 順に N 件まで。既定は上限なし） -> approved-sites.sql（0 件なら作らない）
 10 gate       生成 SQL をメモリ DB に流す整合チェック（integrity.gate）。違反なら停止
 11 prod       --apply-prod のときだけ: bookmark 取得 -> 本番投入 -> 整合チェック(--remote)
-12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> favicons.sql（`--store local`: 夜間はローカルの `var/nightly/favicons/` にだけ置く）。**この SQL を D1 に適用してはいけない**（D1 が指す画像が R2 に無くなる）。R2 へ置いてから `sql`（既定 `--store r2-remote`）で出し直す（[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
+12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> 取得だけ（ローカルの `var/favicons/` と台帳 `var/favicons.sqlite` に置く。**SQL は作らない**: ローカルにしか無い画像を D1 に指す SQL の誤適用を避けるため）。D1 への反映は、R2 へ置いたあと手で `sql`（既定 `--store r2-remote`、`--since` なし。[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
@@ -116,7 +116,7 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 | fetch が遅い | `--fetch-limit` を下げる。cron の間隔を空ける |
 | 追加が 0 件 | 承認ポリシーで保留が多い（朝の手順 4）。判定対象が尽きているなら `--discover-limit` を上げる |
 | favicon 段が guards に出る | Pillow が無い等。`uv run --with pillow` 起動か確認（[favicons.md](../collection/favicons.md)） |
-| `favicons.sql`（`--since` 付き）を適用し忘れた / 夜間の `favicons.sql` をどうするか | 夜間の SQL は適用しない。R2 へ置いたうえで `--since` なし・`--store` 既定（r2-remote）で全件を出し直す（[手順](../collection/favicons.md#使い方)。何度適用しても安全） |
+| ファビコンを D1 へ反映したい / 反映し忘れた | 夜間は SQL を作らない。R2 へ置いたうえで `sql --out var/favicons-all.sql`（`--since` なし、既定 r2-remote）。`IS NOT` 条件があるので何度適用しても安全（[手順](../collection/favicons.md#r2-への保存と配信)） |
 
 ## 未対応（v1）
 

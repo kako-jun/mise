@@ -24,7 +24,7 @@ uv run --with pillow python3 scripts/favicon/favicon.py status
 
 台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<hash>.webp' WHERE id=... AND favicon_path IS NOT '<hash>.webp'`（値が同じなら書かない。D1 の書き込み行数を使わない）。取れていないサイトには触れない。`run`（`--apply` なし）・`sql`・`status` は台帳を読み取り専用で開き、無ければ何も作らない。
 
-**`--since` の SQL を適用し忘れたとき**（夜間ジョブが作った `var/nightly/<date>/favicons.sql` を適用しないまま次の夜が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。`AND favicon_path IS NOT ...` があるので、すでに合っている行は書かれず、何度適用しても安全。migration は不要（`favicon_path` は 0002 から存在）。
+**`--since` の SQL を適用し忘れたとき**（`--since` 付きで出した SQL を適用しないまま次回が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。夜間ジョブは SQL を作らない。`AND favicon_path IS NOT ...` があるので、すでに合っている行は書かれず、何度適用しても安全。migration は不要（`favicon_path` は 0002 から存在）。
 
 ## 取得作法
 
@@ -71,10 +71,11 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 ```
 
 - `R2Store` は `npx wrangler r2 object put mise-media/icon/<hash>.webp --file ... --content-type image/webp --local|--remote` を呼ぶ。**`--r2-remote` が無ければ常に `--local`**（本番に書かない安全側）。put の失敗は 1 サイト分の `store_failed` として続行する。
-- **呼び出し数を抑える設計**: wrangler の起動は 1 回数秒かかるので、`exists` は既定で R2 に問い合わせず台帳（`icon_hash`）を信じる。同じ実行中に置いた名前は記憶して 2 度 put しない。R2 から画像が消えた・別バケットへ移した疑いがあるときだけ `--r2-verify`（`wrangler r2 object get` で 1 件ずつ確認。遅い）。画像は 1 件 約 1.5 KB なので 1 件ずつ put する（件数が増えて遅くなったら S3 互換 API での並列化を別 Issue で検討）。
+- **呼び出し数を抑える設計**: wrangler の起動は 1 回数秒かかるので、`exists` は既定で R2 に問い合わせず台帳（`icon_hash`）を信じる。同じ実行中に置いた名前は記憶して 2 度 put しない。R2 から画像が消えた・別バケットへ移した疑いがあるときだけ `--r2-verify`（`wrangler r2 object get` で 1 件ずつ確認。遅い。このとき put も印があっても毎回やり直す）。印があれば（`--r2-verify` でない限り）同じ中身の 200 でも put しない（ETag を返さないサイトが毎月 200 でも書き込みは増えない）。画像は 1 件 約 1.5 KB なので 1 件ずつ put する（件数が増えて遅くなったら S3 互換 API での並列化を別 Issue で検討）。
 - **台帳は保存先ごとに「置いた印」を持つ**（`icon_stored` 表: 画像名 × `local` / `r2-local` / `r2-remote`。旧い台帳には `connect()` が自動で表を足す）。`exists` の判定と期限（`due_sites`）はその保存先の印で行う。ローカルで置いたあとに `--r2-remote` を回すと、`next_check_at` が先でも「画像はあるのにこの保存先の印が無い」サイトが対象になり、304 でも条件なしで取り直して put する。nightly（`local`）で取得済みのものも同様に、初めて `--r2-remote` を回したときに R2 へ上がる。旧い台帳は印が無いので、初回の `--r2-remote` で全件が対象（304 を挟むだけで安い）。
+- 旧い台帳（印の表が無い）を読み取り専用で開く `run`（dry-run）・`sql --store ...` は印を判定できず、件数が少なく（`sql` は 0 行に）出る。そのとき注記が出る。書き込み可で開く（`run --apply` や `import`）と表が足される。
 - **`sql` は既定で `--store r2-remote` の印がある画像だけ**を出す（ローカルにしか置いていないものは出さない＝D1 が指す画像が配信元に無い状態を作らない）。`--store local` / `r2-local` も明示すれば選べる。
-- 本番へ初回に流す順序: バケット作成 → マージ・デプロイ → `--r2-remote` で画像を置く → `sql`（既定）の出力を D1 へ適用（`favicon_path` が入って初めて一覧に出る。画像が先、SQL が後なので、表示が 404 のままになる時間帯が出ない）。`--since` は取得日（`changed_at`）基準で、置いた日ではないので、初回は `--since` なしで出す。
+- 本番へ初回に流す順序: バケット作成 → マージ・デプロイ → `--r2-remote` で画像を置く → `sql`（既定）の出力を D1 へ適用（`favicon_path` が入って初めて一覧に出る。画像が先、SQL が後なので、表示が 404 のままになる時間帯が出ない）。`--since` は取得日（`changed_at`）基準で、R2 に置いた日ではない（ローカルで取得して後から `--r2-remote` で置くと、`--since <置いた日>` は 0 行になる）。**R2 へ置いたあとの `sql` は、夜間の台帳を使う限り毎回 `--since` なし**にする。`AND favicon_path IS NOT ...` があるので毎回全件を出しても、すでに合っている行は書かれず D1 の書き込みは増えない。
 - プレビュー（`wrangler preview`）の `MEDIA` は別バケット `mise-media-preview`（空のまま。本番バケットを触らせない）。プレビューでは `/icon/` は 404 になり、一覧はファビコン枠ごと消える。
 
 ## 取り下げ（#29）での R2 画像の削除（設計のみ・未実装）
@@ -91,4 +92,4 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 
 ## 夜間ジョブ
 
-`scripts/nightly.py` の最終段 `favicon`。**既定は無効**（`--favicon-limit 0`）。`--favicon-limit N` を付けたときだけ、再巡回台帳の取り込み → 期限が来た N 件の取得 → `var/nightly/<date>/favicons.sql` の生成までを行う。本番 D1 には触れず（SQL の適用は人）、段が失敗しても夜間ジョブ全体は失敗にしない（guards に残す）。実サイトにアクセスするので、有効にするのは最初は少数で様子を見てから。
+`scripts/nightly.py` の最終段 `favicon`。**既定は無効**（`--favicon-limit 0`）。`--favicon-limit N` を付けたときだけ、再巡回台帳の取り込み → 期限が来た N 件の取得までを行う（置き場はローカルの `var/favicons/`。**SQL は作らない**）。本番 D1・R2 には触れず（D1 への反映は人が、R2 へ置いたあとに `sql` で）、段が失敗しても夜間ジョブ全体は失敗にしない（guards に残す）。実サイトにアクセスするので、有効にするのは最初は少数で様子を見てから。
