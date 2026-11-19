@@ -36,7 +36,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 - **0018（`sites.search_text`）を適用した後**は、検索用の列を NFKC + 小文字化で埋め直す。migration の暫定値は ASCII の小文字化だけで、全角半角や非 ASCII の大小は埋め直すまで合わない。サイトを migration で足した後も同じ。**0020（タグを `search_text` に含める）の適用後も同じ**（**`refresh-search-text.mjs` は 0020 を含むブランチ（マージ後は main）のものを使う。古い版を回すとタグが search_text から消える**。migration の暫定値は ASCII のみ。タグの追加・削除のたびにトリガが暫定値へ戻すので、まとめてタグを入れた後にも実行する）。本番 → プレビューの順に実行する（`--db` は `mise` / `mise-preview` のみ。`--local` は `mise` 専用）:
   ```
   node scripts/refresh-search-text.mjs --remote --db mise
-  node scripts/refresh-search-text.mjs --remote --db mise-preview   # ※ mise-preview は一時設定が要る。手順は下の「プレビュー DB を本番に追従させる手順」
+  node scripts/refresh-search-text.mjs --remote --db mise-preview
   ```
 - **連絡先の廃止（#88）のマージ後に 1 回だけ**、本番とプレビューの両方で、廃止前に保存された連絡先を消す（`contact` 列は未使用で常に NULL とする。定期の掃除からは外してある）:
 
@@ -59,7 +59,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
    npx wrangler d1 export mise-preview --remote --output backup-mise-preview-$(date +%Y%m%d).sql
    ```
    バックアップはリポジトリにコミットしない。
-2. 適用。本番は `npx wrangler d1 migrations apply mise --remote`（事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する）。プレビュー DB は「プレビュー DB を本番に追従させる手順」の 2〜4。
+2. 適用。本番は `npx wrangler d1 migrations apply mise --remote`（事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する）。プレビュー DB は「プレビュー DB を本番に追従させる手順」の 1・2・4（一時設定・未適用の確認・適用。バックアップは上の手順 1 で取得済み）。
 3. 検索用列の埋め直し（0015 の INSERT はトリガが ASCII の小文字化だけの暫定値を入れる。全角半角の検索がヒットするよう NFKC に直す）: 本番は `node scripts/refresh-search-text.mjs --remote --db mise`。プレビューは同手順の 5。
 4. 確認（適用後、マージ前に本番 DB を直接読む）:
    ```sh
@@ -153,11 +153,11 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 
 ## プレビュー DB を本番に追従させる手順
 
-`mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）、`wrangler d1 ... mise-preview` はそのままでは設定から DB を引けず失敗する。**一時的な wrangler 設定ファイルを作り、`-c`（または cwd）で指定する。コミットしない。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:
+`mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）。**`migrations list` / `migrations apply` だけは、一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。`d1 execute`・`d1 export`・`refresh-search-text.mjs` は `mise-preview` を名前で指定すればそのまま動く。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:
 
 1. **一時設定**（リポジトリの外に置く。`<tmp>` は任意のディレクトリ）:
    ```sh
-   mkdir -p <tmp>/mise-preview-cfg && cp -r migrations <tmp>/mise-preview-cfg/migrations   # 最新の migrations をコピーし直す（古いコピーのまま流さない）
+   rm -rf <tmp>/mise-preview-cfg && mkdir -p <tmp>/mise-preview-cfg && cp -r migrations <tmp>/mise-preview-cfg/migrations   # 毎回作り直す（古いコピーや migrations/migrations の入れ子を残さない）
    cat > <tmp>/mise-preview-cfg/wrangler.jsonc <<'EOF'
    { "name": "mise-preview-tmp", "compatibility_date": "2025-01-01",
      "d1_databases": [{ "binding": "DB", "database_name": "mise-preview", "database_id": "<wrangler.jsonc の previews の database_id>", "migrations_dir": "migrations" }] }
@@ -166,11 +166,11 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 2. **未適用の確認**: `npx wrangler d1 migrations list mise-preview --remote -c <tmp>/mise-preview-cfg/wrangler.jsonc`（`-c` なしだと本番 `mise` の一覧と取り違えやすい）。
 3. **バックアップ**: `npx wrangler d1 export mise-preview --remote --output <tmp>/backup-mise-preview.sql`（リポジトリにコミットしない）。
 4. **適用**: `npx wrangler d1 migrations apply mise-preview --remote -c <tmp>/mise-preview-cfg/wrangler.jsonc`。
-5. **検索用列の埋め直し**（0018・0020 以降の migration を入れたとき、またはサイトを足したとき）。**`refresh-search-text.mjs` は適用した migration を含むブランチのものを使う**。wrangler が設定を見つけられるよう、一時設定のディレクトリを cwd にして実行する（wrangler はリポジトリのものを PATH で渡す）。実行中は DB が一時的に応答しない:
+5. **検索用列の埋め直し**（0018・0020 以降の migration を入れたとき、またはサイトを足したとき）。**`refresh-search-text.mjs` は適用した migration を含むブランチのものを使う**。リポジトリ直下で実行する。実行中は DB が一時的に応答しない:
    ```sh
-   REPO=$(pwd); (cd <tmp>/mise-preview-cfg && PATH=$REPO/node_modules/.bin:$PATH node $REPO/scripts/refresh-search-text.mjs --remote --db mise-preview)
+   node scripts/refresh-search-text.mjs --remote --db mise-preview
    ```
-6. **確認**（SELECT だけ。cwd は同じく一時設定のディレクトリ）: `(cd <tmp>/mise-preview-cfg && PATH=$REPO/node_modules/.bin:$PATH uv run python3 $REPO/scripts/check-data-integrity.py --remote --db mise-preview)` で error 検査がすべて 0 行（0022 の一致確認 5 本を含む）。カテゴリ数・孤児・未分類は `npx wrangler d1 execute mise-preview --remote --command "..."` を同じ cwd で（期待: カテゴリ 153・孤児 0・未分類 0。数は migration で変わる）。
+6. **確認**（SELECT だけ。リポジトリ直下）: `uv run python3 scripts/check-data-integrity.py --remote --db mise-preview` で error 検査がすべて 0 行（0022 の一致確認 5 本を含む）。カテゴリ数・孤児・未分類は `npx wrangler d1 execute mise-preview --remote --command "..."` で（期待: カテゴリ 153・孤児 0・未分類 0。数は migration で変わる）。
 
 ## プレビュービルド（ブランチごと）
 
