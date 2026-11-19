@@ -201,6 +201,7 @@ def upstream_checks(cap):
     import socket
     sys.path.insert(0, str(Path(__file__).parents[2] / 'tests'))
     import test_netfilter as TN
+    from netfilter import FilterProxy, probe_upstream
     seen = []
 
     class U(http.server.BaseHTTPRequestHandler):
@@ -215,15 +216,40 @@ def upstream_checks(cap):
             body = b'<!doctype html><title>t</title><body style="background:#48a"><h1>upstream</h1>'
             self.send_response(200); self.send_header('Content-Type', 'text/html'); self.send_header('Content-Length', str(len(body))); self.send_header('Connection', 'close'); self.end_headers(); self.wfile.write(body)
     up = Srv(('127.0.0.1', 0), U); threading.Thread(target=up.serve_forever, daemon=True).start(); uport = up.server_address[1]
-    ucap = T.NodeCapturer(sandbox=not NO_BWRAP, limits=not NO_LIMITS, timeout=120, proxy_kwargs={'resolve_override': {'pub.test': '93.184.216.34'}, 'upstream': {'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}})
+    kw = {'resolve_override': {'pub.test': '93.184.216.34'}, 'upstream': {'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}}
+    # 既定: 上流あり環境の平文 HTTP は撮らない(IP 固定できない)。上流には 1 件も届かず、upstream_dns_unpinned で失敗
+    dcap = T.NodeCapturer(sandbox=not NO_BWRAP, limits=not NO_LIMITS, timeout=120, proxy_kwargs=dict(kw))
+    rec0, _ = dcap('http://pub.test/', ['http://pub.test/'])
+    ok0 = (not rec0.get('ok')) and not seen and T.refine(dict(rec0), 'pub.test') == 'upstream_dns_unpinned'
+    # 明示フラグ(--allow-plain-http-upstream)のときだけ撮れる。名前のまま上流へ渡し、unpinned に記録される
+    ucap = T.NodeCapturer(sandbox=not NO_BWRAP, limits=not NO_LIMITS, timeout=120, proxy_kwargs=dict(kw), allow_plain_upstream=True, on_proxy=lambda st: ustats.update(st))
+    ustats = {}
     rec, _ = ucap('http://pub.test/', ['http://pub.test/'])
-    ok1 = bool(rec.get('ok'))
+    ok1 = bool(rec.get('ok')) and ustats.get('unpinned') == ['pub.test']
     ok2 = bool(seen) and seen[0].startswith('GET http://pub.test/ HTTP/1.1') and seen[0].endswith('Host: pub.test')
     bad = 0
-    for name, ok in (('上流プロキシ経由でも実 Chromium で撮れる', ok1), ('上流へは平文 HTTP を名前のまま渡す(Squid 系は Host を URI に書き換えるため IP 宛てにできない)', ok2)):
+    for name, ok in (('既定では平文 HTTP を撮らない(上流に届かず upstream_dns_unpinned)', ok0), ('--allow-plain-http-upstream のときだけ実 Chromium で撮れ、unpinned に記録される', ok1), ('フラグ有りでは平文 HTTP を名前のまま渡す(Squid 系は Host を URI に書き換えるため IP 宛てにできない)', ok2)):
         bad += (not ok); print(f"{'PASS' if ok else 'FAIL'}\t上流連鎖: {name}", file=sys.stderr)
+    # CONNECT: IP 宛てが 403/502/503 で拒まれても名前の CONNECT に落ちない。プローブは応答コードだけで判定する
+    for code in (403, 502, 503):
+        got2 = []
+        srv2 = socket.socket(); srv2.bind(('127.0.0.1', 0)); srv2.listen(8); p2port = srv2.getsockname()[1]
+
+        def serve2(srv2=srv2, got2=got2, code=code):
+            while True:
+                try:
+                    c, _ = srv2.accept()
+                except OSError:
+                    return
+                got2.append(c.recv(65536)); c.sendall(f'HTTP/1.1 {code} X\r\nContent-Length: 0\r\n\r\n'.encode()); c.close()
+        threading.Thread(target=serve2, daemon=True).start()
+        fp = FilterProxy(resolve_override={'pub.test': '93.184.216.34'}, upstream={'http': ('127.0.0.1', p2port), 'https': ('127.0.0.1', p2port)}).start()
+        out = TN.talk(fp, b'CONNECT pub.test:443 HTTP/1.1\r\n\r\n')
+        ok = out.startswith(b'HTTP/1.1 502') and all(b'pub.test' not in g.split(b'\r\n')[0] for g in got2) and fp.unpinned == []
+        pok, _ = probe_upstream({'http': None, 'https': ('127.0.0.1', p2port)}, ('1.1.1.1', 443))
+        fp.stop(); srv2.close()
+        bad += (not (ok and not pok)); print(f"{'PASS' if ok and not pok else 'FAIL'}\t上流が {code} を返しても名前 CONNECT に落ちない・プローブは拒否と判定", file=sys.stderr)
     # 密輸の各形(上流には何も届かない)
-    from netfilter import FilterProxy
     got = []
     srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(32); sport = srv.getsockname()[1]
 

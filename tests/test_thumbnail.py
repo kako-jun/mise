@@ -260,7 +260,7 @@ class Attempt(unittest.TestCase):
     def test_resource_limit_and_filter_block_are_reported(self):
         cap = lambda url, allow: ({'ok': False, 'reason': 'resource-limit', 'proxy': {'over_limit': True, 'blocked': []}}, None)
         self.assertEqual(T.attempt('https://a.example/', FakeGate(), cap)['error'], 'resource-limit')
-        cap = lambda url, allow: ({'ok': False, 'reason': 'error:net::ERR_TUNNEL_CONNECTION_FAILED', 'proxy': {'over_limit': False, 'blocked': [('a.example:443 -> 10.0.0.1', 'non_public')]}}, None)
+        cap = lambda url, allow: ({'ok': False, 'reason': 'error:page.goto: net::ERR_TUNNEL_CONNECTION_FAILED at https://a.example/', 'proxy': {'over_limit': False, 'blocked': [('a.example:443 -> 10.0.0.1', 'non_public')]}}, None)
         self.assertEqual(T.attempt('https://a.example/', FakeGate(), cap)['error'], 'ssrf_blocked')
 
 
@@ -603,7 +603,7 @@ class Limits(unittest.TestCase):
             with contextlib.redirect_stderr(err):
                 self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply']), 3)
             self.assertIn('--no-limits', err.getvalue())
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(T.netfilter, 'probe_upstream', return_value=(True, 'x')):
                 self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply', '--no-limits']), 0)
 
     def test_scope_check_requires_memory_max_to_take_effect(self):
@@ -661,7 +661,8 @@ class ExcludeAndUpload(unittest.TestCase):
 
     def test_unpinned_note_is_recorded_on_success_and_failure(self):
         rec = dict(OK, proxy={'over_limit': False, 'blocked': [], 'unpinned': ['a.example']})
-        r = T.attempt('https://a.example/', FakeGate(), lambda u, a: (rec, png()))
+        cap = lambda u, a: (rec, png()); cap.allow_unpinned = True   # 明示フラグで許したときだけ保存する
+        r = T.attempt('https://a.example/', FakeGate(), cap)
         self.assertEqual(r['notes'], 'upstream_dns_unpinned: a.example')
         db = T.connect(':memory:'); self.addCleanup(db.close); T.import_sites(db, [('a', 'https://a.example/')])
         row = db.execute('SELECT * FROM thumbs').fetchone()
@@ -672,6 +673,61 @@ class ExcludeAndUpload(unittest.TestCase):
         le = db.execute('SELECT last_error FROM thumbs').fetchone()[0]
         self.assertEqual(le, 'timeout [upstream_dns_unpinned: a.example]'); self.assertEqual(T.error_code(le), 'timeout')
         self.assertEqual(T.retry_days(le, 1), T.RETRY_DAYS)
+
+
+class Unpinned(unittest.TestCase):
+    """名前解決が上流になった(IP を固定できなかった)撮影は、既定では画像を保存もアップロードもしない。"""
+    def test_unpinned_capture_fails_by_default_and_is_recorded_permanent(self):
+        rec = dict(OK, proxy={'over_limit': False, 'blocked': [], 'unpinned': ['a.example']})
+        r = T.attempt('https://a.example/', FakeGate(), lambda u, a: (rec, png()))
+        self.assertEqual((r['status'], r['error'], r['notes']), ('error', 'upstream_dns_unpinned', 'upstream_dns_unpinned: a.example')); self.assertNotIn('webp', r)
+        db = T.connect(':memory:'); self.addCleanup(db.close); T.import_sites(db, [('a', 'https://a.example/')])
+        with tempfile.TemporaryDirectory() as d:
+            T.record(db, T.LocalDirStore(d), db.execute('SELECT * FROM thumbs').fetchone(), r, T0)
+            self.assertEqual(list(Path(d).iterdir()), [])   # 保存しない
+        row = db.execute('SELECT state,last_error,thumb_hash,next_check_at FROM thumbs').fetchone()
+        self.assertEqual((row['state'], row['thumb_hash']), ('failed', None)); self.assertIn('upstream_dns_unpinned', row['last_error'])
+        self.assertEqual(row['next_check_at'], T.now_iso(T0 + datetime.timedelta(days=30)))   # 再試行の対象にしない(30 日後)
+
+    def test_plain_http_site_behind_upstream_fails_as_unpinned(self):
+        cap = lambda u, a: ({'ok': False, 'reason': 'error:page.goto: net::ERR_PROXY_CONNECTION_FAILED at http://a.example/', 'proxy': {'over_limit': False, 'blocked': [('a.example:80', 'plain_http_upstream')], 'unpinned': []}}, None)
+        self.assertEqual(T.attempt('http://a.example/', FakeGate(), cap)['error'], 'upstream_dns_unpinned')
+        cap403 = lambda u, a: ({'ok': False, 'reason': 'http-403', 'proxy': {'over_limit': False, 'blocked': [('a.example:80', 'plain_http_upstream')], 'unpinned': []}}, None)   # フィルタの 403 がそのままブラウザに見える形
+        self.assertEqual(T.attempt('http://a.example/', FakeGate(), cap403)['error'], 'upstream_dns_unpinned')
+        sub_only = lambda u, a: (dict(OK, proxy={'over_limit': False, 'blocked': [('img.other.example:80', 'plain_http_upstream')], 'unpinned': []}), png())
+        self.assertEqual(T.attempt('https://a.example/', FakeGate(), sub_only)['status'], 'ok')   # サブリソースの平文 http は拒否するだけで撮影は成功
+
+    def test_probe_refusal_stops_job_unless_flag(self):
+        with mock.patch.object(T.netfilter, 'probe_upstream', return_value=(False, 'CONNECT 1.1.1.1:443 -> 403')):
+            c = T.NodeCapturer(sandbox=True, log=lambda *_: None, proxy_kwargs={'upstream': {'http': ('p', 1), 'https': ('p', 1)}})
+            with self.assertRaises(RuntimeError) as e:
+                c.check_upstream()
+            self.assertIn('--allow-unpinned-upstream', str(e.exception))
+            T.NodeCapturer(sandbox=True, log=lambda *_: None, allow_unpinned_connect=True, proxy_kwargs={'upstream': {'http': ('p', 1), 'https': ('p', 1)}}).check_upstream()   # 明示すれば進む
+        with mock.patch.object(T.netfilter, 'probe_upstream', return_value=(True, 'CONNECT 1.1.1.1:443 -> 200')) as pr:
+            T.NodeCapturer(sandbox=True, log=lambda *_: None, probe_target=('9.9.9.9', 443), proxy_kwargs={'upstream': {'http': None, 'https': ('p', 1)}}).check_upstream()
+            self.assertEqual(pr.call_args[0][1], ('9.9.9.9', 443))   # プローブの宛先は設定できる
+
+    def test_cli_exits_3_when_probe_refused(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(T, '_systemd_scope_ok', return_value=True), \
+                mock.patch.object(T.netfilter, 'probe_upstream', return_value=(False, 'CONNECT 1.1.1.1:443 -> 502')):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply']), 3)
+            self.assertIn('--allow-unpinned-upstream', err.getvalue())
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply', '--allow-unpinned-upstream']), 0)
+
+    def test_delete_uploaded_hint_adds_r2_remote_only_for_remote_sites(self):
+        with tempfile.TemporaryDirectory() as d:
+            dbp = str(Path(d) / 'x.sqlite'); db = T.connect(dbp); T.import_sites(db, [('a', 'https://a.example/'), ('b', 'https://b.example/')])
+            T._mark(db, T.thumb_name('a'), 'r2-remote', 'c'); T._mark(db, T.thumb_name('b'), 'r2-local', 'c'); db.commit(); db.close()
+            err = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+                T.main(['--db', dbp, 'import', '--exclude', 'a,b', '--delete-uploaded'])
+            lines = [l.strip() for l in err.getvalue().splitlines() if 'thumbnail.py delete' in l]
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(any('--site a' in l and l.endswith('--r2-remote') for l in lines)); self.assertTrue(any('--site b' in l and '--r2-remote' not in l for l in lines))
 
 
 class Cli(unittest.TestCase):

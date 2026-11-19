@@ -13,7 +13,8 @@ import netfilter as N
 import netaddr
 
 # アドレス判定の表(1 か所: netfilter.is_public_address)。Node 側には判定を持たないので、この表が唯一の入力表。
-PUBLIC = ['93.184.216.34', '8.8.8.8', '1.1.1.1', '2606:4700::1111', '2001:4860:4860::8888', '::ffff:8.8.8.8', '[2606:4700::1111]']
+PUBLIC = ['64:ff9b::808:808', '2002:808:808::',   # 埋め込まれた IPv4(8.8.8.8)が公開なら通す(DNS64/NAT64 網で全ホストが拒否されないように)
+          '93.184.216.34', '8.8.8.8', '1.1.1.1', '2606:4700::1111', '2001:4860:4860::8888', '::ffff:8.8.8.8', '[2606:4700::1111]']
 NON_PUBLIC = [
     '0.0.0.0', '127.0.0.1', '127.255.255.254', '10.0.0.1', '172.16.0.1', '172.31.255.255', '192.168.1.1', '169.254.169.254', '100.64.0.1',
     '198.18.0.1', '198.19.255.255',                      # ベンチマーク用 198.18/15
@@ -22,8 +23,9 @@ NON_PUBLIC = [
     '224.0.0.1', '239.255.255.250', 'ff02::1', 'ff0e::1', '240.0.0.1', '255.255.255.255',
     '::', '::1', '::ffff:127.0.0.1', '::ffff:10.0.0.1', '::ffff:7f00:1',
     '::7f00:1', '::a00:1', '::1.2.3.4',                  # IPv4 互換
-    '64:ff9b::7f00:1', '64:ff9b::808:808', '64:ff9b:1::1',   # NAT64
-    '2002:7f00:1::', '2002:808:808::',                   # 6to4
+    '64:ff9b::7f00:1', '64:ff9b::a00:1', '64:ff9b:1::1',   # NAT64(埋め込まれた IPv4 が内部なら拒否)
+    '2002:7f00:1::', '2002:a00:1::',                       # 6to4(埋め込まれた IPv4 が内部なら拒否)
+    '8.8.8.8%x', '2606:4700::1111%eth0', '127.0.0.1%lo',     # ゾーン付き
     'fec0::1', 'fec0:0:0:1::1',                          # サイトローカル
     'fe80::1', 'febf::1', 'fe80::1%eth0',                # リンクローカル全体
     'fc00::1', 'fd12:3456::1', '2001:db8::1', '100::1', '2001::1',
@@ -281,20 +283,64 @@ class Proxy(unittest.TestCase):
         self.assertIn(b'echo:hi', out)
         self.assertEqual([x.split(b' ')[1] for x in seen], [b'93.184.216.34:443', b'93.184.216.35:443']); self.assertEqual(p.unpinned, [])
 
-    def test_upstream_refusing_ip_connect_falls_back_to_name_and_is_recorded(self):
-        seen, uport = self.fake_upstream(refuse_ip_connect=True); p = self.up_proxy(uport)
+    def test_upstream_connect_never_falls_back_to_name_by_default(self):
+        """上流が 403/502/503 を返しても(攻撃者が強制できる)名前の CONNECT に落とさない。IP の CONNECT が失敗したらその宛先は失敗。"""
+        for code in (403, 502, 503):
+            seen, uport = self.fake_upstream(refuse_ip_connect=True); p = self.up_proxy(uport)
+            out = talk(p, b'CONNECT pub.test:443 HTTP/1.1\r\n\r\n')
+            self.assertTrue(out.startswith(b'HTTP/1.1 502'), out[:30])
+            self.assertTrue(all(b'pub.test' not in x.split(b'\r\n')[0] for x in seen), seen)   # 名前の CONNECT は 1 度も出ない
+            self.assertEqual(p.unpinned, [])
+
+    def test_name_connect_fallback_only_with_explicit_flag_and_never_for_ip_literals(self):
+        seen, uport = self.fake_upstream(refuse_ip_connect=True); p = self.up_proxy(uport, allow_unpinned_connect=True)
         out = talk(p, b'CONNECT pub.test:443 HTTP/1.1\r\n\r\n', tunnel_data=b'hi')
         self.assertIn(b'echo:hi', out)
-        self.assertEqual([x.split(b' ')[1] for x in seen], [b'93.184.216.34:443', b'pub.test:443'])   # IP 宛て → 拒否 → 名前宛て
-        self.assertEqual(p.unpinned, ['pub.test'])   # 名前解決が上流＝固定できなかった事実を記録
+        self.assertEqual([x.split(b' ')[1] for x in seen], [b'93.184.216.34:443', b'pub.test:443']); self.assertEqual(p.unpinned, ['pub.test'])
+        n = len(seen)
+        for lit in (b'CONNECT 93.184.216.34:443 HTTP/1.1\r\n\r\n', b'CONNECT [2606:4700::1111]:443 HTTP/1.1\r\n\r\n'):
+            self.assertTrue(talk(p, lit).startswith(b'HTTP/1.1 502'))
+        self.assertEqual([x.split(b' ')[1] for x in seen[n:]], [b'93.184.216.34:443', b'[2606:4700::1111]:443'])   # IP 宛てのみ(括弧付き)・名前へは落ちない
 
-    def test_upstream_plain_http_is_passed_by_name_and_recorded_as_unpinned(self):
-        """実機の上流(Squid 系)は IP 宛ての絶対 URI だと Host を IP に書き換え、仮想ホストのサイトが 403 を返す。平文は名前のまま渡し、固定できない事実を記録する。"""
+    def test_probe_upstream_accepts_or_refuses_by_status_only(self):
+        for refuse, want in ((False, True), (True, False)):
+            seen, uport = self.fake_upstream(refuse_ip_connect=refuse)
+            ok, detail = N.probe_upstream({'http': None, 'https': ('127.0.0.1', uport)}, ('1.1.1.1', 443))
+            self.assertEqual(ok, want, detail); self.assertTrue(seen[0].startswith(b'CONNECT 1.1.1.1:443 HTTP/1.1'))
+            self.assertEqual(seen[0].count(b'\r\n\r\n'), 1)   # CONNECT 以外(データ)は送らない
+        self.assertEqual(N.probe_upstream({'http': None, 'https': None}), (True, 'no upstream'))
+        ok, detail = N.probe_upstream({'http': None, 'https': ('127.0.0.1', 1)}, timeout=1); self.assertFalse(ok)
+
+    def test_upstream_plain_http_is_refused_by_default(self):
+        """上流あり環境の平文 HTTP は IP 宛てにできない(Squid 系は Host を URI に書き換える)ので既定では拒否する。上流には届かない。"""
         seen, uport = self.fake_upstream(); p = self.up_proxy(uport)
-        out = talk(p, b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\nAccept: */*\r\n\r\n')
+        out = talk(p, b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\n\r\n')
+        self.assertTrue(out.startswith(b'HTTP/1.1 403')); self.assertEqual(seen, [])
+        self.assertIn(('pub.test:80', 'plain_http_upstream'), p.blocked)
+
+    def test_upstream_plain_http_with_explicit_flag_is_passed_by_name_and_recorded(self):
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport, allow_plain_upstream=True)
+        out = talk(p, b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\nX-Forwarded-For: 10.0.0.1\r\nVia: x\r\nX-Real-IP: 10.0.0.2\r\nForwarded: for=10.0.0.3\r\nAccept: */*\r\n\r\n')
         self.assertTrue(out.endswith(b'up'))
         self.assertTrue(seen[0].startswith(b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\n'), seen[0][:80])
-        self.assertEqual(p.unpinned, ['pub.test'])
+        for h in (b'X-Forwarded-For', b'Via', b'X-Real-IP', b'Forwarded'):
+            self.assertNotIn(h.lower(), seen[0].lower())   # ページの JS が設定できるヘッダは上流へ素通りさせない
+        self.assertIn(b'Accept: */*', seen[0]); self.assertEqual(p.unpinned, ['pub.test'])
+
+    def test_plain_http_without_upstream_is_unaffected(self):
+        o = Origin(); p = self.mk(o)
+        self.assertTrue(talk(p, f'GET http://origin.test:{o.port}/ HTTP/1.1\r\n\r\n'.encode()).endswith(b'ok'))
+
+    def test_header_values_are_resent_as_latin1_not_double_encoded(self):
+        o = Origin(); p = self.mk(o)
+        talk(p, ('GET http://origin.test:%d/ HTTP/1.1\r\nX-A: caf' % o.port).encode() + b'\xe9\r\n\r\n')
+        self.assertIn(b'X-A: caf\xe9', o.received[0]); self.assertNotIn(b'\xc3', o.received[0])
+
+    def test_underscore_header_names_rejected(self):
+        o = Origin(); p = self.mk(o)
+        for h in (b'Transfer_Encoding: chunked', b'Content_Length: 5', b'X_Foo: a'):
+            self.assertTrue(talk(p, f'GET http://origin.test:{o.port}/ HTTP/1.1\r\n'.encode() + h + b'\r\n\r\n').startswith(b'HTTP/1.1 403'), h)
+        self.assertEqual(o.conns, 0)
 
     def test_upstream_never_receives_blocked_destinations(self):
         seen, uport = self.fake_upstream(); p = self.up_proxy(uport)

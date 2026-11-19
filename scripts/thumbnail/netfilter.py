@@ -7,8 +7,12 @@
   - ポートは 80/443 だけ(テスト用の追加ポートは allow_ports で明示したときだけ)
   - ホスト名は自分で名前解決し、**全アドレスが公開アドレス**であること。引けない名前は拒否(fail closed)。IP リテラルは直接検査
   - 上流プロキシが無い環境では、検査した IP に固定して接続する(DNS リバインディングも塞ぐ)
-  - 上流プロキシ(環境変数 http_proxy / https_proxy)がある環境では、そこへ連鎖する。**名前解決は上流が行うため完全には固定できない**。ここでの検査はローカルの名前解決に基づく最善努力
-    (ローカルで引けない内部名は拒否するので、上流でだけ引ける内部名はそもそも通らない。ローカルと上流で答えが食い違う名前が残余リスク)
+  - 上流プロキシ(環境変数 http_proxy / https_proxy)がある環境では、そこへ連鎖する。
+      * HTTPS(CONNECT)は検査した IP 宛て(`CONNECT <ip>:443`)にして固定する。**名前の CONNECT へのフォールバックはしない**(攻撃者が 5xx を強制して名前解決を上流に渡させる道を塞ぐ)。
+        上流が IP 宛て CONNECT を受け付けるかは、ジョブの開始時に公開 IP リテラルへのプローブで 1 回だけ確かめる(probe_upstream)。受け付けない上流では停止し、
+        名前の CONNECT を許すのは明示フラグ(allow_unpinned_connect。CLI は --allow-unpinned-upstream)のときだけ(その接続は unpinned に記録)
+      * 平文 HTTP は、上流(Squid 系)が Host を URI のホストに書き換えるため IP 宛てにできず、名前解決を上流に渡すしかない。**既定では拒否する**(トップレベル・iframe・サブリソースとも。
+        攻撃者の用意した rebinding 名の http:// へ誘導されても内部の HTTP を撮らせない)。明示フラグ(allow_plain_upstream。CLI は --allow-plain-http-upstream)のときだけ通し、unpinned に記録する
   - 1 本の接続につき 1 リクエスト(Connection: close)。同じ接続で別ホスト宛の 2 本目を通さない
   - 総受信バイト数・接続数に上限。超えたら全接続を切り over_limit を立てる(呼び出し側がページを閉じる)
 """
@@ -102,6 +106,30 @@ def _split_hostport(target):
     return host, int(port)
 
 
+def probe_upstream(upstream, target=('1.1.1.1', 443), timeout=15):
+    """上流プロキシが IP 宛ての CONNECT を受け付けるかを、公開 IP リテラルへの CONNECT の応答コードだけで確かめる(データは送らない。実在の特定サイトに依存しない)。
+    戻り: (受け付けるか, 説明)。上流が無ければ (True, 'no upstream')。"""
+    up = upstream.get('https')
+    if not up:
+        return True, 'no upstream'
+    authority = _authority(target[0], target[1])
+    try:
+        with socket.create_connection(up, timeout=timeout) as c:
+            c.settimeout(timeout)
+            c.sendall(f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n'.encode('iso-8859-1'))
+            buf = b''
+            while b'\r\n\r\n' not in buf and len(buf) < 8192:
+                d = c.recv(4096)
+                if not d:
+                    break
+                buf += d
+    except OSError as e:
+        return False, f'上流プロキシへ接続できない: {e}'
+    m = re.match(rb'HTTP/\d\.\d (\d{3})', buf)
+    code = int(m.group(1)) if m else 0
+    return code == 200, f'CONNECT {authority} -> {code or "no response"}'
+
+
 def parse_head(head):
     """リクエストの先頭(リクエスト行とヘッダ)を厳密に解釈する。上流へ送る前に、リクエスト密輸になる形(行内の裸の CR・LF・NUL・制御文字、
     obs-fold、token でないメソッド名・ヘッダ名、長すぎる行・多すぎるヘッダ)を拒否する。戻り: (method, target, [(name, value)])。"""
@@ -121,13 +149,22 @@ def parse_head(head):
         if ln[:1] in (b' ', b'\t'):
             raise Blocked('bad_request', 'obs-fold')
         k, sep, v = ln.partition(b':')
-        if not sep or not TOKEN.match(k.decode('iso-8859-1')):
+        if not sep or not TOKEN.match(k.decode('iso-8859-1')) or b'_' in k:   # `_` を含む名前は一部のバックエンドが `-` に正規化する(Transfer_Encoding 等)
             raise Blocked('bad_request', 'bad header')
         headers.append((k.decode('iso-8859-1'), v.decode('iso-8859-1').strip(' \t')))
     return parts[0], parts[1], headers
 
 
+def _is_ip(h):
+    try:
+        ipaddress.ip_address(h.strip('[]').split('%', 1)[0])
+        return True
+    except ValueError:
+        return False
+
+
 def _authority(ip, port):
+    ip = ip.strip('[]')
     return f'[{ip}]:{port}' if ':' in ip else f'{ip}:{port}'
 
 
@@ -135,16 +172,16 @@ class FilterProxy:
     """1 回の撮影につき 1 つ起動する。unix_path があれば Unix ソケット、無ければ 127.0.0.1 の空きポートで待ち受ける。
     resolve_override / allow_ports はテスト専用(selftest・単体テストが手元のサーバーを相手にするため)。本番では指定しない。"""
     def __init__(self, unix_path=None, upstream=None, max_bytes=MAX_BYTES, max_conns=MAX_CONNS, resolver=None,
-                 resolve_override=None, allow_ports=(), on_limit=None):
+                 resolve_override=None, allow_ports=(), on_limit=None, allow_unpinned_connect=False, allow_plain_upstream=False):
         self.unix_path = unix_path
         self.upstream = upstream_from_env() if upstream is None else upstream
         self.max_bytes = max_bytes; self.max_conns = max_conns
         self.resolver = resolver; self.resolve_override = dict(resolve_override or {}); self.allow_ports = set(ALLOWED_PORTS) | set(allow_ports)
-        self.on_limit = on_limit
+        self.on_limit = on_limit; self.allow_unpinned_connect = allow_unpinned_connect; self.allow_plain_upstream = allow_plain_upstream
         self.bytes = 0; self.conns = 0; self.over_limit = False
         self.blocked = []      # [(host:port, reason)]
         self.forwarded = []    # [host:port]
-        self.unpinned = []     # 上流プロキシが IP 宛て CONNECT を拒み、名前の CONNECT に戻したホスト(その接続だけ名前解決が上流＝IP を固定できない)
+        self.unpinned = []     # 名前解決が上流になった(IP を固定できなかった)ホスト。明示フラグ(allow_unpinned_connect・allow_plain_upstream)のときだけ起こる
         self.port = None
         self._loop = None; self._server = None; self._thread = None; self._writers = set(); self._ready = threading.Event(); self._err = None
 
@@ -288,8 +325,11 @@ class FilterProxy:
     async def _upstream_connect(self, up, authority):
         """上流プロキシへ CONNECT する。戻り: (reader, writer, status)。接続できなければ OSError。"""
         rr, ww = await asyncio.wait_for(asyncio.open_connection(*up), 15)
-        ww.write(f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n'.encode()); await ww.drain()
-        resp = await asyncio.wait_for(rr.readuntil(b'\r\n\r\n'), 20)
+        try:
+            ww.write(f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n'.encode('iso-8859-1')); await ww.drain()
+            resp = await asyncio.wait_for(rr.readuntil(b'\r\n\r\n'), 20)
+        except BaseException:
+            ww.close(); raise   # タイムアウト・切断でも接続を残さない
         m = re.match(rb'HTTP/\d\.\d (\d{3})', resp)
         return rr, ww, int(m.group(1)) if m else 0
 
@@ -303,12 +343,15 @@ class FilterProxy:
                 if status == 200:
                     up_r, up_w = rr, ww; break
                 ww.close()
+            if up_w is None and self.allow_unpinned_connect and not _is_ip(host):
+                # 明示フラグのときだけ、名前の CONNECT に戻す(その接続は名前解決が上流＝固定できない。記録に残す)。IP リテラル宛てはフォールバックしない。
+                rr, ww, status = await self._upstream_connect(up, _authority(host, port))
+                if status == 200:
+                    up_r, up_w = rr, ww; self.unpinned.append(host)
+                else:
+                    ww.close()
             if up_w is None:
-                # 上流が IP 宛ての CONNECT を拒む(4xx/5xx)場合だけ、名前の CONNECT に戻す。この場合のみ名前解決が上流＝固定できない(記録に残す)。
-                rr, ww, status = await self._upstream_connect(up, f'{host}:{port}')
-                if status != 200:
-                    ww.close(); await self._reply(w, 502, 'upstream refused'); return
-                up_r, up_w = rr, ww; self.unpinned.append(host)
+                await self._reply(w, 502, 'upstream refused'); return   # IP 宛て CONNECT が失敗したらその宛先は失敗(フォールバックしない)
             self._writers.add(up_w)
             try:
                 self.forwarded.append(f'{host}:{port}')
@@ -337,11 +380,14 @@ class FilterProxy:
             if not (lengths[0].isascii() and lengths[0].isdigit()) or int(lengths[0]) > MAX_BODY:
                 raise Blocked('bad_request', 'content-length')
             n = int(lengths[0])
+        if self.upstream.get('http') and not self.allow_plain_upstream:
+            raise Blocked('plain_http_upstream', f'{p.hostname}:{port}')   # 上流あり環境の平文 HTTP は IP 宛てにできないので既定では拒否
         body = await asyncio.wait_for(r.readexactly(n), IO_TIMEOUT) if n else b''
         up_r, up_w, via = await self._open('http', p.hostname, port, ips)
         self._writers.add(up_w)
         try:
-            drop = {'proxy-connection', 'connection', 'keep-alive', 'proxy-authorization', 'te', 'upgrade', 'host', 'transfer-encoding', 'content-length'}
+            drop = {'proxy-connection', 'connection', 'keep-alive', 'proxy-authorization', 'te', 'upgrade', 'host', 'transfer-encoding', 'content-length',
+                    'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'forwarded', 'via', 'x-real-ip', 'client-ip', 'true-client-ip', 'x-client-ip', 'x-original-url', 'x-rewrite-url'}   # ページの JS が設定でき、上流に素通りして偽装に使えるヘッダは落とす
             hdr = ''.join(f'{k}: {v}\r\n' for k, v in headers if k.lower() not in drop)
             if n:
                 hdr += f'Content-Length: {n}\r\n'
@@ -357,7 +403,7 @@ class FilterProxy:
                 self.unpinned.append(p.hostname)
             else:
                 target = path
-            up_w.write(f'{method} {target} HTTP/1.1\r\nHost: {authority}\r\n{hdr}Connection: close\r\n\r\n'.encode() + body); await up_w.drain()
+            up_w.write(f'{method} {target} HTTP/1.1\r\nHost: {authority}\r\n{hdr}Connection: close\r\n\r\n'.encode('iso-8859-1', 'replace') + body); await up_w.drain()
             self.forwarded.append(f'{p.hostname}:{port}')
             await self._pipe(None, w, up_r, up_w)   # 以降のクライアントからの入力は読まない(2 本目のリクエストを通さない)
         finally:

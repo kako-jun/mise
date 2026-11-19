@@ -59,7 +59,7 @@ DEFAULT_PER_DAY = 3000        # 1 日の上限(撮影の試行数。成功・失
 DEFAULT_CONCURRENCY = 2
 STORE_LABELS = ('local', 'r2-local', 'r2-remote')
 # 再試行しても同じ結果になる失敗(月次に戻す)。それ以外は一時的として RETRY_DAYS 後(連続 RETRY_LIMIT 回で月次)
-PERMANENT_ERRORS = {'ssrf_blocked', 'robots_disallowed', 'bad_url', 'bad_port', 'cross-site-redirect', 'blank', 'bad_image', 'dns', 'resource-limit'}
+PERMANENT_ERRORS = {'ssrf_blocked', 'robots_disallowed', 'bad_url', 'bad_port', 'cross-site-redirect', 'blank', 'bad_image', 'dns', 'resource-limit', 'upstream_dns_unpinned'}
 PERMANENT_PREFIXES = ('x-robots-tag:', 'meta-robots:', 'http-4')
 TRANSIENT_HTTP = {'http-408', 'http-429'}
 
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS thumbs (
   obscured INTEGER NOT NULL DEFAULT 0, obscured_ratio REAL,    -- cookie 同意バナー・全面モーダルの疑い(撮り直しはしない。画面側の判断材料)
   exclude INTEGER NOT NULL DEFAULT 0, exclude_reason TEXT,     -- 手動の除外(成人向けの属性が sites に無い間の代わり)。撮らず、sql にも出さない
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  notes TEXT,                                                  -- 診断の注記(例: 上流プロキシが IP 宛て CONNECT を拒み、名前解決が上流になった: upstream_dns_unpinned)
+  notes TEXT,                                                  -- 診断の注記(例: 明示フラグで許した、名前解決が上流になった接続: upstream_dns_unpinned: <host>)
   captured_at TEXT, changed_at TEXT, last_checked_at TEXT, next_check_at TEXT);
 -- どの保存先に、どのキー(<sha256(site_id)先頭32桁>.webp)で、どの内容(thumbs.thumb_hash)を置いたかの印。保存先ごとに別(local / r2-local / r2-remote)。
 -- キーはサイト固定で撮り直しは上書きなので、印は「そのキーに置いた最後の内容」を 1 つだけ持つ。
@@ -230,9 +230,11 @@ class NodeCapturer:
     - メモリ・CPU の上限は systemd-run --user --scope(使えない環境では上限なしで続行し、警告を出す)。
     - sandbox=False は bwrap なし・TCP のプロキシ(テスト・GPU で固まらず信頼できる環境用)。
     - 受信量・接続数の上限をフィルタが超えたら、ブラウザごと止めて resource-limit にする。"""
-    def __init__(self, sandbox=True, timeout=CAPTURE_TIMEOUT, memory_max='2G', cpu_quota='150%', proxy_kwargs=None, on_proxy=None, log=print, limits=True):
+    def __init__(self, sandbox=True, timeout=CAPTURE_TIMEOUT, memory_max='2G', cpu_quota='150%', proxy_kwargs=None, on_proxy=None, log=print, limits=True, allow_unpinned_connect=False, allow_plain_upstream=False, probe_target=('1.1.1.1', 443)):
+        self.allow_unpinned_connect = allow_unpinned_connect; self.allow_plain_upstream = allow_plain_upstream; self.probe_target = probe_target
+        self.allow_unpinned = allow_unpinned_connect or allow_plain_upstream   # 名前解決が上流になった(固定できなかった)撮影を保存してよいか
         self.sandbox = sandbox; self.limits = limits; self.timeout = timeout; self.memory_max = memory_max; self.cpu_quota = cpu_quota
-        self.proxy_kwargs = proxy_kwargs or {}; self.on_proxy = on_proxy; self.log = log
+        self.proxy_kwargs = dict(proxy_kwargs or {}, allow_unpinned_connect=allow_unpinned_connect, allow_plain_upstream=allow_plain_upstream); self.on_proxy = on_proxy; self.log = log
         self.node = node_path(); self.chromium = chromium_path(); self.playwright = playwright_dir()
         self.scope = None
 
@@ -242,6 +244,16 @@ class NodeCapturer:
             self.scope = _systemd_scope_ok()
         if self.limits and not self.scope:
             raise RuntimeError('systemd-run --user --scope でメモリ・CPU の上限を掛けられない(memory コントローラが委譲されていない等)。上限なしで撮るなら --no-limits を付ける')
+
+    def check_upstream(self):
+        """上流プロキシがあるなら、IP 宛て CONNECT を受け付けるかをジョブの開始時に 1 回だけ、公開 IP リテラルへのプローブ(応答コードだけ。データは送らない)で確かめる。
+        受け付けない上流では例外で止める(名前の CONNECT に落とさない)。許すのは --allow-unpinned-upstream を明示したときだけ。"""
+        up = self.proxy_kwargs.get('upstream')
+        up = netfilter.upstream_from_env() if up is None else up
+        ok, detail = netfilter.probe_upstream(up, self.probe_target)
+        self.log(f'上流プロキシのプローブ: {detail}' + (' (上流なし)' if detail == 'no upstream' else ''))
+        if not ok and not self.allow_unpinned_connect:
+            raise RuntimeError(f'上流プロキシが IP 宛ての CONNECT を受け付けない({detail})。名前の CONNECT に落とすと名前解決が上流になり、IP を固定できない。許すなら --allow-unpinned-upstream を明示する')
 
     def _limits(self):
         self.check_ready()
@@ -559,7 +571,10 @@ def refine(rec, host):
     pr = rec.get('proxy') or {}
     if pr.get('over_limit'):
         return 'resource-limit'
-    if reason.startswith('error:net::'):
+    for dest, why in pr.get('blocked', []):   # フィルタが自分のページ(主フレーム)を拒否した: ブラウザには 403 の応答か接続エラーとして見える
+        if why == 'plain_http_upstream' and host_key(dest.split(':')[0]) == host_key(host):
+            return 'upstream_dns_unpinned'   # 上流あり環境の平文 HTTP のサイト(IP 固定できないので既定では撮らない)
+    if reason.startswith('error:') and 'net::' in reason:
         for dest, why in pr.get('blocked', []):
             if host_key(dest.split(':')[0].split(' -> ')[0]) == host_key(host) and why in ('non_public', 'dns_failed'):
                 return 'ssrf_blocked' if why == 'non_public' else 'dns'
@@ -599,7 +614,9 @@ def attempt(url, gate, capturer):
                     continue
             break
         un = (rec.get('proxy') or {}).get('unpinned') or []
-        notes = ('upstream_dns_unpinned: ' + ','.join(sorted(set(un)))) if un else None   # 上流プロキシが IP 宛て CONNECT を拒み、その接続は名前解決が上流(IP を固定できなかった)
+        notes = ('upstream_dns_unpinned: ' + ','.join(sorted(set(un)))) if un else None   # 明示フラグで許した、名前解決が上流になった接続(IP を固定できなかった)
+        if un and not getattr(capturer, 'allow_unpinned', False):
+            return {'status': 'error', 'error': 'upstream_dns_unpinned', 'notes': notes}   # 名前解決が上流になった撮影は、画像を保存もアップロードもしない
         base = {'notes': notes, 'http_status': rec.get('http_status'), 'final_url': rec.get('final_url'), 'obscured': (rec.get('obscured_ratio') or 0) > 0.5, 'obscured_ratio': rec.get('obscured_ratio')}
         if (rec.get('proxy') or {}).get('over_limit'):
             return dict(base, status='error', error='resource-limit')
@@ -733,6 +750,9 @@ def main(argv=None):
     p.add_argument('--limit', type=int, default=50); p.add_argument('--apply', action='store_true'); p.add_argument('--store-dir', default=str(DEFAULT_STORE))
     p.add_argument('--per-day', type=int, default=DEFAULT_PER_DAY, help=f'1 日(UTC)の試行数の上限(既定 {DEFAULT_PER_DAY})')
     p.add_argument('--concurrency', type=int, default=DEFAULT_CONCURRENCY, help=f'同時に撮る数(既定 {DEFAULT_CONCURRENCY}。同じホストは常に直列)')
+    p.add_argument('--allow-unpinned-upstream', action='store_true', help='上流プロキシが IP 宛て CONNECT を受け付けなくても、名前の CONNECT で撮る(名前解決が上流になる。記録に残る)')
+    p.add_argument('--allow-plain-http-upstream', action='store_true', help='上流プロキシ経由で平文 HTTP を撮る(IP 固定できず名前解決が上流になる。既定は撮らない)')
+    p.add_argument('--upstream-probe', default='1.1.1.1:443', help='上流プロキシが IP 宛て CONNECT を受け付けるかを確かめる公開 IP(応答コードだけ確認。既定 1.1.1.1:443)')
     p.add_argument('--no-limits', action='store_true', help='メモリ・CPU の上限(systemd-run --user --scope)なしで撮る。上限を掛けられない環境でだけ明示する')
     p.add_argument('--no-bwrap', action='store_true', help='サンドボックス(bwrap)を使わない。信頼できる環境・テスト用(既定は使う)')
     p.add_argument('--store', choices=['local', 'r2'], default='local', help='保存先(既定 local)。r2 は --apply と併せたときだけ wrangler を呼ぶ。R2 は既定でローカル模擬')
@@ -778,8 +798,11 @@ def main(argv=None):
                     print(f'warning: R2 にアップロード済みのサイトを除外した。除外だけでは R2 の /thumb/<k>.webp が公開で取れたまま残る: {", ".join(up)}\n'
                           '  手順(この順): ① 除外(済) → ② `sql` を出して D1 の thumb 列を NULL にする → ③ `delete --site <id> --apply --d1-done`(R2 から消す。本番は --r2-remote)。D1 が先、R2 が後', file=sys.stderr)
                     if a.delete_uploaded:
+                        remote = [i for i in up if _marked(db, thumb_name(i), 'r2-remote')]; local = [i for i in up if i not in remote]
                         print('  次の dry-run を確認してから --apply --d1-done を付ける:', file=sys.stderr)
-                        print('  uv run --with pillow python3 scripts/thumbnail/thumbnail.py delete ' + ' '.join(f'--site {i}' for i in up) + ' --r2-remote', file=sys.stderr)
+                        for ids_, flag_ in ((remote, ' --r2-remote'), (local, '')):   # r2-local にだけ上げたサイトに --r2-remote は付けない
+                            if ids_:
+                                print('  uv run --with pillow python3 scripts/thumbnail/thumbnail.py delete ' + ' '.join(f'--site {i}' for i in ids_) + flag_, file=sys.stderr)
     elif a.cmd == 'run':
         if not a.apply:
             rows = due_sites(db, now, min(a.limit, remaining_today(db, now, a.per_day))) if db else []
@@ -789,7 +812,9 @@ def main(argv=None):
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
         try:
-            cap = NodeCapturer(sandbox=not a.no_bwrap, limits=not a.no_limits); cap.check_ready()
+            ph, _, pp = a.upstream_probe.rpartition(':')
+            cap = NodeCapturer(sandbox=not a.no_bwrap, limits=not a.no_limits, allow_unpinned_connect=a.allow_unpinned_upstream, allow_plain_upstream=a.allow_plain_http_upstream, probe_target=(ph, int(pp)))
+            cap.check_ready(); cap.check_upstream()
         except RuntimeError as e:
             print(str(e), file=sys.stderr)
             return 3
