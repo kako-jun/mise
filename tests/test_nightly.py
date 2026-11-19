@@ -213,7 +213,7 @@ class Run(Env):
         self.assertEqual(self.run_night('--favicon-limit', '5'), 0)
         calls = [c for c in self.calls if 'favicon.py' in ' '.join(c)]
         joined = [' '.join(c) for c in calls]
-        self.assertTrue(all(j.startswith('uv run --with pillow python3 ') for j in joined))   # 夜間本体は Pillow を持たない
+        self.assertTrue(all(j.startswith('uv run --with pillow python ') for j in joined))   # 夜間本体は Pillow を持たない
         self.assertTrue(any(' run --apply --limit 5 ' in j for j in joined))
         self.assertTrue(any(' sql --since 2026-11-18T00:00:00Z ' in j for j in joined))
         self.assertEqual(self.wrangler_calls(), [])

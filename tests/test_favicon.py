@@ -373,6 +373,14 @@ class Ledger(unittest.TestCase):
         with self.assertRaises(ImportError):
             favicon.run(self.db, self.store, T0, 10, session=S(), log=lambda m: None)
 
+    def test_open_readonly_with_special_characters_in_path(self):
+        d = Path(self.tmp.name) / 'a?b#c%d'
+        favicon.connect(d / 'f.sqlite').close()
+        ro = favicon.open_readonly(d / 'f.sqlite')
+        self.assertIsNotNone(ro)
+        self.assertEqual(ro.execute('SELECT COUNT(*) FROM favicons').fetchone()[0], 0)
+        ro.close()
+
     def test_readonly_commands_create_nothing(self):
         d = Path(self.tmp.name) / 'new'
         db = d / 'f.sqlite'

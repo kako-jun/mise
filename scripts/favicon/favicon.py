@@ -10,6 +10,7 @@ import argparse
 import datetime
 import hashlib
 import io
+import os
 import sqlite3
 import sys
 import time
@@ -322,7 +323,7 @@ def open_readonly(path):
     """読み取り専用で開く(台帳もディレクトリも作らない)。無ければ None。"""
     if not Path(path).is_file():
         return None
-    db = sqlite3.connect(f'file:{path}?mode=ro', uri=True); db.row_factory = sqlite3.Row
+    db = sqlite3.connect('file:' + urllib.parse.quote(os.path.abspath(path)) + '?mode=ro', uri=True); db.row_factory = sqlite3.Row
     return db
 
 
