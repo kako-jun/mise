@@ -93,7 +93,7 @@
 
 ## アプリとして追加（PWA）
 
-ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">`（`favicon.ico`・`favicon.svg`）で、ロゴと同じ三毛猫の `M`（クリーム色の縁取り付き）になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
+ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">`（`favicon.ico`・`favicon.svg`）で、ロゴと同じ帯の位置（30/31/57/58/72/73%）の三毛猫模様（橙・クリーム・茶）を塗った `M`（クリーム色の縁取り付き）になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
 
 ### インストール提案バナー
 

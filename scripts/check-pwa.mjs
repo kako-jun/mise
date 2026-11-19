@@ -88,4 +88,20 @@ function decodePng(buf) {
   }
   check(`maskable-512: M が背景と違う画素で存在し、すべて中央 80%（半径 ${(w * .4).toFixed(1)}px）に収まる（最大 ${maxR.toFixed(1)}）`, inside > 5000 && maxR <= w * .4);
 }
+{
+  // apple-touch-icon は不透明（iOS は透過を黒で塗るため）
+  const { w, h, bpp, px } = decodePng(fs.readFileSync(root + 'public/pwa/icon-180.png'));
+  let opaque = true;
+  if (bpp === 4) for (let i = 0; i < w * h; i++) if (px[i * 4 + 3] !== 255) { opaque = false; break; }
+  check('apple-touch-icon(icon-180.png) が不透明（アルファが全て 255）', opaque);
+}
+{
+  // 16px のファビコン: M の上端の切れ込み（2 つの山の間）が上から 6 行とも中央に見えていること
+  // （透明または濃色の輪郭の画素。縁・輪郭を太らせると切れ込みは透明でなく濃色の線として残る）
+  const off = ico.readUInt32LE(6 + 12), len = ico.readUInt32LE(6 + 8);
+  const { w, bpp, px } = decodePng(ico.subarray(off, off + len));
+  const seen = y => bpp === 4 && [6, 7, 8, 9].some(x => { const o = (y * w + x) * 4; return px[o + 3] < 200 || px[o] + px[o + 1] + px[o + 2] < 250; });
+  const rows = [0, 1, 2, 3, 4, 5].map(seen);
+  check(`favicon.ico の 16px で M の上端の切れ込みが上から 6 行とも残る（${rows.map(v => (v ? 1 : 0)).join('')}）`, rows.every(Boolean));
+}
 process.exit(failed ? 1 : 0);
