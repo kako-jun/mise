@@ -125,7 +125,7 @@ function renderStats() {
 }
 // 範囲つきの URL（/jp/?category=…）。カテゴリの階層は従来どおりクエリ。
 function categoryUrl(path, scope=currentScope) { const u=new URL(scopePath(scope),location.origin); path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
-// 区画は /jp/13/ -> jp-13。サイトのある区画かの確認は scopes が届いてから（無ければ国の範囲へ戻す。restoreLocation の前に正規化する）。
+// 区画は /jp/13/ -> jp-13。サイトのある区画かはサーバーが確かめる（サイトの無い区画の URL はサーバーが 404 にする。ここでは確かめない）。
 const scopeFromLocation = () => { const m=location.pathname.match(/^\/(?:([a-z]{2})\/([a-z0-9]{1,3})|([a-z]{2}|all))\/$/); return m ? (m[1] ? `${m[1]}-${m[2]}` : m[3]) : DEFAULT_SCOPE; };
 function link(label, path, callback) {
   const a=document.createElement('a'); a.href=categoryUrl(path); a.textContent=label;
@@ -641,7 +641,13 @@ function regionSelect() {
   const opt=(value,label,count)=>{ const o=document.createElement('option'); o.value=value; o.textContent=`${label} (${count})`; if(value===currentScope) o.selected=true; sel.append(o); };
   opt(cc.toLowerCase(),t('allOf')(countryLabel(cc)),scopes.countries.find(r=>r.code===cc)?.count??0);
   regions.forEach(r=>opt(r.code.toLowerCase(),window.MISE_REGIONS?.[r.code]?.[language]??r.code,r.count));
-  sel.addEventListener('change',()=>chooseScope(sel.value));
+  // キーボードの矢印などで選択が動くたびに change が発火する（閉じた状態では 1 回押すごと）。そのたびに遷移・取得が走らないよう、
+  // 直前に keydown があった change は保留し、Enter・フォーカスが外れたとき・700ms 操作が止まったときに確定する。マウス/タップの選択（keydown なし）は即時。
+  let keyAt=0, timer=0;
+  const commit=()=>{ clearTimeout(timer); timer=0; if(sel.isConnected && sel.value!==currentScope) chooseScope(sel.value); };
+  sel.addEventListener('keydown',e=>{ keyAt=e.key==='Enter' ? 0 : performance.now(); if(e.key==='Enter') commit(); });
+  sel.addEventListener('blur',()=>{ if(timer) commit(); });
+  sel.addEventListener('change',()=>{ if(keyAt && performance.now()-keyAt<150) { clearTimeout(timer); timer=setTimeout(commit,700); } else commit(); });
   row.append(sel); return row;
 }
 function renderScopeNav() {

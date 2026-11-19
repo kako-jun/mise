@@ -90,7 +90,8 @@ function pathOf(categories, id) {
 }
 
 // 範囲ごと（all と、サイトが 1 件以上ある国・区画）に、範囲トップと、その範囲内に 1 サイト以上あるカテゴリの URL を載せる。`/` は `/jp/` の別名なので載せない。
-export async function sitemapXml(db) {
+export const SITEMAP_MAX_URLS = 50000;
+export async function sitemapXml(db, maxUrls = SITEMAP_MAX_URLS) {
   const scopes = await loadScopes(db);
   const urls = [ORIGIN + '/about/']; // アバウトページ（静的な説明ページ。索引に載せてよい。#118）
   // カテゴリ一覧と全範囲の件数を 1 回ずつ読む（範囲ごとに loadCategories を実行しない。#126）。
@@ -104,12 +105,14 @@ export async function sitemapXml(db) {
     urls.push(ORIGIN + categoryHref([], scope));
     for (const c of categories) if (nonEmpty.get(key)?.has(c.id)) urls.push(ORIGIN + categoryHref(pathOf(categories, c.id), scope));
   }
+  // 1 ファイルの上限（sitemaps.org: 50,000 URL）。超えたら黙って切り捨てず例外にする（分割は sitemap index へ。docs/design/seo.md）。
+  if (urls.length > maxUrls) throw new Error(`sitemap has ${urls.length} URLs (limit ${maxUrls}): split into a sitemap index`);
   const body = urls.map(u => `<url><loc>${esc(u)}</loc></url>`).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>\n`;
 }
 
 // 範囲切替の HTML（SSR。JS が起動すると app.js が同じ内容に描き直す）。現在の範囲は aria-current="page"。
-function scopeNavHtml(scopes, scope) {
+export function scopeNavHtml(scopes, scope) {
   // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。
   const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}" aria-label="${esc(label + ", " + count + (count === 1 ? " site" : " sites"))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
   const globe = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
@@ -120,16 +123,21 @@ function scopeNavHtml(scopes, scope) {
   }
   return `<ul class="scope-list">${items.join('')}</ul>${regionSelectHtml(scopes, scope)}`;
 }
+// JS なしでも・クローラも区画のページへ辿れるよう、同じ区画を通常のリンク（/jp/13/ 形式）で並べた折りたたみ。サイトのある区画だけ（無い区画は 404 なので出さない）。
+// JS が起動すると app.js が範囲ナビごと描き直し、select だけになる。
+function regionLinksHtml(cc, regions) {
+  return `<details class="region-links"><summary>Regions of ${esc(countryName(cc))}</summary><ul>${regions.map(r => `<li><a href="${esc(scopePath(r.code.toLowerCase()))}">${esc(regionName(r.code))} (${r.count})</a></li>`).join('')}</ul></details>`;
+}
 // 国（または国の中の区画）が現在の範囲で、その国に区画があるときの区画選択（SSR。app.js が同じ内容に描き直す）。value は範囲名（jp / jp-13）。
 // 先頭は国全体（区画で絞らない）。区画が無い範囲（all・区画を持たない国）では出さない。
-function regionSelectHtml(scopes, scope) {
+export function regionSelectHtml(scopes, scope) {
   const sc = parseScope(scope);
   if (!sc?.cc) return '';
   const regions = (scopes.regions ?? []).filter(r => r.code.startsWith(sc.cc + '-'));
   if (!regions.length) return '';
   const country = scopes.countries.find(r => r.code === sc.cc);
   const opt = (value, label, count) => `<option value="${esc(value)}"${value === scope ? ' selected' : ''}>${esc(label)} (${count})</option>`;
-  return `<div class="region-row"><select class="region-select" aria-label="Region">${opt(sc.cc.toLowerCase(), 'All of ' + countryName(sc.cc), country?.count ?? 0)}${regions.map(r => opt(r.code.toLowerCase(), regionName(r.code), r.count)).join('')}</select></div>`;
+  return `<div class="region-row"><select class="region-select" aria-label="Region">${opt(sc.cc.toLowerCase(), 'All of ' + countryName(sc.cc), country?.count ?? 0)}${regions.map(r => opt(r.code.toLowerCase(), regionName(r.code), r.count)).join('')}</select>${regionLinksHtml(sc.cc, regions)}</div>`;
 }
 
 // 範囲ページ（/ , /jp/ , /us/ , /all/）の HTML を、URL（?category= / ?q=）に応じたメタ情報と JS なしで読める本文に書き換える。

@@ -211,12 +211,14 @@ export async function querySites(db, { cc = null, region = null, category = null
 const PICK_BATCHES = [40, 80], PICK_RANDOM_MAX = 50; // 1 回に引く rowid の数（D1 のバインド値は 1 文 100 個まで）。合う行が少ない範囲（本番では日本の非一括は 3%）ほど引き直しが要る
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }; // Fisher-Yates
 // region（例 JP-13）があれば区画内、無ければ cc（国）内、どちらも無ければ全世界。区画があるとき cc は使わない（区画は国の部分集合）。
+// ORDER BY RANDOM() で引く SQL。?1 = 区画コード（region あり）または国コード（無ければ null で全世界）、除外 id は ?2〜。region があるときは region_code の等値だけ（idx_sites_region_sort を使う）。
+export const randomPickSql = ({ region = null, nExclude = 0, k = 3 }) => `SELECT ${COLUMNS} FROM sites s WHERE s.bulk_import = 0 AND ${region ? 's.region_code = ?1' : '(?1 IS NULL OR s.country_code = ?1)'}${nExclude ? ` AND s.id NOT IN (${Array.from({ length: nExclude }, (_, i) => '?' + (i + 2)).join(',')})` : ''} ORDER BY RANDOM() LIMIT ${Number(k)}`;
 export async function randomSites(db, cc, n = 3, region = null) {
   let scopeN = null;
   if (cc || region) { scopeN = (await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(region ?? cc).first())?.n ?? 0; if (!(scopeN > 0)) return []; }
-  const cond = `s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) AND (?2 IS NULL OR s.region_code = ?2)`;
-  const byRandom = async (excludeIds, k) => (await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE ${cond}${excludeIds.length ? ` AND s.id NOT IN (${excludeIds.map((_, i) => '?' + (i + 3)).join(',')})` : ''} ORDER BY RANDOM() LIMIT ${Number(k)}`).bind(region ? null : cc, region, ...excludeIds).all()).results;
+  const byRandom = async (excludeIds, k) => (await db.prepare(randomPickSql({ region, nExclude: excludeIds.length, k })).bind(region ?? cc, ...excludeIds).all()).results;
   // 区画は全体のごく一部なので、乱数の rowid で引くと当たりが少ない。区画の索引（0026）で区画内の行だけを読んで並べ替える（区画の件数に比例。最大でも数千行）。
+  // 区画のときだけ `s.region_code = ?1` を書く（`(?2 IS NULL OR …)` の形だと索引が使われず activity の索引＋一時 B-tree になった。filters() と同じ方針）。
   if (scopeN !== null && (region || scopeN <= PICK_RANDOM_MAX)) return shuffle(await byRandom([], n)).map(shape);
   const max = (await db.prepare(`SELECT MAX(rowid) AS m FROM sites`).bind().first())?.m ?? 0;
   if (!max) return [];
@@ -224,7 +226,7 @@ export async function randomSites(db, cc, n = 3, region = null) {
   const found = new Map();
   for (let round = 0; round < PICK_BATCHES.length && found.size < n; round++) {
     const rowids = Array.from({ length: PICK_BATCHES[round] }, () => Math.floor(Math.random() * max) + 1);
-    const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.rowid IN (${rowids.map((_, i) => '?' + (i + 3)).join(',')}) AND +s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) AND (?2 IS NULL OR s.region_code = ?2)`).bind(region ? null : cc, region, ...rowids).all();
+    const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.rowid IN (${rowids.map((_, i) => '?' + (i + 2)).join(',')}) AND +s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1)`).bind(cc, ...rowids).all();
     for (const r of results) if (!found.has(r.id)) found.set(r.id, r);
   }
   const rows = shuffle([...found.values()]).slice(0, n);

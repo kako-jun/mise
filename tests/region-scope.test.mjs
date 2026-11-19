@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import app from '../src/index.js';
-import { parseScope, scopePath, categoryHref } from '../src/seo.js';
+import { parseScope, scopePath, categoryHref, loadScopes, scopeNavHtml, sitemapXml } from '../src/seo.js';
 import { scopeKeyOf } from '../src/sites.js';
 
 // 範囲を国から都道府県・州まで広げる（#127）。URL・API の解釈と、404/301 の規則。件数と一覧の一致は tests/category-counts.test.mjs。
@@ -80,4 +80,61 @@ test('ページの URL: 未知の区画・不正な形は 404、大文字は小�
   assert.equal((await get(db, '/JP/99/')).status, 301, '大文字は先に小文字へ（国の /ZZ/ と同じ。移動先で 404）');
   // 国のページは従来どおり
   assert.equal((await get(db, '/jp')).status, 301); assert.equal((await get(db, '/zz/')).status, 404);
+});
+
+// 0026 の戻し（scripts/rollback-region-counts.sql）: 適用 → 戻し で、0022 だけの状態と同じ集計表になり、旧 integrity.py（区画を知らない版）の検査が 0 行。
+test('0026 の戻し SQL: 0022 のトリガと逐語一致し、戻した後は旧 integrity の国別検査が 0 行・以後の投入も旧トリガで数える', () => {
+  const rb = readFileSync(new URL('../scripts/rollback-region-counts.sql', import.meta.url), 'utf8');
+  const m22 = readFileSync(new URL('0022_category_counts.sql', MIG), 'utf8');
+  for (const name of ['category_closure_au', 'category_counts_sc_ai', 'category_counts_sc_ad', 'category_counts_sc_au', 'category_counts_sites_ai', 'category_counts_sites_bd', 'category_counts_sites_au']) {
+    const i = m22.indexOf('CREATE TRIGGER ' + name + ' '), t = m22.slice(i, m22.indexOf('\nEND;', i) + 5);
+    assert.ok(rb.includes(t), name + ' は 0022 の逐語');
+  }
+  const only = f => { const db = new DatabaseSync(':memory:'); db.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)'); for (const x of readdirSync(MIG).filter(x => x.endsWith('.sql')).sort().filter(f)) db.exec(readFileSync(new URL(x, MIG), 'utf8')); return db; };
+  const snap = db => ['category_closure', 'category_counts', 'scope_counts'].map(t => db.prepare(`SELECT * FROM ${t} ORDER BY 1,2`).all().map(r => ({ ...r })));
+  const db = only(() => true), base = only(f => f < '0026');
+  db.exec(rb);
+  assert.deepEqual(snap(db), snap(base), '戻した後 = 0022 だけの状態');
+  // 旧 integrity.py（main 時点）の国別 2 本の SQL（逐語）
+  const oldCountry = db.prepare("SELECT sc.scope FROM scope_counts sc WHERE sc.scope<>'all' AND sc.n<>(SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope)").all();
+  const oldCatExtra = db.prepare("SELECT cc.category_id FROM category_counts cc WHERE cc.scope<>'all' AND cc.n<>0 AND NOT EXISTS (SELECT 1 FROM sites s JOIN site_categories x ON x.site_id=s.id WHERE s.country_code=cc.scope)").all();
+  assert.deepEqual([oldCountry, oldCatExtra], [[], []]);
+  // 戻した後の投入（区画つき）も国・all だけ数える
+  const n = () => db.prepare("SELECT n FROM scope_counts WHERE scope = 'JP'").get().n;
+  const before = n();
+  db.prepare("INSERT INTO sites (id,url,name,description_ja,country_code,region_code) VALUES ('rb1','https://rb1.example/','n','d','JP','JP-13')").run();
+  assert.equal(n(), before + 1); assert.equal(db.prepare("SELECT COUNT(*) c FROM scope_counts WHERE scope LIKE '%-%'").get().c, 0);
+});
+
+test('ピックアップの区画経路: region_code の等値で idx_sites_region_sort を使う（activity の索引＋一時 B-tree にならない）', async () => {
+  const db = fresh();
+  const { randomPickSql } = await import('../src/sites.js');
+  const plan = sql => db.prepare('EXPLAIN QUERY PLAN ' + sql).all('JP-13', 'x').map(r => r.detail).join('\n');
+  const pr = plan(randomPickSql({ region: 'JP-13', nExclude: 1 }));
+  assert.match(pr, /idx_sites_region_sort/); assert.doesNotMatch(pr, /idx_sites_activity/);
+  assert.doesNotMatch(randomPickSql({ region: null }), /region_code = /); // 国・全世界の SQL は従来のまま
+});
+
+test('SSR: 国・区画のページに、サイトのある区画へのリンク（/jp/13/ 形式）が JS なしで出る。サイトの無い区画・区画の無い範囲では出ない', async () => {
+  const db = fresh();
+  const scopes = await loadScopes(d(db));
+  for (const scope of ['jp', 'jp-13']) {
+    const html = scopeNavHtml(scopes, scope);
+    assert.match(html, /<details class="region-links">/);
+    const hrefs = [...html.matchAll(/<a href="(\/jp\/\d\d\/)">/g)].map(m => m[1]);
+    assert.deepEqual(hrefs, scopes.regions.filter(r => r.code.startsWith('JP-')).map(r => `/jp/${r.code.slice(3)}/`), scope + ': サイトのある区画だけ・コード順');
+    assert.ok(hrefs.includes('/jp/13/') && !hrefs.includes('/jp/99/'));
+    assert.match(html, /<option value="jp-13"/); // select も従来どおり
+  }
+  assert.doesNotMatch(scopeNavHtml(scopes, 'all'), /region-links|region-select/);
+  assert.doesNotMatch(scopeNavHtml({ ...scopes, regions: [] }, 'jp'), /region-links/);
+});
+
+test('sitemap: URL 数が上限を超えたら例外（黙って切り捨てない）', async () => {
+  const db = fresh(), dd = d(db);
+  const xml = await sitemapXml(dd);
+  const n = (xml.match(/<loc>/g) || []).length;
+  assert.ok(n > 100 && n <= 50000);
+  assert.ok((await sitemapXml(dd, n)).includes('<urlset'), '上限ちょうどは通る');
+  await assert.rejects(() => sitemapXml(dd, n - 1), /sitemap index/);
 });
