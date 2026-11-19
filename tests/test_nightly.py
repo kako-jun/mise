@@ -15,6 +15,7 @@ import frontier
 import judge
 import nightly
 import integrity
+import usage_guard
 
 REAL_LEAF_ORDER = nightly.wikidata_leaf_order
 import discover_wikidata
@@ -59,6 +60,11 @@ class Env(unittest.TestCase):
         self.p_gate = mock.patch.object(integrity, 'gate', side_effect=lambda sql, current=None: self.violations)
         self.p_gate.start()
         self.addCleanup(self.p_gate.stop)
+        # 使用量ガード(#157): 実機の ~/.config や Cloudflare API を見ない。既定はトークン無し(未設定の警告のみ)
+        self.usage_env = Path(self.tmp.name) / 'no-such-usage.env'
+        self.p_usage = mock.patch.object(usage_guard, 'DEFAULT_ENV', str(self.usage_env))
+        self.p_usage.start()
+        self.addCleanup(self.p_usage.stop)
         self.p_env = mock.patch.dict(os.environ, {'ANTHROPIC_API_KEY': 'dummy'})
         self.p_env.start()
         self.addCleanup(self.p_env.stop)
@@ -228,6 +234,56 @@ class Run(Env):
         with mock.patch.object(nightly, 'run_cmd', side_effect=failing):
             self.assertEqual(self.run_night('--favicon-limit', '5'), 0)
         self.assertTrue(any('favicon' in g for g in self.status()['guards']))
+
+    def test_usage_stage_without_token_warns_but_does_not_fail(self):
+        self.seed()
+        self.assertEqual(self.run_night(), 0)
+        st = self.status()
+        u = next(s for s in st['stages'] if s['name'] == 'usage')
+        self.assertEqual(u['status'], 'ok')
+        self.assertTrue(any('使用量ガードは動いていません' in g and 'docs/operations/usage-guard.md' in g for g in st['guards']))
+
+    def test_usage_stage_runs_even_after_a_failed_stage_and_never_fails_the_night(self):
+        self.seed()
+        orig = self.fake
+        def fake(cmd, env=None, timeout=None):
+            if 'run.py' in ' '.join(cmd) and 'triage' in cmd:
+                return 1, 'boom'
+            return orig(cmd, env=env, timeout=timeout)
+        with mock.patch.object(nightly, 'run_cmd', side_effect=fake), mock.patch.object(usage_guard, 'run', side_effect=RuntimeError('x')) as ug:
+            self.run_night()
+        ug.assert_called_once()
+        st = self.status()
+        u = next(s for s in st['stages'] if s['name'] == 'usage')
+        self.assertEqual(u['status'], 'ok')       # 使用量ガードの例外は段の失敗にしない
+        self.assertEqual(next(s for s in st['stages'] if s['name'] == 'triage')['status'], 'failed')
+
+    def test_usage_guard_warnings_go_to_guards_and_report(self):
+        self.seed()
+        with mock.patch.object(usage_guard, 'run', return_value={'guards': ['使用量: D1 読み取り行 が当月の枠の 55.0%'], 'note': 'x'}):
+            self.assertEqual(self.run_night(), 0)
+        self.assertIn('使用量: D1 読み取り行 が当月の枠の 55.0%', self.status()['guards'])
+        self.assertIn('55.0%', (self.var / 'nightly' / '2026-11-18' / 'report.md').read_text())
+
+    def test_usage_guard_gets_current_utc_not_the_night_name(self):
+        # 再開・再実行で夜の名前が過去の日付でも、「今日/昨日」の基準は現在の UTC(date=None)。夜の名前を渡すと急増判定・月末予測が狂う
+        self.seed()
+        with mock.patch.object(usage_guard, 'run', return_value={'guards': [], 'note': 'x'}) as ug:
+            self.assertEqual(self.run_night(date='2026-01-05'), 0)
+        self.assertIsNone(ug.call_args[0][0])
+
+    def test_no_usage_guard_option_skips_the_stage(self):
+        self.seed()
+        with mock.patch.object(usage_guard, 'run') as ug:
+            self.assertEqual(self.run_night('--no-usage-guard'), 0)
+        ug.assert_not_called()
+        self.assertEqual(next(s for s in self.status()['stages'] if s['name'] == 'usage')['status'], 'skipped')
+
+    def test_dry_run_mentions_usage_stage(self):
+        with mock.patch('builtins.print') as pr:
+            nightly.main(['--dry-run', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger)])
+        self.assertIn('13 usage', pr.call_args[0][0])
+        self.assertIn('トークン未設定', pr.call_args[0][0])
 
     def test_status_schema(self):
         self.seed()

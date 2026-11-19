@@ -33,6 +33,8 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 手動での再デプロイや緊急時は `npx wrangler deploy` を使う。
 
+**デプロイすると共有キャッシュが切り替わる**: 重い GET の共有キャッシュ（`caches.default`、TTL 60 秒。[architecture.md](../design/architecture.md#1-リクエストの読み取り行数の観測とキャッシュ157)）のキーにデプロイのバージョン ID（`wrangler.jsonc` の `version_metadata` バインディング `CF_VERSION_METADATA`）が入るので、デプロイ直後に旧バージョンの HTML/JSON が返ることは無い（旧バージョンの保存分は使われず TTL で消える）。
+
 - 本番 DB への適用は取り返しがつかないため、migration の内容とローカルでの確認結果を見てから行う。スキーマ変更は、適用後も旧 Worker が動き続けられる後方互換の形にする。
 - **0018（`sites.search_text`）を適用した後**は、検索用の列を NFKC + 小文字化で埋め直す。migration の暫定値は ASCII の小文字化だけで、全角半角や非 ASCII の大小は埋め直すまで合わない。サイトを migration で足した後も同じ。**0020（タグを `search_text` に含める）の適用後も同じ**（**`refresh-search-text.mjs` は 0020 を含むブランチ（マージ後は main）のものを使う。古い版を回すとタグが search_text から消える**。migration の暫定値は ASCII のみ。タグの追加・削除のたびにトリガが暫定値へ戻すので、まとめてタグを入れた後にも実行する）。本番 → プレビューの順に実行する（`--db` は `mise` / `mise-preview` のみ。`--local` は `mise` 専用）:
   ```

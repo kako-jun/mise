@@ -4,7 +4,10 @@ import { securityHeaders } from './security.js';
 import { receiveRequest } from './intake.js';
 import { serveMedia } from './media.js';
 import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags, scopeKeyOf } from './sites.js';
+import { usageMiddleware } from './usage.js';
 const app = new Hono();
+// 最初に登録する: 重い GET の共有キャッシュ（ヒットなら D1 を読まない）と、1 リクエストの D1 読み取り行数の観測（X-D1-Rows-Read・閾値超過だけ警告ログ）。#157 / src/usage.js
+app.use('*', usageMiddleware());
 app.use('*', async (c, next) => {
   await next();
   // HTML はインラインスクリプトのハッシュを含む CSP を seo.js が設定する。それ以外の応答には固定の CSP を付ける。
