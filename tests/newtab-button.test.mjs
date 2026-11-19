@@ -15,7 +15,7 @@ test('別タブで開くボタン: 常に別タブ・noopener noreferrer・日�
 test('別タブで開くボタン: 表示はトグルと同期（描画時の初期化と切替時の更新）', () => {
   assert.match(app, /a\.hidden\s*=\s*openExternalInNewTab;/);
   assert.match(app, /querySelectorAll\('a\.site-newtab'\)\.forEach\(a=>\{ a\.hidden=openExternalInNewTab; \}\)/);
-  assert.match(app, /if\(href\) title\.append\(newTabButton\(href,\s*site\.name\)\)/);
+  assert.match(app, /if\(href\) title\.append\(newTabButton\(href,\s*displayName\)\)/);
   assert.match(app, /classList\.contains\('site-newtab'\)\) return;/);
 });
 test('別タブで開くボタン: display を持つので [hidden] を併記・枠なし・32px', () => {

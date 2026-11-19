@@ -41,6 +41,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
   node scripts/refresh-search-text.mjs --remote --db mise
   node scripts/refresh-search-text.mjs --remote --db mise-preview
   ```
+- **0030（サイト名を言語ごとに持つ。#167）**: `sites.name_ja` / `name_en`（NULL 可・全行 NULL で入る）を足し、`search_text` のトリガ（0018・0020）を作り直し、0027 の FTS 同期トリガも後ろで同定義に作り直す（発火順を保つため。順が逆だと INSERT で索引が壊れる）。手順: (1) migration（`wrangler d1 migrations apply`）→ (2) 名前を入れる `UPDATE sites SET name_ja=…, name_en=… WHERE id=…`（トリガが暫定値の `search_text` にし、`sites_fts` が追従する）→ (3) `node scripts/refresh-search-text.mjs --remote --db mise` で NFKC 版に直す（**0030 を含むブランチのものを使う**。古い版は name_ja/name_en を search_text から落とす）。確認: `SELECT COUNT(*) FROM sites WHERE name_ja IS NOT NULL`、`node scripts/build-search-fts.mjs --remote --db mise --check`、`/api/sites?q=<日本語名>`。戻し方は migration 冒頭のコメント。新コードは列が無いと `/api/sites` が 500 になるので、**migration を先に**入れてからコードをデプロイする（旧コードは新しい列を読まないので migration だけ先でも壊れない）。
 - **連絡先の廃止（#88）のマージ後に 1 回だけ**、本番とプレビューの両方で、廃止前に保存された連絡先を消す（`contact` 列は未使用で常に NULL とする。定期の掃除からは外してある）:
 
   ```sh

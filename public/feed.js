@@ -29,6 +29,8 @@
   let language = savedLang === 'ja' || savedLang === 'en' ? savedLang : (((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
   let newTab = storage.get('mise-external-new-tab') === 'true';
   const t = k => words[language][k];
+  // サイト名: 画面の言語の名前があればそれ、無ければ言語共通の name(#167)
+  const siteName = s => (language === 'ja' ? s.name_ja : s.name_en) || s.name;
   // 件数の桁区切り(表示言語に合わせる)。「SEEN 000128」のような固定桁の意匠には使わない
   const fmt = n => L.fmtCount(n, language);
 
@@ -83,7 +85,7 @@
     if (!withLetter) return svg;
     svg.append(svgEl('circle', { cx: 200, cy: 120, r: 58, class: 'c-plate' }));
     const txt = svgEl('text', { x: 200, y: 120, class: 'c-letter', 'text-anchor': 'middle', 'dominant-baseline': 'central' });
-    txt.textContent = [...(site.name.trim() || '?')][0].toUpperCase();
+    txt.textContent = [...(siteName(site).trim() || '?')][0].toUpperCase();
     svg.append(txt);
     return svg;
   }
@@ -147,7 +149,7 @@
       } else layer.append(calico(s, layer === hero));
     }
     const body = document.createElement('div'); body.className = 'f-body';
-    const h = document.createElement('h2'); h.id = `f-name-${i}`; h.className = 'f-name'; h.textContent = s.name;
+    const h = document.createElement('h2'); h.id = `f-name-${i}`; h.className = 'f-name'; h.textContent = siteName(s);
     const useEn = language === 'en' && s.description_en, p = document.createElement('p'); p.className = 'f-desc'; p.textContent = useEn ? s.description_en : s.description_ja + t('fallback'); if (language === 'en' && !useEn) p.lang = 'ja';
     body.append(h);
     const host = globalThis.MiseSiteHost && globalThis.MiseSiteHost(s.url); if (host) { const hs = document.createElement('p'); hs.className = 'f-host'; hs.textContent = host; body.append(hs); }
@@ -172,7 +174,7 @@
     if (when) { const time = document.createElement('time'); time.className = 'f-date'; time.dateTime = when; time.textContent = `${s.source_updated_at ? t('updated') : t('added')} ${when}`; foot.append(time); }
     // http(s) 以外(javascript: / data: / 相対 / 不正)の URL は『開く』リンクを出さない
     const href = L.safeHttpUrl(s.url);
-    if (href) { const a = document.createElement('a'); a.className = 'f-open'; a.href = href; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${s.name}`); configureLink(a); foot.append(a); }
+    if (href) { const a = document.createElement('a'); a.className = 'f-open'; a.href = href; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${siteName(s)}`); configureLink(a); foot.append(a); }
     body.append(foot);
     const scrim = document.createElement('div'); scrim.className = 'f-scrim'; scrim.setAttribute('aria-hidden', 'true');
     art.append(pic, scrim, body);
