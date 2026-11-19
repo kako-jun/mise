@@ -221,7 +221,7 @@ export async function querySites(db, o) {
   let res;
   try { res = await runQuery(db, o, basePlan); }
   catch (e) { if (!FTS_ERR.test(String(e?.message))) throw e; return fallback(e); }
-  // 実行の「後」に ready を確かめる。作り直しは ready = 0 と delete-all を同じ文でこの順に流すので、実行が空・作りかけの索引を見たなら、ここでは必ず ready = 0 が見える
+  // 実行の「後」に ready を確かめる。作り直しは ready = 0 と delete-all を同じ文でこの順に流すので、実行が空・作りかけの索引を見ても、ここを読む前に構築が終わっていなければ ready = 0 が見える（残る窓: 実行が作りかけを見てからここを読むまでの D1 1 往復［数 ms］の間に、残りのチャンク全部と ready = 1 が終わり切る場合。最後のチャンクは秒単位なので実際上は起きない）
   // （実行の前の確認だけだと、確認と実行の間に作り直しが始まる窓で一覧が途中で切れる・0 件になる）。
   if (!await ftsReady(db)) return fallback('ready が 1 でない（作り直し中・表なし）');
   return res;

@@ -325,7 +325,7 @@ test('実行時の catch は索引の失敗だけ: 表なし系は握って inst
 
 test('構築: ready = 0 に戻す操作も失敗したら、元の検証エラーも合わせて出す', () => {
   const wr = sql => { if (sql === SQL.range) return [{ lo: 1, hi: 5 }]; if (sql === SQL.counts) return [{ sites: 5, indexed: 4 }]; if (sql === SQL.unready) throw new Error('unready failed'); return []; };
-  assert.throws(() => runBuild(wr, { chunk: 10 }), /件数が合わない.*unready failed.*1 のまま/);
+  assert.throws(() => runBuild(wr, { chunk: 10 }), err => /件数が合わない.*unready failed.*1 のまま/.test(err.message) && /件数が合わない/.test(err.cause.message));
 });
 
 test('畳み込み: 索引が instr より多く拾う行（非 ASCII の大文字・語末シグマ）は instr と同じ結果（索引の行にも instr を重ねる）', async () => {
@@ -375,5 +375,15 @@ test('構築の順序: ready = 1 にしてから検証し、失敗したら read
     calls.length = 0;
     assert.throws(() => runBuild(mk(counts, fails), { chunk: 10 }), msg);
     assert.equal(calls.at(-1), SQL.unready, '失敗したら ready = 0 に戻す');
+  }
+});
+
+test('probe（planQuery）の catch は索引の失敗だけ: 索引系は握って instr、それ以外は再送出', async () => {
+  const db2 = mkSmall(60), q = cleanQuery('りんご');
+  const isProbe = s => s.includes('AS ready') && s.includes('sites_fts MATCH');
+  const ok = await planQuery(hooked(db2, { fail: s => isProbe(s) ? new Error('no such table: sites_fts') : null }), { q });
+  assert.equal(ok.qMode, 'instr');
+  for (const msg of ['too many terms in compound SELECT', 'D1_ERROR: Network connection lost']) {
+    await assert.rejects(() => planQuery(hooked(db2, { fail: s => isProbe(s) ? new Error(msg) : null }), { q }), new RegExp(msg.slice(0, 12)));
   }
 });

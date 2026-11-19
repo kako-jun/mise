@@ -55,7 +55,7 @@ export function runBuild(wr, { chunk = DEFAULT_CHUNK, log = () => {} } = {}) {
   ranges.forEach(([a, b], i) => { wr(SQL.chunk(a, b)); log(`chunk ${i + 1}/${ranges.length} rowid ${a}..${b}`); });
   wr(SQL.ready);
   try { return verify(); }
-  catch (e) { try { wr(SQL.unready); } catch (e2) { throw new Error(`${e.message}（さらに ready = 0 に戻す操作も失敗: ${e2.message}。fts_state.ready は 1 のまま。手で 0 にする）`); } throw e; }
+  catch (e) { try { wr(SQL.unready); } catch (e2) { throw new Error(`${e.message}（さらに ready = 0 に戻す操作も失敗: ${e2.message}。fts_state.ready は 1 のまま。手で 0 にする）`, { cause: e }); } throw e; }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
