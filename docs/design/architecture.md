@@ -46,6 +46,47 @@ D1 は**スキャンした行数**（`rows_read`）で課金する。プラン�
 
 10 万件の実測（rows_read。第2段の PR 本文の表）は `scripts/bench/`（合成データの投入 `gen-synthetic-sites.mjs`（`PROD_SHAPE=1` で一括投入が連続・日時同値の本番の形）と計測 `bench-search.mjs`・`bench-traverse.mjs`（全ページ合計と 1 ページの最大・ピックアップの偏り）。ローカルの D1 だけ）で再現できる。**同値の多いデータで測ること**（合成データだけの表は誤解を招く）。新しい形のクエリを足したら、**D1 本番で一度試す**（複合 SELECT の項数上限などローカルで出ない失敗がある。手順は [deploy.md](../operations/deploy.md#検索計画と索引023025を本番へ適用する手順issue-126-第2段)）。
 
+### 1 リクエストの読み取り行数の観測とキャッシュ（#157）
+
+目的は、料金の暴走（攻撃・バグ）に気づくことと、**結果を変えずに**同じ URL の繰り返しで D1 を読み直さないこと（全体の方針と検知は [usage-guard.md](../operations/usage-guard.md)）。実装は `src/usage.js`（`src/index.js` の最初のミドルウェア）。
+
+- **観測**: D1 のバインディングを包み（`meterDb`）、リクエストごとに `meta.rows_read` を合計して応答ヘッダ **`X-D1-Rows-Read`**（数値のみ。D1 を読んだ応答に付く。キャッシュのヒットは `0`）に出す。合計が `ROWS_WARN`（20,000 行。通常の一覧は数百〜数千行）を超えたリクエストだけ `console.warn` に 1 行の JSON（`event: "d1-rows-read-high"`・`rows_read`・`stmts`・`path`・`query_length`）を出す。**検索語・URL のクエリは載せない**（長さだけ）。大量リクエストでログが洪水にならないよう閾値は高くしてある。`first()` は meta を返さないので `all()` で実行して先頭行を返す（結果は同じ）。
+- **共有キャッシュ**: `caches.default`（Cache API）に GET の応答を `CACHE_TTL` = 60 秒保存する。対象は `/api/sites`・`/api/categories`・`/api/scopes`・`/api/activity`・`/sitemap.xml` と、範囲ページ・`/about/` の HTML（`/icon/` と他の `/api/*` は対象外）。ヒットなら D1 を読まず保存した応答を返す（`X-Cache: HIT`・`X-D1-Rows-Read: 0`）。保存するのは 200 と、画面側の 404（範囲外のページ番号など。判定に D1 を数十万行読むことがあった）だけ。**対象外**: `/api/picks`（毎回ランダム。キャッシュすると結果が変わる）・POST（`/api/requests`）・`Authorization` 付き・4xx/5xx の API 応答。
+  - **キャッシュキーは URL（クエリ込み）だけ**。この Worker は `Accept-Language`・`Cookie` で応答を変えない（SSR は英語固定で、言語はブラウザ側が切り替える。Cookie は使わない）ので含めない。応答を言語や Cookie で変える機能を足すときは、キーに入れるか対象外にする。
+  - 保存する応答は最終のヘッダ（`Content-Security-Policy` のインラインスクリプトのハッシュ入りの値も本文と対）を含み、`ETag` は元から付けない（`renderIndex` が消す）。保存用の `Cache-Control: public, max-age=60` に差し替えるので、元の値は別ヘッダに退避し、取り出すときに戻す（ブラウザには従来と同じ `Cache-Control` が見える）。
+  - 古さの許容は最大 60 秒（`/api/*` は元から `max-age=30` でブラウザが古さを許している）。夜間ジョブの投入は反映が最大 1 分遅れるだけで、結果の形は変わらない。キャッシュの読み書きが失敗しても通常どおり D1 から応答する。
+  - ローカル（`wrangler dev --local`）でも動く。`workers.dev` のドメインでは Cache API は何も保存しない（カスタムドメイン `mise.llll-ll.com` では動く）。
+- **結果の同一性**: クエリは変えていない。`tests/search-*.test.mjs` など既存テストと、`tests/usage.test.mjs`（ヒットで D1 を読まない・対象外・失敗時のフォールバック・ヘッダ）で固定。
+
+#### 1 リクエストの D1 読み取り行数（10 万件・`PROD_SHAPE=1`・ローカル D1。`X-D1-Rows-Read` の実測）
+
+「初回」はキャッシュが空のとき（変更前と同じ値。クエリは変えていない）、「同じ URL の 2 回目以降」は 60 秒以内のキャッシュヒット（D1 を読まない）。
+
+| 経路 | 初回 | 同じ URL の 2 回目以降 |
+|---|---|---|
+| `/api/sites?tag=A&tag=B`（タグ 2 個 AND） | 約 485,700 | 0 |
+| SSR `/jp/?category=<親>&page=3`（範囲外のページ。404） | 約 200,600 | 0（404 も保存） |
+| `/api/sites?q=<2 文字・0 件>` ・ `?q=<1 文字・0 件>` | 100,000 | 0 |
+| `/api/sites?page=999999`（深いページ番号） | 約 100,000 | 0 |
+| `/api/sites?category=<大きい親カテゴリ>` | 約 100,000 | 0 |
+| `/api/sites?page=2000` | 約 80,300 | 0 |
+| `/api/sites?q=<2 文字・該当が少ない>` | 約 76,500 | 0 |
+| `/api/sites?q=<1 文字・稀>` | 約 49,600 | 0 |
+| `/api/sites?q=<2 文字>`（ラテン文字） | 約 23,000 | 0 |
+| `/api/sites?category=<大きい親>&q=<3 文字>` | 約 17,600 | 0 |
+| `/api/sites?q=web`（3 文字・該当が多い） | 約 15,000 | 0 |
+| `/api/sites?tag=A`（1 個） | 約 3,700 | 0 |
+| `/api/sites?category=<小さい葉>` | 約 3,500 | 0 |
+| `/sitemap.xml` | 約 3,600 | 0 |
+| `/api/sites?q=<3 文字以上・通常>` | 約 430〜2,900 | 0 |
+| 範囲ページ SSR（`/`・`/jp/`・`/all/`・カテゴリ付き） | 約 600 | 0 |
+| `/api/categories`・`/api/scopes`・`/api/activity` | 約 460・134・56 | 0 |
+| `/api/sites`（既定・`limit=100`・`scope=jp`） | 280・710・390 | 0 |
+| `/api/picks`（キャッシュしない） | 約 110〜280 | 同じ |
+| `/about/` | 0（D1 を読まない。HTML のハッシュ計算を省く） | 0 |
+
+読み方: キャッシュは「同じ URL の繰り返し」を無料にするだけで、**初回の最悪値（約 49 万行）は残る**。URL を毎回変える攻撃（検索語を変え続ける）には効かないので、WAF のレート制限（[usage-guard.md](../operations/usage-guard.md)）と使用量ガードで備える。最悪値を下げる、結果が変わる対策（1〜2 文字の検索の拒否・打ち切り・`page` の上限）は未実装で、案を usage-guard.md に書いた（kako-jun の判断待ち）。タグ 2 個 AND の約 49 万行は結果を変えずに計画を直せる余地がある（別 Issue）。
+
 ## セキュリティヘッダ
 
 `src/security.js` が定義し、Worker の全応答に付ける: `Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: strict-origin-when-cross-origin`。静的ファイルには `public/_headers` で nosniff と Referrer-Policy を付ける（CSP は文書だけに意味があるため）。
