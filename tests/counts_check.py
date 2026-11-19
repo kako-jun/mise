@@ -8,7 +8,7 @@ def truth(db, cc):
     """旧実装の逐語（範囲 cc。None は全世界）: カテゴリ id -> 自身と全子孫の所属サイト数（重複なし）。"""
     return dict(db.execute(TREE + "SELECT c.id, COUNT(DISTINCT s.id) FROM categories c LEFT JOIN tree ON tree.root_id = c.id "
                            "LEFT JOIN site_categories sc ON sc.category_id = tree.id LEFT JOIN sites s ON s.id = sc.site_id "
-                           "AND (?1 IS NULL OR s.country_code = ?1) GROUP BY c.id", (cc,)))
+                           "AND (?1 IS NULL OR s.country_code = ?1 OR s.region_code = ?1) GROUP BY c.id", (cc,)))
 
 
 def cached(db, cc):
@@ -17,9 +17,11 @@ def cached(db, cc):
 
 
 def check(tc, db):
-    ccs = [None] + [r[0] for r in db.execute("SELECT DISTINCT country_code FROM sites WHERE country_code IS NOT NULL")]
+    # 範囲 = 全世界・国・区画（migration 0026。区画は region_code）
+    ccs = [None] + [r[0] for r in db.execute("SELECT DISTINCT country_code FROM sites WHERE country_code IS NOT NULL UNION SELECT DISTINCT region_code FROM sites WHERE region_code IS NOT NULL")]
     for cc in ccs:
         tc.assertEqual(cached(db, cc), truth(db, cc), f"category_counts != recursive CTE (scope {cc})")
     tc.assertEqual(dict(db.execute("SELECT scope, n FROM scope_counts WHERE n > 0")),
                    {"all": db.execute("SELECT COUNT(*) FROM sites").fetchone()[0],
-                    **dict(db.execute("SELECT country_code, COUNT(*) FROM sites WHERE country_code IS NOT NULL GROUP BY country_code"))})
+                    **dict(db.execute("SELECT country_code, COUNT(*) FROM sites WHERE country_code IS NOT NULL GROUP BY country_code")),
+                    **dict(db.execute("SELECT region_code, COUNT(*) FROM sites WHERE region_code IS NOT NULL GROUP BY region_code"))})

@@ -66,11 +66,19 @@ CHECKS = [
      "FROM (SELECT t.root_id cid, s.country_code scope, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id "
      "JOIN sites s ON s.id=x.site_id WHERE s.country_code IS NOT NULL GROUP BY t.root_id, s.country_code) w "
      "LEFT JOIN category_counts cc ON cc.category_id=w.cid AND cc.scope=w.scope WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0) "
-     "UNION ALL SELECT cc.category_id, cc.scope, 0, cc.n FROM category_counts cc WHERE cc.scope<>'all' AND cc.n<>0 "
+     "UNION ALL SELECT cc.category_id, cc.scope, 0, cc.n FROM category_counts cc WHERE cc.scope<>'all' AND cc.scope NOT LIKE '%-%' AND cc.n<>0 "
      "AND NOT EXISTS (SELECT 1 FROM sites s JOIN site_categories x ON x.site_id=s.id WHERE s.country_code=cc.scope)"),
-    ("scope_counts_country", "error", "scope_counts (per country) differs from the number of sites",
-     "SELECT sc.scope, sc.n cached, (SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope) expected FROM scope_counts sc "
-     "WHERE sc.scope<>'all' AND sc.n<>(SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope)"),
+    ("category_counts_region", "error",
+     "category_counts (per region, e.g. JP-13; migration 0026) differs from the recursive count, or a non-empty row is left for a region without sites (n=0 rows are the normal empty state)",
+     TREE + "SELECT COALESCE(w.cid,cc.category_id) id, COALESCE(w.scope,cc.scope) scope, COALESCE(w.n,0) expected, COALESCE(cc.n,0) cached "
+     "FROM (SELECT t.root_id cid, s.region_code scope, COUNT(DISTINCT s.id) n FROM tree t JOIN site_categories x ON x.category_id=t.id "
+     "JOIN sites s ON s.id=x.site_id WHERE s.region_code IS NOT NULL GROUP BY t.root_id, s.region_code) w "
+     "LEFT JOIN category_counts cc ON cc.category_id=w.cid AND cc.scope=w.scope WHERE COALESCE(w.n,0)<>COALESCE(cc.n,0) "
+     "UNION ALL SELECT cc.category_id, cc.scope, 0, cc.n FROM category_counts cc WHERE cc.scope LIKE '%-%' AND cc.n<>0 "
+     "AND NOT EXISTS (SELECT 1 FROM sites s JOIN site_categories x ON x.site_id=s.id WHERE s.region_code=cc.scope)"),
+    ("scope_counts_country", "error", "scope_counts (per country and per region, e.g. JP and JP-13) differs from the number of sites",
+     "SELECT sc.scope, sc.n cached, (SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope OR s.region_code=sc.scope) expected FROM scope_counts sc "
+     "WHERE sc.scope<>'all' AND sc.n<>(SELECT COUNT(*) FROM sites s WHERE s.country_code=sc.scope OR s.region_code=sc.scope)"),
     ("scope_counts_all", "error", "scope_counts (all) differs from the number of sites",
      "SELECT sc.n cached,(SELECT COUNT(*) FROM sites) expected FROM scope_counts sc "
      "WHERE sc.scope='all' AND sc.n<>(SELECT COUNT(*) FROM sites)"),

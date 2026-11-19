@@ -140,8 +140,8 @@ npx wrangler d1 execute mise --local --file var/update-categories.sql   # ロー
 | `retreat_with_real` | 退避先と他のカテゴリが併存（`pb-` 除く）。LLM が選んだ可能性があり、違反ではなく情報 | warn |
 | `uncategorized` | カテゴリが 1 つも無いサイト | error |
 | `orphan_site_categories` | 存在しないカテゴリ・サイトを指す `site_categories` | error |
-| `category_counts_all` / `category_counts_country` | `category_counts` が再帰 CTE の数え直しと違う（国別は、サイトの無い国に残った n>0 の行も） | error |
-| `scope_counts_country` / `scope_counts_all` | `scope_counts` が実サイト数と違う | error |
+| `category_counts_all` / `category_counts_country` / `category_counts_region` | `category_counts` が再帰 CTE の数え直しと違う（国別・区画別（`JP-13` のような scope 値。0026）は、サイトの無い国・区画に残った n>0 の行も） | error |
+| `scope_counts_country` / `scope_counts_all` | `scope_counts` が実サイト数と違う（国・区画とも。区画は `region_code` の一致数） | error |
 | `category_closure` | 閉包表の欠け・余りを再帰 CTE と比較 | error |
 | `duplicate_site_category` | 同じ (サイト, カテゴリ) の二重（主キーで防がれているはずの確認） | error |
 | `duplicate_url` | 正規化後（scheme・`www.`・末尾スラッシュ・大文字小文字を無視）の URL が同じサイト | error |

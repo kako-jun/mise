@@ -13,13 +13,13 @@
 
 | エンドポイント | 内容 |
 |---|---|
-| `GET /api/scopes` | 範囲として選べる国（サイトが 1 件以上ある国、件数の多い順）と全体の件数。`{total, countries:[{code, count}]}`。集計表 `scope_counts` から読む（[data-model.md](./data-model.md) の「カテゴリ件数の集計表」） |
-| `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える（集計表 `category_counts` から読む。再帰 CTE で数え直さない）。`scope` は `jp` `us` などの国コード（小文字）または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope` は 400 |
+| `GET /api/scopes` | 範囲として選べる国（サイトが 1 件以上ある国、件数の多い順）・区画（サイトが 1 件以上ある区画、コード順。#127）と全体の件数。`{total, countries:[{code, count}], regions:[{code, count}]}`。集計表 `scope_counts` から読む（[data-model.md](./data-model.md) の「カテゴリ件数の集計表」） |
+| `GET /api/categories?scope=` | カテゴリの木。サイト件数は自身と全子孫の所属サイトを数える（集計表 `category_counts` から読む。再帰 CTE で数え直さない）。`scope` は `jp` `us` などの国コード（小文字）、区画 `jp-13` `us-ca`（`JP-13` のように区画だけは大文字も可。#127）、または `all`（省略は `all`）。件数はその範囲内だけ。範囲内に 0 件のカテゴリも返す。不正な `scope`（`jp-` `jp-1234` `JP` など）は 400。サイトの無い区画（`jp-99`）はエラーにせず 0 件で返す |
 | `GET /api/sites?scope=&category=&q=&tag=&limit=&cursor=&page=` | サイトの 1 ページ分（`{ items, next_cursor, total, total_capped }`）。カーソル方式: `limit`（既定 40、1〜100。100 超は 100 に丸め、0・負数・数字以外は 400）と、前の応答の `next_cursor`（並びのキー値の配列を JSON → base64url にした不透明な文字列。不正は 400）。`next_cursor` が `null` なら末尾。`total` と `total_capped` は先頭の応答（`cursor` なし）にだけ入る。**総件数は上限付き**: `q`・`tag`・葉でないカテゴリの絞り込みでは `TOTAL_CAP`（1,000。`src/sites.js`）件までしか数えず、超えると `total = 1000`・`total_capped = true`（画面は「1,000+」）。末尾まで届いた先頭ページ（0 件を含む）、範囲（国）だけの絞り込み（集計表 `scope_counts`）、直下が葉のカテゴリだけの絞り込み（集計表 `category_counts`）は常に正確（`total_capped = false`）。詳しくは下の「読み取りの設計」。`category` はそのカテゴリ直下（存在しない id は 404）、`q` は名前・紹介文・URL・タグ名（日英）の部分一致（検索はサーバー側。NFKC + 小文字化、100 文字まで）。`tag` はタグの日本語名か英語名のどちらでも完全一致で絞る（複数指定は AND、最大 5 個。6 個以上、または 1 個が 101 文字以上は 400）。`page`（1〜999999、範囲外は 400）は開始位置の指定で `cursor` が無いときだけ有効（`?page=N` の直リンク用）。範囲で絞る（`country_code` が NULL のサイトは `all` にだけ出る）。各サイトに所属カテゴリ `category_ids`（空配列は「未分類」）。実装は `src/sites.js`（SSR と共有）。並びは [ui.md](ui.md#一覧検索結果の既定の並び) |
 | `GET /api/picks?scope=` | ピックアップ用に範囲内からランダム 3 件（`/api/sites` と同じ形） |
 | `GET /api/activity?scope=` | 掲載総数と直近 7 日の日別登録数（HUD 用。範囲内だけ） |
 | `POST /api/requests` | 申請（推薦・取り下げ・訂正）の受付のみ。同一オリジンの JSON（連絡先は受け付けない）。常に `no-store`。仕様・レート制限は [operations/requests.md](../operations/requests.md) |
-| `GET /` `/:scope/` `/:scope` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。サイトが 1 件も無い国・不正な値は 404、大文字は小文字へ 301 |
+| `GET /` `/:scope/` `/:scope` `/:scope/:sub/` `/:scope/:sub` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。区画は `/jp/13/`。サイトが 1 件も無い国・区画・不正な値は 404、大文字は小文字へ 301 |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
 `/api/*` は（範囲内の）全件返しで、成功応答に `Cache-Control: public, max-age=30`、4xx/5xx に `no-store` を付ける（更新が速やかに反映されるよう短く。ページング・カーソル化は構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。ブラウザ用で、外部向け公開 API としては設計していない。
@@ -82,7 +82,7 @@ D1 は**スキャンした行数**（`rows_read`）で課金し、Free は 1 日
 
 ### 範囲の選択（地球儀）
 
-選べる国（サイトが 1 件以上ある国）の代表点に、`globe.js` が小さな点を置く（現在の範囲の国は大きく暖色）。`app.js` が `window.MISE_SCOPE = {current, countries:[{code,lat,lon}]}` を置き、変わるたびに `mise-scope-changed` を発火する。何も載っていない背景（`html` / `body` と本文の入れ物の余白）をクリック/タップすると、レイキャストで当たった緯度経度から角距離 12° 以内で最も近い選べる国を求め、`mise-globe-pick`（`detail: {code}`）を発火して `app.js` が範囲を切り替える。国境の多角形は持たない（海岸線データに国情報がない）ので、代表点からの距離で選ぶ。リンク・ボタン・文章の上のクリックは地球儀の入力にしない。ポインターが選べる国の上にあるとき（PC のみ）は `html.globe-hot` でカーソルを手の形にする。切替ボタン（国旗リンク）が同じ操作のキーボード・スクリーンリーダー用の経路で、地球儀は補助。
+選べる国（サイトが 1 件以上ある国）の代表点に、`globe.js` が小さな点を置く（現在の範囲の国は大きく暖色）。`app.js` が `window.MISE_SCOPE = {current, countries:[{code,lat,lon}]}` を置き（`current` は国単位。区画の範囲ではその国。区画を選ぶと地球は `mise-fly-country`（`level: 'region'`）で区画の代表点へ向く）、変わるたびに `mise-scope-changed` を発火する。何も載っていない背景（`html` / `body` と本文の入れ物の余白）をクリック/タップすると、レイキャストで当たった緯度経度から角距離 12° 以内で最も近い選べる国を求め、`mise-globe-pick`（`detail: {code}`）を発火して `app.js` が範囲を切り替える。国境の多角形は持たない（海岸線データに国情報がない）ので、代表点からの距離で選ぶ。リンク・ボタン・文章の上のクリックは地球儀の入力にしない。ポインターが選べる国の上にあるとき（PC のみ）は `html.globe-hot` でカーソルを手の形にする。切替ボタン（国旗リンク）が同じ操作のキーボード・スクリーンリーダー用の経路で、地球儀は補助。
 
 ### 連動の挙動
 
