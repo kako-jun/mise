@@ -76,14 +76,12 @@ test('CSS: 行頭の中点は li::before（フォント依存）でなく、1 �
   assert.doesNotMatch(css, /(?:#directory-sites|#result-list|#pick-list) li \{[^}]*display:\s*flex/);
 });
 
-test('ホスト名: 案 A（同じ行）が既定、案 B は html[data-url-layout=below] で切替。どちらも aria-hidden にしない', () => {
-  assert.match(rule('.site-host-below'), /display:\s*none/);
-  assert.match(css, /html\[data-url-layout="below"\] \.site-host-inline \{ display: none/);
-  assert.match(css, /html\[data-url-layout="below"\] \.site-host-below \{ display: block/);
+test('ホスト名: サイト名の直後（同じ行）に 1 つだけ。aria-hidden にしない。案 B・切替は無い', () => {
+  assert.doesNotMatch(css, /data-url-layout|site-host-below/); assert.doesNotMatch(app, /urllayout|urlLayout|site-host-below/);
+  assert.equal((app.match(/className='site-host'/g) || []).length, 1);
   assert.match(rule('.site-host'), /overflow-wrap:\s*anywhere/);
   assert.doesNotMatch(rule('.site-host'), /break-all/); // 短いホスト名を文字単位に割らない
   assert.match(app, /globalThis\.MiseSiteHost \? globalThis\.MiseSiteHost\(value\) : null/); // site-host.js が無くても一覧は出す
-  assert.match(app, /get\('urllayout'\)==='below'/);
   assert.match(app, /const host=siteHost\(site\.url\)/);
   assert.doesNotMatch(app, /site-host[^;\n]*aria-hidden/);
 });
@@ -98,7 +96,7 @@ test('1 行目の並び: 名前・新規タブ・NEW・国旗・ホスト名', (
   const i = app.indexOf('function renderSite');
   const body = app.slice(i, app.indexOf('target.append(li)', i));
   const pos = k => body.indexOf(k);
-  assert.ok(pos('newTabButton(href,site.name)') < pos("tag.textContent=' NEW'") && pos("tag.textContent=' NEW'") < pos('title.append(flag)') && pos('title.append(flag)') < pos("title.append(hostEl('site-host-inline'))"));
+  assert.ok(pos('newTabButton(href,site.name)') < pos("tag.textContent=' NEW'") && pos("tag.textContent=' NEW'") < pos('title.append(flag)') && pos('title.append(flag)') < pos("hs.className='site-host'"));
 });
 
 test('SSR: 一覧の行の構造はブラウザ描画と同じ（中点・サイト名・ホスト名、説明文は次の行）。ホスト名は 1 回だけ計算', () => {

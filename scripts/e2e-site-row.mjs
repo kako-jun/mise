@@ -2,7 +2,7 @@
 // 一覧の行の実測検証 (#166)。仕様は docs/design/ui.md の「ファビコン」。
 // 検査: (1) 中点・ファビコンの中心 y がサイト名の 1 行目の中心と ±1px、(2) 説明文・タグ・所属の左端が行の左端（ファビコンの有無で動かない）、
 // (3) .site-icon と画像に border/radius/box-shadow/background が無い、(4) 折り返した名前の行が重ならない、(5) 短いホスト名が行内で割れない、
-// (6) site-host.js の読み込みに失敗しても一覧が出る（ホスト名だけ出ない）、(7) ?urllayout=below でホスト名が 2 行目の左端に出る。
+// (6) site-host.js の読み込みに失敗しても一覧が出る（ホスト名だけ出ない）。
 // 条件: PC1280 / スマホ390 / 幅360 / 最小フォント 24px 相当（390）/ ズーム 200%（幅 640 + zoom 2）× ライト・ダーク × ja・en。
 // 前提: `npx wrangler dev --local --port 8799` が起動していて、ローカル D1 に favicon_path を持つサイト（検索語 llll の 4 件。R2 にも画像）と、
 //   持たないサイト（検索語 国立）があること（--remote は使わない）。
@@ -76,14 +76,6 @@ for (const [label, width, zoom, font] of conds) for (const theme of ['light', 'd
   const n = await page.evaluate(() => [document.querySelectorAll('#result-list li').length, document.querySelectorAll('.site-host').length]);
   try { assert.ok(n[0] > 0, '一覧が出ない'); assert.equal(n[1], 0, 'ホスト名が出ている'); } catch (e) { failed++; console.error('NG site-host.js abort:', e.message); }
   console.log(`site-host.js abort: rows=${n[0]} hosts=${n[1]}`);
-  await ctx.close();
-}
-// (7) ?urllayout=below: ホスト名が 2 行目の左端
-{
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 900 } });
-  const page = await ctx.newPage(); await page.goto(`${BASE}/jp/?q=llll&urllayout=below`, { waitUntil: 'networkidle' });
-  const m = await page.evaluate(measure);
-  try { for (const r of m) { assert.equal(r.hostLines.length, 1); assert.ok(r.hostLines[0].cls.includes('site-host-below')); assert.ok(r.hostLines[0].left <= 0.5, '2 行目の左端でない'); assert.ok(r.hostLines[0].top >= r.hostLines[0].headBottom - 1); assert.ok(Math.abs(r.bulletDy) <= 1); } } catch (e) { failed++; console.error('NG urllayout=below:', e.message); }
   await ctx.close();
 }
 await browser.close();

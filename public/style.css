@@ -344,10 +344,6 @@ html[data-theme="dark"] .region-select option { color: #effaff; background: #102
 .region-links ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 10px; margin: 4px 0 0; padding: 0; list-style: none; }
 .region-links a { color: inherit; }
 
-/* リンク先のホスト名（#166）。小さく薄い灰色。案 A（既定）はサイト名の直後（同じ行）、案 B は 2 行目の左端の独立した行（html[data-url-layout=below] で切替）。読み上げには出す（aria-hidden にしない）。 */
-.site-host { font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
-.site-host-inline { margin-left: 6px; }
-.site-host-below { display: none; }
-html[data-url-layout="below"] .site-host-inline { display: none; }
-html[data-url-layout="below"] .site-host-below { display: block; margin: 0; }
+/* リンク先のホスト名（#166）。サイト名の直後（同じ行）に小さく薄い灰色で。読み上げには出す（aria-hidden にしない）。 */
+.site-host { margin-left: 6px; font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
 html[data-theme="dark"] .site-host { color: #8fb0ba; }

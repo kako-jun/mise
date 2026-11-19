@@ -275,8 +275,6 @@ function toggleTag(tag, fromDirectory=false) {
 }
 // リンク先のホスト名の表示（public/site-host.js。SSR の src/seo.js と縦フィードと共有する 1 本）
 const siteHost = value => globalThis.MiseSiteHost ? globalThis.MiseSiteHost(value) : null; // site-host.js の読み込み失敗でも一覧は出す（ホスト名だけ出ない）
-// 比較用の一時的な手段: ?urllayout=below でホスト名を 2 行目に出す案 B（保存しない。通常は無効＝案 A）
-try { if(new URLSearchParams(location.search).get('urllayout')==='below') document.documentElement.dataset.urlLayout='below'; } catch (_) { /* 既定の案 A */ }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
   const href=safeHttpUrl(site.url); if(href) { a.href=href; configureExternalLink(a); }
@@ -293,13 +291,12 @@ function renderSite(target, site, showCategories=false) {
   }
   const content=document.createElement('div'); content.className='site-content'; const head=document.createElement('div'); head.className='site-head'; const title=document.createElement('span'); title.className='site-title'; title.append(a); if(href) title.append(newTabButton(href,site.name));
   const host=siteHost(site.url);
-  const hostEl=cls=>{ const e=document.createElement('span'); e.className='site-host '+cls; e.textContent=host; return e; };
-  const bullet=document.createElement('span'); bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true'); head.append(bullet,icon,title); content.append(head); if(host) content.append(hostEl('site-host-below')); // 案 B: 2 行目の左端（html[data-url-layout=below] のときだけ表示）
+  const bullet=document.createElement('span'); bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true'); head.append(bullet,icon,title); content.append(head);
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
   if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; title.append(tag); }
   content.append(p);
   const flag=countryFlag(site); if(flag) { title.append(flag); bindGlobeHover(li,flag,site); }
-  if(host) title.append(hostEl('site-host-inline')); // 案 A: 1 行目の最後（名前・新規タブ・NEW・国旗・ホスト名の順）
+  if(host) { const hs=document.createElement('span'); hs.className='site-host'; hs.textContent=host; title.append(hs); } // 1 行目の最後（名前・新規タブ・NEW・国旗・ホスト名の順。スマホで長い名前だと折り返して次の行に落ちることがある＝既知・受け入れ済み）
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
