@@ -127,3 +127,47 @@ test('seo: ?view=feed は noindex、無ければ付かない(検索結果の noi
   assert.equal(wantsNoindex(sp('?tag=abc')), true);
   assert.match(readFileSync(new URL('../src/seo.js', import.meta.url), 'utf8'), /if \(wantsNoindex\(url\.searchParams\)\) rw\.on\('head'/);
 });
+
+// フックを疑似 document で実行する。scripts は head に積まれたもの、timers は setTimeout の予約
+function runHook() {
+  const hook = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).find(s => s.includes('feed.js'));
+  const classes = new Set(), head = [], timers = [];
+  const el = tag => ({ tag, remove() { this.removed = true; } });
+  const document = { documentElement: { classList: { add: c => classes.add(c), remove: c => classes.delete(c) } }, head: { append: e => head.push(e) }, createElement: el, getElementById: () => null };
+  vm.runInNewContext(hook, { URLSearchParams, document, location: { search: '?view=feed' }, setTimeout: (fn, ms) => timers.push({ fn, ms }) });
+  return { classes, head, timers };
+}
+
+test('フック: 読み込みに失敗(onerror)・起動しない(タイムアウト)ときは feed-mode を外して通常表示に戻す', () => {
+  const a = runHook();
+  assert.ok(a.classes.has('feed-mode'));
+  const scripts = a.head.filter(e => e.tag === 'script'); assert.equal(scripts.length, 2);
+  scripts[1].onerror();
+  assert.ok(!a.classes.has('feed-mode'), 'feed.js の失敗');
+  assert.ok(a.head.find(e => e.tag === 'link').removed, 'feed.css も外す');
+  const b = runHook(); b.head.filter(e => e.tag === 'script')[0].onerror();
+  assert.ok(!b.classes.has('feed-mode'), 'feed-lib.js の失敗');
+  const c = runHook(); assert.equal(c.timers.length, 1); assert.equal(c.timers[0].ms, 10000);
+  c.timers[0].fn();
+  assert.ok(!c.classes.has('feed-mode'), '起動しないまま 10 秒');
+});
+
+test('範囲の読み込み中(要求した範囲を含む読み込みが無い)は、絞り込み・描画を保留する', () => {
+  // feed.js は !covers(loadedScope, loadedComplete, state.scope) を pending とし、refilter・言語切替で描き直さない
+  assert.match(appJs, /const pending = \(\) => !L\.covers\(loadedScope, loadedComplete, state\.scope\);/);
+  assert.match(appJs, /function refilter\(\) \{ syncUrl\(\); renderBar\(\); if \(pending\(\)\) return;/);
+  assert.match(appJs, /if \(!pending\(\)\) \{ renderList\(id\)/);
+  // jp を読み込み中に us へ切り替えた直後は pending（古い jp のデータを us で絞って出さない）
+  assert.ok(!lib.covers('jp', true, 'us') && !lib.covers(null, false, 'all'));
+  assert.ok(lib.covers('all', true, 'us'), '全件読めた全世界なら絞り込むだけ');
+});
+
+test('件数の桁区切りは表示言語に合わせる。SEEN の固定桁は変えない', () => {
+  assert.match(appJs, /const fmt = n => Number\(n\)\.toLocaleString\(language === 'ja' \? 'ja-JP' : 'en-US'\);/);
+  assert.match(appJs, /String\(n\)\.padStart\(6, '0'\)/);
+  assert.equal((101868).toLocaleString('en-US'), '101,868');
+});
+
+test('「最初に戻る」は先頭カードへフォーカスを移す', () => {
+  assert.match(appJs, /top\.addEventListener\('click', \(\) => \{ const c = go\(0\); if \(c\) c\.focus\(\{ preventScroll: true \}\); \}\);/);
+});
