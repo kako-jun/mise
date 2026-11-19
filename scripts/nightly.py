@@ -471,7 +471,7 @@ class Night:
         if os.path.exists(recrawl_db):
             steps.append(("import", ["--db", fdb, "import", "--recrawl", recrawl_db]))
         steps.append(("run", ["--db", fdb, "run", "--apply", "--limit", str(a.favicon_limit), "--store-dir", os.path.join(self.var, "favicons")]))
-        steps.append(("sql", ["--db", fdb, "sql", "--since", a.date + "T00:00:00Z", "--out", self.p("favicons.sql")]))
+        steps.append(("sql", ["--db", fdb, "sql", "--store", "local", "--since", a.date + "T00:00:00Z", "--out", self.p("favicons.sql")]))
         notes = []
         for name, argv in steps:
             # ここだけ python3 でなく python: 実行機 kako-rog(Windows)の venv に python3.exe は無い(Store の偽 python3 を拾うと Pillow が無く毎晩失敗する)。uv run python は Linux でも動く

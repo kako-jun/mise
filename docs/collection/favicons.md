@@ -18,7 +18,7 @@ Issue #125。**自前で取得し、32px の画像にして保存し、月 1 回
 uv run --with pillow python3 scripts/favicon/favicon.py import --recrawl var/recrawl.sqlite   # 再巡回台帳の listed かつ取得成功済みのサイトを対象へ(--sites JSON も可)
 uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50            # 計画だけ(ネットワークなし。台帳もディレクトリも作らない)
 uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply    # 期限が来たものを取得(実サイトにアクセスする)
-uv run --with pillow python3 scripts/favicon/favicon.py sql --since 2026-11-20T00:00:00Z --out var/favicons.sql   # sites.favicon_path の UPDATE(適用は人が行う)
+uv run --with pillow python3 scripts/favicon/favicon.py sql --since 2026-11-20T00:00:00Z --out var/favicons.sql   # sites.favicon_path の UPDATE(適用は人が行う。既定は --store r2-remote の印がある画像だけ。ローカルのみなら --store local)
 uv run --with pillow python3 scripts/favicon/favicon.py status
 ```
 
@@ -72,7 +72,9 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 
 - `R2Store` は `npx wrangler r2 object put mise-media/icon/<hash>.webp --file ... --content-type image/webp --local|--remote` を呼ぶ。**`--r2-remote` が無ければ常に `--local`**（本番に書かない安全側）。put の失敗は 1 サイト分の `store_failed` として続行する。
 - **呼び出し数を抑える設計**: wrangler の起動は 1 回数秒かかるので、`exists` は既定で R2 に問い合わせず台帳（`icon_hash`）を信じる。同じ実行中に置いた名前は記憶して 2 度 put しない。R2 から画像が消えた・別バケットへ移した疑いがあるときだけ `--r2-verify`（`wrangler r2 object get` で 1 件ずつ確認。遅い）。画像は 1 件 約 1.5 KB なので 1 件ずつ put する（件数が増えて遅くなったら S3 互換 API での並列化を別 Issue で検討）。
-- 本番へ初回に流す順序: バケット作成 → マージ・デプロイ → `--r2-remote` で画像を置く → `sql` の出力を D1 へ適用（`favicon_path` が入って初めて一覧に出る。画像が先、SQL が後なので、表示が 404 のままになる時間帯が出ない）。
+- **台帳は保存先ごとに「置いた印」を持つ**（`icon_stored` 表: 画像名 × `local` / `r2-local` / `r2-remote`。旧い台帳には `connect()` が自動で表を足す）。`exists` の判定と期限（`due_sites`）はその保存先の印で行う。ローカルで置いたあとに `--r2-remote` を回すと、`next_check_at` が先でも「画像はあるのにこの保存先の印が無い」サイトが対象になり、304 でも条件なしで取り直して put する。nightly（`local`）で取得済みのものも同様に、初めて `--r2-remote` を回したときに R2 へ上がる。旧い台帳は印が無いので、初回の `--r2-remote` で全件が対象（304 を挟むだけで安い）。
+- **`sql` は既定で `--store r2-remote` の印がある画像だけ**を出す（ローカルにしか置いていないものは出さない＝D1 が指す画像が配信元に無い状態を作らない）。`--store local` / `r2-local` も明示すれば選べる。
+- 本番へ初回に流す順序: バケット作成 → マージ・デプロイ → `--r2-remote` で画像を置く → `sql`（既定）の出力を D1 へ適用（`favicon_path` が入って初めて一覧に出る。画像が先、SQL が後なので、表示が 404 のままになる時間帯が出ない）。`--since` は取得日（`changed_at`）基準で、置いた日ではないので、初回は `--since` なしで出す。
 - プレビュー（`wrangler preview`）の `MEDIA` は別バケット `mise-media-preview`（空のまま。本番バケットを触らせない）。プレビューでは `/icon/` は 404 になり、一覧はファビコン枠ごと消える。
 
 ## 取り下げ（#29）での R2 画像の削除（設計のみ・未実装）

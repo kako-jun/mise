@@ -23,7 +23,7 @@ export async function serveMedia(env, request, kind, file) {
   const etag = obj.httpEtag || (obj.etag ? `"${obj.etag}"` : null);
   const headers = { 'Content-Type': MEDIA_KINDS[kind].type, 'Cache-Control': 'public, max-age=31536000, immutable' };
   if (etag) headers.ETag = etag;
-  if (etag && (request.headers.get('If-None-Match') || '').split(',').some(v => v.trim().replace(/^W\//, '') === etag)) {
+  if (etag && (request.headers.get('If-None-Match') || '').split(',').some(v => v.trim() === '*' || v.trim().replace(/^W\//, '') === etag)) {
     obj.body?.cancel?.();
     return new Response(null, { status: 304, headers });
   }

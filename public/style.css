@@ -218,6 +218,9 @@ html[data-theme="dark"] .search-row input[type="search"] { background: rgba(18, 
 html[data-theme="dark"] .search-icon { color: #82ddea; }
 [data-i18n="concept"] { user-select: none; -webkit-user-select: none; }
 .site-icon { width: 30px; height: 30px; flex-basis: 30px; border: 0; border-radius: 0; background: transparent; }
+/* 黒や白の単色ファビコンが背景に溶けないよう、ごく淡い下地を敷く（ライトは縁だけ、ダークは明るめの下地） */
+.site-icon img { border-radius: 4px; box-shadow: 0 0 0 1px rgba(8, 120, 142, .18); }
+html[data-theme="dark"] .site-icon img { background: rgba(239, 250, 255, .16); box-shadow: 0 0 0 1px rgba(130, 221, 234, .28); }
 
 
 @media (max-width: 1199px) { .hud { display: none; } }

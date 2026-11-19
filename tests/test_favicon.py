@@ -457,6 +457,87 @@ class R2StoreMock(unittest.TestCase):
             self.assertEqual(list(Path(t).iterdir()), [])
 
 
+class StoreMarks(unittest.TestCase):
+    """台帳は保存先ごとに「置いた印」を持つ。ローカルで置いた後に本番へ置く、local だけのものを D1 に出さない、旧台帳からの移行。"""
+    def setUp(self):
+        self.db = favicon.connect(':memory:')
+        favicon.import_sites(self.db, [('s1', 'https://a.example/')])
+        self.calls = []; self.puts = []
+        self.png = img(color=(10, 90, 200, 255))
+
+    def runner(self, args):
+        self.puts.append(args); return 0
+
+    def session(self):
+        png = self.png
+        class S:
+            def get(s, url, max_body, headers=None, same_site_only=False):
+                if url.endswith('/'):
+                    return 200, {'content-type': 'text/html'}, html('<link rel=icon href="/i.png">'), url
+                if headers:
+                    return 304, {}, b'', url
+                return 200, {'content-type': 'image/png', 'etag': 'e'}, png, url
+        return S()
+
+    def go(self, store, days=0):
+        return favicon.run(self.db, store, T0 + datetime.timedelta(days=days), 10, session=self.session(), log=lambda m: None)
+
+    def test_remote_run_puts_even_when_not_due_after_local_run(self):
+        self.go(favicon.R2Store(runner=self.runner))                    # --local の模擬 R2。次回確認は 30 日後
+        self.assertEqual(len(self.puts), 1); self.assertIn('--local', self.puts[0])
+        self.go(favicon.R2Store(remote=True, runner=self.runner), days=1)   # 直後に --r2-remote: 期限前でも印が無いので対象
+        self.assertEqual(len(self.puts), 2); self.assertIn('--remote', self.puts[1])
+
+    def test_sql_only_lists_images_marked_in_that_store(self):
+        self.go(favicon.R2Store(runner=self.runner))
+        self.assertEqual(favicon.sql_updates(self.db, store='r2-remote'), '')    # ローカルにしか置いていない
+        self.assertIn("WHERE id='s1'", favicon.sql_updates(self.db, store='r2-local'))
+        self.go(favicon.R2Store(remote=True, runner=self.runner), days=1)
+        self.assertIn("WHERE id='s1'", favicon.sql_updates(self.db, store='r2-remote'))
+
+    def test_local_dir_store_does_not_satisfy_r2_remote(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.go(favicon.LocalDirStore(Path(t) / 'icons'))
+        self.assertEqual(favicon.sql_updates(self.db, store='r2-remote'), '')
+        self.assertIn('s1', favicon.sql_updates(self.db, store='local'))
+        self.go(favicon.R2Store(remote=True, runner=self.runner), days=1)   # 304 でも印が無いので取り直して put
+        self.assertEqual(len(self.puts), 1)
+
+    def test_304_without_mark_refetches_unconditionally(self):
+        self.go(favicon.R2Store(runner=self.runner))
+        seen = []
+        orig = self.session
+        base = orig()
+        class S:
+            def get(s, url, max_body, headers=None, same_site_only=False):
+                seen.append((url, dict(headers or {}))); return base.get(url, max_body, headers, same_site_only)
+        favicon.run(self.db, favicon.R2Store(remote=True, runner=self.runner), T0 + datetime.timedelta(days=1), 10, session=S(), log=lambda m: None)
+        imgs = [h for u, h in seen if u.endswith('/i.png')]
+        self.assertEqual(imgs, [{'If-None-Match': 'e'}, {}])
+
+    def test_marked_store_is_not_due_before_next_check(self):
+        store = favicon.R2Store(remote=True, runner=self.runner)
+        self.go(store)
+        self.assertEqual(favicon.due_sites(self.db, T0 + datetime.timedelta(days=1), 10, store), [])
+
+    def test_legacy_ledger_gets_table_automatically(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / 'old.sqlite'
+            c = sqlite3.connect(p)
+            c.execute('CREATE TABLE favicons (site_id TEXT PRIMARY KEY, url TEXT NOT NULL, icon_url TEXT, etag TEXT, last_modified TEXT, icon_hash TEXT, status TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0, last_checked_at TEXT, next_check_at TEXT, changed_at TEXT)')
+            c.execute("INSERT INTO favicons(site_id,url,icon_hash,status,next_check_at,changed_at) VALUES('s1','https://a.example/','" + 'a' * 32 + ".webp','ok','2099-01-01T00:00:00Z','2026-11-01T00:00:00Z')")
+            c.commit(); c.close()
+            ro = favicon.open_readonly(p)   # 読み取り専用(表が無い)でも落ちない
+            self.assertEqual(favicon.sql_updates(ro, store='r2-remote'), '')
+            self.assertEqual(len(favicon.due_sites(ro, T0, 10, favicon.R2Store(remote=True, runner=self.runner))), 0)
+            ro.close()
+            db = favicon.connect(p)
+            due = favicon.due_sites(db, T0, 10, favicon.R2Store(remote=True, runner=self.runner))
+            self.assertEqual([r['site_id'] for r in due], ['s1'])   # 印が無いので本番投入の対象
+            self.assertEqual(favicon.sql_updates(db, store='r2-remote'), '')
+            self.assertIn('s1', favicon.sql_updates(db))
+
+
 class RealLaunch(unittest.TestCase):
     """夜間ジョブと同じ起動方法(uv run)で、Pillow の有無による挙動を実際に確かめる。"""
     SCRIPT = str(ROOT / 'scripts' / 'favicon' / 'favicon.py')

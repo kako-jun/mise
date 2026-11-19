@@ -78,3 +78,38 @@ CREATE TABLE category_counts(category_id TEXT NOT NULL, scope TEXT NOT NULL, n I
   assert.equal(by.b.favicon_path, null); assert.equal(by.b.favicon_url, null);
   assert.equal(by.c.favicon_path, 'legacy.png'); assert.equal(by.c.favicon_url, null);
 });
+
+test('/icon/: If-None-Match の W/ 付き・カンマ区切り・* で 304、304 にも Cache-Control と ETag', async () => {
+  const mk = () => ({ MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) });
+  for (const inm of ['W/"etag-1"', '"zzz", "etag-1"', '"zzz", W/"etag-1"', '*']) {
+    const r = await get(`/icon/${H}.webp`, mk(), { 'If-None-Match': inm });
+    assert.equal(r.status, 304, inm);
+    assert.equal(r.headers.get('ETag'), '"etag-1"');
+    assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+  }
+  assert.equal((await get(`/icon/${H}.webp`, mk(), { 'If-None-Match': '"other"' })).status, 200);
+});
+
+test('/icon/: HEAD は 200 + ヘッダ（本文なし）', async () => {
+  const r = await app.request(`/icon/${H}.webp`, { method: 'HEAD' }, { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) });
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('Content-Type'), 'image/webp');
+  assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+  assert.equal(await r.text(), '');
+});
+
+test('/icon/: R2 が例外を投げたら 500 で immutable を付けない', async () => {
+  const r = await get(`/icon/${H}.webp`, { MEDIA: { get: async () => { throw new Error('boom'); } } });
+  assert.equal(r.status, 500);
+  assert.doesNotMatch(r.headers.get('Cache-Control') || '', /immutable/);
+});
+
+test('/icon/x/ のように scope 側へ落ちるパスは R2 を見ずに 404', async () => {
+  const env = { MEDIA: fakeBucket({}), DB: { prepare: () => { throw new Error('no db'); } } };
+  for (const p of ['/icon/x/', `/icon/${H}.webp/`, '/icon/', '/icon/a/b']) {
+    const r = await app.request(p, { redirect: 'manual' }, env);
+    assert.ok([404, 500].includes(r.status) && r.status !== 200, p + ' ' + r.status);
+    assert.notEqual(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+  }
+  assert.deepEqual(env.MEDIA.calls, []);
+});

@@ -63,7 +63,7 @@ npx wrangler r2 bucket list
 - **ローカル検証**（Cloudflare には触れない。miniflare の R2 模擬、状態は `.wrangler/state`）: `uv run --with pillow python3 scripts/favicon/favicon.py run --apply --store r2`（既定で `--local`）か、`npx wrangler r2 object put mise-media/icon/<hash>.webp --file <f> --content-type image/webp --local` で置き、`npm run dev` で `/icon/<hash>.webp`（200・`immutable`・`ETag`）、存在しない名前で 404、一覧にファビコンが出ることを確かめる。`--remote` は本番バケットへ書くので、バケット作成後にだけ使う。
 - **無料枠の目安**（R2 の無料枠。数字は課金ページで要確認）: 保存 10 GB/月、書き込み系（Class A）100 万回/月、読み取り系（Class B）1,000 万回/月、egress（転送）無料。ファビコンは 1 件 約 1.5 KB なので、10 万件で約 150 MB・初回の書き込み 10 万回。月次更新はハッシュが変わったものだけ書くので無料枠に収まる。404 も R2 の読み取りに数えるが、不正な名前（32 桁 16 進でないもの）は R2 を見ずに 404 を返す。
 - プレビューのバケットは本番と別（`previews.r2_buckets` の `mise-media-preview`）。ブランチの未レビューのコードが本番の画像を触らないため。書き込みはしない運用で、空なら `/icon/` は 404。
-- 取り下げ（#29）での削除経路は [collection/favicons.md](../collection/favicons.md) の設計（未実装）。
+- ファビコンを本番へ流す順序は「`--r2-remote` で画像を置く → `sql`（既定の保存先 r2-remote の印があるものだけ）を D1 へ適用」。台帳は保存先ごとの印を持つ（[collection/favicons.md](../collection/favicons.md#r2-への保存と配信)）。取り下げ（#29）での削除経路は [collection/favicons.md](../collection/favicons.md) の設計（未実装）。
 
 ## 官公庁の名簿（0015・0019）を本番へ適用する手順（Issue #37、PR #71）
 

@@ -14,6 +14,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import warnings
 import urllib.parse
@@ -47,7 +48,10 @@ CREATE TABLE IF NOT EXISTS favicons (
   icon_url TEXT, etag TEXT, last_modified TEXT, icon_hash TEXT,
   status TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0,
   last_checked_at TEXT, next_check_at TEXT, changed_at TEXT);
+-- どの保存先にどの画像を置いたかの印。保存先ごとに別(local / r2-local / r2-remote)。旧い台帳には connect() が自動で足す。
+CREATE TABLE IF NOT EXISTS icon_stored (name TEXT NOT NULL, store TEXT NOT NULL, PRIMARY KEY (name, store));
 """
+STORE_LABELS = ('local', 'r2-local', 'r2-remote')
 
 
 class IconError(Exception):
@@ -58,7 +62,11 @@ class IconError(Exception):
 # ---- 保存先(差し替え可能) ----
 
 class IconStore:
-    """アイコンの置き場。実装は put/exists だけ。R2 は R2Store。"""
+    """アイコンの置き場。実装は put/exists だけ。R2 は R2Store。
+    label は台帳の印(icon_stored.store)の名前。trust_ledger が真なら、保存先に問い合わせず台帳の印だけで「置いてある」と判断する。"""
+    label = 'local'
+    trust_ledger = False
+
     def exists(self, name):
         raise NotImplementedError
 
@@ -93,7 +101,7 @@ class R2Store(IconStore):
     - put は同じ名前(=同じ内容)の上書きなので何度やっても同じ結果。この実行中に置いた名前は記憶して 2 度呼ばない。
     wrangler は `runner(args)`(戻り値は終了コード)で呼ぶ。テストでは runner を差し替え、実際には呼ばない。"""
     def __init__(self, bucket=R2_BUCKET, remote=False, runner=None, cwd=None, verify=False):
-        self.verify = verify; self.bucket = bucket; self.remote = remote; self.cwd = cwd or ROOT
+        self.verify = verify; self.trust_ledger = not verify; self.label = 'r2-remote' if remote else 'r2-local'; self.bucket = bucket; self.remote = remote; self.cwd = cwd or ROOT
         self.runner = runner or self._run
         self.known = set()
 
@@ -117,7 +125,6 @@ class R2Store(IconStore):
     def put(self, name, data):
         if name in self.known:
             return False
-        import tempfile
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / name
             f.write_bytes(data)
@@ -392,9 +399,31 @@ def import_from_recrawl(db, recrawl_path):
     return import_sites(db, rows)
 
 
-def due_sites(db, now, limit):
-    return db.execute('SELECT * FROM favicons WHERE next_check_at IS NULL OR next_check_at <= ? ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?',
-                      (now_iso(now), limit)).fetchall()
+def _marked(db, name, label):
+    try:
+        return db.execute('SELECT 1 FROM icon_stored WHERE name=? AND store=?', (name, label)).fetchone() is not None
+    except sqlite3.OperationalError:   # 旧い台帳を読み取り専用で開いたとき(表が無い)
+        return False
+
+
+def _mark(db, name, label):
+    db.execute('INSERT OR IGNORE INTO icon_stored(name, store) VALUES(?,?)', (name, label))
+
+
+def due_sites(db, now, limit, store=None):
+    """期限が来たサイト。store(IconStore)を渡すと、期限前でも「画像は取れているのにその保存先の印が無い」サイトも対象にする(ローカルで置いた後の本番投入など)。"""
+    base = 'SELECT * FROM favicons WHERE next_check_at IS NULL OR next_check_at <= ?'
+    args = [now_iso(now)]
+    if store is not None:
+        base = ("SELECT * FROM favicons WHERE next_check_at IS NULL OR next_check_at <= ? OR (status='ok' AND icon_hash IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM icon_stored s WHERE s.name=favicons.icon_hash AND s.store=?))")
+        args.append(store.label)
+    try:
+        return db.execute(base + ' ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?', (*args, limit)).fetchall()
+    except sqlite3.OperationalError:
+        if store is None:
+            raise
+        return due_sites(db, now, limit)   # 旧い台帳を読み取り専用で開いたとき(印の表が無い): 印なしの期限判定だけ
 
 
 def _plus(now, days):
@@ -411,6 +440,7 @@ def record(db, store, row, res, now):
         name = icon_name(res['webp'])
         out = 'same' if row['icon_hash'] == name else 'changed'
         store.put(name, res['webp'])   # 既にあれば書かれない(同じ画像・他サイトの同一アイコン)。保存先から消えていれば同じハッシュでも置き直す
+        _mark(db, name, store.label)   # この保存先に置いた印(put が例外なら印は付かない)
         db.execute("UPDATE favicons SET icon_url=?, etag=?, last_modified=?, icon_hash=?, status='ok', consecutive_failures=0, last_checked_at=?, next_check_at=?, changed_at=COALESCE(?, changed_at) WHERE site_id=?",
                    (res['icon_url'], res.get('etag'), res.get('last_modified'), name, t, _plus(now, OK_INTERVAL_DAYS), t if out == 'changed' else None, sid))
     elif res['status'] == 'none':
@@ -425,15 +455,25 @@ def record(db, store, row, res, now):
     return out
 
 
+def _present(db, store, name):
+    """この保存先に画像があるか。trust_ledger の保存先(R2)は台帳の印だけ、それ以外(ローカル)は実在を確かめて印を付ける。"""
+    if store.trust_ledger:
+        return _marked(db, name, store.label)
+    if store.exists(name):
+        _mark(db, name, store.label); db.commit()
+        return True
+    return False
+
+
 def run(db, store, now=None, limit=50, session=None, log=print):
     now = now or datetime.datetime.now(datetime.timezone.utc)
     session = session or Session()
     counts = {}
-    for row in due_sites(db, now, limit):
+    for row in due_sites(db, now, limit, store):
         try:
             res = fetch_favicon(session, row['url'], dict(row))
-            if res['status'] == 'unchanged' and row['icon_hash'] and not store.exists(row['icon_hash']):
-                # 304 だが保存先に画像が無い(消えた・別の保存先へ移した): 条件なしで取り直す
+            if res['status'] == 'unchanged' and row['icon_hash'] and not _present(db, store, row['icon_hash']):
+                # 304 だが、この保存先に画像の印が無い(消えた・別の保存先へ移した・ローカルでしか置いていない): 条件なしで取り直して置く
                 res = fetch_favicon(session, row['url'], dict(row, etag=None, last_modified=None))
         except ImportError:
             raise   # Pillow が無い等は 1 サイトの失敗ではない。握りつぶさず全体を止める
@@ -453,15 +493,28 @@ def _q(s):
     return "'" + str(s).replace("'", "''") + "'"
 
 
-def sql_updates(db, since=None):
-    """sites.favicon_path へ入れる UPDATE。値が同じなら書かない(D1 の書き込み行数を使わない)。取れていないサイトは触れない。"""
+def sql_updates(db, since=None, store=None):
+    """sites.favicon_path へ入れる UPDATE。値が同じなら書かない(D1 の書き込み行数を使わない)。取れていないサイトは触れない。
+    store(ラベル名)を渡すと、その保存先に置いた印のある画像だけを出す(D1 が指す画像が配信元に無い状態を作らない)。None は全件。"""
     q = 'SELECT site_id, icon_hash FROM favicons WHERE icon_hash IS NOT NULL'
     args = ()
+    if store:
+        q += ' AND icon_hash IN (SELECT name FROM icon_stored WHERE store=?)'; args += (store,)
     if since:
-        q += ' AND changed_at >= ?'; args = (since,)
+        q += ' AND changed_at >= ?'; args += (since,)
+    try:
+        rows = db.execute(q + ' ORDER BY site_id', args).fetchall()
+    except sqlite3.OperationalError:   # 印の表が無い旧い台帳を読み取り専用で開いた: 印は 1 つも無い
+        if not store:
+            raise
+        rows = []
     lines = [f"UPDATE sites SET favicon_path={_q(r['icon_hash'])} WHERE id={_q(r['site_id'])} AND favicon_path IS NOT {_q(r['icon_hash'])};"
-             for r in db.execute(q + ' ORDER BY site_id', args)]
+             for r in rows]
     return '\n'.join(lines) + ('\n' if lines else '')
+
+
+def make_store(a):
+    return R2Store(remote=a.r2_remote, verify=a.r2_verify) if a.store == 'r2' else LocalDirStore(a.store_dir)
 
 
 def main(argv=None):
@@ -475,7 +528,8 @@ def main(argv=None):
     p.add_argument('--store', choices=['local', 'r2'], default='local', help='保存先(既定 local)。r2 は --apply と併せたときだけ wrangler を呼ぶ。R2 は既定でローカル模擬')
     p.add_argument('--r2-verify', action='store_true', help='--store r2 で、台帳にある画像が R2 に在るかを 1 件ずつ確かめる(遅い)')
     p.add_argument('--r2-remote', action='store_true', help='--store r2 で本番/リモートの R2 に書く(明示したときだけ)')
-    p = sub.add_parser('sql', help='sites.favicon_path 向けの UPDATE を出す'); p.add_argument('--out'); p.add_argument('--since', help='changed_at がこれ以降のものだけ(ISO)')
+    p = sub.add_parser('sql', help='sites.favicon_path 向けの UPDATE を出す(既定は R2 本番に置いた画像だけ)'); p.add_argument('--out'); p.add_argument('--since', help='changed_at がこれ以降のものだけ(ISO)')
+    p.add_argument('--store', choices=STORE_LABELS, default='r2-remote', help='この保存先に置いた印のある画像だけ出す(既定 r2-remote。local は従来どおり)')
     sub.add_parser('status', help='台帳の集計')
     a = ap.parse_args(argv)
     if a.cmd == 'run' and a.apply:
@@ -496,15 +550,15 @@ def main(argv=None):
     elif a.cmd == 'run':
         now = datetime.datetime.now(datetime.timezone.utc)
         if not a.apply:
-            rows = due_sites(db, now, a.limit) if db else []
-            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {a.store}' + (' ' + R2_BUCKET + (' remote' if a.r2_remote else ' local') if a.store == 'r2' else '') + ')')
+            store = make_store(a)
+            rows = due_sites(db, now, a.limit, store) if db else []
+            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {store.label})')
             for r in rows[:20]:
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
-        store = R2Store(remote=a.r2_remote, verify=a.r2_verify) if a.store == 'r2' else LocalDirStore(a.store_dir)
-        print('done ' + str(run(db, store, now, a.limit)))
+        print('done ' + str(run(db, make_store(a), now, a.limit)))
     elif a.cmd == 'sql':
-        text = sql_updates(db, a.since) if db else ''
+        text = sql_updates(db, a.since, a.store) if db else ''
         if a.out:
             Path(a.out).write_text(text, encoding='utf-8')
             print(f'wrote {a.out} ({text.count(chr(10))} 行)')
