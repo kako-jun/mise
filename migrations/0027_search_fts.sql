@@ -6,7 +6,7 @@
 -- ★ 仮想表があると `wrangler d1 export` は使えない（docs/operations/deploy.md のバックアップは Time Travel の bookmark が主）。
 -- ★ 戻し方: DROP TRIGGER sites_fts_ai / sites_fts_ad / sites_fts_au; DROP TABLE sites_fts; DROP TABLE fts_state; （検索コードは表が無いと instr に落ちる）。
 CREATE VIRTUAL TABLE IF NOT EXISTS sites_fts USING fts5(search_text, content='sites', content_rowid='rowid', tokenize='trigram');
--- 索引が構築済みで検索に使ってよいか（0 = 未構築・構築中。build-search-fts.mjs が構築の前に 0、検証の後に 1 にする）。
+-- 索引が構築済みで検索に使ってよいか（0 = 未構築・構築中。build-search-fts.mjs が構築の前に 0、構築の後に 1 にしてから検証し、失敗したら 0 に戻す。検索は実行の後にも ready を確かめる）。
 CREATE TABLE IF NOT EXISTS fts_state (name TEXT PRIMARY KEY, ready INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 INSERT OR IGNORE INTO fts_state (name, ready) VALUES ('sites_fts', 0);
 -- 同期: sites の登録・削除・search_text の変更（ready = 1 のときだけ）。外部コンテンツ表の削除と更新は、古い値を 'delete' で渡して索引から外す。

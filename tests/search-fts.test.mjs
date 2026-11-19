@@ -267,15 +267,65 @@ test('続きのページ: 先頭ページの後に表を DROP（ロールバッ�
   assert.deepEqual([...p1.items.map(i => i.id), ...rest], want);
 });
 
-test('実行時の失敗の安全策: 計画の判断の後に表が消えても（判断と実行の間）instr でやり直す', async () => {
+// 文の実行の前後に処理を差し込めるラッパー（窓の再現用）。after(sql) が true を返した文の実行の直後に hook() を 1 回だけ流す。before は文の実行前に fail(sql) が Error を返したら投げる。
+const hooked = (db2, { after = () => false, hook = () => {}, fail = () => null } = {}) => {
+  let fired = false;
+  return { prepare: sql => { const mk = args => { const run = async fn => { const f = fail(sql); if (f) throw f; const r = fn(); if (!fired && after(sql)) { fired = true; hook(); } return r; }; return { bind: (...a) => mk(a), all: () => run(() => ({ results: db2.prepare(sql).all(...args) })), first: () => run(() => db2.prepare(sql).get(...args)) }; }; return mk([]); } };
+};
+const READY_SQL = s => s.includes('SELECT ready FROM fts_state') && !s.includes('COUNT(*)');
+const PAGES = async (d2, o) => { const items = []; let cur = null, first, n = 0; for (; n < 50; n++) { const r = await querySites(d2, { ...o, limit: 40, cursor: cur ? decodeCursor(cur) : null }); if (n === 0) first = r; items.push(...r.items.map(i => i.id)); cur = r.next_cursor; if (!cur) break; } return { ids: items, first, pages: n + 1 }; };
+
+test('窓: 計画の判断（probe）の後・一覧の実行の前に作り直し（ready = 0）が始まっても、先頭ページは instr と同じ（total = 0・途中打ち切りにならない）', async () => {
+  const db2 = mkSmall(800), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  const d2 = hooked(db2, { after: s => s.includes('AS ready'), hook: () => db2.exec(SQL.begin) });
+  const r = await PAGES(d2, { q });
+  assert.deepEqual(r.ids, want); assert.equal(r.first.total, want.length); assert.equal(want.length, 800);
+});
+
+test('窓: 続きのページで、ready の事前確認の後・一覧の実行の前に作り直しが始まっても、instr と同じ（next_cursor が途中で null にならない）', async () => {
+  const db2 = mkSmall(800), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  let armed = false;
+  const d2 = hooked(db2, { after: s => armed && READY_SQL(s), hook: () => db2.exec(SQL.begin) });
+  const p1 = await querySites(d2, { q, limit: 40 }); assert.ok(p1.next_cursor);
+  armed = true;
+  const ids = p1.items.map(i => i.id); let cur = p1.next_cursor;
+  while (cur) { const r = await querySites(d2, { q, limit: 40, cursor: decodeCursor(cur) }); ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; }
+  assert.deepEqual(ids, want);
+  assert.equal(db2.prepare("SELECT ready FROM fts_state WHERE name = 'sites_fts'").get().ready, 0, '窓を再現できている（作り直しが始まった）');
+});
+
+test('実行時の失敗の安全策: 先頭ページで索引の計画を覚えた後、ready = 1 のまま sites_fts だけ消えても、続きのページは instr で同じ（実行時 catch）', async () => {
+  const db2 = mkSmall(120), d2 = wrap(db2), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  const p1 = await querySites(d2, { q, limit: 40 }); assert.equal((await planQuery(d2, { q })).qMode, 'fts');
+  db2.exec('DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts;'); // fts_state（ready = 1）は残す
+  assert.equal(db2.prepare("SELECT ready FROM fts_state").get().ready, 1);
+  const ids = p1.items.map(i => i.id); let cur = p1.next_cursor;
+  while (cur) { const r = await querySites(d2, { q, limit: 40, cursor: decodeCursor(cur) }); ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; }
+  assert.deepEqual(ids, want);
+});
+
+test('実行時の catch は索引の失敗だけ: 表なし系は握って instr、それ以外（too many terms・一時エラー）は投げる。両方失敗したら先のエラーも出す', async () => {
   const db2 = mkSmall(60), q = cleanQuery('りんご'), want = instrIds(db2, q);
-  const d2 = wrap(db2); await querySites(d2, { q }); // 計画を覚える
-  // fts_state は読めるが sites_fts だけ無い状況を作る（planFor の確認をすり抜けて実行で落ちる）
-  db2.exec('DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts;');
-  const p1 = await querySites(d2, { q }); // 先頭ページ: 計画 → probe 失敗 → instr
-  assert.deepEqual((await idsOf(d2, { q })).ids, want); assert.equal(p1.items.length, 40);
-  const c = await querySites(d2, { q, cursor: decodeCursor(p1.next_cursor) });
-  assert.deepEqual(c.items.map(i => i.id), want.slice(40, 60));
+  const isList = s => s.startsWith('SELECT s.id') && s.includes('sites_fts MATCH');
+  const quiet = async f => { const e = console.error; console.error = () => {}; try { return await f(); } finally { console.error = e; } };
+  // 握る: sites_fts 系
+  for (const msg of ['no such table: main.sites_fts', 'vtable constructor failed: sites_fts', 'database disk image is malformed']) {
+    const d2 = hooked(db2, { fail: s => isList(s) ? new Error(msg) : null });
+    assert.deepEqual((await quiet(() => idsOf(d2, { q }))).ids, want, msg);
+  }
+  // 握らない
+  for (const msg of ['too many terms in compound SELECT', 'D1_ERROR: Network connection lost', 'near "FROM": syntax error']) {
+    const d2 = hooked(db2, { fail: s => isList(s) ? new Error(msg) : null });
+    await assert.rejects(() => quiet(() => querySites(d2, { q })), new RegExp(msg.slice(0, 12)), msg);
+  }
+  // 索引も instr も失敗: 両方のメッセージ
+  const both = hooked(db2, { fail: s => s.startsWith('SELECT s.id') ? new Error(s.includes('sites_fts MATCH') ? 'no such table: sites_fts' : 'boom instr') : null });
+  await assert.rejects(() => quiet(() => querySites(both, { q })), /boom instr.*no such table: sites_fts/);
+});
+
+test('構築: ready = 0 に戻す操作も失敗したら、元の検証エラーも合わせて出す', () => {
+  const wr = sql => { if (sql === SQL.range) return [{ lo: 1, hi: 5 }]; if (sql === SQL.counts) return [{ sites: 5, indexed: 4 }]; if (sql === SQL.unready) throw new Error('unready failed'); return []; };
+  assert.throws(() => runBuild(wr, { chunk: 10 }), /件数が合わない.*unready failed.*1 のまま/);
 });
 
 test('畳み込み: 索引が instr より多く拾う行（非 ASCII の大文字・語末シグマ）は instr と同じ結果（索引の行にも instr を重ねる）', async () => {

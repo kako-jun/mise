@@ -167,7 +167,7 @@ export async function planQuery(db, { cc = null, region = null, category = null,
         if (r.n <= TOTAL_CAP) plan.qMode = 'fts';
         else { plan.qOver = true; plan.qCountViaFts = extras && r.n <= cap; }
       }
-    } catch (_) { /* instr */ }
+    } catch (e) { if (!FTS_ERR.test(String(e?.message))) throw e; /* 表なし・未構築 → instr */ }
   }
   return plan;
 }
@@ -203,17 +203,28 @@ const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r))
 //   2. 範囲（国・区画）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
 //   2.5. q が 3 文字以上で索引の該当が TOTAL_CAP 超（かつ他の絞り込みなし）は、数えずに上限付き。TOTAL_CAP 以下なら索引から正確に数える。絞り込み併用で該当が FTS_EXTRA_PROBE 以下なら総件数だけ索引から数える
 //   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
+// 索引の経路が「索引がまだ無い・消えた・壊れている」で失敗したときのエラー（これだけ instr でやり直す）。D1 の一時エラー・本番だけで出る SQL エラー（too many terms in compound SELECT など）は握らず投げる（握ると毎回「索引で失敗 → instr」の二重実行になり気づけない）。
+const FTS_ERR = /no such table|sites_fts|fts5|CORRUPT_VTAB|malformed/i;
+const usesFts = p => p.qMode === 'fts' || p.qCountViaFts;
+const ftsReady = async db => { try { return (await db.prepare(`SELECT ready FROM fts_state WHERE name = 'sites_fts'`).first())?.ready === 1; } catch (_) { return false; } };
 export async function querySites(db, o) {
-  const hasCursor = o.cursor && !o.cursor.none;
-  const basePlan = await planFor(db, { cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q }, !hasCursor);
-  try { return await runQuery(db, o, basePlan); }
-  catch (e) {
-    // 索引の経路の実行時の失敗（索引の作り直し・表の DROP と計画の判断の間に起きたもの）は、instr の経路でやり直す（結果は同じ）。索引を使わない計画の失敗はそのまま投げる。
-    if (basePlan.qMode !== 'fts' && !basePlan.qCountViaFts) throw e;
+  const hasCursor = o.cursor && !o.cursor.none, pk = { cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q };
+  const basePlan = await planFor(db, pk, !hasCursor);
+  if (!usesFts(basePlan)) return runQuery(db, o, basePlan);
+  const fallback = async why => { // instr の経路でやり直す（結果は同じ）。計画も instr にして覚える。
+    console.error('sites_fts の経路を使えず instr でやり直す:', why instanceof Error ? why.message : why);
     const plan = { ...basePlan, qMode: 'instr', qOver: false, qCountViaFts: false };
-    planCache.set(planKey({ cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q }), { plan, at: Date.now() });
-    return await runQuery(db, o, plan);
-  }
+    planCache.set(planKey(pk), { plan, at: Date.now() });
+    try { return await runQuery(db, o, plan); }
+    catch (e2) { if (why instanceof Error && e2 instanceof Error) e2.message += `（先に索引の経路が失敗: ${why.message}）`; throw e2; }
+  };
+  let res;
+  try { res = await runQuery(db, o, basePlan); }
+  catch (e) { if (!FTS_ERR.test(String(e?.message))) throw e; return fallback(e); }
+  // 実行の「後」に ready を確かめる。作り直しは ready = 0 と delete-all を同じ文でこの順に流すので、実行が空・作りかけの索引を見たなら、ここでは必ず ready = 0 が見える
+  // （実行の前の確認だけだと、確認と実行の間に作り直しが始まる窓で一覧が途中で切れる・0 件になる）。
+  if (!await ftsReady(db)) return fallback('ready が 1 でない（作り直し中・表なし）');
+  return res;
 }
 async function runQuery(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }, basePlan) {
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
