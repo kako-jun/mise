@@ -6,9 +6,9 @@ Issue #125。**自前で取得し、32px の画像にして保存し、月 1 回
 
 | 実装済み | 未実装（後続） |
 |---|---|
-| 取得・縮小・台帳・ローカル保存・`sites.favicon_path` 向け SQL・月次更新・条件付き GET・`nightly.py` の任意の段 | **R2 への配信**（サムネイル #41 と共用する別 Issue #130。配信ルート・CSP の `img-src`・キャッシュ設定）、既存全サイトの一括取得、取り下げ申請（#29）での削除、一覧の UI での表示 |
+| 取得・縮小・台帳・ローカル保存・`sites.favicon_path` 向け SQL・月次更新・条件付き GET・`nightly.py` の任意の段。R2 への配信ルート `/icon/<hash>.webp`（`src/media.js`）・API の `favicon_url`・一覧での表示・`R2Store`（#125 の R2 部分。**R2 バケット `mise-media` の作成後にマージ**） | 既存全サイトの一括取得、取り下げ申請（#29）での R2 画像の削除（設計は下の「取り下げ」。実装は別 Issue）、サムネイル（#130）の `/thumb/` |
 
-保存先は `IconStore`（`put` / `exists`）の抽象で、今回の実装はローカルディレクトリ `var/favicons/<hash>.webp` だけ。R2 実装は同じ形で足せる。**今は R2・本番 D1 のどちらにも書かない**。
+保存先は `IconStore`（`put` / `exists`）の抽象で、実装は既定のローカルディレクトリ `var/favicons/<hash>.webp`（`LocalDirStore`）と、R2 へ置く `R2Store`。**既定はローカルのまま**で、R2 へ書くのは `run --apply --store r2` と明示したときだけ。本番 D1 には書かない（SQL の適用は人）。
 
 ## 使い方
 
@@ -56,6 +56,28 @@ HTML の `<link>`（`<base href>` を考慮、相対 URL は解決）から、�
 - 形式は `Image.open` の `formats` で限定し、辺の上限・縮小率は**読み込み後の実寸**で判定する（ICO などの埋め込み画像は宣言サイズと実寸が違いうる）。展開爆弾の警告も拒否扱い。
 - ICO は入っている中で最大の絵、GIF は最初のフレームを使う。長辺を 32px に合わせ、正方形でなければ透明で余白を足して **32x32 の可逆 WebP**（透明保持）にする。
 - ファイル名は出力画像の SHA-256 の先頭 32 桁 + `.webp`。**同じ画像（既定アイコン等）は 1 ファイルに重複排除**される（`sites.favicon_path` が同じ名前を指す）。
+
+## R2 への保存と配信
+
+配信は Worker の `/icon/<hash>.webp`（`src/media.js` の `serveMedia`。`<hash>` は 32 桁 16 進だけ許可、それ以外は R2 を見ずに 404）。R2 のキーは `icon/<hash>.webp`、バケットは `mise-media`（バインディング `MEDIA`）。応答は `Cache-Control: public, max-age=31536000, immutable`・`ETag`（`If-None-Match` 一致で 304）・`Content-Type: image/webp`。名前が内容ハッシュなので中身は変わらず、画像が替わると名前も替わる。R2 に無ければ 404（代替画像は作らない・404 は `no-store`）。`MEDIA` バインディングが無い環境でも Worker は落ちず 404 を返す。自サイト配下なので CSP の `img-src 'self'` のままで足りる。サムネイル（#130）は `MEDIA_KINDS` に `thumb` を足し `app.get('/thumb/:file', ...)` を 1 行足すだけで同じ仕組みを使える。
+
+```sh
+# ドライラン（既定。ネットワークも wrangler も呼ばない）
+uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --store r2
+# ローカル模擬の R2 へ（wrangler dev --local と同じ .wrangler/state。実サイトは取得する）
+uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply --store r2
+# 本番バケットへ（バケット作成後、--r2-remote を明示したときだけ）
+uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply --store r2 --r2-remote
+```
+
+- `R2Store` は `npx wrangler r2 object put mise-media/icon/<hash>.webp --file ... --content-type image/webp --local|--remote` を呼ぶ。**`--r2-remote` が無ければ常に `--local`**（本番に書かない安全側）。put の失敗は 1 サイト分の `store_failed` として続行する。
+- **呼び出し数を抑える設計**: wrangler の起動は 1 回数秒かかるので、`exists` は既定で R2 に問い合わせず台帳（`icon_hash`）を信じる。同じ実行中に置いた名前は記憶して 2 度 put しない。R2 から画像が消えた・別バケットへ移した疑いがあるときだけ `--r2-verify`（`wrangler r2 object get` で 1 件ずつ確認。遅い）。画像は 1 件 約 1.5 KB なので 1 件ずつ put する（件数が増えて遅くなったら S3 互換 API での並列化を別 Issue で検討）。
+- 本番へ初回に流す順序: バケット作成 → マージ・デプロイ → `--r2-remote` で画像を置く → `sql` の出力を D1 へ適用（`favicon_path` が入って初めて一覧に出る。画像が先、SQL が後なので、表示が 404 のままになる時間帯が出ない）。
+- プレビュー（`wrangler preview`）の `MEDIA` は別バケット `mise-media-preview`（空のまま。本番バケットを触らせない）。プレビューでは `/icon/` は 404 になり、一覧はファビコン枠ごと消える。
+
+## 取り下げ（#29）での R2 画像の削除（設計のみ・未実装）
+
+取り下げが通ったサイトの `favicon_path` を NULL にするのに加えて、R2 の `icon/<hash>.webp` を消す。**同じ画像（既定アイコン等）は複数サイトが共有する**ので、削除前に台帳（`var/favicons.sqlite` の `icon_hash`）と `sites.favicon_path` の両方で他サイトが同じ名前を指していないことを確かめ、指す者が 0 のときだけ `wrangler r2 object delete mise-media/icon/<hash>.webp --remote` する。順序は D1（NULL 化）→ R2 削除。逆だと一覧が一瞬 404 になる。CDN にキャッシュが残る間は表示され続けるが、immutable・1 年のため即時には消えない（許容。即時に消す必要があればキャッシュのパージを別途）。実装は別 Issue。
 
 ## 更新
 

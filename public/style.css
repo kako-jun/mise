@@ -73,7 +73,7 @@ body { touch-action: pan-y; }
 #directory-sites, #result-list { list-style: none; padding-left: 0; }
 #directory-sites li, #result-list li { display: flex; gap: 10px; align-items: flex-start; }
 .site-icon { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; border: 1px solid #76a8b3; border-radius: 5px; font-size: 20px; color: #08788e; background: #eff9fa; }
-.site-icon img { max-width: 24px; max-height: 24px; }
+.site-icon img { width: 24px; height: 24px; object-fit: contain; }
 .site-content { min-width: 0; }
 .site-categories { font-size: 11px; }
 

@@ -403,6 +403,60 @@ class Ledger(unittest.TestCase):
         self.assertEqual(self.row('s2')['status'], 'http_404')
 
 
+class R2StoreMock(unittest.TestCase):
+    """wrangler 呼び出しは runner の差し替えでモックする。実際には呼ばない。"""
+    def setUp(self):
+        self.calls = []; self.rc = 0
+
+    def runner(self, args):
+        self.calls.append(args)
+        return self.rc
+
+    def test_put_uses_local_by_default_and_content_type(self):
+        st = favicon.R2Store(runner=self.runner)
+        self.assertTrue(st.put('a' * 32 + '.webp', b'x'))
+        a = self.calls[0]
+        self.assertEqual(a[:3], ['r2', 'object', 'put'])
+        self.assertEqual(a[3], 'mise-media/icon/' + 'a' * 32 + '.webp')
+        self.assertIn('image/webp', a); self.assertIn('--local', a); self.assertNotIn('--remote', a)
+
+    def test_remote_only_when_explicit(self):
+        st = favicon.R2Store(remote=True, runner=self.runner); st.put('b' * 32 + '.webp', b'x')
+        self.assertIn('--remote', self.calls[0]); self.assertNotIn('--local', self.calls[0])
+
+    def test_put_once_per_name_in_a_run(self):
+        st = favicon.R2Store(runner=self.runner)
+        self.assertTrue(st.put('c' * 32 + '.webp', b'x')); self.assertFalse(st.put('c' * 32 + '.webp', b'x'))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_exists_trusts_ledger_without_calling_by_default(self):
+        self.assertTrue(favicon.R2Store(runner=self.runner).exists('d' * 32 + '.webp'))
+        self.assertEqual(self.calls, [])
+
+    def test_verify_checks_with_get(self):
+        st = favicon.R2Store(runner=self.runner, verify=True)
+        self.rc = 1; self.assertFalse(st.exists('e' * 32 + '.webp'))
+        self.rc = 0; self.assertTrue(st.exists('e' * 32 + '.webp')); self.assertTrue(st.exists('e' * 32 + '.webp'))
+        self.assertEqual([c[2] for c in self.calls], ['get', 'get'])
+
+    def test_put_failure_raises_oserror_for_per_site_continue(self):
+        self.rc = 1
+        with self.assertRaises(OSError):
+            favicon.R2Store(runner=self.runner).put('f' * 32 + '.webp', b'x')
+
+    def test_default_is_local_dir_and_dry_run_never_calls_wrangler(self):
+        with tempfile.TemporaryDirectory() as t:
+            def boom(self_, args):
+                raise AssertionError('wrangler called')
+            orig = favicon.R2Store._run
+            favicon.R2Store._run = boom
+            try:
+                self.assertEqual(favicon.main(['--db', str(Path(t) / 'f.sqlite'), 'run', '--store', 'r2']), 0)   # --apply なし = ドライラン
+            finally:
+                favicon.R2Store._run = orig
+            self.assertEqual(list(Path(t).iterdir()), [])
+
+
 class RealLaunch(unittest.TestCase):
     """夜間ジョブと同じ起動方法(uv run)で、Pillow の有無による挙動を実際に確かめる。"""
     SCRIPT = str(ROOT / 'scripts' / 'favicon' / 'favicon.py')

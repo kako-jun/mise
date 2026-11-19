@@ -7,6 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
+- 画像（ファビコン等）は R2 バケット `mise-media`（バインディング `MEDIA`、`/icon/<hash>.webp` で配信）。バケットは Cloudflare アカウントで R2 を有効化したうえで作る（次の節）。
 - 必須の secret は `INTAKE_SALT`（申請の IP ハッシュの塩。未設定だと申請の受付が 503 で止まる。[requests.md](requests.md)）。設定は [秘密情報](#秘密情報)。
 
 ## ローカル
@@ -48,6 +49,21 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 - 適用済みの migration は書き換えない。データの修正は新しい番号の migration で行う。番号は他の作業と衝突しないよう、最新を確認してから振る。
 - 収集データの投入も migration（`migrations/0005`・`0009`・`0014` など）。根拠は `data/collection-*.json`（[procedures.md](../collection/procedures.md)）。
 - 注意: `migrations/0006_registration_clock.sql` は `d1_migrations` の履歴に依存する書き方で、履歴の無い環境では何もしない。本番の `registered_at` の値はこのため環境で異なる（Issue #13 の指摘）。
+
+## R2 バケット（画像配信）の作成と確認（Issue #125）
+
+`wrangler.jsonc` の `r2_buckets` は `mise-media` を指すので、**バケットが無いまま main にマージするとデプロイが失敗する**。順序は「R2 の有効化 → バケット作成 → マージ」。
+
+```sh
+npx wrangler r2 bucket create mise-media           # 本番（Cloudflare ダッシュボードで R2 を有効化済みであること。未有効だと code 10042）
+npx wrangler r2 bucket create mise-media-preview   # プレビュー用（空のまま。previews.r2_buckets が指す）
+npx wrangler r2 bucket list
+```
+
+- **ローカル検証**（Cloudflare には触れない。miniflare の R2 模擬、状態は `.wrangler/state`）: `uv run --with pillow python3 scripts/favicon/favicon.py run --apply --store r2`（既定で `--local`）か、`npx wrangler r2 object put mise-media/icon/<hash>.webp --file <f> --content-type image/webp --local` で置き、`npm run dev` で `/icon/<hash>.webp`（200・`immutable`・`ETag`）、存在しない名前で 404、一覧にファビコンが出ることを確かめる。`--remote` は本番バケットへ書くので、バケット作成後にだけ使う。
+- **無料枠の目安**（R2 の無料枠。数字は課金ページで要確認）: 保存 10 GB/月、書き込み系（Class A）100 万回/月、読み取り系（Class B）1,000 万回/月、egress（転送）無料。ファビコンは 1 件 約 1.5 KB なので、10 万件で約 150 MB・初回の書き込み 10 万回。月次更新はハッシュが変わったものだけ書くので無料枠に収まる。404 も R2 の読み取りに数えるが、不正な名前（32 桁 16 進でないもの）は R2 を見ずに 404 を返す。
+- プレビューのバケットは本番と別（`previews.r2_buckets` の `mise-media-preview`）。ブランチの未レビューのコードが本番の画像を触らないため。書き込みはしない運用で、空なら `/icon/` は 404。
+- 取り下げ（#29）での削除経路は [collection/favicons.md](../collection/favicons.md) の設計（未実装）。
 
 ## 官公庁の名簿（0015・0019）を本番へ適用する手順（Issue #37、PR #71）
 

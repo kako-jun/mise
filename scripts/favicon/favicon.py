@@ -1,4 +1,4 @@
-"""ファビコンの取得・縮小・保存(Issue #125)。手元/夜間ジョブで実行する。LLM なし、本番 D1・R2 には書かない。
+"""ファビコンの取得・縮小・保存(Issue #125)。手元/夜間ジョブで実行する。LLM なし、本番 D1 には書かない。R2 へは --store r2 を明示したときだけ(既定は --local の模擬)。
 
 台帳(SQLite, 既定 var/favicons.sqlite)に 1 サイト 1 行で状態を持ち、32px の WebP を内容ハッシュ名(<hash>.webp)で
 IconStore(既定: ローカル var/favicons/)に置く。`sql` が sites.favicon_path 向けの UPDATE を出す(適用は人が行う)。
@@ -12,6 +12,7 @@ import hashlib
 import io
 import os
 import sqlite3
+import subprocess
 import sys
 import time
 import warnings
@@ -25,6 +26,8 @@ import fetcher  # noqa: E402
 
 DEFAULT_DB = ROOT / 'var' / 'favicons.sqlite'
 DEFAULT_STORE = ROOT / 'var' / 'favicons'
+R2_BUCKET = 'mise-media'      # wrangler.jsonc の r2_buckets と同じ名前
+R2_PREFIX = 'icon/'           # 配信ルート /icon/<hash>.webp のキー
 ICON_SIZE = 32                 # 出力は 32x32
 MAX_ICON_BYTES = 256 * 1024    # 取得する画像の上限
 MAX_SIDE = 1024                # 元画像の一辺の上限(展開爆弾よけ)
@@ -55,7 +58,7 @@ class IconError(Exception):
 # ---- 保存先(差し替え可能) ----
 
 class IconStore:
-    """アイコンの置き場。実装は put/exists だけ。R2 実装は後続で同じ形で足す。"""
+    """アイコンの置き場。実装は put/exists だけ。R2 は R2Store。"""
     def exists(self, name):
         raise NotImplementedError
 
@@ -78,6 +81,50 @@ class LocalDirStore(IconStore):
         tmp = self.root / (name + '.tmp')
         tmp.write_bytes(data)
         tmp.replace(self.root / name)
+        return True
+
+
+class R2Store(IconStore):
+    """R2 バケットへ wrangler CLI で置く。`run --apply --store r2` を明示したときだけ使う(既定は LocalDirStore)。
+
+    - 既定は本番ではなく --local(wrangler dev --local と同じローカル模擬の R2)。本番(--remote)へは `--remote` を明示したときだけ。
+    - exists は既定で R2 に問い合わせず、台帳(icon_hash)を信じて True を返す(wrangler の起動は 1 回数秒で、月次の 304 を全件確認すると遅い)。
+      R2 から画像が消えた/別バケットへ移した疑いのときだけ verify=True(--r2-verify)で `wrangler r2 object get` により 1 件ずつ確かめる。
+    - put は同じ名前(=同じ内容)の上書きなので何度やっても同じ結果。この実行中に置いた名前は記憶して 2 度呼ばない。
+    wrangler は `runner(args)`(戻り値は終了コード)で呼ぶ。テストでは runner を差し替え、実際には呼ばない。"""
+    def __init__(self, bucket=R2_BUCKET, remote=False, runner=None, cwd=None, verify=False):
+        self.verify = verify; self.bucket = bucket; self.remote = remote; self.cwd = cwd or ROOT
+        self.runner = runner or self._run
+        self.known = set()
+
+    def _run(self, args):
+        return subprocess.run(['npx', 'wrangler'] + args, cwd=self.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120).returncode
+
+    def _flag(self):
+        return ['--remote'] if self.remote else ['--local']
+
+    def _key(self, name):
+        return f'{self.bucket}/{R2_PREFIX}{name}'
+
+    def exists(self, name):
+        if name in self.known or not self.verify:
+            return True
+        ok = self.runner(['r2', 'object', 'get', self._key(name), '--pipe'] + self._flag()) == 0
+        if ok:
+            self.known.add(name)
+        return ok
+
+    def put(self, name, data):
+        if name in self.known:
+            return False
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / name
+            f.write_bytes(data)
+            rc = self.runner(['r2', 'object', 'put', self._key(name), '--file', str(f), '--content-type', 'image/webp'] + self._flag())
+        if rc != 0:
+            raise OSError(f'wrangler r2 object put が失敗(終了コード {rc})')   # run() が 1 サイト分の store_failed として続行する
+        self.known.add(name)
         return True
 
 
@@ -425,6 +472,9 @@ def main(argv=None):
     p.add_argument('--sites', nargs='*', default=[], help='[{id,url}] の JSON')
     p = sub.add_parser('run', help='期限が来たサイトを取得(--apply が無ければ計画だけ。ネットワーク・書き込みなし)')
     p.add_argument('--limit', type=int, default=50); p.add_argument('--apply', action='store_true'); p.add_argument('--store-dir', default=str(DEFAULT_STORE))
+    p.add_argument('--store', choices=['local', 'r2'], default='local', help='保存先(既定 local)。r2 は --apply と併せたときだけ wrangler を呼ぶ。R2 は既定でローカル模擬')
+    p.add_argument('--r2-verify', action='store_true', help='--store r2 で、台帳にある画像が R2 に在るかを 1 件ずつ確かめる(遅い)')
+    p.add_argument('--r2-remote', action='store_true', help='--store r2 で本番/リモートの R2 に書く(明示したときだけ)')
     p = sub.add_parser('sql', help='sites.favicon_path 向けの UPDATE を出す'); p.add_argument('--out'); p.add_argument('--since', help='changed_at がこれ以降のものだけ(ISO)')
     sub.add_parser('status', help='台帳の集計')
     a = ap.parse_args(argv)
@@ -447,11 +497,12 @@ def main(argv=None):
         now = datetime.datetime.now(datetime.timezone.utc)
         if not a.apply:
             rows = due_sites(db, now, a.limit) if db else []
-            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする)')
+            print(f'[dry-run] 取得対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {a.store}' + (' ' + R2_BUCKET + (' remote' if a.r2_remote else ' local') if a.store == 'r2' else '') + ')')
             for r in rows[:20]:
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
-        print('done ' + str(run(db, LocalDirStore(a.store_dir), now, a.limit)))
+        store = R2Store(remote=a.r2_remote, verify=a.r2_verify) if a.store == 'r2' else LocalDirStore(a.store_dir)
+        print('done ' + str(run(db, store, now, a.limit)))
     elif a.cmd == 'sql':
         text = sql_updates(db, a.since) if db else ''
         if a.out:
