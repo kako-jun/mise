@@ -54,8 +54,8 @@ def _uses_proxy(scheme):
     return bool(os.environ.get(f'{scheme}_proxy') or os.environ.get(f'{scheme.upper()}_PROXY'))
 
 
-def http_get(url, max_body=MAX_BODY):
-    """1リクエスト。リダイレクトは追わない。戻り: (status, headers(dict, 小文字キー), body bytes)。"""
+def http_get(url, max_body=MAX_BODY, extra_headers=None):
+    """1リクエスト。リダイレクトは追わない。extra_headers は条件付き GET 用の追加ヘッダ(dict)。戻り: (status, headers(dict, 小文字キー), body bytes)。"""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         raise FetchError('bad_url', url)
@@ -65,6 +65,8 @@ def http_get(url, max_body=MAX_BODY):
     cmd = ['curl', '--silent', '--show-error', '--include', '--max-time', str(TIMEOUT), '--connect-timeout', '10',
            '--max-redirs', '0', '--compressed', '--proto', '=http,https', '--user-agent', USER_AGENT,
            '--header', 'Accept-Language: ja,en;q=0.5']
+    for k, v in (extra_headers or {}).items():
+        cmd += ['--header', f'{k}: {v}']
     if not _uses_proxy(parts.scheme):
         # 検査したIPに固定して接続する（検査と接続の間の名前解決差し替えを防ぐ）
         port = parts.port or (443 if parts.scheme == 'https' else 80)
