@@ -7,7 +7,10 @@ import app from '../src/index.js';
 import { sortIndexSql, regionSortIndexSql } from '../src/sites.js';
 const stmt = { all: async () => ({ results: [] }), first: async () => ({ total: 0 }), run: async () => ({ meta: { changes: 1 } }) };
 stmt.bind = () => stmt;
-const okDb = { prepare: () => stmt };
+// 集計(COUNT・COALESCE)の文は実 D1 と同じく必ず 1 行返す（src/usage.js は first() を all() で実行するので all の戻りに行が要る）
+const totalStmt = { all: async () => ({ results: [{ total: 0 }] }), first: async () => ({ total: 0 }) };
+totalStmt.bind = () => totalStmt;
+const okDb = { prepare: sql => (/scope_counts/.test(sql) ? totalStmt : stmt) };
 const badStmt = { all: async () => { throw new Error('D1 down'); }, first: async () => { throw new Error('D1 down'); } };
 badStmt.bind = () => badStmt;
 const badDb = { prepare: () => badStmt };

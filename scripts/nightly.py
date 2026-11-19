@@ -28,6 +28,7 @@ for _d in ("scripts/llm", "scripts/pipeline"):
 import judge  # noqa: E402
 import filelock  # noqa: E402
 import export_candidates  # noqa: E402
+import usage_guard  # noqa: E402
 
 SCHEMA = 1
 PY = sys.executable
@@ -36,7 +37,7 @@ ANOMALY_FACTOR = 5                # 追加数が直近 7 夜の平均のこの�
 ANOMALY_MIN_NIGHTS = 3            # 履歴がこれ未満の夜は比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
-STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon"]
+STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "usage"]
 
 
 class StageFailed(Exception):
@@ -177,9 +178,9 @@ class Night:
             return 0.0
 
     # -- 段の枠
-    def stage(self, name, fn, resumable=True):
+    def stage(self, name, fn, resumable=True, always=False):
         rec = {"name": name, "status": "ok", "seconds": 0.0, "count": {}, "note": ""}
-        if self.stop:
+        if self.stop and not always:   # always: 前の段が失敗していても動かす(読むだけの使用量ガード)
             rec.update(status="skipped", note="前の段で停止")
             self.status["stages"].append(rec)
             return
@@ -482,6 +483,21 @@ class Night:
             notes.append(f"{name}: " + out.strip()[-80:])
         return {"note": " / ".join(notes)}
 
+    def s_usage(self):
+        """使用量ガード(#157)。Cloudflare の使用量(読むだけ)を込みの枠と比べ、しきい値超過・急増を guards に載せる。トークンが無い・API が失敗しても警告だけで続行し、夜間ジョブを失敗にしない。"""
+        a = self.a
+        if a.no_usage_guard:
+            return {"status": "skipped", "note": "--no-usage-guard で無効"}
+        try:
+            # 日付は渡さない(None=現在の UTC)。夜の名前 a.date は再開・再実行で過去の日付になり、「今日/昨日」の基準(急増判定・月末予測)が狂う。a.date は使わない
+            r = usage_guard.run(None, env_file=a.usage_env, var_dir=self.var, out=lambda *_: None)
+        except Exception as e:     # run() は投げない作りだが、念のため段の失敗にはしない
+            r = {"guards": [f"使用量ガード: 想定外のエラー({type(e).__name__})"], "note": "想定外のエラー"}
+        for g in r["guards"]:
+            if g not in self.status["guards"]:
+                self.status["guards"].append(g)
+        return {"note": r["note"]}
+
     # -- 全体
     def run(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -489,12 +505,13 @@ class Night:
         self.status["month_spent_usd"] = round(self.spent(), 4)
         table = [("discover", self.s_discover), ("triage", self.s_triage), ("fetch", self.s_fetch), ("judge", self.s_judge),
                  ("candidates", self.s_candidates), ("llm", self.s_llm), ("import", self.s_import), ("approve", self.s_approve),
-                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon)]
+                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon), ("usage", self.s_usage)]
         llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
             # candidates は llm 段が済むまでだけ作り直す(済んだ後に作り直すと import の入力 candidates.jsonl が縮む)
-            self.stage(name, fn, resumable=not force and (name != "candidates" or llm_prev_ok))
+            # usage は毎回動かす(再実行でも最新の使用量を見る)・前の段が失敗していても動かす
+            self.stage(name, fn, resumable=not force and name != "usage" and (name != "candidates" or llm_prev_ok), always=(name == "usage"))
         after = snapshot(self.db)
         self.status["rejected_by_reason"] = {k: v - before["rejected"].get(k, 0) for k, v in after["rejected"].items() if v > before["rejected"].get(k, 0)}
         self.status["held"] = after["review"].get("pending", 0)
@@ -618,7 +635,8 @@ def plan(a):
           f"  6 llm        haiku -> sonnet / mode={a.judge_mode}", "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
-          " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)")]
+          " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)"),
+          " 13 usage      " + ("無効(--no-usage-guard)" if a.no_usage_guard else "Cloudflare の使用量(Workers リクエスト・D1 行数。読むだけ)を込みの枠と比べる" + ("" if usage_guard.load_credentials(a.usage_env) else "。トークン未設定なので警告のみ(手順は docs/operations/usage-guard.md)"))]
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
@@ -635,6 +653,8 @@ def parse_args(argv=None):
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
     ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。取得だけ(SQL は作らない。本番には触れない。#125)")
+    ap.add_argument("--no-usage-guard", action="store_true", help="usage 段(Cloudflare の使用量ガード。#157)を動かさない。既定は有効(トークンが無ければ警告のみで続行)")
+    ap.add_argument("--usage-env", default=usage_guard.DEFAULT_ENV, help="使用量ガードのトークンの env ファイル(既定 ~/.config/mise/cloudflare-analytics.env)")
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
