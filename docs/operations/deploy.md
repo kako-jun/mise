@@ -75,6 +75,7 @@ npx wrangler r2 bucket list
    npx wrangler d1 export mise-preview --remote --output backup-mise-preview-$(date +%Y%m%d).sql
    ```
    バックアップはリポジトリにコミットしない。
+   **0027（検索の全文索引）の適用後は仮想表ができるので `d1 export` は使えない**。そのときのバックアップは Time Travel の bookmark（`npx wrangler d1 time-travel info <DB>`）を主にする（[検索の全文索引（0027）](#検索の全文索引0027を本番へ適用する手順issue-126-第3段)）。
 2. 適用。本番は `npx wrangler d1 migrations apply mise --remote`（事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する）。プレビュー DB は「プレビュー DB を本番に追従させる手順」の 1・2・4（一時設定・未適用の確認・適用。バックアップは上の手順 1 で取得済み）。
 3. 検索用列の埋め直し（0015 の INSERT はトリガが ASCII の小文字化だけの暫定値を入れる。全角半角の検索がヒットするよう NFKC に直す）: 本番は `node scripts/refresh-search-text.mjs --remote --db mise`。プレビューは同手順の 5。
 4. 確認（適用後、マージ前に本番 DB を直接読む）:
@@ -176,6 +177,39 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 - **一致確認**: `uv run python3 scripts/check-data-integrity.py --remote`（**PR ブランチ（新 integrity）で**）が **全 error 検査で 0 行**（`category_counts_country`・`scope_counts_country` に加え、0026 から `category_counts_region` が区画の行を検査する）。ずれたら `scripts/rebuild-category-counts.sql`（区画の分を含む）で作り直す。確認の例: `SELECT scope, n FROM scope_counts WHERE scope LIKE 'JP-%' ORDER BY scope` が、サイトのある区画の数だけ並ぶ。`SELECT n FROM scope_counts WHERE scope = 'JP-01'` が `SELECT COUNT(*) FROM sites WHERE region_code = 'JP-01'` と同じ。
 - **戻し方**: **先にコードを戻す**。そのあと **必ず `scripts/rollback-region-counts.sql` を流す**（新トリガ 7 本を消して 0022 のトリガに戻し、区画の行 `scope LIKE '%-%'` と索引 `idx_sites_region_sort` を消す。`npx wrangler d1 execute mise --remote --file scripts/rollback-region-counts.sql`。夜間ジョブを止めた時間に）。これで旧 `integrity.py` も 0 error になる（`tests/region-scope.test.mjs` が in-memory SQLite で「0026 適用 → 戻し → 0022 だけの状態と同じ集計表・旧 integrity の国別検査 0 行・以後の区画つき投入も国と all だけ数える」を検査している）。**コードだけ戻して区画の行を残してはいけない**（旧 `integrity.py` が FAIL して夜間ジョブが止まる）。別の道として、新 `integrity.py`（区画対応）を残してコードだけ戻す手もあるが、区画の行とトリガが残り続けるので推奨しない。0026 は適用後に凍結する（`d1_migrations` には残るので、再び区画を使うには 0026 の内容を元にした新しい migration が要る）。
 - **プレビュー DB**: 本番の適用後に「プレビュー DB を本番に追従させる手順」で追従させる。
+
+## 検索の全文索引（0027）を本番へ適用する手順（Issue #126 第3段）
+
+**承認を取ってから実行する。** 0027 は `sites_fts`（`search_text` の FTS5 trigram・外部コンテンツ表）・`fts_state`・同期トリガ 3 本を作る。**migration は空の表とトリガを作るだけ**（既存行の構築は含めない）で、構築は `scripts/build-search-fts.mjs` が 1 万行ずつ分けて流す（10 万件の一括構築は 12〜24 秒で D1 の 1 クエリ 30 秒の上限に近い）。構築が終わる（`fts_state.ready = 1`）までは、検索コードは従来の instr の経路を使い、同期トリガは何もしない。
+
+**FTS5 の trigram が本番 D1 で使えるかは本番では未確認**（本番の `pragma_module_list` は読めない）。プレビュー DB（`mise-preview`）では 2026-11-19 に `CREATE VIRTUAL TABLE … USING fts5(…, tokenize='trigram')`・`MATCH`・`integrity-check`・`INSERT … SELECT` での構築がすべて通った（Issue #126 に記録）。本番も同じ D1 のはずだが、**本番へ入れる前に必ずプレビューで 0027 を通す**。
+
+**仮想表ができると `wrangler d1 export` は使えなくなる**（公式の回避策は、仮想表を DROP → export → 作り直し）。**バックアップは Time Travel の bookmark（Paid 30 日・Free 7 日）を主にする**（`npx wrangler d1 time-travel info mise`）。SQL の写しが要るときだけ、次の順に流す（スクラッチ DB で通して確認済み）: (1) `UPDATE fts_state SET ready = 0; DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts;`（**`ready = 0` を先に**。検索は instr に落ちる）→ (2) `d1 export` → (3) **作り直し**: `npx wrangler d1 execute <DB> --remote --file migrations/0027_search_fts.sql`（`IF NOT EXISTS` / `INSERT OR IGNORE` / `DROP TRIGGER IF EXISTS` だけなので、何度流しても同じ。表・トリガが戻る。`fts_state` は残るので `ready = 0` のまま）→ (4) `node scripts/build-search-fts.mjs --remote --db <DB>`。**`ready = 1` のまま (3) を流してはいけない**（トリガが空の索引に対して動き、削除・更新の `'delete'` で索引が壊れ、`sites` の削除・更新が失敗する）。**0027 の適用より前に**通常の export のバックアップを取っておく（適用後は上の手順でしか取れない）。
+
+**書き込み量**: 構築 = 索引の行数（`sites` の件数ぶんの `INSERT`。内部表への書き込みが多く、ローカルの `total_changes()` で 1 サイトあたり数行〜十数行。D1 の課金がこれを数えるかは未検証）。Workers Paid 契約済み（書き込み 月 5,000 万行込み）なので、10 万件の構築（数十万〜百万行規模）でも込みの枠に収まる。無料プランに戻した場合（1 日 10 万行）は 1 日の枠を超えうるので、その場合は**件数が少ないうちに入れる**（構築のやり直しも同じ量を書く）。登録・紹介文の修正・タグの追加のたびに、索引の delete と insert が走る（タグ 3 つのサイトの登録で 17 → 約 47 行。夜間ジョブの 1 夜の書き込みの見積りにはこの増分を足す）。
+
+**構築の前に** `node scripts/refresh-search-text.mjs --remote --db <DB>` で `search_text` を NFKC + 小文字に埋め直しておく（0018・0020 の暫定値は ASCII の小文字化だけで、非 ASCII の大文字が残っているほど、索引（大小を畳む）と instr の該当件数の差が広がる。索引の行にも instr を重ねるので結果は同じだが、計画の判断が索引の件数に寄るぶん読み取りが増える）。
+
+**順序は 1 つ**: 0. 未適用が 0027 だけであること（`npx wrangler d1 migrations list mise --remote`）。→ 1. バックアップ（`d1 export` と Time Travel の bookmark。**適用前に**）。→ 2. **プレビュー DB で先に通す**（「プレビュー DB を本番に追従させる手順」の 1〜4 → `node scripts/build-search-fts.mjs --remote --db mise-preview` → 同 `--check`。代表クエリの確認はこの節の手順 4）。→ 3. 本番に適用: `npx wrangler d1 migrations apply mise --remote` → `node scripts/build-search-fts.mjs --remote --db mise`（構築中は夜間ジョブ・登録を止める。構築の最後に `ready = 1` にしてから件数の一致と `integrity-check` を検査する（以降の登録はトリガが拾う。検査に落ちたら `ready = 0` に戻って止まる）。落ちたら原因を直して同じコマンドを再実行する。何度流しても同じ結果）。→ 4. **新しい形のクエリを本番で読み取り実行する**（D1 本番は複合 SELECT の項数上限が低く、ローカルで通っても `too many terms in compound SELECT` で落ちた前例がある。第2段と同じ。下は `--remote` の SELECT だけで、エラーなく結果が返れば合格）:
+   - 索引の該当数（`planQuery`）: `SELECT (SELECT ready FROM fts_state WHERE name = 'sites_fts') AS ready, (SELECT COUNT(*) FROM (SELECT rowid FROM sites_fts WHERE sites_fts MATCH '"tokyo"' LIMIT 1001)) AS n`
+   - 一覧（索引の経路）: `SELECT s.id FROM sites s WHERE s.rowid IN (SELECT rowid FROM sites_fts WHERE sites_fts MATCH '"tokyo"') AND instr(s.search_text, 'tokyo') > 0 ORDER BY s.bulk_import ASC, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id ASC LIMIT 41`
+   - タグの併用（タグ駆動の UNION と同じ文に入る形。q を索引にしない計画だが、タグが稀でないときは索引の IN と EXISTS が同じ文に入る）: 上の一覧に `AND EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = '市' OR t.label_en = '市'))` を足したもの、および `AND s.id IN (SELECT site_id FROM site_tags WHERE label_ja = '村' UNION SELECT site_id FROM site_tags WHERE label_en = '村')` を足したもの。
+   - `SELECT COUNT(*) FROM sites_fts_docsize` が `SELECT COUNT(*) FROM sites` と同じ。
+   → 5. **マージ**（自動デプロイ）。マージ後、`/api/sites?q=…` の応答（`total`・`total_capped`・`next_cursor` で 3 ページ）が適用前と同じ並びであること。旧コードは索引を使わない（instr）ので、migration だけ先に入っても画面は壊れない。**新しいコードは `fts_state` が無いと instr に落ちる**（壊れない）。
+   → 6. 手元の dev DB でも `npm run db:migrate` と `node scripts/build-search-fts.mjs --local`（流さなくても検索は instr で動く）。
+
+**日常の運用**:
+- **紹介文・名前・タグを SQL で直接直した/大量に足した後**: `node scripts/refresh-search-text.mjs --remote --db mise`（今の値と違う行だけ UPDATE する。同値の UPDATE は書き込みを増やさないよう省いてある）。索引はトリガが追従する。
+- **索引を疑うとき**: `node scripts/build-search-fts.mjs --remote --db mise --check`（件数の一致と `integrity-check`。SELECT と検証コマンドだけで書き込みなし）。ずれていれば同じコマンドから `--check` を外して作り直す（`ready = 0` の間は検索が instr に落ちるだけで、結果は変わらない）。**定期的に `--check` を流す**（外部コンテンツ表は `sites` の暗黙の rowid で結ぶ。D1 が VACUUM で rowid を変えるかは未検証なので、ずれの検出が要る）。
+- **夜間ジョブ**: 構築の最中は止める（`ready = 0` の間に登録・削除されたサイトは索引に入らない/残る。最後の検査が検出して失敗する）。
+
+**戻し方**（失敗したとき・使わないとき）: **先にコードを戻さなくてよい**（表が無い・`ready = 0` なら、先頭ページも続きのページも instr に落ちる。続きのページは覚えた計画を使う前に `ready` を確かめ、索引の実行時の失敗は instr でやり直す。`tests/search-fts.test.mjs` が検査）。次を流す（トリガ 3 本 → 表の順。トリガを残して表だけ消すと `sites` の登録・更新が失敗する）:
+
+```sh
+npx wrangler d1 execute mise --remote --command "DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts; DROP TABLE fts_state;"
+```
+
+DROP しても `d1_migrations` には `0027_search_fts.sql` が残り、**同じ 0027 は二度と流れない**。入れ直すには、同じ内容の新しい migration（0028 以降）が要る。正本（`sites.search_text`）は変わらないので件数は失われない。Time Travel の bookmark でも戻せる。検索コードの instr の経路は残してある（消さない）。
 
 ## プレビュー DB を本番に追従させる手順
 
