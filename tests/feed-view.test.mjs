@@ -127,3 +127,67 @@ test('seo: ?view=feed は noindex、無ければ付かない(検索結果の noi
   assert.equal(wantsNoindex(sp('?tag=abc')), true);
   assert.match(readFileSync(new URL('../src/seo.js', import.meta.url), 'utf8'), /if \(wantsNoindex\(url\.searchParams\)\) rw\.on\('head'/);
 });
+
+// フックを疑似 document で実行する。scripts は head に積まれたもの、timers は setTimeout の予約
+function runHook() {
+  const hook = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).find(s => s.includes('feed.js'));
+  const classes = new Set(), head = [], timers = [];
+  const el = tag => ({ tag, remove() { this.removed = true; } });
+  const document = { documentElement: { classList: { add: c => classes.add(c), remove: c => classes.delete(c) } }, head: { append: e => head.push(e) }, createElement: el, getElementById: () => null };
+  vm.runInNewContext(hook, { URLSearchParams, document, location: { search: '?view=feed' }, setTimeout: (fn, ms) => timers.push({ fn, ms }) });
+  return { classes, head, timers };
+}
+
+test('フック: 読み込みに失敗(onerror)・起動しない(タイムアウト)ときは feed-mode を外して通常表示に戻す', () => {
+  const a = runHook();
+  assert.ok(a.classes.has('feed-mode'));
+  const scripts = a.head.filter(e => e.tag === 'script'); assert.equal(scripts.length, 2);
+  scripts[1].onerror();
+  assert.ok(!a.classes.has('feed-mode'), 'feed.js の失敗');
+  assert.ok(a.head.find(e => e.tag === 'link').removed, 'feed.css も外す');
+  const b = runHook(); b.head.filter(e => e.tag === 'script')[0].onerror();
+  assert.ok(!b.classes.has('feed-mode'), 'feed-lib.js の失敗');
+  const c = runHook(); assert.equal(c.timers.length, 1); assert.equal(c.timers[0].ms, 10000);
+  c.timers[0].fn();
+  assert.ok(!c.classes.has('feed-mode'), '起動しないまま 10 秒');
+});
+
+test('isPending: 要求した範囲を含む読み込みが無い間は true（古い範囲のデータを絞り込んで出さない）', () => {
+  assert.equal(lib.isPending(null, false, 'all'), true, '最初の読み込み前');
+  assert.equal(lib.isPending('jp', true, 'us'), true, 'jp を読んでいる最中に us へ切替');
+  assert.equal(lib.isPending('all', false, 'us'), true, '上限で切れた全世界は us を含むとは言えない');
+  assert.equal(lib.isPending('all', true, 'us'), false, '全件読めた全世界なら絞り込むだけ');
+  assert.equal(lib.isPending('jp', false, 'jp'), false);
+  // feed.js は pending の間、絞り込み直し・言語切替の描画・注記を保留する
+  assert.match(appJs, /function refilter\(\) \{ syncUrl\(\); renderBar\(\); if \(pending\(\)\) return;/);
+});
+
+test('fmtCount: 表示言語に合わせた桁区切り。数でない値は NaN と出さず空文字', () => {
+  assert.equal(lib.fmtCount(101868, 'en'), '101,868');
+  assert.equal(lib.fmtCount(101868, 'ja'), '101,868');
+  assert.equal(lib.fmtCount(0, 'ja'), '0');
+  for (const bad of [undefined, null, NaN, '', 'x']) assert.equal(lib.fmtCount(bad, 'ja'), '', String(bad));
+  assert.match(appJs, /String\(n\)\.padStart\(6, '0'\)/, 'SEEN の固定桁は変えない');
+});
+
+test('カテゴリ欄: 選択中のカテゴリはその範囲で 0 件でも常に選択肢に出す', () => {
+  assert.match(appJs, /if \(n \|\| c\.id === state\.cat\) sel\.append/);
+});
+
+test('「最初に戻る」「並びを変えてもう一度」は先頭カードへフォーカスを移し、連続操作の基準も 0 にする', () => {
+  assert.match(appJs, /top\.addEventListener\('click', \(\) => \{ navTarget = 0;.*const c = go\(0\); if \(c\) c\.focus\(\{ preventScroll: true \}\); \}\);/);
+  assert.match(appJs, /renderList\(\); const c = go\(0, true\); if \(c\) c\.focus\(\{ preventScroll: true \}\); \}\); row\.append\(re\);/);
+});
+
+test('feed.js: feed-mode が無い（フックが通常表示へ戻した後に届いた）ときは #feed を作らず keydown も奪わない', () => {
+  const calls = { created: 0, listeners: [], appended: 0, fetched: 0 };
+  const doc = { readyState: 'complete', documentElement: { classList: { contains: () => false } },
+    createElement: () => { calls.created++; return {}; }, body: { append: () => calls.appended++ }, addEventListener: (...a) => calls.listeners.push(a[0]), querySelector: () => null };
+  const ctx = { document: doc, MiseFeedLib: lib, matchMedia: () => ({ matches: false }), navigator: {}, location: { search: '?view=feed', pathname: '/', origin: 'https://x.example' },
+    URLSearchParams, URL, Date, Math, JSON, Number, Object, Array, String, Map, Set, Promise, setTimeout, clearTimeout, fetch: () => { calls.fetched++; return Promise.reject(Error('no')); },
+    addEventListener: (...a) => calls.listeners.push(a[0]), ResizeObserver: class {}, IntersectionObserver: class {}, CustomEvent: class {} };
+  ctx.window = ctx;
+  vm.runInNewContext(appJs, ctx);
+  assert.deepEqual(calls.listeners, [], 'window/document にリスナーを足さない');
+  assert.equal(calls.created, 0); assert.equal(calls.appended, 0); assert.equal(calls.fetched, 0);
+});

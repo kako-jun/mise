@@ -29,6 +29,8 @@
   let language = savedLang === 'ja' || savedLang === 'en' ? savedLang : (((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
   let newTab = storage.get('mise-external-new-tab') === 'true';
   const t = k => words[language][k];
+  // 件数の桁区切り(表示言語に合わせる)。「SEEN 000128」のような固定桁の意匠には使わない
+  const fmt = n => L.fmtCount(n, language);
 
   // ---- 決定論の乱数（シード = セッションごと。?seed= で再現） ----
   const { hash32, rngOf, updatedOf } = L;
@@ -60,6 +62,8 @@
     }
     return [...map.values()];
   }
+  // 要求した範囲のデータがまだ揃っていない間は true。この間は古い範囲のデータを絞り込んで出さない
+  const pending = () => L.isPending(loadedScope, loadedComplete, state.scope);
   function visible() {
     // 並びは全件で一度決め、絞り込みは順序を保ったまま間引く（条件を戻すと同じ並びに戻る）
     return L.order(all, { sort: state.sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => L.inScope(s, state.scope) && (!state.cat || s.roots.has(state.cat)));
@@ -173,14 +177,14 @@
     return art;
   }
   function endCard(n) {
-    const sec = document.createElement('section'); sec.className = 'f-card f-end'; sec.tabIndex = -1; sec.dataset.index = 'end'; sec.setAttribute('aria-label', t('end')(n));
+    const sec = document.createElement('section'); sec.className = 'f-card f-end'; sec.tabIndex = -1; sec.dataset.index = 'end'; sec.setAttribute('aria-label', t('end')(fmt(n)));
     const body = document.createElement('div'); body.className = 'f-end-body';
-    const h = document.createElement('h2'); h.textContent = t('end')(n);
+    const h = document.createElement('h2'); h.textContent = t('end')(fmt(n));
     const p = document.createElement('p'); p.textContent = t('endNote');
     const row = document.createElement('div'); row.className = 'f-end-actions';
-    const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => go(0));
+    const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => { navTarget = 0; clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(0); if (c) c.focus({ preventScroll: true }); });
     row.append(top);
-    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); go(0, true); }); row.append(re); }
+    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); const c = go(0, true); if (c) c.focus({ preventScroll: true }); }); row.append(re); }
     body.append(h, p, row); sec.append(body);
     return sec;
   }
@@ -210,19 +214,19 @@
   const kittensHtml = () => MILESTONES.filter(m => m <= seenCount()).map((m, i) => kittenSvg(i)).join('');
   function updateSeenBadge() {
     const btn = $('.f-seen'); if (!btn) return; const n = seenCount(), m = nextMilestone(n);
-    $('.f-seen-num', btn).textContent = String(n).padStart(6, '0'); btn.title = btn.ariaLabel = t('seenTitle')(n);
+    $('.f-seen-num', btn).textContent = String(n).padStart(6, '0'); btn.title = btn.ariaLabel = t('seenTitle')(fmt(n));
     const bar = $('.f-seen-bar i', btn); if (bar) { const prev = [0, ...MILESTONES].filter(x => x <= n).pop(); bar.style.width = m ? `${Math.round((n - prev) / (m - prev) * 100)}%` : '100%'; }
   }
   function monthKey(iso) { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }
   function breakdown(list, label) {
     const ul = mk('ul', 'f-bd'); const max = Math.max(1, ...list.map(x => x[1]));
-    for (const [k, v] of list) { const li = mk('li'); const name = mk('span', 'f-bd-k'); name.textContent = label(k); const track = mk('span', 'f-bd-t', { 'aria-hidden': 'true' }); const i = mk('i'); i.style.width = `${v / max * 100}%`; track.append(i); const num = mk('span', 'f-bd-v'); num.textContent = v; li.append(name, track, num); ul.append(li); }
+    for (const [k, v] of list) { const li = mk('li'); const name = mk('span', 'f-bd-k'); name.textContent = label(k); const track = mk('span', 'f-bd-t', { 'aria-hidden': 'true' }); const i = mk('i'); i.style.width = `${v / max * 100}%`; track.append(i); const num = mk('span', 'f-bd-v'); num.textContent = fmt(v); li.append(name, track, num); ul.append(li); }
     return ul;
   }
   function renderPanel() {
     const panel = $('.f-panel'); const n = seenCount(), m = nextMilestone(n); panel.replaceChildren();
-    const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${n}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.textContent = '×'; x.addEventListener('click', closePanel); head.append(h, x);
-    const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(m - n)} (${m})` : t('topMilestone');
+    const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${fmt(n)}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.textContent = '×'; x.addEventListener('click', closePanel); head.append(h, x);
+    const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(fmt(m - n))} (${fmt(m)})` : t('topMilestone');
     panel.append(head, note);
     const byId = new Map(all.map(s => [s.id, s]));
     const months = new Map(), countries = new Map(), cats = new Map();
@@ -279,7 +283,7 @@
     const th = mk('button', 'f-icon', { type: 'button', 'aria-label': t('theme'), title: t('theme') }); th.textContent = '◐';
     th.addEventListener('click', () => { const v = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = v; storage.set('mise-theme', v); });
     const lg = mk('button', 'f-icon', { type: 'button', 'aria-label': t('lang'), title: t('lang') }); lg.textContent = '文';
-    lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); renderList(id); updateCounter(); });
+    lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); if (!pending()) { renderList(id); updateCounter(); } });
     const sb = mk('button', 'f-seen', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
     sb.innerHTML = '<span class="f-seen-label" aria-hidden="true">SEEN</span> <span class="f-seen-num" aria-hidden="true"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span>';
     sb.addEventListener('click', () => ($('.f-panel').hidden ? openPanel() : closePanel()));
@@ -295,15 +299,15 @@
     const nameOf = (m, code) => (m && m[code] ? m[code][language] : null);
     for (const c of scopes.countries) {
       const cc = String(c.code).toUpperCase(), cn = nameOf(window.MISE_COUNTRIES, cc) || cc;
-      scopeSel.append(new Option(`${cn} (${c.count})`, cc.toLowerCase()));
-      for (const r of scopes.regions.filter(r => String(r.code).toUpperCase().startsWith(cc + '-'))) scopeSel.append(new Option(`\u00a0\u00a0${nameOf(window.MISE_REGIONS, String(r.code).toUpperCase()) || r.code} (${r.count})`, String(r.code).toLowerCase()));
+      scopeSel.append(new Option(`${cn} (${fmt(c.count)})`, cc.toLowerCase()));
+      for (const r of scopes.regions.filter(r => String(r.code).toUpperCase().startsWith(cc + '-'))) scopeSel.append(new Option(`\u00a0\u00a0${nameOf(window.MISE_REGIONS, String(r.code).toUpperCase()) || r.code} (${fmt(r.count)})`, String(r.code).toLowerCase()));
     }
     if (![...scopeSel.options].some(o => o.value === state.scope)) state.scope = 'all';
     scopeSel.value = state.scope; scopeSel.addEventListener('change', () => changeScope(scopeSel.value));
     row2.append(scopeSel);
     const sel = mk('select', 'f-select', { 'aria-label': t('catLabel') });
     sel.append(new Option(t('catAll'), ''));
-    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
+    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n || c.id === state.cat) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${fmt(n)})`, c.id)); }
     sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
     row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
@@ -314,7 +318,7 @@
     if (state.scope !== 'all' || pathScope) u.searchParams.set('scope', state.scope); if (state.cat) u.searchParams.set('cat', state.cat); if (state.sort !== 'mix') u.searchParams.set('sort', state.sort); if (seedPinned) u.searchParams.set('seed', seed);
     history.replaceState(null, '', u.pathname + u.search);
   }
-  function refilter() { syncUrl(); renderBar(); renderList(); go(0, true); }
+  function refilter() { syncUrl(); renderBar(); if (pending()) return; renderList(); go(0, true); }
 
   // 描画は最初の FIRST_BATCH 枚だけ先に行い、残りは少しずつ足す(1,000 枚を一度に描かない)。終了カードは常に最後に置く
   const FIRST_BATCH = 100, BATCH = 100;
@@ -357,9 +361,9 @@
   function updateNote() {
     if (!noteEl) return;
     const total = scopeTotal(), loaded = all.length;
-    noteEl.textContent = loadedScope !== null && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(loaded, Number.isFinite(total) ? total : loaded) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
+    noteEl.textContent = loadedScope !== null && !pending() && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(fmt(loaded), fmt(Number.isFinite(total) ? total : loaded)) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
   }
-  function updateCounter() { if (counter) counter.textContent = list.length ? t('itemOf')(Math.min(current + 1, list.length), list.length) : ''; }
+  function updateCounter() { if (counter) counter.textContent = list.length ? t('itemOf')(fmt(Math.min(current + 1, list.length)), fmt(list.length)) : ''; }
 
   // ---- 移動 ----
   function go(i, instant) {
@@ -388,6 +392,7 @@
   }
 
   function start() {
+    if (!document.documentElement.classList.contains('feed-mode')) return; // フックが通常表示へ戻した後（読み込み失敗・遅延到着）は何も起動しない
     document.documentElement.lang = language;
     root = mk('div', 'feed-root'); root.id = 'feed';
     bar = mk('header', 'f-bar'); bar.setAttribute('role', 'banner');
