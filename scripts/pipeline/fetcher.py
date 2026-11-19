@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.robotparser
 
 import freshness
+import netaddr
 
 USER_AGENT = 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)'
 ROBOT_TOKEN = 'MiseResearchBot'
@@ -45,7 +46,7 @@ def check_public_host(host):
     if ALLOW_PRIVATE:
         return ips
     for ip in ips:
-        if not ipaddress.ip_address(ip).is_global:
+        if not netaddr.is_public_address(ip):   # 判定の表は netaddr 1 か所(is_global だけでは ::7f00:1・64:ff9b::7f00:1 を通す)
             raise FetchError('ssrf_blocked', f'{host} -> non-public address')
     return ips
 
@@ -135,6 +136,7 @@ class RobotsCache:
     """origin ごとの robots.txt。取得は同一サイト内のリダイレクトのみ追従。"""
     def __init__(self, sleep):
         self.rules = {}; self.sleep = sleep
+        self.detail = {}   # origin -> 'unavailable' の理由(診断用。例: 'http_503'・'redirect_offsite')
 
     def _fetch(self, origin):
         url = origin + '/robots.txt'
@@ -146,6 +148,7 @@ class RobotsCache:
                 nxt = urllib.parse.urljoin(url, headers['location'])
                 nh = urllib.parse.urlsplit(nxt).hostname or ''
                 if not same_site(nh, host):
+                    self.detail[origin] = 'redirect_offsite'
                     return 'unavailable', None
                 url = nxt; host = nh; continue
             break
@@ -156,6 +159,7 @@ class RobotsCache:
             return 'allowed_no_robots', None
         if status in (401, 403):
             return 'disallowed', None   # 保守的に拒否扱い
+        self.detail[origin] = f'http_{status}'
         return 'unavailable', None      # 5xx 等。再試行待ち
 
     def check(self, origin, path):

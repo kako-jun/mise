@@ -7,7 +7,7 @@
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/*", "!/*.js", "!/*.css", "!/*.svg", "!/*.png", "!/*.jpg", "!/*.jpeg", "!/*.gif", "!/*.ico", "!/*.txt", "!/*.geojson", "!/*.json", "!/*.webmanifest", "!/*.woff", "!/*.woff2"] },
   "d1_databases": [{ "binding": "DB", "database_name": "mise", "database_id": "ebcd8092-5f2e-4119-9e15-692c1aae631a", "migrations_dir": "migrations" }],
-  // 画像（ファビコン /icon/<hash>.webp、将来はサムネイル）の置き場 R2。バケットは `npx wrangler r2 bucket create mise-media` で作る（docs/operations/deploy.md）。
+  // 画像（ファビコン /icon/<hash>.webp、サムネイル /thumb/<hash>.webp）の置き場 R2。バケットは `npx wrangler r2 bucket create mise-media` で作る（docs/operations/deploy.md）。
   // バケットが無いままデプロイすると失敗するので、作成後にマージする。バインディングが無い環境でも Worker は落ちず、/icon/ は 404 になる。
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "mise-media" }],
   // ブランチのプレビュー(wrangler preview)は本番DBでなくプレビュー専用DBを使う（docs/operations/deploy.md）

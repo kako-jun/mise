@@ -32,13 +32,13 @@ export function meterDb(db, acc) {
 }
 
 // 共有キャッシュに入れてよい GET か。DB を読む重い経路（検索・カテゴリ・範囲・活動・sitemap・範囲ページの SSR・アバウト）。
-// 入れない: /api/picks（毎回ランダム。キャッシュすると結果が変わる）・/api/requests（POST）・/icon/（R2。immutable で別に長期キャッシュ）・その他の /api/*（404 等）。
+// 入れない: /api/picks（毎回ランダム。キャッシュすると結果が変わる）・/api/requests（POST）・/icon/・/thumb/（R2。immutable で別に長期キャッシュ）・その他の /api/*（404 等）。
 const CACHE_PATHS = new Set(['/api/sites', '/api/categories', '/api/scopes', '/api/activity', '/sitemap.xml']);
 export function isCacheable(req) {
   if (req.method !== 'GET' || req.headers.has('Authorization')) return false;
   const { pathname } = new URL(req.url);
   if (pathname.startsWith('/api/')) return CACHE_PATHS.has(pathname);
-  return !pathname.startsWith('/icon/');
+  return !pathname.startsWith('/icon/') && !pathname.startsWith('/thumb/');
 }
 
 // キーは「デプロイのバージョン + URL（クエリ込み）」。caches.default はデプロイで消えないので、バージョンをキーに入れてデプロイ直後に古い応答を返さない

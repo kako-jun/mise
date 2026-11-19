@@ -126,6 +126,8 @@ test('キャッシュ対象外: picks（ランダム）・POST・Authorization �
   await req('/api/sites', { headers: { Authorization: 'Bearer x' } }); await req('/api/sites', { headers: { Authorization: 'Bearer x' } }); assert.equal(calls.n, 6); assert.equal(cache.m.size, 0);
   await req('/api/fail'); await req('/api/fail'); assert.equal(calls.n, 8); assert.equal(cache.m.size, 0);
   assert.equal(isCacheable(new Request('http://x/icon/abc.webp')), false);
+  assert.equal(isCacheable(new Request('http://x/thumb/abc.webp')), false);
+  assert.equal(isCacheable(new Request('http://x/thumb/abc.webp?v=1x')), false);   // v 付きも共有キャッシュに入れない
   assert.equal(isCacheable(new Request('http://x/api/sites', { method: 'POST' })), false);
 });
 

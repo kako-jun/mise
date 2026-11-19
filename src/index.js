@@ -52,8 +52,9 @@ app.post('/api/requests', async c => {
   // JS なしのフォーム送信(ブラウザの遷移)には JSON でなく簡単な HTML を返す。
   if ((c.req.header('Accept') || '').includes('text/html') && !(c.req.header('Content-Type') || '').toLowerCase().startsWith('application/json')) return c.html(NOJS, 415);
   const r = await receiveRequest(c); return c.json(r.body, r.status); });
-// R2 の画像（ファビコン。サムネイルは /thumb/ を同じ関数で足す）。:scope/:sub より先に登録する。MEDIA 未設定でも 404 を返すだけ。docs/design/architecture.md
+// R2 の画像（ファビコン /icon/・サムネイル /thumb/）。:scope/:sub より先に登録する。MEDIA 未設定でも 404 を返すだけ。docs/design/architecture.md
 app.get('/icon/:file', c => serveMedia(c.env, c.req.raw, 'icon', c.req.param('file')));
+app.get('/thumb/:file', c => serveMedia(c.env, c.req.raw, 'thumb', c.req.param('file')));
 app.get('/sitemap.xml', async c => c.body(await sitemapXml(c.env.DB), 200, { 'Content-Type': 'application/xml; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }));
 // 範囲ページ。`/` は既定範囲（日本）と同じ内容を 200 で返し、canonical だけ `/jp/` に向ける（301 にしない理由は docs/design/seo.md）。
 const page = async (c, scope, scopes) => renderIndex(c, await c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))), scope, scopes);

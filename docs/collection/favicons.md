@@ -6,7 +6,7 @@ Issue #125。**自前で取得し、32px の画像にして保存し、月 1 回
 
 | 実装済み | 未実装（後続） |
 |---|---|
-| 取得・縮小・台帳・ローカル保存・`sites.favicon_path` 向け SQL・月次更新・条件付き GET・`nightly.py` の任意の段。R2 への配信ルート `/icon/<hash>.webp`（`src/media.js`）・API の `favicon_url`・一覧での表示・`R2Store`（#125 の R2 部分。**R2 バケット `mise-media` の作成後にマージ**） | 既存全サイトの一括取得、取り下げ申請（#29）での R2 画像の削除（設計は下の「取り下げ」。実装は別 Issue）、サムネイル（#130）の `/thumb/` |
+| 取得・縮小・台帳・ローカル保存・`sites.favicon_path` 向け SQL・月次更新・条件付き GET・`nightly.py` の任意の段。R2 への配信ルート `/icon/<hash>.webp`（`src/media.js`）・API の `favicon_url`・一覧での表示・`R2Store`（#125 の R2 部分。**R2 バケット `mise-media` の作成後にマージ**） | 既存全サイトの一括取得、取り下げ申請（#29）での R2 画像の削除（設計は下の「取り下げ」。実装は別 Issue）、サムネイル（#130）の撮影ジョブは [thumbnails.md](thumbnails.md) |
 
 保存先は `IconStore`（`put` / `exists`）の抽象で、実装は既定のローカルディレクトリ `var/favicons/<hash>.webp`（`LocalDirStore`）と、R2 へ置く `R2Store`。**既定はローカルのまま**で、R2 へ書くのは `run --apply --store r2` と明示したときだけ。本番 D1 には書かない（SQL の適用は人）。
 
@@ -59,7 +59,7 @@ HTML の `<link>`（`<base href>` を考慮、相対 URL は解決）から、�
 
 ## R2 への保存と配信
 
-配信は Worker の `/icon/<hash>.webp`（`src/media.js` の `serveMedia`。`<hash>` は 32 桁 16 進だけ許可、それ以外は R2 を見ずに 404）。R2 のキーは `icon/<hash>.webp`、バケットは `mise-media`（バインディング `MEDIA`）。応答は `Cache-Control: public, max-age=31536000, immutable`・`ETag`（`If-None-Match` 一致で 304）・`Content-Type: image/webp`。名前が内容ハッシュなので中身は変わらず、画像が替わると名前も替わる。R2 に無ければ 404（代替画像は作らない・404 は `no-store`）。`MEDIA` バインディングが無い環境でも Worker は落ちず 404 を返す。自サイト配下なので CSP の `img-src 'self'` のままで足りる。サムネイル（#130）は `MEDIA_KINDS` に `thumb` を足し `app.get('/thumb/:file', ...)` を 1 行足すだけで同じ仕組みを使える。
+配信は Worker の `/icon/<hash>.webp`（`src/media.js` の `serveMedia`。`<hash>` は 32 桁 16 進だけ許可、それ以外は R2 を見ずに 404）。R2 のキーは `icon/<hash>.webp`、バケットは `mise-media`（バインディング `MEDIA`）。応答は `Cache-Control: public, max-age=31536000, immutable`・`ETag`（`If-None-Match` 一致で 304）・`Content-Type: image/webp`。名前が内容ハッシュなので中身は変わらず、画像が替わると名前も替わる。R2 に無ければ 404（代替画像は作らない・404 は `no-store`）。`MEDIA` バインディングが無い環境でも Worker は落ちず 404 を返す。自サイト配下なので CSP の `img-src 'self'` のままで足りる。サムネイル（#130）は `MEDIA_KINDS.thumb` と `app.get('/thumb/:file', ...)` で同じ仕組みを使っている（[thumbnails.md](thumbnails.md)）。
 
 ```sh
 # ドライラン（既定。ネットワークも wrangler も呼ばない）

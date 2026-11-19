@@ -95,6 +95,10 @@
 
 自前で取得した 32px の WebP を内容ハッシュ名（`<hash>.webp`）で配信する（`sites.favicon_path` がハッシュ名を持つ）。未取得・失敗時は何も表示せず、**代替アイコン（頭文字・猫模様など）は作らない**。表示時に第三者のサーバーへ問い合わせない（IP・閲覧の事実・Referer を漏らさない）。取得・更新・R2 への配信は実装済み（[collection/favicons.md](../collection/favicons.md)）。一覧の各行は、API の `favicon_url`（`/icon/<hash>.webp`。`favicon_path` のハッシュ名から Worker が組み立てる）を持つサイトだけ、行頭に 30px の固定寸法の枠（画像 24px。サムネイル #130 とは別物）を出す。枠は画像の読み込み前から出すので読み込み後に行がずれない。`favicon_url` が無いサイトは枠ごと出さず（**ファビコンがある行だけ名前が右にずれる**。全行に空きを確保してそろえる案は採用しない。kako-jun 2026-11-19、[decisions.md](../decisions.md)）、画像が 404 などで読めなければ枠を消す。表示時に第三者のサーバーへは一切アクセスしない。`public/icons/` の静的ファイル（従来の `favicon_path` が `/icons/…` の値）は、`favicon_url` が無いときだけ従来どおり表示する。置き場は R2（`public/icons/` は件数に上限があり 10 万件に使えない）。
 
+## サムネイル
+
+縦フィード（`?view=feed`）のカードに出す、サイトの最初の画面の縮小画像（幅 320px の横長 WebP。`sites.thumb_path`）。API の `thumb_url`（`/thumb/<k>.webp?v=<撮影時刻由来>`。`<k>` はサイト ID から決まる固定のキー）を同一オリジンの絶対パス（`?v=` 付きを含む）として読み、`thumb_lqip`（極小プレースホルダ）を先にぼかして出して画像が届いたら入れ替える（フィードの試作は既にこの形で読む。`public/feed.js`）。`thumb_url` が無いサイトは、従来どおりサイトごとの代替ビジュアル（三毛猫の模様）のまま。**取れなかったサイトに、サムネイルとしての代替画像は作らない**（ファビコンと同じ）。撮影・更新は [collection/thumbnails.md](../collection/thumbnails.md)、配信は [architecture.md](architecture.md)。カードの見た目の改善は #52・#160。
+
 ## アプリとして追加（PWA）
 
 ホーム画面に追加すると standalone（ブラウザの枠なし）で起動する。オフライン時は「オフラインです」だけを表示し、古いカテゴリ・サイトは見せない。タブのファビコンは `<link rel="icon">`（`favicon.ico`・`favicon.svg`）で、ロゴと同じ帯の位置（30/31/57/58/72/73%）の三毛猫模様（橙・クリーム・茶）を塗った `M`（クリーム色の縁取り付き。16/32px の小サイズ版は輪郭を太らせるため、クリームの縁は輪郭の下に隠れてほぼ出ない。主に輪郭のアンチエイリアス画素に効く）になる（`sites.favicon_path` の各サイトのファビコンとは別物）。ホーム画面アイコンは `public/pwa/` の PNG。仕組みは [architecture.md](architecture.md#pwa)。
