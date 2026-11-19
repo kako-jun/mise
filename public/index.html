@@ -7,7 +7,8 @@
 <meta name="description" content="For those tired of search results dominated by ads and major sites. Discover independent websites you have yet to find. MISE is a directory search engine.">
 <meta name="theme-color" content="#ffffff">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="icon" href="/pwa/icon-192.png" type="image/png">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/pwa/icon-180.png">
 <link rel="canonical" href="https://mise.llll-ll.com/">
 <link rel="alternate" hreflang="en" href="https://mise.llll-ll.com/">
@@ -33,7 +34,7 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=45">
+<link rel="stylesheet" href="/style.css?v=46">
 <script src="/countries.js?v=3" defer></script>
 <script src="/regions.js?v=2" defer></script>
 <script src="/install.js?v=2" defer></script>
@@ -55,8 +56,23 @@ addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.ser
     <h1 class="visually-hidden" data-i18n="heading">MISE — A directory search engine for today.</h1>
     <div class="logo-row"><a href="/jp/" id="home-link" class="logo" aria-label="MISE Home"><span>M</span><span>I</span><span>S</span><span>E</span></a></div>
     <script>
-// ロゴの M/S 横伸ばしを最速で実測適用する(#35)。適用前は style.css で不可視(領域は確保)、完了で html.logo-ready を付けて表示。失敗しても CSS の遅延アニメで必ず表示される。
-window.__miseLogo = () => { try { const l = [...document.querySelectorAll('.logo span')]; if (l.length < 4) return; const m = l[0].offsetWidth, s = l[2].offsetWidth; if (!m || !s) return; const sc = [1.5, 1, 1.5 * m / s, 1], gap = 8; l.forEach((e, k) => { const x = (sc[k] - 1) * e.offsetWidth / 2 + gap / 2; e.style.transform = `scaleX(${sc[k]})`; e.style.margin = `0 ${x}px`; }); document.documentElement.classList.add('logo-ready'); } catch (_) {} };
+// logo-script:begin
+// ロゴ MISE の横伸ばしと文字間を、最速で実測適用する(#35, #152)。適用前は style.css で不可視(領域は確保)、完了で html.logo-ready を付けて表示。失敗しても CSS の遅延アニメで必ず表示される。
+// 倍率は M 1.5・S 1.4 の固定(M と S の幅はそろえない)。文字間は layout 幅でなくインク(実際に塗られる範囲)基準で、隣り合う 2 文字の「行ごとのインク間隔の平均」を 17px にそろえる。
+// layout: prof[k]={left[],right[]}(伸ばす前の文字 k の行ごとのインク左右端、span 左端が 0、インクの無い行は null)、A[k]=文字 k の layout 幅。純関数(実ブラウザ無しでテストする)。
+window.__miseLogoLayout = (prof, A, sc, G) => {
+  const X = (k, u) => A[k] / 2 + (u - A[k] / 2) * sc[k];
+  const gap0 = (k) => { let s = 0, n = 0; for (let y = 0; y < prof[k].right.length; y++) { const r = prof[k].right[y], l = prof[k + 1].left[y]; if (r === null || l === null) continue; s += X(k + 1, l) - X(k, r); n++; } return n ? s / n : 0; };
+  const ext = (k) => { const v = prof[k].left.filter((a) => a !== null), w = prof[k].right.filter((a) => a !== null); return [Math.min(...v), Math.max(...w)]; };
+  const P = [0];
+  for (let k = 0; k < 3; k++) P.push(P[k] + G - gap0(k));
+  const c = (P[0] + X(0, ext(0)[0]) + P[3] + X(3, ext(3)[1])) / 2 - (P[0] + P[3] + A[3]) / 2;
+  return sc.map((_, k) => [k === 0 ? Math.max(0, -2 * c) : P[k] - (P[k - 1] + A[k - 1]), k === 3 ? Math.max(0, 2 * c) : 0]); // [左 margin, 右 margin]
+};
+// 測定の失敗(幅 0・フォント設定が効かない・例外)では、リセット前の inline 値に戻す。初回なら空に戻り、style.css のフォールバックが効く。
+// 幅は getBoundingClientRect(祖先の transform を含む)。今の .logo は scaleY だけなので layout 幅と同じだが、.logo に scaleX を付けるとここが壊れる。
+window.__miseLogo = () => { const l = [...document.querySelectorAll('.logo span')]; if (l.length < 4) return; const saved = l.map((e) => [e.style.transform, e.style.margin]), restore = () => l.forEach((e, k) => { e.style.transform = saved[k][0]; e.style.margin = saved[k][1]; }); try { l.forEach((e) => { e.style.transform = 'none'; e.style.margin = '0'; }); const A = l.map((e) => e.getBoundingClientRect().width); if (!A.every((a) => a > 0)) return restore(); const cs = getComputedStyle(l[0]), R = 2, fs = parseFloat(cs.fontSize) * R, PAD = 20, H = Math.ceil(fs * 2), BASE = Math.ceil(fs * 1.4), cv = document.createElement('canvas'), g = cv.getContext('2d', { willReadFrequently: true }); const font = `${cs.fontWeight} ${fs}px ${cs.fontFamily}`; const f0 = g.font; g.font = font; if (g.font === f0 && f0 !== font) return restore(); /* 指定が拒否されると font が初期値のまま */ const st = { '50%': 'ultra-condensed', '62.5%': 'extra-condensed', '75%': 'condensed', '87.5%': 'semi-condensed', '112.5%': 'semi-expanded', '125%': 'expanded', '150%': 'extra-expanded', '200%': 'ultra-expanded' }[cs.fontStretch]; const setup = () => { g.font = font; if (st && 'fontStretch' in g) g.fontStretch = st; g.textBaseline = 'alphabetic'; g.fillStyle = '#000'; }; /* canvas の幅・高さを変えると状態が初期化されるので毎回設定する */ const prof = l.map((e, k) => { cv.width = Math.ceil(A[k] * R) + PAD * 2; cv.height = H; setup(); g.clearRect(0, 0, cv.width, H); g.fillText(e.textContent, PAD, BASE); const d = g.getImageData(0, 0, cv.width, H).data, left = [], right = []; for (let y = 0; y < H; y++) { let a = -1, b = -1; for (let x = 0; x < cv.width; x++) if (d[(y * cv.width + x) * 4 + 3] > 127) { if (a < 0) a = x; b = x + 1; } left.push(a < 0 ? null : (a - PAD) / R); right.push(a < 0 ? null : (b - PAD) / R); } return { left, right }; }); if (prof.some((p) => p.left.every((v) => v === null))) return restore(); const sc = [1.5, 1, 1.4, 1], mg = window.__miseLogoLayout(prof, A, sc, 17); l.forEach((e, k) => { e.style.transform = `scaleX(${sc[k]})`; e.style.margin = `0 ${mg[k][1]}px 0 ${mg[k][0]}px`; }); document.documentElement.classList.add('logo-ready'); } catch (_) { restore(); } };
+// logo-script:end
 // 書体(自己ホスト Anton)の読込後に実測する。低速回線では 2.5 秒で見切って現在の書体で先に測り(Chromium は block を 3 秒で打ち切り代替書体を出すため、その前に横伸ばしを済ませる)、到着後にもう一度測り直す。失敗・未対応でも測る。
 { const go = () => window.__miseLogo(); if (document.fonts && document.fonts.load) { const f = document.fonts.load('1000 54px "Mise Logo"', 'MISE'); Promise.race([f, new Promise(r => setTimeout(r, 2500))]).then(go, go); f.then(go, go); } else go(); }
 </script>
