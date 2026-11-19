@@ -7,6 +7,7 @@
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
+  const MAX_SITES = 1000;        // 試作で読み込むサイト数の上限(100 件ずつ取得)
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
   const SEEN_KEY = 'mise-seen-v1'; // 端末内保存(localStorage)。{v:1, sites:{サイトID: 初めて見た日時ISO}}
   // -------------------------------------------------------------------------------------
@@ -17,11 +18,13 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
+      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', proto: '試作', protoTitle: '試作ビュー(検索エンジンには載りません)', scopeAllLabel: '全世界', allOf: n => `${n}全域`, catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
     en: { seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
+      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', proto: 'BETA', protoTitle: 'Prototype view (not indexed by search engines)', scopeAllLabel: 'World', allOf: n => `All of ${n}`, catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
   };
-  let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
+  // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
+  const savedLang = storage.get('mise-language');
+  let language = savedLang === 'ja' || savedLang === 'en' ? savedLang : (((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
   let newTab = storage.get('mise-external-new-tab') === 'true';
   const t = k => words[language][k];
 
@@ -32,24 +35,28 @@
   const params = new URLSearchParams(location.search);
   let seed = params.get('seed') || storage.sget('mise-feed-seed') || Math.random().toString(36).slice(2, 8);
   storage.sset('mise-feed-seed', seed);
-  const state = { scope: params.get('scope') === 'jp' ? 'jp' : 'all', cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
+  const state = { scope: /^([a-z]{2}(-[a-z0-9]{1,3})?)$/i.test(params.get('scope') || '') ? params.get('scope').toLowerCase() : 'all', cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
 
-  let categories = [], all = [], list = [], current = 0, cards = [];
+  let categories = [], scopes = { countries: [], regions: [] }, all = [], list = [], current = 0, cards = [];
   const dwell = new Map();
   let root, scroller, bar, counter, observer, globeTimer = 0, lastPlace = '';
 
   // ---- データ整形 ----
   const updatedOf = s => Date.parse(s.source_updated_at || s.registered_at);
   function rootCat(id) { let n = categories.find(c => c.id === id); while (n && n.parent_id) n = categories.find(c => c.id === n.parent_id); return n || null; }
+  // /api/sites は 1 サイト 1 行（category_ids を持つ）。同じ id が複数ページに跨っても 1 件にまとめる
   function build(rows) {
     const map = new Map();
     for (const r of rows) {
-      let s = map.get(r.id);
-      if (!s) { s = { ...r, roots: new Set(), cats: new Set() }; delete s.category_id; map.set(r.id, s); }
-      s.cats.add(r.category_id); const rc = rootCat(r.category_id); if (rc) s.roots.add(rc.id);
+      if (map.has(r.id)) continue;
+      const roots = new Set();
+      for (const id of Array.isArray(r.category_ids) ? r.category_ids : []) { const rc = rootCat(id); if (rc) roots.add(rc.id); }
+      map.set(r.id, { ...r, roots });
     }
     return [...map.values()];
   }
+  // 範囲: all / 国(jp) / 区画(jp-13)
+  const inScope = s => state.scope === 'all' || (state.scope.includes('-') ? (s.region_code || '').toLowerCase() === state.scope : (s.country_code || '').toLowerCase() === state.scope);
   // 重み付きランダム順（Efraimidis-Spirakis）。key = u^(1/w) の降順。w = 1 + FRESH_BOOST * 0.5^(経過日/半減期)
   function order(sites) {
     if (state.sort === 'new') return [...sites].sort((a, b) => (updatedOf(b) || 0) - (updatedOf(a) || 0) || (a.id < b.id ? -1 : 1));
@@ -61,7 +68,7 @@
   }
   function visible() {
     // 並びは全件で一度決め、絞り込みは順序を保ったまま間引く（条件を戻すと同じ並びに戻る）
-    return order(all).filter(s => (state.scope === 'all' || s.country_code === 'JP') && (!state.cat || s.roots.has(state.cat)));
+    return order(all).filter(s => inScope(s) && (!state.cat || s.roots.has(state.cat)));
   }
 
   // ---- 代替ビジュアル（サイトIDから決まる三毛猫の模様 + 頭文字）。thumb_url があればそちらを使う ----
@@ -82,7 +89,8 @@
     svg.append(txt);
     return svg;
   }
-  const thumbOf = s => (typeof s.thumb_url === 'string' && /^(\/|https:\/\/)/.test(s.thumb_url)) ? s.thumb_url : null;
+  // 第三者へアクセスしないよう、同一オリジンの絶対パス(/thumb/... など。//host は不可)だけ許す
+  const thumbOf = s => (typeof s.thumb_url === 'string' && /^\/(?!\/)/.test(s.thumb_url)) ? s.thumb_url : null;
 
   // ---- 場所（国旗 + 区画名） ----
   function regionInfo(s) {
@@ -272,14 +280,25 @@
     sb.innerHTML = '<span class="f-seen-label" aria-hidden="true">SEEN</span> <span class="f-seen-num" aria-hidden="true"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span>';
     sb.addEventListener('click', () => ($('.f-panel').hidden ? openPanel() : closePanel()));
     const kit = mk('span', 'f-kittens', { 'aria-hidden': 'true' }); kit.innerHTML = kittensHtml();
-    const row0 = mk('div', 'f-row f-row0'); row0.append(counter0(), mk('span', 'f-grow'), sb);
+    const row0 = mk('div', 'f-row f-row0'); const proto = mk('span', 'f-proto', { title: t('protoTitle') }); proto.textContent = t('proto');
+    row0.append(counter0(), mk('span', 'f-grow'), proto, sb);
     row1.append(logo, kit, space, dir, ext, th, lg);
 
     const row2 = mk('div', 'f-row f-filters');
-    row2.append(segment('scope', [['all', t('all')], ['jp', t('japan')]], state.scope, v => { state.scope = v; refilter(); }));
+    const scopeSel = mk('select', 'f-select f-scope', { 'aria-label': t('scopeLabel') });
+    scopeSel.append(new Option(t('scopeAllLabel'), 'all'));
+    const nameOf = (m, code) => (m && m[code] ? m[code][language] : null);
+    for (const c of scopes.countries) {
+      const cc = String(c.code).toUpperCase(), cn = nameOf(window.MISE_COUNTRIES, cc) || cc;
+      scopeSel.append(new Option(`${cn} (${c.count})`, cc.toLowerCase()));
+      for (const r of scopes.regions.filter(r => String(r.code).toUpperCase().startsWith(cc + '-'))) scopeSel.append(new Option(`\u00a0\u00a0${nameOf(window.MISE_REGIONS, String(r.code).toUpperCase()) || r.code} (${r.count})`, String(r.code).toLowerCase()));
+    }
+    if (![...scopeSel.options].some(o => o.value === state.scope)) state.scope = 'all';
+    scopeSel.value = state.scope; scopeSel.addEventListener('change', () => { state.scope = scopeSel.value; refilter(); });
+    row2.append(scopeSel);
     const sel = mk('select', 'f-select', { 'aria-label': t('catLabel') });
     sel.append(new Option(t('catAll'), ''));
-    for (const c of categories.filter(c => !c.parent_id)) { const n = new Set(all.filter(s => s.roots.has(c.id)).map(s => s.id)).size; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
+    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => inScope(s) && s.roots.has(c.id)).length; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
     sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
     row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
@@ -361,12 +380,19 @@
       else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); step(-1, true); }
     });
     addEventListener('pagehide', () => window.dispatchEvent(new CustomEvent('mise-fly-release')));
-    // モック専用: public/_mock-thumbs/(git 管理外)に撮影試験のサムネと manifest があれば thumb_url / thumb_lqip を補う。無ければ従来の代替絵。本番では /api/sites が thumb_url を返す想定
-    const mockThumbs = fetch('/_mock-thumbs/manifest.json').then(r => r.ok ? r.json() : null).catch(() => null);
-    Promise.all([fetch('/api/categories'), fetch('/api/sites'), mockThumbs]).then(async ([a, b, man]) => {
-      if (!a.ok || !b.ok) throw Error('API');
-      categories = await a.json(); all = build(await b.json());
-      if (man && Array.isArray(man.sites)) { const byId = new Map(man.sites.filter(x => x.ok).map(x => [x.id, x])); for (const s of all) { const m = byId.get(s.id); if (m) { s.thumb_url = `/_mock-thumbs/${encodeURIComponent(s.id)}.webp`; s.thumb_lqip = m.placeholder; } } }
+    // 全サイトを 100 件ずつ cursor でたどって読む(上限 MAX_SITES。試作なので超えた分は出さない)
+    async function loadSites() {
+      const rows = []; let cursor = null;
+      for (let i = 0; i < Math.ceil(MAX_SITES / 100); i++) {
+        const r = await fetch('/api/sites?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); if (!r.ok) throw Error('API');
+        const j = await r.json(); rows.push(...j.items); cursor = j.next_cursor; if (!cursor) break;
+      }
+      return rows;
+    }
+    Promise.all([fetch('/api/categories'), loadSites(), fetch('/api/scopes').then(r => r.ok ? r.json() : null).catch(() => null)]).then(async ([a, rows, sc]) => {
+      if (!a.ok) throw Error('API');
+      if (sc && Array.isArray(sc.countries)) scopes = { countries: sc.countries, regions: Array.isArray(sc.regions) ? sc.regions : [] };
+      categories = await a.json(); all = build(rows);
       if (!categories.some(c => c.id === state.cat && !c.parent_id)) state.cat = '';
       renderBar(); renderList(); updateCounter(); scroller.focus({ preventScroll: true });
       // globe.js は load 後に遅延読込されるため、最初のカードの向き移動を一度だけ遅れて再送する

@@ -214,7 +214,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   // 前後ページの関係（クローラ向け。Google は rel=next/prev を使わないが、他の検索エンジンと意味づけのために出す）
   const rels = [page > 1 && `<link rel="prev" href="${esc(ORIGIN + categoryHref(path, scope, page - 1))}">`, page < pages && `<link rel="next" href="${esc(ORIGIN + categoryHref(path, scope, page + 1))}">`].filter(Boolean).join('');
   if (rels) rw.on('head', { element: e => e.append(rels, { html: true }) });
-  if (isSearch) rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
+  // `?view=feed`(縦フィードの試作ビュー。#52)も索引に出さない。canonical は view を含まないので通常ページを指す
+  if (isSearch || url.searchParams.get('view') === 'feed') rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
 
   const res = rw.transform(new Response(assetResponse.body, assetResponse));
   // 元assetのETag/Last-Modifiedは書き換え後の本文と対応しないので残さない（304で別ページが返るのを防ぐ）
