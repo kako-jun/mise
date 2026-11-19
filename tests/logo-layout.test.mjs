@@ -19,7 +19,9 @@ const run = (extra = {}) => {
   const ctx = { window: {}, ...extra };
   ctx.window = ctx; // window.__x = ... がグローバルに載る
   vm.createContext(ctx);
-  vm.runInContext(logoScript.slice(logoScript.indexOf('// logo-script:begin'), logoScript.indexOf('// logo-script:end')), ctx); // マーカーの間(関数定義だけ。末尾の fonts 待ちは含めない)
+  const i0 = logoScript.indexOf('// logo-script:begin'), i1 = logoScript.indexOf('// logo-script:end');
+  assert.ok(i0 >= 0 && i1 > i0, 'マーカーが無い');
+  vm.runInContext(logoScript.slice(i0, i1), ctx); // マーカーの間(関数定義だけ。末尾の fonts 待ちは含めない)
   return ctx;
 };
 
