@@ -36,7 +36,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 - **0018（`sites.search_text`）を適用した後**は、検索用の列を NFKC + 小文字化で埋め直す。migration の暫定値は ASCII の小文字化だけで、全角半角や非 ASCII の大小は埋め直すまで合わない。サイトを migration で足した後も同じ。**0020（タグを `search_text` に含める）の適用後も同じ**（**`refresh-search-text.mjs` は 0020 を含むブランチ（マージ後は main）のものを使う。古い版を回すとタグが search_text から消える**。migration の暫定値は ASCII のみ。タグの追加・削除のたびにトリガが暫定値へ戻すので、まとめてタグを入れた後にも実行する）。本番 → プレビューの順に実行する（`--db` は `mise` / `mise-preview` のみ。`--local` は `mise` 専用）:
   ```
   node scripts/refresh-search-text.mjs --remote --db mise
-  node scripts/refresh-search-text.mjs --remote --db mise-preview   # ※ mise-preview は一時設定が要る。手順は下の「官公庁の名簿（0015・0019）」の 2・3
+  node scripts/refresh-search-text.mjs --remote --db mise-preview
   ```
 - **連絡先の廃止（#88）のマージ後に 1 回だけ**、本番とプレビューの両方で、廃止前に保存された連絡先を消す（`contact` 列は未使用で常に NULL とする。定期の掃除からは外してある）:
 
@@ -59,22 +59,8 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
    npx wrangler d1 export mise-preview --remote --output backup-mise-preview-$(date +%Y%m%d).sql
    ```
    バックアップはリポジトリにコミットしない。
-2. 適用。本番は通常どおり。**プレビュー DB `mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）、`migrations apply mise-preview` は失敗する**。一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する:
-   ```sh
-   npx wrangler d1 migrations apply mise --remote
-   # プレビュー: 一時設定（リポジトリの外に置く）
-   mkdir -p /tmp/mise-preview-cfg && cp -r migrations /tmp/mise-preview-cfg/migrations
-   cat > /tmp/mise-preview-cfg/wrangler.jsonc <<'EOF'
-   { "name": "mise-preview-tmp", "compatibility_date": "2025-01-01",
-     "d1_databases": [{ "binding": "DB", "database_name": "mise-preview", "database_id": "d55d6451-d683-40ae-bf85-2a03422af006", "migrations_dir": "migrations" }] }
-   EOF
-   npx wrangler d1 migrations apply mise-preview --remote -c /tmp/mise-preview-cfg/wrangler.jsonc
-   ```
-3. 検索用列の埋め直し（0015 の INSERT はトリガが ASCII の小文字化だけの暫定値を入れる。全角半角の検索がヒットするよう NFKC に直す）:
-   ```sh
-   node scripts/refresh-search-text.mjs --remote --db mise
-   REPO=$(pwd); (cd /tmp/mise-preview-cfg && PATH=$REPO/node_modules/.bin:$PATH node $REPO/scripts/refresh-search-text.mjs --remote --db mise-preview)   # 一時設定を置いたディレクトリを cwd にして実行する（wrangler はリポジトリのものを PATH で渡す）
-   ```
+2. 適用。本番は `npx wrangler d1 migrations apply mise --remote`（事前に `npx wrangler d1 migrations list mise --remote` で未適用の一覧を確認する）。プレビュー DB は「プレビュー DB を本番に追従させる手順」の 1・2・4（一時設定・未適用の確認・適用。バックアップは上の手順 1 で取得済み）。
+3. 検索用列の埋め直し（0015 の INSERT はトリガが ASCII の小文字化だけの暫定値を入れる。全角半角の検索がヒットするよう NFKC に直す）: 本番は `node scripts/refresh-search-text.mjs --remote --db mise`。プレビューは同手順の 5。
 4. 確認（適用後、マージ前に本番 DB を直接読む）:
    ```sh
    npx wrangler d1 execute mise --remote --command "SELECT bulk_import, COUNT(*) FROM sites GROUP BY bulk_import"
@@ -92,7 +78,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 
 0. **適用前の確認**: 適用は **PR ブランチ（`126-category-counts`）をチェックアウトした状態で行う**（`main` にはまだ 0022 のファイルが無い）。`npx wrangler d1 migrations list mise --remote` で**未適用が 0022 だけ**であることを確かめる（他に未適用があれば、それも一緒に流れてしまうので止めて原因を調べる）。
 1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
-2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（一時設定の手順は上の 0015 の節の 2）。
+2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（「プレビュー DB を本番に追従させる手順」）。
 3. **一致確認**（`--remote` の SELECT だけ）: `uv run python3 scripts/check-data-integrity.py --remote`。**検査ごとに結果 0 行**が正で、1 つでも FAIL なら終了コードが 0 以外になる（`warn` は表示のみ）。検査の定義の正本は `scripts/llm/integrity.py`（検査一覧と意味は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）ので、スクリプトは検査ごとに 1 本ずつ流す。このうち 0022 の確認は `category_counts_all` / `category_counts_country` / `scope_counts_country` / `scope_counts_all` / `category_closure` の 5 本（`expected` が数え直した値、`cached` が表の値）。ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 5 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_integrity.py`、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
 4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
 5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。マージ後、**手元の dev DB でも `npm run db:migrate` を流す**（流さないと手元の `/api/categories` が表なしでエラーになる）。
@@ -129,7 +115,7 @@ npx wrangler d1 execute mise --remote --file scripts/rebuild-category-counts.sql
 
 **承認を取ってから実行する。** 0023（タグ日本語名の索引）・0024（タグ英語名の索引）・0025（活動の索引）は、`CREATE INDEX IF NOT EXISTS` だけの migration で、**1 本 1 索引**に分けてある。書き込み行数 = 索引の行数（0023 = `site_tags` の行数、0024 = `label_en` が NULL でない `site_tags` の行数、0025 = `sites` の行数。10 万件で各約 24 万・24 万・10 万行）。
 
-**書き込みの小分け（Free の 1 日 10 万行）**: 現在の件数なら 3 本まとめても小さい（本番の件数は適用前に下の手順 1 で調べる）。**合計が 1 日の枠（10 万行）に収まらないときは、1 日 1 本ずつ適用する**（枠を超えるとクエリが失敗する。失敗した本がどこまで取り消されるかは未検証なので、枠に収まる見積りで適用する）。`migrations apply` は未適用を全部流すので、1 本だけ流すには、その番号までの migration を並べた一時ディレクトリを `migrations_dir` にした一時設定を使う（0015 の節の 2 のプレビュー用一時設定と同じ考え方。リポジトリの外に置く）:
+**書き込みの小分け（Free の 1 日 10 万行）**: 現在の件数なら 3 本まとめても小さい（本番の件数は適用前に下の手順 1 で調べる）。**合計が 1 日の枠（10 万行）に収まらないときは、1 日 1 本ずつ適用する**（枠を超えるとクエリが失敗する。失敗した本がどこまで取り消されるかは未検証なので、枠に収まる見積りで適用する）。`migrations apply` は未適用を全部流すので、1 本だけ流すには、その番号までの migration を並べた一時ディレクトリを `migrations_dir` にした一時設定を使う（「プレビュー DB を本番に追従させる手順」の一時設定と同じ考え方。リポジトリの外に置く）:
 
 ```sh
 rm -rf /tmp/mise-step && mkdir -p /tmp/mise-step/migrations && for f in migrations/00{01..23}_*.sql; do ln -s "$(pwd)/$f" /tmp/mise-step/migrations/; done   # 0023 まで（次の日は {01..24}、その次は {01..25}）。毎回ディレクトリごと作り直す（前の日のリンクが残ると、適用したくない migration まで流れる）
@@ -143,7 +129,7 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 **順序: 索引（0023〜0025）が先、コードは後。** 索引なしでコードだけ先に出してはいけない（結果は同じだが、本番相当のデータ 2,158 件で全ページをたどる合計の読み取りが main の 4.3 倍になる。タグの該当数のプローブがページごとに `site_tags` を全件走査するため）。現在の本番の件数（`site_tags` 4,528 行・サイト 2,158 件）なら 3 本合計の書き込みは約 1.1 万行（`site_tags` 4,528 + 4,528 以下 + `sites` 2,158）で、**1 日に 3 本まとめて入れてよい**（小分けが要るのは件数が数万を超えてから）。0022 は適用済みであること（新しいコードは `category_counts` / `scope_counts` を読む）。
 
 1. **適用前**: 件数を調べて書き込み行数を見積もる: `npx wrangler d1 execute mise --remote --command "SELECT (SELECT COUNT(*) FROM sites) AS sites, (SELECT COUNT(*) FROM site_tags) AS tags, (SELECT COUNT(*) FROM site_tags WHERE label_en IS NOT NULL) AS tags_en"`。`npx wrangler d1 migrations list mise --remote` で未適用を確かめる。バックアップ（`d1 export` と Time Travel の bookmark）は 0022 と同じ手順。索引は派生物なので失っても正本は無事。
-2. **適用**: 上の手順（または `migrations apply`）。続けて**プレビュー DB も**（0015 の節の 2）。
+2. **適用**: 上の手順（または `migrations apply`）。続けて**プレビュー DB も**（「プレビュー DB を本番に追従させる手順」）。
 3. **索引の確認**: `npx wrangler d1 execute mise --remote --command "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_site_tags_label_ja','idx_site_tags_label_en','idx_sites_activity')"`（適用した本数ぶん出る）。
 4. **新しい形のクエリを本番で一度試す**。**D1 本番は複合 SELECT の項数上限が低く、ローカルで通るクエリが `too many terms in compound SELECT`（code 7500）で落ちた前例がある。** 第 2 段で足した形を、マージ前に本番の読み取りで通す。下は値をリテラルにした同じ形で、どれも `--remote` の SELECT だけ。**エラーなく結果が返れば合格**。`--json` を付けると `meta.rows_read` も見える（索引適用後は数百行以下のはず）。各行を `npx wrangler d1 execute mise --remote --command "<SQL>"` に渡す:
    - タグの該当数のプローブ（`planQuery`。UNION は 2 項、`LIMIT` は複合の外側）:
@@ -165,18 +151,33 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 5. **マージ後の確認**（自動デプロイ後）: `/api/sites?q=a`（`total` が 1000 以下・上限を超えるなら `total_capped` が `true`）、`/api/sites?tag=個人サイト`、`/api/sites?category=libraries`、`/api/sites`（`total` が `/api/scopes` の `total` と同じ・`total_capped` が `false`）、`/api/picks`（3 件・重複なし）、`/api/activity` がすべて 200。`next_cursor` を使った 2 ページ目も 200。
 6. **戻し方**: 索引は派生物。`DROP INDEX idx_site_tags_label_ja;`（0024・0025 も同様）で消せる（結果は同じだが、コードが索引前提の形のままだと読み取りが main より増える。消すなら先にコードを戻す）。`d1_migrations` には残るので同じ migration は再実行されない。入れ直すときは `CREATE INDEX` を直接実行する。
 
+## プレビュー DB を本番に追従させる手順
+
+`mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）。**`migrations list` / `migrations apply` だけは、一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。`d1 execute`・`d1 export`・`refresh-search-text.mjs` は `mise-preview` を名前で指定すればそのまま動く。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:
+
+1. **一時設定**（リポジトリの外に置く。`<tmp>` は任意のディレクトリ）:
+   ```sh
+   rm -rf <tmp>/mise-preview-cfg && mkdir -p <tmp>/mise-preview-cfg && cp -r migrations <tmp>/mise-preview-cfg/migrations   # 毎回作り直す（古いコピーや migrations/migrations の入れ子を残さない）
+   cat > <tmp>/mise-preview-cfg/wrangler.jsonc <<'EOF'
+   { "name": "mise-preview-tmp", "compatibility_date": "2025-01-01",
+     "d1_databases": [{ "binding": "DB", "database_name": "mise-preview", "database_id": "<wrangler.jsonc の previews の database_id>", "migrations_dir": "migrations" }] }
+   EOF
+   ```
+2. **未適用の確認**: `npx wrangler d1 migrations list mise-preview --remote -c <tmp>/mise-preview-cfg/wrangler.jsonc`（`-c` なしだと本番 `mise` の一覧と取り違えやすい）。
+3. **バックアップ**: `npx wrangler d1 export mise-preview --remote --output <tmp>/backup-mise-preview.sql`（リポジトリにコミットしない）。
+4. **適用**: `npx wrangler d1 migrations apply mise-preview --remote -c <tmp>/mise-preview-cfg/wrangler.jsonc`。
+5. **検索用列の埋め直し**（0018・0020 以降の migration を入れたとき、またはサイトを足したとき）。**`refresh-search-text.mjs` は適用した migration を含むブランチのものを使う**。リポジトリ直下で実行する。実行中は DB が一時的に応答しない:
+   ```sh
+   node scripts/refresh-search-text.mjs --remote --db mise-preview
+   ```
+6. **確認**（SELECT だけ。リポジトリ直下）: `uv run python3 scripts/check-data-integrity.py --remote --db mise-preview` で error 検査がすべて 0 行（0022 の一致確認 5 本を含む）。カテゴリ数・孤児・未分類は `npx wrangler d1 execute mise-preview --remote --command "..."` で（期待: カテゴリ 153・孤児 0・未分類 0。数は migration で変わる）。
+
 ## プレビュービルド（ブランチごと）
 
 Cloudflare の自動ビルドは、ブランチ（PR）ごとに `npx wrangler preview` でプレビュー用の Worker（Worker Previews。本番の Worker の枝）をデプロイする（ダッシュボードで確認済み、2026-11-14: プレビューブランチのビルドも Build コマンドは「なし」、プレビューコマンドは `npx wrangler preview`、ルートディレクトリ `/`。プレビュー URL は現在「無効」で、ビルドは実行されるが URL は有効化するまで作られない）。設定は `wrangler.jsonc` の `previews` ブロックで、**ブロックが無いと `Your Wrangler configuration is missing a previews block` でビルドが失敗する**（コードの不具合ではない）。
 
 - `previews.d1_databases` で、プレビューの `DB` バインディングを**プレビュー専用の D1 `mise-preview`**（`database_id` は `wrangler.jsonc` 参照）に向ける。**本番 DB `mise` をプレビューから触らせない**ため（ブランチの未レビューのコードが本番データを読み書き・破壊しないように）。静的ファイル（`assets`）はトップレベルの設定が使われる。
-- `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）:
-
-```sh
-npx wrangler d1 migrations apply mise-preview --remote
-```
-
-  `wrangler d1 migrations apply` はバインディング名または `database_name` を取るので、対象に `mise-preview` を指定すれば本番には触れない（`mise` と取り違えない）。`mise-preview` のデータは確認用の複製で、本番とのずれは許容する。
+- `mise-preview` は本番と同じ migrations（`migrations/` の全部）を適用して作る。**新しい migration を足したら `mise-preview` にも手動で適用する**（自動では適用されない。適用し忘れるとプレビューがスキーマ違いで落ちる）。手順は次の節。`mise-preview` のデータは確認用の複製で、本番とのずれは許容する。
 - プレビューの URL とビルド結果は PR のチェック（Cloudflare のコメント）に出る。ローカルでの設定確認は `npx wrangler preview --help` と `npx wrangler dev --local`（デプロイはしない）。
 
 ## CSP を含むデプロイ後の確認手順
