@@ -3,8 +3,15 @@
   "main": "src/index.js",
   "routes": [{ "pattern": "mise.llll-ll.com", "custom_domain": true }],
   "compatibility_date": "2026-11-01",
-  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/*", "!/*.js", "!/*.css", "!/*.svg", "!/*.png", "!/*.jpg", "!/*.jpeg", "!/*.gif", "!/*.webp", "!/*.ico", "!/*.txt", "!/*.geojson", "!/*.json", "!/*.webmanifest", "!/*.woff", "!/*.woff2"] },
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/*", "!/*.js", "!/*.css", "!/*.svg", "!/*.png", "!/*.jpg", "!/*.jpeg", "!/*.gif", "!/*.ico", "!/*.txt", "!/*.geojson", "!/*.json", "!/*.webmanifest", "!/*.woff", "!/*.woff2"] },
   "d1_databases": [{ "binding": "DB", "database_name": "mise", "database_id": "ebcd8092-5f2e-4119-9e15-692c1aae631a", "migrations_dir": "migrations" }],
+  // 画像（ファビコン /icon/<hash>.webp、将来はサムネイル）の置き場 R2。バケットは `npx wrangler r2 bucket create mise-media` で作る（docs/operations/deploy.md）。
+  // バケットが無いままデプロイすると失敗するので、作成後にマージする。バインディングが無い環境でも Worker は落ちず、/icon/ は 404 になる。
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "mise-media" }],
   // ブランチのプレビュー(wrangler preview)は本番DBでなくプレビュー専用DBを使う（docs/operations/deploy.md）
-  "previews": { "d1_databases": [{ "binding": "DB", "database_id": "d55d6451-d683-40ae-bf85-2a03422af006" }] }
+  // R2 もプレビュー専用バケット mise-media-preview に向け、本番の画像バケットに触れさせない（書き込みはしない運用。中身が空なら /icon/ は 404）。
+  "previews": {
+    "d1_databases": [{ "binding": "DB", "database_id": "d55d6451-d683-40ae-bf85-2a03422af006" }],
+    "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "mise-media-preview" }]
+  }
 }

@@ -215,7 +215,7 @@ class Run(Env):
         joined = [' '.join(c) for c in calls]
         self.assertTrue(all(j.startswith('uv run --with pillow python ') for j in joined))   # 夜間本体は Pillow を持たない
         self.assertTrue(any(' run --apply --limit 5 ' in j for j in joined))
-        self.assertTrue(any(' sql --since 2026-11-18T00:00:00Z ' in j for j in joined))
+        self.assertFalse(any(' sql ' in j for j in joined))   # 夜間は SQL を作らない（ローカルにしか置かない画像を D1 に指す SQL の誤適用を避ける）
         self.assertEqual(self.wrangler_calls(), [])
 
     def test_favicon_failure_does_not_fail_the_night(self):

@@ -89,7 +89,7 @@
 
 ## ファビコン
 
-自前で取得した 32px の WebP を内容ハッシュ名（`<hash>.webp`）で配信する（`sites.favicon_path` がハッシュ名を持つ）。未取得・失敗時は何も表示せず、**代替アイコン（頭文字・猫模様など）は作らない**。表示時に第三者のサーバーへ問い合わせない（IP・閲覧の事実・Referer を漏らさない）。取得・更新は実装済み（[collection/favicons.md](../collection/favicons.md)）。**R2 への配信・一覧での表示は未実装**（サムネイル #130 と共用で後続）。`public/icons/` は件数に上限があり 10 万件に使えないため、置き場は R2 を想定する。
+自前で取得した 32px の WebP を内容ハッシュ名（`<hash>.webp`）で配信する（`sites.favicon_path` がハッシュ名を持つ）。未取得・失敗時は何も表示せず、**代替アイコン（頭文字・猫模様など）は作らない**。表示時に第三者のサーバーへ問い合わせない（IP・閲覧の事実・Referer を漏らさない）。取得・更新・R2 への配信は実装済み（[collection/favicons.md](../collection/favicons.md)）。一覧の各行は、API の `favicon_url`（`/icon/<hash>.webp`。`favicon_path` のハッシュ名から Worker が組み立てる）を持つサイトだけ、行頭に 30px の固定寸法の枠（画像 24px。サムネイル #130 とは別物）を出す。枠は画像の読み込み前から出すので読み込み後に行がずれない。`favicon_url` が無いサイトは枠ごと出さず、画像が 404 などで読めなければ枠を消す。表示時に第三者のサーバーへは一切アクセスしない。`public/icons/` の静的ファイル（従来の `favicon_path` が `/icons/…` の値）は、`favicon_url` が無いときだけ従来どおり表示する。置き場は R2（`public/icons/` は件数に上限があり 10 万件に使えない）。
 
 ## アプリとして追加（PWA）
 
@@ -110,9 +110,11 @@
 
 ## ロゴ
 
-大文字の太い縦長ゴシック体 `MISE`。三毛猫模様のグラデーション。ホバー・フォーカスで模様の境界がなだらかにぼける（`@property --blur` による補間。`prefers-reduced-motion` では即時。`@property` 非対応のブラウザでは補間されず、ホバーで即時にぼける。`@supports` の分岐はない）。M/S の横伸ばしはインラインスクリプトで初回描画前に適用し、通常幅の瞬間を見せない。タイトル下に発音記号 `/ˈmiːseɪ/` を小さく出す。
+大文字の太い縦長ゴシック体 `MISE`。三毛猫模様のグラデーション。ホバー・フォーカスで模様の境界がなだらかにぼける（`@property --blur` による補間。`prefers-reduced-motion` では即時。`@property` 非対応のブラウザでは補間されず、ホバーで即時にぼける。`@supports` の分岐はない）。M/S の横伸ばしはインラインスクリプトで初回描画前に適用し、通常幅の瞬間を見せない。
 
-書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、M/S の実幅測定は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。woff2 が 2.5 秒以内に届かない低速回線では、そこで見切って現在の書体で先に測って横伸ばしを済ませ（Chromium は block を約 3 秒で打ち切り代替書体を出すため）、到着後にもう一度測り直す。ライセンス全文は `public/licenses/`。woff2 は `uv run --with fonttools --with brotli python3 -m fontTools.subset <ttf> --text=<文字> --flavor=woff2 --layout-features='*' --name-IDs='*'` で作る（Noto Serif は先に `fontTools.varLib.instancer` で `wght=400 wdth=100` に固定）。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
+**M/S の横伸ばしと文字間（#152）**: 横伸ばしは M 1.5・S 1.4 の固定倍率（M と S の幅はそろえない。旧実装は S を M と同じ幅にそろえて約 2.4 倍にしたため、S の縦線が M の約 2 倍の太さに見えた。1.4 にすると S の縦に近い部分の太さが M の ±1px に収まる）。文字間は layout 幅（フォントの左右の空きを含む）でなく**インク（実際に塗られる範囲）基準**で、隣り合う 2 文字の「行ごとのインク間隔の平均」が 17px になるよう margin を逆算し、インク全体が中央に来るよう両端の margin も補正する。外接（一番出っ張った点どうしの隙間）でなく平均にするのは、S の曲線が上下で引っ込み、外接でそろえると S の両隣だけ見た目が広くなるため。各文字のインクは canvas に同じフォントで描いて行ごとに左右端を取る（計算は純関数 `__miseLogoLayout`、テストは `tests/logo-layout.test.mjs`、実測は `scripts/e2e-logo-ink.mjs`）。JS が動かない・測定に失敗したときは、`style.css` の M/S の倍率と margin が効く（Anton が読み込まれた前提の px 値で、実測では平均インク間隔 17.3 / 17.5 / 16.3px、インク全幅 158px、中央寄せ。JS 版との差は ±1px 程度。通常はインラインの値が上書きする）。測定は失敗（幅 0・canvas が使えない・フォント指定が効かず既定の 10px sans-serif に落ちた・例外）すると、測る前の inline 値に戻して CSS の値を効かせる。canvas の font には weight 1000 を指定するが、実機の Safari/Firefox では未確認（受け付けなければ測定側で検知して CSS の値に戻す）。OG 画像（`public/og/mise-og.svg`）は文字を path にした別の絵で、この倍率とは連動しない。タイトル下に発音記号 `/ˈmiːseɪ/` を小さく出す。
+
+書体は環境で変わらないよう自己ホストする（`public/fonts/`、`font-display: block` で代替書体を見せない）。ロゴは Anton（SIL OFL、`MISE` の 4 文字だけにサブセット化した woff2）、発音記号は Noto Serif Italic（OFL、`/ˈmiːseɪ/` の文字だけ。Lora は ˈ ː を持たないため不採用）。従来の `Impact` などは font-family の後ろにフォールバックとして残す。ロゴの woff2 は `<link rel=preload>` で先読みし、ロゴの文字の実測（幅とインク）は `document.fonts.load` の完了後に行う（失敗しても測定して表示する）。woff2 が 2.5 秒以内に届かない低速回線では、そこで見切って現在の書体で先に測って横伸ばしを済ませ（Chromium は block を約 3 秒で打ち切り代替書体を出すため）、到着後にもう一度測り直す。ライセンス全文は `public/licenses/`。woff2 は `uv run --with fonttools --with brotli python3 -m fontTools.subset <ttf> --text=<文字> --flavor=woff2 --layout-features='*' --name-IDs='*'` で作る（Noto Serif は先に `fontTools.varLib.instancer` で `wght=400 wdth=100` に固定）。書体を差し替えるときは woff2 のファイル名のバージョン（`-v1`）を上げる（`_headers` で immutable の長期キャッシュ）。
 
 ## アバウトページ
 

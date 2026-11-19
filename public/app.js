@@ -279,10 +279,13 @@ function renderSite(target, site, showCategories=false) {
   a.textContent=site.name; p.textContent=siteDescription(site);
   if(language==='en' && !site.description_en) p.lang='ja';
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
-  // Only serve previously collected icons from this origin; never probe third-party sites on page load.
-  if(site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path)) {
-    const img=document.createElement('img'); img.alt=''; img.src=site.favicon_path;
-    img.addEventListener('load',()=>{icon.hidden=false;}); img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img);
+  // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは枠ごと出さない。
+  // 枠は固定寸法で、画像の読み込み前から出しておく（読み込み後に枠が現れて行がずれるのを避ける）。失敗したら枠ごと消す。
+  const iconSrc = typeof site.favicon_url==='string' && /^\/icon\/[0-9a-f]{32}\.webp$/.test(site.favicon_url) ? site.favicon_url
+    : (site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path) ? site.favicon_path : null);
+  if(iconSrc) {
+    const img=document.createElement('img'); img.alt=''; img.width=24; img.height=24; img.decoding='async'; img.src=iconSrc;
+    img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img); icon.hidden=false;
   }
   const content=document.createElement('div'); content.className='site-content'; content.append(a); if(href) content.append(newTabButton(href,site.name));
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;

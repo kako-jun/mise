@@ -459,7 +459,7 @@ class Night:
         return {"note": "反映済み・整合 OK", "count": {"added": self.status["added"]}}
 
     def s_favicon(self):
-        """ファビコンの取得(#125)。既定は無効(--favicon-limit 0)。有効にしても SQL を作るだけで、本番 D1・R2 には触れない。
+        """ファビコンの取得(#125)。既定は無効(--favicon-limit 0)。有効にしてもローカルへ取得するだけで、SQL は作らず、本番 D1・R2 には触れない。
         失敗しても夜間ジョブ全体は失敗にしない(guards に残して続行)。"""
         a = self.a
         if a.favicon_limit <= 0:
@@ -471,7 +471,6 @@ class Night:
         if os.path.exists(recrawl_db):
             steps.append(("import", ["--db", fdb, "import", "--recrawl", recrawl_db]))
         steps.append(("run", ["--db", fdb, "run", "--apply", "--limit", str(a.favicon_limit), "--store-dir", os.path.join(self.var, "favicons")]))
-        steps.append(("sql", ["--db", fdb, "sql", "--since", a.date + "T00:00:00Z", "--out", self.p("favicons.sql")]))
         notes = []
         for name, argv in steps:
             # ここだけ python3 でなく python: 実行機 kako-rog(Windows)の venv に python3.exe は無い(Store の偽 python3 を拾うと Pillow が無く毎晩失敗する)。uv run python は Linux でも動く
@@ -619,7 +618,7 @@ def plan(a):
           f"  6 llm        haiku -> sonnet / mode={a.judge_mode}", "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
-          " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得 -> var/nightly/{a.date}/favicons.sql(本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)")]
+          " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)")]
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
@@ -635,7 +634,7 @@ def parse_args(argv=None):
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
-    ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。SQL を作るだけで本番には触れない(#125)")
+    ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。取得だけ(SQL は作らない。本番には触れない。#125)")
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
