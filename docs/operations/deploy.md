@@ -79,7 +79,7 @@ npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 0. **適用前の確認**: 適用は **PR ブランチ（`126-category-counts`）をチェックアウトした状態で行う**（`main` にはまだ 0022 のファイルが無い）。`npx wrangler d1 migrations list mise --remote` で**未適用が 0022 だけ**であることを確かめる（他に未適用があれば、それも一緒に流れてしまうので止めて原因を調べる）。
 1. **バックアップ**: 上の手順と同じ `npx wrangler d1 export mise --remote --output=…` と、`npx wrangler d1 time-travel info mise` の時点（bookmark）を控える。
 2. **適用**: `npx wrangler d1 migrations apply mise --remote`。続けて**プレビュー DB も**（「プレビュー DB を本番に追従させる手順」）。
-3. **一致確認**（`--remote` の SELECT だけ）: `uv run python3 scripts/check-data-integrity.py --remote`。**検査ごとに結果 0 行**が正で、1 つでも FAIL なら終了コードが 0 以外になる（`warn` は表示のみ）。検査の定義の正本は `scripts/llm/integrity.py`（検査一覧と意味は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）ので、スクリプトは検査ごとに 1 本ずつ流す。このうち 0022 の確認は `category_counts_all` / `category_counts_country` / `scope_counts_country` / `scope_counts_all` / `category_closure` の 5 本（`expected` が数え直した値、`cached` が表の値）。ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 5 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_integrity.py`、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
+3. **一致確認**（`--remote` の SELECT だけ）: `uv run python3 scripts/check-data-integrity.py --remote`。**検査ごとに結果 0 行**が正で、1 つでも FAIL なら終了コードが 0 以外になる（`warn` は表示のみ）。検査の定義の正本は `scripts/llm/integrity.py`（検査一覧と意味は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。**1 本のクエリに UNION ALL を多数連ねない**（D1 本番は複合 SELECT の項数の上限が低く、1 本にまとめた版は 2026-11-18 に `too many terms in compound SELECT: SQLITE_ERROR [code: 7500]` で実際に失敗した。ローカルでは通る）ので、スクリプトは検査ごとに 1 本ずつ流す。このうち集計表の確認は `category_counts_all` / `category_counts_country` / `category_counts_region`（0026）/ `scope_counts_country`（国・区画とも）/ `scope_counts_all` / `category_closure` の 6 本（`expected` が数え直した値、`cached` が表の値）。ローカルの検証には `tests/category-counts.test.mjs`（全 migration 適用後のメモリ SQLite で、投入・削除・カテゴリ変更・親子変更の各操作の後に突き合わせる。上の 6 本そのものも、わざとずらした DB で検出できることを検査している）と、`tests/test_integrity.py`、`tests/test_update_categories.py` / `tests/test_llm_ledger.py`（夜間の一括投入 SQL を流したあと）がある。
 4. **画面の確認**: 適用前に控えた `/api/categories?scope=all` の `site_count` と、適用後の値・`/jp/` のカテゴリ件数が同じ。`/api/scopes` の `total` が `SELECT COUNT(*) FROM sites` と同じ。
 5. **マージ**: 手順 3・4 が想定どおりなら PR をマージする（自動デプロイ）。マージ後、**手元の dev DB でも `npm run db:migrate` を流す**（流さないと手元の `/api/categories` が表なしでエラーになる）。
 6. **失敗したとき**: 手順 2 が失敗したら 0022 は 1 つのトランザクションなので全体が取り消される（`SELECT name FROM d1_migrations WHERE name LIKE '0022%'` が空であることを確認）。
@@ -151,6 +151,16 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
 5. **マージ後の確認**（自動デプロイ後）: `/api/sites?q=a`（`total` が 1000 以下・上限を超えるなら `total_capped` が `true`）、`/api/sites?tag=個人サイト`、`/api/sites?category=libraries`、`/api/sites`（`total` が `/api/scopes` の `total` と同じ・`total_capped` が `false`）、`/api/picks`（3 件・重複なし）、`/api/activity` がすべて 200。`next_cursor` を使った 2 ページ目も 200。
 6. **戻し方**: 索引は派生物。`DROP INDEX idx_site_tags_label_ja;`（0024・0025 も同様）で消せる（結果は同じだが、コードが索引前提の形のままだと読み取りが main より増える。消すなら先にコードを戻す）。`d1_migrations` には残るので同じ migration は再実行されない。入れ直すときは `CREATE INDEX` を直接実行する。
 
+## 区画（都道府県）の範囲（0026）を本番へ適用する手順（Issue #127）
+
+**承認を取ってから実行する。** 0026 は、集計表の scope 値に区画（`region_code`。例 `JP-13`）を足し、集計トリガ 7 本を区画も数える形に作り直し、区画の部分索引 `idx_sites_region_sort` を作る。**新しい列は無い**。トリガの名前は 0022 のまま（DROP → CREATE）なので、上の「0022 の戻し方」の SQL（トリガ 9 本の DROP）はそのまま使える。
+
+- **書き込み量**: 初期集計 = 区画の `category_counts`（区画数 × 所属のあるカテゴリ数。官公庁の名簿だけなら 47 × 約 6 行）+ `scope_counts`（区画数）、索引 = `region_code` を持つサイトの行数（現在約 1,900 行。10 万件で最悪 10 万行）。1 日 10 万行の枠には現在の件数なら十分収まる。
+- **順序は 1 つ**: 適用前の確認（`npx wrangler d1 migrations list mise --remote` で未適用が 0026 だけ。他にあれば一緒に流れるので止める）→ バックアップ（`npx wrangler d1 time-travel info mise` の bookmark を控える）→ `npx wrangler d1 migrations apply mise --remote` → 一致確認 → コードのマージ。**新しいコードは区画の行が無いと区画のページが 404・件数 0 になる**（旧コードは区画の行を読まない。国の一覧は 2 文字のコードだけに絞る）ので、migration だけ先に入っても壊れない）。**夜間投入（`export_approved_sql.py` 等）を流していない時間に適用する**（トリガを作り直す間の投入は新旧どちらのトリガにも数えられない）。
+- **一致確認**: `uv run python3 scripts/check-data-integrity.py --remote` が **全 error 検査で 0 行**（`category_counts_country`・`scope_counts_country` に加え、0026 から `category_counts_region` が区画の行を検査する）。ずれたら `scripts/rebuild-category-counts.sql`（区画の分を含む）で作り直す。確認の例: `SELECT scope, n FROM scope_counts WHERE scope LIKE 'JP-%' ORDER BY scope` が、サイトのある区画の数だけ並ぶ。`SELECT n FROM scope_counts WHERE scope = 'JP-01'` が `SELECT COUNT(*) FROM sites WHERE region_code = 'JP-01'` と同じ。
+- **戻し方**: 先にコードを戻す。区画の行は読み取り側が使わなければ無害（旧コードは読まない）で、新トリガも国・all の件数は旧トリガと同じ結果を出すので、**トリガを戻す必要はない**。区画の行を消すなら `DELETE FROM category_counts WHERE scope LIKE '%-%'; DELETE FROM scope_counts WHERE scope LIKE '%-%'`（その後も新トリガが区画の行を作るので、完全に 0022 の状態へ戻すには別の migration でトリガを作り直す）。索引は `DROP INDEX idx_sites_region_sort;`（区画の一覧が並びの索引の走査になり遅くなるだけで、結果は同じ）。0026 は適用後に凍結する。
+- **プレビュー DB**: 本番の適用後に「プレビュー DB を本番に追従させる手順」で追従させる。
+
 ## プレビュー DB を本番に追従させる手順
 
 `mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）。**`migrations list` / `migrations apply` だけは、一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。`d1 execute`・`d1 export`・`refresh-search-text.mjs` は `mise-preview` を名前で指定すればそのまま動く。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:
@@ -170,7 +180,7 @@ npx wrangler d1 migrations apply mise --remote -c /tmp/mise-step/wrangler.jsonc
    ```sh
    node scripts/refresh-search-text.mjs --remote --db mise-preview
    ```
-6. **確認**（SELECT だけ。リポジトリ直下）: `uv run python3 scripts/check-data-integrity.py --remote --db mise-preview` で error 検査がすべて 0 行（0022 の一致確認 5 本を含む）。カテゴリ数・孤児・未分類は `npx wrangler d1 execute mise-preview --remote --command "..."` で（期待: カテゴリ 153・孤児 0・未分類 0。数は migration で変わる）。
+6. **確認**（SELECT だけ。リポジトリ直下）: `uv run python3 scripts/check-data-integrity.py --remote --db mise-preview` で error 検査がすべて 0 行（集計表の一致確認 6 本を含む）。カテゴリ数・孤児・未分類は `npx wrangler d1 execute mise-preview --remote --command "..."` で（期待: カテゴリ 153・孤児 0・未分類 0。数は migration で変わる）。
 
 ## プレビュービルド（ブランチごと）
 

@@ -4,7 +4,7 @@
 // 実行: node scripts/check-api-headers.mjs
 import { readFileSync } from 'node:fs';
 import app from '../src/index.js';
-import { sortIndexSql } from '../src/sites.js';
+import { sortIndexSql, regionSortIndexSql } from '../src/sites.js';
 const stmt = { all: async () => ({ results: [] }), first: async () => ({ total: 0 }), run: async () => ({ meta: { changes: 1 } }) };
 stmt.bind = () => stmt;
 const okDb = { prepare: () => stmt };
@@ -44,4 +44,9 @@ const latest = idxFiles.at(-1), idx = sortIndexSql();
 const idxOk = !!latest && readFileSync(new URL('../migrations/' + latest, import.meta.url), 'utf8').includes(idx);
 console.log(`${idxOk ? 'OK  ' : 'NG  '}最新の並びインデックスの migration (${latest}) に現在の SORT_KEYS の CREATE INDEX がある: ${idx}`);
 if (!idxOk) failed++;
+// 区画の部分索引（0026）も同じ並びの列で作られていること。
+const rIdx = regionSortIndexSql(), rFiles = files.filter(f => readFileSync(new URL('../migrations/' + f, import.meta.url), 'utf8').includes('idx_sites_region_sort'));
+const rOk = rFiles.length > 0 && readFileSync(new URL('../migrations/' + rFiles.at(-1), import.meta.url), 'utf8').includes(rIdx);
+console.log(`${rOk ? 'OK  ' : 'NG  '}最新の区画索引の migration (${rFiles.at(-1)}) に現在の SORT_KEYS の CREATE INDEX がある: ${rIdx}`);
+if (!rOk) failed++;
 process.exit(failed ? 1 : 0);

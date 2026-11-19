@@ -44,11 +44,11 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 - **正本は `sites` / `site_categories` / `categories`。次の 3 表は派生物で、トリガが常に追従させる**（ずれたら 0022 の「初期集計」と同じ文で作り直せる。`tests/category-counts.test.mjs` が「集計表 = 再帰 CTE」を検査する）。
   - `category_closure(ancestor_id, descendant_id)`: カテゴリの祖先 → 子孫（自分自身を含む）。307 行（現在 153 カテゴリ・深さ 3）。
-  - `category_counts(category_id, scope, n)`: **そのカテゴリ自身と全子孫の所属サイト数**（同じサイトが複数の子孫に属しても 1 件）。`scope` は `'all'`（全世界。`ALL_SCOPE`）か `country_code`（その国のサイトだけ。`country_code` が NULL のサイトは `'all'` のみ）。旧 `loadCategories` の再帰 CTE（`COUNT(DISTINCT s.id)`）と同じ意味。行が無い・`n = 0` は「空」で、読み側が 0 とみなす。
-  - `scope_counts(scope, n)`: 範囲ごとのサイト数（`/api/scopes`・`/api/activity` の `total`・範囲だけを指定した `/api/sites` の `total`）。`n = 0` の行は読み側が除く。
+  - `category_counts(category_id, scope, n)`: **そのカテゴリ自身と全子孫の所属サイト数**（同じサイトが複数の子孫に属しても 1 件）。`scope` は `'all'`（全世界。`ALL_SCOPE`）・`country_code`（その国のサイトだけ。`country_code` が NULL のサイトは `'all'` のみ）・**`region_code`（その区画のサイトだけ。例 `JP-13`。0026・#127）**。区画は国の部分集合（`region_code` は `country_code` が必須）で、国だけ分かって `region_code` が NULL のサイトは `'all'` と国にだけ数える。国コード（2 文字）と区画コード（ハイフンを含む）は形が違うので衝突しない。旧 `loadCategories` の再帰 CTE（`COUNT(DISTINCT s.id)`）と同じ意味。行が無い・`n = 0` は「空」で、読み側が 0 とみなす。
+  - `scope_counts(scope, n)`: 範囲（`'all'`・国・区画）ごとのサイト数（`/api/scopes`・`/api/activity` の `total`・範囲だけを指定した `/api/sites` の `total`）。`n = 0` の行は読み側が除く。
 - **読み取り**: `loadCategories`（`/api/categories`・SSR・sitemap）は `categories LEFT JOIN category_counts`、`loadScopes` は `scope_counts`。sitemap は範囲ごとに数え直さず、`category_counts` の `n > 0` を 1 回で読む。`/api/sites` の `total` は、範囲だけなら `scope_counts`、**直下が葉のカテゴリ**だけなら `category_counts`（葉は子孫が無いので直下の所属数と同じ）から正確に読む。葉でないカテゴリ（直下の所属を集計表で出せない）・`q`・`tag` は上限付きで数える（`TOTAL_CAP`。第2段）。
-- **トリガ**（書き込み量の見積りは migration 冒頭のコメント）: `site_categories` の INSERT / DELETE（「そのサイトの、祖先の部分木に入る所属行がちょうど 1 件」の祖先だけ +1、「消した後に 0 件」の祖先だけ -1 にして二重カウントを避ける）・UPDATE（旧・新の祖先を再計算）、`sites` の INSERT / DELETE / `country_code` の UPDATE、`categories` の INSERT / `parent_id` の UPDATE（閉包表を付け替え、旧親・新親の祖先の件数を再計算）/ DELETE。1 サイトの投入は通常 +3〜+14 行の書き込み（国あり・カテゴリ 1〜3 個）。夜間の一括投入（`export_approved_sql.py` の `INSERT` と `--update-categories` の `DELETE` + `INSERT OR IGNORE`）でも同じトリガが働く。
-- **作り直し**: ずれたら `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 の初期集計と同じ `INSERT`）で正本から作り直せる。手順・戻し方・一致確認のクエリは `docs/operations/deploy.md`。
+- **トリガ**（書き込み量の見積りは migration 冒頭のコメント）: `site_categories` の INSERT / DELETE（「そのサイトの、祖先の部分木に入る所属行がちょうど 1 件」の祖先だけ +1、「消した後に 0 件」の祖先だけ -1 にして二重カウントを避ける）・UPDATE（旧・新の祖先を再計算）、`sites` の INSERT / DELETE / `country_code`・`region_code` の UPDATE（国も区画も、新旧で変わった範囲だけ付け替える）、`categories` の INSERT / `parent_id` の UPDATE（閉包表を付け替え、旧親・新親の祖先の件数を再計算）/ DELETE。1 サイトの投入は通常 +3〜+14 行の書き込み（国あり・カテゴリ 1〜3 個）。区画ありはさらに最大 +3 行（0026）。夜間の一括投入（`export_approved_sql.py` の `INSERT` と `--update-categories` の `DELETE` + `INSERT OR IGNORE`）でも同じトリガが働く。
+- **作り直し**: ずれたら `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 と 0026（区画）の初期集計と同じ `INSERT`）で正本から作り直せる。手順・戻し方・一致確認のクエリは `docs/operations/deploy.md`。
 - **カテゴリの木を変えるときの制約**（migration で `categories` を INSERT / UPDATE / DELETE すれば閉包表と件数は追従するが、次を守る）:
   - **親を先に INSERT する**（子の INSERT トリガは、親の閉包表の行を引いて祖先を作るため。親が無いと子の祖先が欠ける）。
   - **カテゴリ id の変更（`UPDATE categories SET id`）は非対応**（閉包表・件数表・`site_categories` が旧 id を指したままになる）。作り直す場合は新 id を INSERT して所属を移し、旧 id を DELETE する。
@@ -74,11 +74,11 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 ### 運営者の所在国（`country_code`）
 
-一覧の国旗と地球の連動、および範囲（`/jp/` など。[ui.md](ui.md#範囲国)）のための値。`NULL` のサイトは範囲 `all` にだけ出る。（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れる。**ドメイン（.jp 等）・言語・ホスティング・IP の所在だけでは決めない**。確認できなければ `NULL`（旗を出さない）。根拠は収集 JSON の `country_code` / `country_evidence` と migration のコメントに残す。
+一覧の国旗と地球の連動、および範囲（`/jp/` など。[ui.md](ui.md#範囲国都道府県)）のための値。`NULL` のサイトは範囲 `all` にだけ出る。（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れる。**ドメイン（.jp 等）・言語・ホスティング・IP の所在だけでは決めない**。確認できなければ `NULL`（旗を出さない）。根拠は収集 JSON の `country_code` / `country_evidence` と migration のコメントに残す。
 
 ### 運営者の所在区画（`region_code`）
 
-県・州まで分かったサイトだけ、旗の右に区画名を出し、地球を区画へ向けるための値。判定基準は国と同じく公開情報に明記されたもの（サイトの記載、公的機関の公式所在地）だけで、推測しない。確認できなければ `NULL`（旗のみ）。根拠は `data/region-evidence.json`（id・region_code・出典 URL・根拠・確認日）。区画名・座標の表は `public/regions.js`（生成物）。
+県・州まで分かったサイトだけ、旗の右に区画名を出し、地球を区画へ向けるための値。**範囲（scope）として県で絞る軸でもある（#127、0026）**: `/api/*?scope=jp-13`（`JP-13` も可）・URL `/jp/13/` は `sites.region_code = 'JP-13'` のサイトだけ。新しい列は無く、集計表の scope 値に区画が増えただけ（上の「カテゴリ件数の集計表」）。一覧の絞り込みは部分索引 `idx_sites_region_sort`（0026。`(region_code, bulk_import, 新しい順, id) WHERE region_code IS NOT NULL`。並びは `SORT_KEYS` と同じで、区画は全体の一部なので並びの索引を走査して絞ると他の区画の行を読み飛ばす。`regionSortIndexSql()` が定義の正本で、`scripts/check-api-headers.mjs` が migration との一致を検査）。区画が NULL のサイトは国の範囲にだけ出る（区画で絞る価値が出るのは `region_code` を持つサイト。官公庁の名簿 `pb-` は大半が区画を持つ）。ピックアップは区画内の一括投入でないサイトから選ぶので、区画に一括投入しか無ければ空になる。判定基準は国と同じく公開情報に明記されたもの（サイトの記載、公的機関の公式所在地）だけで、推測しない。確認できなければ `NULL`（旗のみ）。根拠は `data/region-evidence.json`（id・region_code・出典 URL・根拠・確認日）。区画名・座標の表は `public/regions.js`（生成物。ブラウザと Worker の SSR が共有するので `globalThis.MISE_REGIONS`）。
 
 ### 日時の扱い
 

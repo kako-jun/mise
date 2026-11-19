@@ -242,6 +242,7 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 .scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-more { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 6px; min-height: 32px; min-width: 32px; box-sizing: border-box; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; transition: border-color .15s; }
 .scope-nav a.scope-item:hover, .scope-more:hover { opacity: 1; background: none; border-bottom-color: currentColor; }
 .scope-nav a.scope-item[aria-current="page"] { opacity: 1; border-bottom-color: #cc6f32; color: #12272c; }
+.scope-nav a.scope-item[aria-current="true"] { opacity: 1; border-bottom-color: currentColor; }
 .scope-nav a.scope-item:focus-visible, .scope-more:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
 .scope-flag { display: block; width: 16px; height: 12px; border: 1px solid rgba(0, 0, 0, .25); }
 .scope-globe { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
@@ -325,3 +326,11 @@ html[data-theme="dark"] .site-newtab:hover, html[data-theme="dark"] .site-newtab
 .install-banner button { min-height: 36px; }
 .install-add { font-weight: bold; }
 html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); color: #effaff; border-color: #4e8e9b; }
+/* 範囲ナビの区画選択（#127）: 国の行の下に 1 行。国は一覧、区画は件数付きのプルダウン（47 都道府県でも 1 行に収まる）。 */
+.region-row { flex: 1 0 100%; display: flex; justify-content: center; margin-top: 2px; }
+.region-select { max-width: 100%; min-height: 32px; box-sizing: border-box; padding: 3px 24px 3px 8px; border: 1px solid currentColor; border-radius: 3px; background-color: transparent; color: inherit; font: inherit; cursor: pointer; }
+.region-select option { color: #12272c; background: #fff; }
+.region-select:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+html[data-theme="dark"] .region-select option { color: #effaff; background: #10252b; }
+@media (max-width: 700px) { .region-select { min-height: 36px; } }
+@media (pointer: coarse) { .region-select { font-size: 16px; min-height: 44px; } }

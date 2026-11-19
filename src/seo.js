@@ -2,6 +2,8 @@ import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
 import { querySites, parsePage, cleanTags, PAGE_SIZE, ALL_SCOPE } from './sites.js';
 // 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
 import '../public/countries.js';
+// 区画（都道府県・州）の名前の表（ブラウザの app.js・globe.js と共有）。読み込むと globalThis.MISE_REGIONS が定義される。
+import '../public/regions.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -10,17 +12,22 @@ const DEFAULT_DESC = 'For those tired of search results dominated by ads and maj
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
-// 範囲（scope）: 国コード（小文字 2 文字。jp, us…）または all。ルート `/` は既定範囲として扱う（docs/design/seo.md）。
+// 範囲（scope）: 国コード（小文字 2 文字。jp, us…）、区画（国コード-区画。jp-13, us-ca…。URL は /jp/13/ /us/ca/）、または all。ルート `/` は既定範囲として扱う（docs/design/seo.md）。
 export const DEFAULT_SCOPE = 'jp';
-// API/URL の範囲指定を解釈する。省略・空・all は全世界（cc = null）、小文字 2 文字は国、それ以外は null（不正）。
+// API/URL の範囲指定を解釈する。省略・空・all は全世界（cc = null, region = null）、小文字 2 文字は国、小文字 2 文字 + ハイフン + 英数 1〜3 文字は区画
+// （region は sites.region_code と同じ大文字の形 JP-13。cc はその国）、それ以外は null（不正）。区画が実在するか（サイトがあるか）は呼び出し側が scopes で確かめる。
 export function parseScope(raw) {
-  if (raw == null || raw === '' || raw === 'all') return { scope: 'all', cc: null };
-  return /^[a-z]{2}$/.test(raw) ? { scope: raw, cc: raw.toUpperCase() } : null;
+  if (raw == null || raw === '' || raw === 'all') return { scope: 'all', cc: null, region: null };
+  if (/^[a-z]{2}$/.test(raw)) return { scope: raw, cc: raw.toUpperCase(), region: null };
+  if (/^[a-z]{2}-[a-z0-9]{1,3}$/.test(raw)) return { scope: raw, cc: raw.slice(0, 2).toUpperCase(), region: raw.toUpperCase() };
+  return null;
 }
+// 範囲名 -> URL のパス。jp -> /jp/、jp-13 -> /jp/13/、all -> /all/。
+export const scopePath = scope => `/${scope.replace('-', '/')}/`;
 // page >= 2 のときだけ `page=N` を付ける（1 ページ目の URL は付けない形に正規化）。
 export const categoryHref = (path, scope = DEFAULT_SCOPE, page = 1) => {
   const qs = [...path.map(id => 'category=' + encodeURIComponent(id)), ...(page > 1 ? ['page=' + page] : [])];
-  return `/${scope}/` + (qs.length ? '?' + qs.join('&') : '');
+  return scopePath(scope) + (qs.length ? '?' + qs.join('&') : '');
 };
 // ページ番号リンク（JS なし・クローラ用）。先頭・末尾・現在地の前後 2 ページ + 前へ/次へ。
 function pagerHtml(path, scope, page, pages) {
@@ -33,18 +40,24 @@ function pagerHtml(path, scope, page, pages) {
   return out;
 }
 
-// サイトが 1 件以上ある国（件数の多い順）と全体の件数。範囲として選べる国 = ここに出る国だけ。
+// サイトが 1 件以上ある国（件数の多い順）・区画（コード順）と全体の件数。範囲として選べる国・区画 = ここに出るものだけ。
 export async function loadScopes(db) {
   // 集計表 scope_counts（migration 0022。トリガが sites に追従させる派生物）を読む。数百行以下。
   const { results } = await db.prepare(`SELECT scope, n FROM scope_counts WHERE n > 0 ORDER BY n DESC, scope`).all();
   const total = results.find(r => r.scope === ALL_SCOPE)?.n ?? 0;
-  return { total, countries: results.filter(r => /^[A-Z]{2}$/.test(r.scope)).map(r => ({ code: r.scope, count: r.n })) };
+  // regions: 区画（JP-13 など）。サイトが 1 件以上ある区画だけ。コードの昇順（JP-01〜JP-47 の順）。
+  const regions = results.filter(r => /^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(r.scope)).map(r => ({ code: r.scope, count: r.n })).sort((a, b) => a.code < b.code ? -1 : a.code > b.code ? 1 : 0);
+  return { total, countries: results.filter(r => /^[A-Z]{2}$/.test(r.scope)).map(r => ({ code: r.scope, count: r.n })), regions };
 }
 const countryName = code => {
   const e = globalThis.MISE_COUNTRIES?.[code]?.en;
   if (e) return e;
   try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) || code; } catch { return code; }
 };
+// 区画の英語名。表（regions.js）に無ければコード。
+const regionName = code => globalThis.MISE_REGIONS?.[code]?.en ?? code;
+// 範囲の表示名（英語）。区画は「区画名, 国名」。
+const placeName = ({ cc, region }) => region ? `${regionName(region)}, ${countryName(cc)}` : cc ? countryName(cc) : null;
 const flagUrl = code => (globalThis.MISE_FLAGS ?? []).includes(code) ? `/flags/${code.toLowerCase()}.svg` : null;
 
 // `q` か `tag` が付いた URL は検索結果扱い（noindex）。tag は不正（6 個以上・101 文字以上で cleanTags が null）でも、付いた時点で対象にする。
@@ -63,7 +76,7 @@ export function resolvePath(categories, raw) {
   return path;
 }
 
-// cc を渡すと、その国のサイトだけを数える（空のカテゴリも 0 件で返す）。null は全世界。
+// cc を渡すと、その範囲のサイトだけを数える（空のカテゴリも 0 件で返す）。国コード（JP）か区画コード（JP-13）。null は全世界。
 // 件数は集計表 category_counts（migration 0022。そのカテゴリ自身と全子孫の所属サイト数、重複なし。旧: 再帰 CTE）から読む。
 export async function loadCategories(db, cc = null) {
   const { results } = await db.prepare(`SELECT c.id, c.parent_id, c.name_ja, c.name_en, c.sort_order, COALESCE(k.n, 0) AS site_count FROM categories c LEFT JOIN category_counts k ON k.category_id = c.id AND k.scope = ?1 ORDER BY c.sort_order, c.id`).bind(cc ?? ALL_SCOPE).all();
@@ -76,7 +89,7 @@ function pathOf(categories, id) {
   return path;
 }
 
-// 範囲ごと（all と、サイトが 1 件以上ある国）に、範囲トップと、その範囲内に 1 サイト以上あるカテゴリの URL を載せる。`/` は `/jp/` の別名なので載せない。
+// 範囲ごと（all と、サイトが 1 件以上ある国・区画）に、範囲トップと、その範囲内に 1 サイト以上あるカテゴリの URL を載せる。`/` は `/jp/` の別名なので載せない。
 export async function sitemapXml(db) {
   const scopes = await loadScopes(db);
   const urls = [ORIGIN + '/about/']; // アバウトページ（静的な説明ページ。索引に載せてよい。#118）
@@ -87,7 +100,7 @@ export async function sitemapXml(db) {
   ]);
   const categories = cats.results, nonEmpty = new Map();
   for (const r of counts.results) { if (!nonEmpty.has(r.scope)) nonEmpty.set(r.scope, new Set()); nonEmpty.get(r.scope).add(r.category_id); }
-  for (const [scope, key] of [['all', ALL_SCOPE], ...scopes.countries.map(r => [r.code.toLowerCase(), r.code])]) {
+  for (const [scope, key] of [['all', ALL_SCOPE], ...scopes.countries.map(r => [r.code.toLowerCase(), r.code]), ...scopes.regions.map(r => [r.code.toLowerCase(), r.code])]) {
     urls.push(ORIGIN + categoryHref([], scope));
     for (const c of categories) if (nonEmpty.get(key)?.has(c.id)) urls.push(ORIGIN + categoryHref(pathOf(categories, c.id), scope));
   }
@@ -105,15 +118,26 @@ function scopeNavHtml(scopes, scope) {
     const flag = flagUrl(r.code);
     items.push(item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : `<span class="scope-code" aria-hidden="true">${esc(r.code)}</span>`));
   }
-  return `<ul class="scope-list">${items.join('')}</ul>`;
+  return `<ul class="scope-list">${items.join('')}</ul>${regionSelectHtml(scopes, scope)}`;
+}
+// 国（または国の中の区画）が現在の範囲で、その国に区画があるときの区画選択（SSR。app.js が同じ内容に描き直す）。value は範囲名（jp / jp-13）。
+// 先頭は国全体（区画で絞らない）。区画が無い範囲（all・区画を持たない国）では出さない。
+function regionSelectHtml(scopes, scope) {
+  const sc = parseScope(scope);
+  if (!sc?.cc) return '';
+  const regions = (scopes.regions ?? []).filter(r => r.code.startsWith(sc.cc + '-'));
+  if (!regions.length) return '';
+  const country = scopes.countries.find(r => r.code === sc.cc);
+  const opt = (value, label, count) => `<option value="${esc(value)}"${value === scope ? ' selected' : ''}>${esc(label)} (${count})</option>`;
+  return `<div class="region-row"><select class="region-select" aria-label="Region">${opt(sc.cc.toLowerCase(), 'All of ' + countryName(sc.cc), country?.count ?? 0)}${regions.map(r => opt(r.code.toLowerCase(), regionName(r.code), r.count)).join('')}</select></div>`;
 }
 
 // 範囲ページ（/ , /jp/ , /us/ , /all/）の HTML を、URL（?category= / ?q=）に応じたメタ情報と JS なしで読める本文に書き換える。
 // scope は parseScope で検証済みの範囲名、scopes は loadScopes の結果。`/` は scope = jp で呼ばれ、canonical は `/jp/…`。
 export async function renderIndex(c, assetResponse, scope, scopes) {
   const url = new URL(c.req.url);
-  const cc = scope === 'all' ? null : scope.toUpperCase();
-  const categories = await loadCategories(c.env.DB, cc);
+  const { cc, region } = parseScope(scope);
+  const categories = await loadCategories(c.env.DB, region ?? cc);
   const raw = url.searchParams.getAll('category');
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
@@ -123,7 +147,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   if (page === null) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
 
   // 範囲ごとに title / description を変える（all は従来どおり）。国は英語名。
-  const place = cc ? countryName(cc) : null, inPlace = place && (/^United /.test(place) ? 'the ' : '') + place;
+  const place = placeName({ cc, region }), inPlace = place && (/^United /.test(place) ? 'the ' : '') + place;
   let title = place ? `MISE — ${place}: A directory search engine for today.` : DEFAULT_TITLE;
   let desc = place
     ? `Independent websites from ${inPlace} on MISE, a directory search engine. For those tired of search results dominated by ads and major sites.`
@@ -148,7 +172,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   }).join('');
   let siteItems = '', pagerBody = '', pages = 1;
   if (path.length || tags.length) {
-    const { items, total } = await querySites(c.env.DB, { cc, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
+    const { items, total } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
     pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');

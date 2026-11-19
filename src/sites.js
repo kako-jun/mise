@@ -2,12 +2,14 @@
 // ★ 並び順の定義はこのファイルの SORT_KEYS だけ。ORDER BY・カーソルのキー列・「次のページ」の比較条件・インデックス列はここから生成する。
 //   並びのキーを足す/変えるとき（例: 先頭の `bulk_import`。#71 で足した）:
 //   1. SORT_KEYS に { expr, dir } を足す（先頭ほど優先。末尾の s.id は必ず最後に残す）。
-//   2. sortIndexSql() が返す CREATE INDEX を新しい migration に書く（scripts/check-api-headers.mjs が最新の migration と一致を検査する）。
+//   2. sortIndexSql() と regionSortIndexSql() が返す CREATE INDEX を新しい migration に書く（scripts/check-api-headers.mjs が最新の migration と一致を検査する）。
 //   3. 追加した列が画面に必要なら COLUMNS にも足す（並びだけに使う列は足さなくてよい）。
 //   4. docs/design/ui.md の「既定の並び」を更新する。カーソルは配列なので形式の変更は不要。
 export const PAGE_SIZE = 40, MAX_LIMIT = 100;
-// 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの。
+// 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの、区画（都道府県・州）は region_code そのもの（0026。例 JP-13）。
 export const ALL_SCOPE = 'all';
+// 範囲の集計キー: 区画 > 国 > 全世界。cc は国、region は区画（どちらも集計表の scope 値）。
+export const scopeKeyOf = ({ cc = null, region = null } = {}) => region ?? cc ?? ALL_SCOPE;
 // 絞り込み（q・tag・直下以外のカテゴリ）の総件数の上限（#126 第2段）。これを超えるときは数えず total = TOTAL_CAP・total_capped = true で返し、画面は「1,000+」と出す。
 // 全件を数えると読み取りがヒット件数に比例して増えるため（docs/design/architecture.md）。変えるときは app.js の表示（formatCap）と docs/design/ui.md も確認する。
 export const TOTAL_CAP = 1000;
@@ -32,6 +34,8 @@ const indexCols = () => SORT_KEYS.map(k => `${k.expr.replace(/\bs\./g, '')} ${k.
 const fnv = str => { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16).padStart(8, '0'); };
 export const sortIndexName = () => `idx_sites_sort_${fnv(indexCols())}`;
 export const sortIndexSql = () => `CREATE INDEX IF NOT EXISTS ${sortIndexName()} ON sites (${indexCols()});`;
+// 区画（region_code）で絞った一覧用の部分索引（migration 0026。区画 NULL の行は載せない）。並びの列は上と同じなので、SORT_KEYS を変えたらこれも新しい migration で作り直す。
+export const regionSortIndexSql = () => `CREATE INDEX IF NOT EXISTS idx_sites_region_sort ON sites (region_code, ${indexCols()}) WHERE region_code IS NOT NULL;`;
 const keyCols = () => SORT_KEYS.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
 
 // ---- 入力の解釈（不正は null → 呼び出し側が 400/404） ----
@@ -105,7 +109,7 @@ const CATEGORY_IN_COST = 7, CATEGORY_EXISTS_COST = 3;
 // 計画は先頭ページ（カーソルなし）で決めて覚え、続きのページ（カーソルあり）はそれを使う。ページごとにタグの該当数を数え直さない（よく使うタグ 5 個で 1 ページ約 1 万行）。
 // 計画は読み取りの形を選ぶだけで結果は変えないので、isolate ごとのメモリに短時間覚えるだけでよい（別の isolate に当たったら計画し直す）。件数が変わって古くなっても結果は同じ。
 const PLAN_TTL_MS = 10 * 60 * 1000, PLAN_CACHE_MAX = 500, planCache = new Map();
-const planKey = ({ cc, category, tags }) => JSON.stringify([cc ?? null, category ?? null, tags ?? []]);
+const planKey = ({ cc, region, category, tags }) => JSON.stringify([cc ?? null, region ?? null, category ?? null, tags ?? []]);
 async function planFor(db, o, fresh) {
   const key = planKey(o), hit = planCache.get(key);
   if (!fresh && hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan;
@@ -114,11 +118,11 @@ async function planFor(db, o, fresh) {
   planCache.set(key, { plan, at: Date.now() });
   return plan;
 }
-export async function planQuery(db, { cc = null, category = null, tags = [] }) {
+export async function planQuery(db, { cc = null, region = null, category = null, tags = [] }) {
   const plan = { categoryMode: 'in', categoryLeafCount: null, driveTag: null, tagsOverCap: false };
   const jobs = [];
   if (category) jobs.push((async () => {
-    const scope = cc ?? ALL_SCOPE;
+    const scope = scopeKeyOf({ cc, region });
     const r = await db.prepare(`SELECT (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = 'all') AS n_all, (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = ?2) AS n_scope, (SELECT n FROM scope_counts WHERE scope = ?2) AS n_base, EXISTS (SELECT 1 FROM categories WHERE parent_id = ?1) AS has_child`).bind(category, scope).first();
     const nAll = r?.n_all ?? 0, nScope = r?.n_scope ?? 0, base = r?.n_base ?? 0;
     // 葉カテゴリの category_counts は「直下の所属サイト数」と同じ（子孫が無いので）。総件数はこれをそのまま使える。
@@ -138,9 +142,11 @@ export async function planQuery(db, { cc = null, category = null, tags = [] }) {
   return plan;
 }
 
-function filters({ cc, category, q, tags }, plan = {}) {
+function filters({ cc, region, category, q, tags }, plan = {}) {
   const where = [], args = [];
-  if (cc) { where.push('s.country_code = ?'); args.push(cc); }
+  // 区画は国の部分集合（region_code は country_code が必須で先頭 2 文字が一致する）ので、区画があれば区画だけで絞る（国だけ分かって区画 NULL のサイトは出ない）。
+  if (region) { where.push('s.region_code = ?'); args.push(region); }
+  else if (cc) { where.push('s.country_code = ?'); args.push(cc); }
   if (category) {
     if (plan.categoryMode === 'exists') where.push('EXISTS (SELECT 1 FROM site_categories sc WHERE sc.category_id = ? AND sc.site_id = s.id)');
     else where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)');
@@ -162,15 +168,15 @@ const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r))
 // total は先頭ページ（カーソルなし）のときだけ入れる。q は cleanQuery 済み、tags は cleanTags 済みであること。
 // total の出し方（読み取りが件数に比例しないように。#126 第2段）:
 //   1. 末尾まで届いた（次ページなし）なら、読んだ行数から正確に分かる（追加の読み取りなし。0 ヒットも 1 回の走査で済む）
-//   2. 範囲（国）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
+//   2. 範囲（国・区画）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
 //   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
-export async function querySites(db, { cc = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
+export async function querySites(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
-  const basePlan = await planFor(db, { cc, category, tags }, !hasCursor);
+  const basePlan = await planFor(db, { cc, region, category, tags }, !hasCursor);
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
-  const { where, args } = filters({ cc, category, q, tags }, plan);
+  const { where, args } = filters({ cc, region, category, q, tags }, plan);
   const run = async (extra, extraArgs, lim, off, order = siteOrder()) => {
     const conds = [...where, ...extra];
     return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
@@ -187,9 +193,9 @@ export async function querySites(db, { cc = null, category = null, q = null, tag
   if (!hasCursor) {
     const plain = !category && !q && !tags?.length;
     if (!more && (start === 0 || rows.length > 0)) { out.total = start + rows.length; out.total_capped = false; }
-    else if (plain) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(cc ?? ALL_SCOPE).first())?.total ?? 0; out.total_capped = false; }
+    else if (plain) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(scopeKeyOf({ cc, region })).first())?.total ?? 0; out.total_capped = false; }
     else if (plan.categoryLeafCount !== null && !q && !tags?.length) { out.total = plan.categoryLeafCount; out.total_capped = false; }
-    else if (plan.tagsOverCap && !q && !category && !cc) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
+    else if (plan.tagsOverCap && !q && !category && !cc && !region) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
     else {
       const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''} LIMIT ${TOTAL_CAP + 1})`).bind(...args).first())?.n ?? 0;
       out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
@@ -204,19 +210,21 @@ export async function querySites(db, { cc = null, category = null, q = null, tag
 // 範囲内の件数が PICK_RANDOM_MAX 以下（棄却が多く、全件でも少ない）なら従来の `ORDER BY RANDOM()`。それでも n 件に足りなければ、足りない分だけ `ORDER BY RANDOM()` で補う（件数が少ないときだけ起きる）。
 const PICK_BATCHES = [40, 80], PICK_RANDOM_MAX = 50; // 1 回に引く rowid の数（D1 のバインド値は 1 文 100 個まで）。合う行が少ない範囲（本番では日本の非一括は 3%）ほど引き直しが要る
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }; // Fisher-Yates
-export async function randomSites(db, cc, n = 3) {
+// region（例 JP-13）があれば区画内、無ければ cc（国）内、どちらも無ければ全世界。区画があるとき cc は使わない（区画は国の部分集合）。
+export async function randomSites(db, cc, n = 3, region = null) {
   let scopeN = null;
-  if (cc) { scopeN = (await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(cc).first())?.n ?? 0; if (!(scopeN > 0)) return []; }
-  const cond = `s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1)`;
-  const byRandom = async (excludeIds, k) => (await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE ${cond}${excludeIds.length ? ` AND s.id NOT IN (${excludeIds.map((_, i) => '?' + (i + 2)).join(',')})` : ''} ORDER BY RANDOM() LIMIT ${Number(k)}`).bind(cc, ...excludeIds).all()).results;
-  if (scopeN !== null && scopeN <= PICK_RANDOM_MAX) return shuffle(await byRandom([], n)).map(shape);
+  if (cc || region) { scopeN = (await db.prepare(`SELECT n FROM scope_counts WHERE scope = ?`).bind(region ?? cc).first())?.n ?? 0; if (!(scopeN > 0)) return []; }
+  const cond = `s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) AND (?2 IS NULL OR s.region_code = ?2)`;
+  const byRandom = async (excludeIds, k) => (await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE ${cond}${excludeIds.length ? ` AND s.id NOT IN (${excludeIds.map((_, i) => '?' + (i + 3)).join(',')})` : ''} ORDER BY RANDOM() LIMIT ${Number(k)}`).bind(region ? null : cc, region, ...excludeIds).all()).results;
+  // 区画は全体のごく一部なので、乱数の rowid で引くと当たりが少ない。区画の索引（0026）で区画内の行だけを読んで並べ替える（区画の件数に比例。最大でも数千行）。
+  if (scopeN !== null && (region || scopeN <= PICK_RANDOM_MAX)) return shuffle(await byRandom([], n)).map(shape);
   const max = (await db.prepare(`SELECT MAX(rowid) AS m FROM sites`).bind().first())?.m ?? 0;
   if (!max) return [];
   // `+s.bulk_import` は、並びの索引（bulk_import が先頭）を選ばせず rowid の点引きにするため（ローカルの D1 で、付けないと非一括の全件を走査して 300 行余り読んだ）。
   const found = new Map();
   for (let round = 0; round < PICK_BATCHES.length && found.size < n; round++) {
     const rowids = Array.from({ length: PICK_BATCHES[round] }, () => Math.floor(Math.random() * max) + 1);
-    const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.rowid IN (${rowids.map((_, i) => '?' + (i + 2)).join(',')}) AND +s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1)`).bind(cc, ...rowids).all();
+    const { results } = await db.prepare(`SELECT ${COLUMNS} FROM sites s WHERE s.rowid IN (${rowids.map((_, i) => '?' + (i + 3)).join(',')}) AND +s.bulk_import = 0 AND (?1 IS NULL OR s.country_code = ?1) AND (?2 IS NULL OR s.region_code = ?2)`).bind(region ? null : cc, region, ...rowids).all();
     for (const r of results) if (!found.has(r.id)) found.set(r.id, r);
   }
   const rows = shuffle([...found.values()]).slice(0, n);
