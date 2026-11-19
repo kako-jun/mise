@@ -634,7 +634,7 @@ def parse_args(argv=None):
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
-    ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。SQL を作るだけで本番には触れない(#125)")
+    ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。取得だけ(SQL は作らない。本番には触れない。#125)")
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")

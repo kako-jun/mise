@@ -72,6 +72,7 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 
 - `R2Store` は `npx wrangler r2 object put mise-media/icon/<hash>.webp --file ... --content-type image/webp --local|--remote` を呼ぶ。**`--r2-remote` が無ければ常に `--local`**（本番に書かない安全側）。put の失敗は 1 サイト分の `store_failed` として続行する。
 - **呼び出し数を抑える設計**: wrangler の起動は 1 回数秒かかるので、`exists` は既定で R2 に問い合わせず台帳（`icon_hash`）を信じる。同じ実行中に置いた名前は記憶して 2 度 put しない。R2 から画像が消えた・別バケットへ移した疑いがあるときだけ `--r2-verify`（`wrangler r2 object get` で 1 件ずつ確認。遅い。このとき put も印があっても毎回やり直す）。印があれば（`--r2-verify` でない限り）同じ中身の 200 でも put しない（ETag を返さないサイトが毎月 200 でも書き込みは増えない）。画像は 1 件 約 1.5 KB なので 1 件ずつ put する（件数が増えて遅くなったら S3 互換 API での並列化を別 Issue で検討）。
+- `--r2-verify` での取り直しと put が起きるのは、`next_check_at` が来たサイトだけ（最大約 30 日後）。期限が来たものから順に戻る。すぐ戻したいときは台帳（`icon_stored`）の `r2-remote` の行を消して `--r2-remote` で回す（印が無いので期限前でも対象になる）。
 - **台帳は保存先ごとに「置いた印」を持つ**（`icon_stored` 表: 画像名 × `local` / `r2-local` / `r2-remote`。旧い台帳には `connect()` が自動で表を足す）。`exists` の判定と期限（`due_sites`）はその保存先の印で行う。ローカルで置いたあとに `--r2-remote` を回すと、`next_check_at` が先でも「画像はあるのにこの保存先の印が無い」サイトが対象になり、304 でも条件なしで取り直して put する。nightly（`local`）で取得済みのものも同様に、初めて `--r2-remote` を回したときに R2 へ上がる。旧い台帳は印が無いので、初回の `--r2-remote` で全件が対象（304 を挟むだけで安い）。
 - 旧い台帳（印の表が無い）を読み取り専用で開く `run`（dry-run）・`sql --store ...` は印を判定できず、件数が少なく（`sql` は 0 行に）出る。そのとき注記が出る。書き込み可で開く（`run --apply` や `import`）と表が足される。
 - **`sql` は既定で `--store r2-remote` の印がある画像だけ**を出す（ローカルにしか置いていないものは出さない＝D1 が指す画像が配信元に無い状態を作らない）。`--store local` / `r2-local` も明示すれば選べる。

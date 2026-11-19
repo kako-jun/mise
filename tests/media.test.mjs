@@ -104,6 +104,7 @@ test('/icon/: R2 が例外を投げたら 500 で immutable を付けない', as
   assert.doesNotMatch(r.headers.get('Cache-Control') || '', /immutable/);
 });
 
+// これらは media.js の NOT_FOUND（no-store）でなく scope 側のルートの 404。no-store は付かないが、immutable も付かないこと（キャッシュに残らない）だけを保証する。
 test('/icon/x/ のように scope 側へ落ちるパスは R2 を見ずに 404', async () => {
   const env = { MEDIA: fakeBucket({}), DB: { prepare: () => { throw new Error('no db'); } } };
   for (const p of ['/icon/x/', `/icon/${H}.webp/`, '/icon/', '/icon/a/b']) {
