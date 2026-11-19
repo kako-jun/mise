@@ -30,7 +30,7 @@
   let newTab = storage.get('mise-external-new-tab') === 'true';
   const t = k => words[language][k];
   // 件数の桁区切り(表示言語に合わせる)。「SEEN 000128」のような固定桁の意匠には使わない
-  const fmt = n => Number(n).toLocaleString(language === 'ja' ? 'ja-JP' : 'en-US');
+  const fmt = n => L.fmtCount(n, language);
 
   // ---- 決定論の乱数（シード = セッションごと。?seed= で再現） ----
   const { hash32, rngOf, updatedOf } = L;
@@ -63,7 +63,7 @@
     return [...map.values()];
   }
   // 要求した範囲のデータがまだ揃っていない間は true。この間は古い範囲のデータを絞り込んで出さない
-  const pending = () => !L.covers(loadedScope, loadedComplete, state.scope);
+  const pending = () => L.isPending(loadedScope, loadedComplete, state.scope);
   function visible() {
     // 並びは全件で一度決め、絞り込みは順序を保ったまま間引く（条件を戻すと同じ並びに戻る）
     return L.order(all, { sort: state.sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => L.inScope(s, state.scope) && (!state.cat || s.roots.has(state.cat)));
@@ -182,9 +182,9 @@
     const h = document.createElement('h2'); h.textContent = t('end')(fmt(n));
     const p = document.createElement('p'); p.textContent = t('endNote');
     const row = document.createElement('div'); row.className = 'f-end-actions';
-    const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => { const c = go(0); if (c) c.focus({ preventScroll: true }); });
+    const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => { navTarget = 0; clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(0); if (c) c.focus({ preventScroll: true }); });
     row.append(top);
-    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); go(0, true); }); row.append(re); }
+    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); const c = go(0, true); if (c) c.focus({ preventScroll: true }); }); row.append(re); }
     body.append(h, p, row); sec.append(body);
     return sec;
   }
@@ -226,7 +226,7 @@
   function renderPanel() {
     const panel = $('.f-panel'); const n = seenCount(), m = nextMilestone(n); panel.replaceChildren();
     const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${fmt(n)}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.textContent = '×'; x.addEventListener('click', closePanel); head.append(h, x);
-    const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(m - n)} (${m})` : t('topMilestone');
+    const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(fmt(m - n))} (${fmt(m)})` : t('topMilestone');
     panel.append(head, note);
     const byId = new Map(all.map(s => [s.id, s]));
     const months = new Map(), countries = new Map(), cats = new Map();
@@ -307,7 +307,7 @@
     row2.append(scopeSel);
     const sel = mk('select', 'f-select', { 'aria-label': t('catLabel') });
     sel.append(new Option(t('catAll'), ''));
-    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n || (pending() && c.id === state.cat)) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${fmt(n)})`, c.id)); }
+    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n || c.id === state.cat) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${fmt(n)})`, c.id)); }
     sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
     row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
@@ -361,7 +361,7 @@
   function updateNote() {
     if (!noteEl) return;
     const total = scopeTotal(), loaded = all.length;
-    noteEl.textContent = loadedScope !== null && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(fmt(loaded), fmt(Number.isFinite(total) ? total : loaded)) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
+    noteEl.textContent = loadedScope !== null && !pending() && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(fmt(loaded), fmt(Number.isFinite(total) ? total : loaded)) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
   }
   function updateCounter() { if (counter) counter.textContent = list.length ? t('itemOf')(fmt(Math.min(current + 1, list.length)), fmt(list.length)) : ''; }
 
@@ -392,6 +392,7 @@
   }
 
   function start() {
+    if (!document.documentElement.classList.contains('feed-mode')) return; // フックが通常表示へ戻した後（読み込み失敗・遅延到着）は何も起動しない
     document.documentElement.lang = language;
     root = mk('div', 'feed-root'); root.id = 'feed';
     bar = mk('header', 'f-bar'); bar.setAttribute('role', 'banner');

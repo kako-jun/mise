@@ -51,5 +51,10 @@
     };
   }
 
-  g.MiseFeedLib = { safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
+  // 件数の桁区切り（表示言語に合わせる）。数でない値は NaN と出さず空文字
+  const fmtCount = (n, lang) => Number.isFinite(Number(n)) && n !== null && n !== '' ? Number(n).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US') : '';
+  // 要求した範囲 want のデータがまだ揃っていない（絞り込み・描画を保留する）か
+  const isPending = (loaded, complete, want) => !covers(loaded, complete, want);
+
+  g.MiseFeedLib = { fmtCount, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
 })(globalThis);
