@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { querySites, planQuery, decodeCursor, siteOrder, filters, TOTAL_CAP, PAGE_SIZE, cleanQuery, searchText, FTS_EXTRA_PROBE } from '../src/sites.js';
-import { SQL, chunkRanges, parseArgs } from '../scripts/build-search-fts.mjs';
+import { SQL, chunkRanges, parseArgs, runBuild } from '../scripts/build-search-fts.mjs';
 import { changedRows } from '../scripts/refresh-search-text.mjs';
 
 // 全文索引（#126 第3段。migration 0027 の sites_fts = search_text の FTS5 trigram）。
@@ -233,4 +233,97 @@ test('refresh-search-text: 今の search_text と同じ行は更新しない（�
   const stale = mk('c', 'n c abc https://x/c'); // 暫定値（NFKC 前）
   const nul = mk('d', null);
   assert.deepEqual(changedRows([ok, withTag, stale, nul]).map(r => r.id), ['c', 'd']);
+});
+
+// ---- 続きのページ・境界・畳み込み・構築の順序（レビュー指摘）----
+const mkSmall = (n, desc = i => `りんご${i} 紹介サイト`) => {
+  const db2 = mkDb(); db2.exec('DELETE FROM site_categories; DELETE FROM site_tags; DELETE FROM sites;'); build(db2);
+  db2.exec('BEGIN'); const ins = db2.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at) VALUES (?,?,?,?,?)');
+  for (let i = 0; i < n; i++) ins.run('c' + String(i).padStart(4, '0'), `https://c${i}.example/`, 'n' + i, desc(i), `2026-01-${String(1 + (i % 28)).padStart(2, '0')}T00:00:00Z`);
+  db2.exec('COMMIT'); return db2;
+};
+const idsOf = async (d2, o) => { const ids = []; let cur = null, first; for (let g = 0; g < 50; g++) { const r = await querySites(d2, { ...o, cursor: cur ? decodeCursor(cur) : null }); if (g === 0) first = r; ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; if (!cur) break; } return { ids, first }; };
+const instrIds = (db2, q) => db2.prepare(`SELECT s.id FROM sites s WHERE instr(s.search_text, ?) > 0 ${siteOrder()}`).all(q).map(r => r.id);
+
+test('続きのページ: 先頭ページの後に索引の作り直し（ready = 0）が始まっても、instr で同じ結果・0 件にならない', async () => {
+  const db2 = mkSmall(120), d2 = wrap(db2), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  const p1 = await querySites(d2, { q }); assert.equal(p1.items.length, 40);
+  db2.exec(SQL.begin); // ready = 0・空の索引
+  const rest = []; let cur = p1.next_cursor;
+  while (cur) { const r = await querySites(d2, { q, cursor: decodeCursor(cur) }); rest.push(...r.items.map(i => i.id)); cur = r.next_cursor; }
+  assert.deepEqual([...p1.items.map(i => i.id), ...rest], want);
+  // 作り直しが終わったら（ready = 1）先頭ページから索引の経路に戻る
+  for (const [a, b] of chunkRanges(1, 1000, 500)) db2.exec(SQL.chunk(a, b)); db2.exec(SQL.ready);
+  assert.equal((await planQuery(d2, { q })).qMode, 'fts');
+  assert.deepEqual((await idsOf(d2, { q })).ids, want);
+});
+
+test('続きのページ: 先頭ページの後に表を DROP（ロールバック）しても 500 にならず instr で同じ結果', async () => {
+  const db2 = mkSmall(120), d2 = wrap(db2), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  const p1 = await querySites(d2, { q }); assert.equal((await planQuery(d2, { q })).qMode, 'fts');
+  db2.exec('DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts; DROP TABLE fts_state;');
+  const rest = []; let cur = p1.next_cursor;
+  while (cur) { const r = await querySites(d2, { q, cursor: decodeCursor(cur) }); rest.push(...r.items.map(i => i.id)); cur = r.next_cursor; }
+  assert.deepEqual([...p1.items.map(i => i.id), ...rest], want);
+});
+
+test('実行時の失敗の安全策: 計画の判断の後に表が消えても（判断と実行の間）instr でやり直す', async () => {
+  const db2 = mkSmall(60), q = cleanQuery('りんご'), want = instrIds(db2, q);
+  const d2 = wrap(db2); await querySites(d2, { q }); // 計画を覚える
+  // fts_state は読めるが sites_fts だけ無い状況を作る（planFor の確認をすり抜けて実行で落ちる）
+  db2.exec('DROP TRIGGER sites_fts_ai; DROP TRIGGER sites_fts_ad; DROP TRIGGER sites_fts_au; DROP TABLE sites_fts;');
+  const p1 = await querySites(d2, { q }); // 先頭ページ: 計画 → probe 失敗 → instr
+  assert.deepEqual((await idsOf(d2, { q })).ids, want); assert.equal(p1.items.length, 40);
+  const c = await querySites(d2, { q, cursor: decodeCursor(p1.next_cursor) });
+  assert.deepEqual(c.items.map(i => i.id), want.slice(40, 60));
+});
+
+test('畳み込み: 索引が instr より多く拾う行（非 ASCII の大文字・語末シグマ）は instr と同じ結果（索引の行にも instr を重ねる）', async () => {
+  const db2 = mkSmall(0), d2 = wrap(db2);
+  // 0020 の暫定値（ASCII だけ小文字化）で非 ASCII の大文字が残った search_text を想定
+  db2.exec("INSERT INTO sites (id,url,name,description_ja,search_text) VALUES ('g1','https://g1.example/','n','d','ΟΔΟΣ 例'), ('g2','https://g2.example/','n','d','ςας 例'), ('g3','https://g3.example/','n','d','οδος σας')");
+  for (const t of ['οδο', 'σας', 'ςας', 'οδοσ']) {
+    const q = cleanQuery(t), ftsHits = db2.prepare('SELECT COUNT(*) c FROM sites_fts WHERE sites_fts MATCH ?').get('"' + q + '"').c;
+    assert.deepEqual((await idsOf(d2, { q })).ids, instrIds(db2, q), t);
+    if (t === 'οδο') assert.ok(ftsHits > instrIds(db2, q).length, '索引は instr より多く拾う（このテストが意味を持つ前提）');
+  }
+});
+
+test('境界: 該当がちょうど TOTAL_CAP 件なら索引・総件数は正確、TOTAL_CAP + 1 件なら instr・total_capped', async () => {
+  for (const [n, mode, capped] of [[TOTAL_CAP, 'fts', false], [TOTAL_CAP + 1, 'instr', true]]) {
+    const db2 = mkSmall(n, i => `ぼうだい${i}`), d2 = wrap(db2), q = cleanQuery('ぼうだい');
+    const plan = await planQuery(d2, { q });
+    assert.equal(plan.qMode, mode, `${n} 件`);
+    const r = await querySites(d2, { q });
+    assert.equal(r.total, TOTAL_CAP); assert.equal(r.total_capped, capped);
+    setReady(db2, 0); const b = await querySites(d2, { q }); // instr の経路
+    assert.deepEqual([r.total, r.total_capped, r.items.map(i => i.id)], [b.total, b.total_capped, b.items.map(i => i.id)]);
+  }
+});
+
+test('計画のキャッシュは q ごと: 続きのページでも、索引の語は索引・上限超えの語は instr の計画を使う', async () => {
+  const db2 = mkSmall(1100, i => `共通語 ${i % 2 ? 'りんご' : 'みかん'}${i}`), q1 = cleanQuery('みかん'), q2 = cleanQuery('共通語');
+  const seen = []; const d2 = { prepare: sql => { seen.push(sql); return wrap(db2).prepare(sql); } };
+  const a = await querySites(d2, { q: q1, limit: 10 }), b = await querySites(d2, { q: q2, limit: 10 });
+  seen.length = 0;
+  await querySites(d2, { q: q1, limit: 10, cursor: decodeCursor(a.next_cursor) });
+  assert.ok(seen.some(s => s.includes('sites_fts MATCH')), 'q1（550 件）は索引');
+  seen.length = 0;
+  await querySites(d2, { q: q2, limit: 10, cursor: decodeCursor(b.next_cursor) });
+  assert.ok(!seen.some(s => s.includes('sites_fts MATCH')), 'q2（1,100 件）は instr');
+});
+
+test('構築の順序: ready = 1 にしてから検証し、失敗したら ready = 0 に戻して止まる（モック）', () => {
+  const calls = [];
+  const mk = (counts, integrityFails) => sql => { calls.push(sql); if (sql === SQL.range) return [{ lo: 1, hi: 25 }]; if (sql === SQL.counts) return [counts]; if (sql === SQL.integrity && integrityFails) throw new Error('malformed'); return []; };
+  const ok = runBuild(mk({ sites: 25, indexed: 25 }, false), { chunk: 10 });
+  assert.equal(ok.indexed, 25);
+  const i = f => calls.indexOf(f);
+  assert.ok(i(SQL.ready) > i(SQL.chunk(21, 25)) && i(SQL.ready) < i(SQL.counts) && i(SQL.counts) < i(SQL.integrity), 'ready は検証の前');
+  assert.ok(!calls.includes(SQL.unready));
+  for (const [counts, fails, msg] of [[{ sites: 25, indexed: 24 }, false, /件数/], [{ sites: 25, indexed: 25 }, true, /malformed/]]) {
+    calls.length = 0;
+    assert.throws(() => runBuild(mk(counts, fails), { chunk: 10 }), msg);
+    assert.equal(calls.at(-1), SQL.unready, '失敗したら ready = 0 に戻す');
+  }
 });

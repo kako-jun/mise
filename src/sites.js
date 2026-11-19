@@ -123,7 +123,11 @@ const PLAN_TTL_MS = 10 * 60 * 1000, PLAN_CACHE_MAX = 500, planCache = new Map();
 const planKey = ({ cc, region, category, tags, q }) => JSON.stringify([cc ?? null, region ?? null, category ?? null, tags ?? [], q ?? null]);
 async function planFor(db, o, fresh) {
   const key = planKey(o), hit = planCache.get(key);
-  if (!fresh && hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan;
+  if (!fresh && hit && Date.now() - hit.at < PLAN_TTL_MS) {
+    // 索引の経路で覚えた計画は、使う前に ready を 1 行で確かめる（索引の作り直し中 = ready 0 の空の索引を MATCH すると 0 件になる・DROP 後は表が無い）。失敗したら計画し直して instr にする。
+    if (hit.plan.qMode !== 'fts') return hit.plan;
+    try { if ((await db.prepare(`SELECT ready FROM fts_state WHERE name = 'sites_fts'`).first())?.ready === 1) return hit.plan; } catch (_) { /* 表なし → 計画し直し */ }
+  }
   const plan = await planQuery(db, o);
   if (planCache.size >= PLAN_CACHE_MAX) planCache.clear();
   planCache.set(key, { plan, at: Date.now() });
@@ -197,9 +201,20 @@ const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r))
 //   2. 範囲（国・区画）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
 //   2.5. q が 3 文字以上で索引の該当が TOTAL_CAP 超（かつ他の絞り込みなし）は、数えずに上限付き。TOTAL_CAP 以下なら索引から正確に数える。絞り込み併用で該当が FTS_EXTRA_PROBE 以下なら総件数だけ索引から数える
 //   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
-export async function querySites(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
+export async function querySites(db, o) {
+  const hasCursor = o.cursor && !o.cursor.none;
+  const basePlan = await planFor(db, { cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q }, !hasCursor);
+  try { return await runQuery(db, o, basePlan); }
+  catch (e) {
+    // 索引の経路の実行時の失敗（索引の作り直し・表の DROP と計画の判断の間に起きたもの）は、instr の経路でやり直す（結果は同じ）。索引を使わない計画の失敗はそのまま投げる。
+    if (basePlan.qMode !== 'fts' && !basePlan.qCountViaFts) throw e;
+    const plan = { ...basePlan, qMode: 'instr', qOver: false, qCountViaFts: false };
+    planCache.set(planKey({ cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q }), { plan, at: Date.now() });
+    return await runQuery(db, o, plan);
+  }
+}
+async function runQuery(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }, basePlan) {
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
-  const basePlan = await planFor(db, { cc, region, category, tags, q }, !hasCursor);
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
