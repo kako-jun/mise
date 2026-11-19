@@ -149,7 +149,9 @@
     const body = document.createElement('div'); body.className = 'f-body';
     const h = document.createElement('h2'); h.id = `f-name-${i}`; h.className = 'f-name'; h.textContent = s.name;
     const useEn = language === 'en' && s.description_en, p = document.createElement('p'); p.className = 'f-desc'; p.textContent = useEn ? s.description_en : s.description_ja + t('fallback'); if (language === 'en' && !useEn) p.lang = 'ja';
-    body.append(h, p);
+    body.append(h);
+    const host = globalThis.MiseSiteHost && globalThis.MiseSiteHost(s.url); if (host) { const hs = document.createElement('p'); hs.className = 'f-host'; hs.textContent = host; body.append(hs); }
+    body.append(p);
     const pl = place(s); if (pl) body.append(pl);
     // 長い紹介文（ショート動画のキャプション風）。折りたたみ時は数行、タップで全文。長ければ枠内だけ縦スクロール
     const lt = longText(s);

@@ -4,6 +4,8 @@ import { querySites, parsePage, cleanTags, PAGE_SIZE, ALL_SCOPE } from './sites.
 import '../public/countries.js';
 // 区画（都道府県・州）の名前の表（ブラウザの app.js・globe.js と共有）。読み込むと globalThis.MISE_REGIONS が定義される。
 import '../public/regions.js';
+// リンク先のホスト名の表示（ブラウザの app.js・feed.js と共有。読み込むと globalThis.MiseSiteHost が定義される）。
+import '../public/site-host.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -186,7 +188,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     const { items, total } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
     pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
-    siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${globalThis.MiseSiteHost(s.url) ? ` <small class="site-host">${esc(globalThis.MiseSiteHost(s.url))}</small>` : ''}${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
     if (isSearch) pages = 1; // 検索結果はページ番号なし（noindex。エンドレススクロールのみ）
     if (pages > 1) pagerBody = pagerHtml(path, scope, page, pages);
   }

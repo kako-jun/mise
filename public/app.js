@@ -273,31 +273,37 @@ function toggleTag(tag, fromDirectory=false) {
   // 画面（スマホは先頭が見えていないことが多い）を、検索バー（チップ）と結果の先頭が見える位置へ。ホバーは使わずタップで完結する。
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ const row=document.querySelector('.search-row'); if(row.getBoundingClientRect().top<0) row.scrollIntoView({block:'start'}); }));
 }
+// リンク先のホスト名の表示（public/site-host.js。SSR の src/seo.js と縦フィードと共有する 1 本）
+const siteHost = value => globalThis.MiseSiteHost(value);
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
   const href=safeHttpUrl(site.url); if(href) { a.href=href; configureExternalLink(a); }
   a.textContent=site.name; p.textContent=siteDescription(site);
   if(language==='en' && !site.description_en) p.lang='ja';
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
-  // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは枠ごと出さない。
-  // 枠は固定寸法で、画像の読み込み前から出しておく（読み込み後に枠が現れて行がずれるのを避ける）。失敗したら枠ごと消す。
+  // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは何も出さない（名前は左端から始まる）。
+  // サイト名の左だけに出す。寸法は固定（18px）で、画像の読み込み前から出しておく（読み込み後に枠が現れて行がずれるのを避ける）。失敗したら枠ごと消す。
   const iconSrc = typeof site.favicon_url==='string' && /^\/icon\/[0-9a-f]{32}\.webp$/.test(site.favicon_url) ? site.favicon_url
     : (site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path) ? site.favicon_path : null);
   if(iconSrc) {
-    const img=document.createElement('img'); img.alt=''; img.width=24; img.height=24; img.decoding='async'; img.src=iconSrc;
+    const img=document.createElement('img'); img.alt=''; img.width=18; img.height=18; img.decoding='async'; img.src=iconSrc;
     img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img); icon.hidden=false;
   }
-  const content=document.createElement('div'); content.className='site-content'; content.append(a); if(href) content.append(newTabButton(href,site.name));
+  const content=document.createElement('div'); content.className='site-content'; const head=document.createElement('div'); head.className='site-head'; const title=document.createElement('span'); title.className='site-title'; title.append(a); if(href) title.append(newTabButton(href,site.name));
+  const host=siteHost(site.url);
+  const hostEl=cls=>{ const e=document.createElement('span'); e.className='site-host '+cls; e.textContent=host; return e; };
+  if(host) title.append(hostEl('site-host-inline')); // 案 A: サイト名の直後（同じ行）
+  const bullet=document.createElement('span'); bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true'); head.append(bullet,icon,title); content.append(head); if(host) content.append(hostEl('site-host-below')); // 案 B: 2 行目の左端（html[data-url-layout=below] のときだけ表示）
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
-  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
+  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; title.append(tag); }
   content.append(p);
-  const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site); }
+  const flag=countryFlag(site); if(flag) { title.append(flag); bindGlobeHover(li,flag,site); }
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
   let tags=[]; try { tags=JSON.parse(site.tags_json || '[]'); } catch (_) { tags=[]; }
   for(const tag of tags) { meta.append(' ',tagLink(tag)); }
-  if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
+  if(meta.textContent.trim()) content.append(meta); li.append(content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
     const ids=(site.category_ids||[]).filter(id=>categories.some(c=>c.id===id));
