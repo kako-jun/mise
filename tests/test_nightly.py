@@ -201,6 +201,33 @@ class Run(Env):
         self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'approved-sites.sql').exists())
         self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'report.md').exists())
 
+    def test_favicon_stage_disabled_by_default(self):
+        self.seed()
+        self.run_night()
+        fav = next(s for s in self.status()['stages'] if s['name'] == 'favicon')
+        self.assertEqual(fav['status'], 'skipped')
+        self.assertFalse(any('favicon.py' in ' '.join(c) for c in self.calls))
+
+    def test_favicon_stage_enabled_runs_script_and_never_touches_prod(self):
+        self.seed()
+        self.assertEqual(self.run_night('--favicon-limit', '5'), 0)
+        calls = [c for c in self.calls if 'favicon.py' in ' '.join(c)]
+        joined = [' '.join(c) for c in calls]
+        self.assertTrue(any(' run --apply --limit 5 ' in j for j in joined))
+        self.assertTrue(any(' sql --since 2026-11-18T00:00:00Z ' in j for j in joined))
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_favicon_failure_does_not_fail_the_night(self):
+        self.seed()
+        orig = self.fake
+        def failing(cmd, env=None, timeout=None):
+            if 'favicon.py' in ' '.join(cmd):
+                self.calls.append(cmd); return 1, 'boom'
+            return orig(cmd, env, timeout)
+        with mock.patch.object(nightly, 'run_cmd', side_effect=failing):
+            self.assertEqual(self.run_night('--favicon-limit', '5'), 0)
+        self.assertTrue(any('favicon' in g for g in self.status()['guards']))
+
     def test_status_schema(self):
         self.seed()
         self.run_night()

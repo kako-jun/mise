@@ -18,6 +18,7 @@
 9 sql         承認済みの未出荷をすべて（`--max-add N` を付けたときだけ key 順に N 件まで。既定は上限なし） -> approved-sites.sql（0 件なら作らない）
 10 gate       生成 SQL をメモリ DB に流す整合チェック（integrity.gate）。違反なら停止
 11 prod       --apply-prod のときだけ: bookmark 取得 -> 本番投入 -> 整合チェック(--remote)
+12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125) -> favicons.sql。本番には触れず、失敗しても夜間全体は失敗にしない
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
@@ -38,7 +39,7 @@ uv run python3 scripts/nightly.py --apply-prod              # 本番反映まで
 uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の再開
 ```
 
-主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
+主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
 ## 実行機 kako-rog（Windows）と pi-3b の cron
 
@@ -119,6 +120,6 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 
 - **Issue #124 の段 6（ローカル D1 で検証してから本番）は未対応**。現状の gate 段は生成 SQL を**空 DB（マイグレーションのみ）**に流す整合チェックで、本番の既存データでの検証ではない。`--current-db`（本番再現の sqlite）を渡せば、その上で SQL を流して判定する。cron の既定では未使用。
 - 葉（カテゴリ）の目標未達を優先した選抜（各葉 100 件の最低ライン）。今は key 順。
-- Wikidata からの発見（#128）、ファビコン取得（#125）。
+- Wikidata からの発見（#128）。ファビコン取得（#125）は `favicon` 段（既定無効）まで実装済みで、R2 への配信と既存全サイトの一括取得は未対応。
 - 再巡回（[recrawl](../collection/recrawl.md)）の夜間組み込み。
 - 構想の全体は [ideas/llm-judging.md](../ideas/llm-judging.md) と Issue #124。

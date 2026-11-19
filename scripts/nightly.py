@@ -36,7 +36,7 @@ ANOMALY_FACTOR = 5                # 追加数が直近 7 夜の平均のこの�
 ANOMALY_MIN_NIGHTS = 3            # 履歴がこれ未満の夜は比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
-STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod"]
+STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon"]
 
 
 class StageFailed(Exception):
@@ -458,6 +458,29 @@ class Night:
             raise StageFailed("prod: 反映後の整合チェックが error。bookmark " + str(self.status["bookmark"]) + "\n" + out.strip()[-500:])
         return {"note": "反映済み・整合 OK", "count": {"added": self.status["added"]}}
 
+    def s_favicon(self):
+        """ファビコンの取得(#125)。既定は無効(--favicon-limit 0)。有効にしても SQL を作るだけで、本番 D1・R2 には触れない。
+        失敗しても夜間ジョブ全体は失敗にしない(guards に残して続行)。"""
+        a = self.a
+        if a.favicon_limit <= 0:
+            return {"status": "skipped", "note": "--favicon-limit 0(既定)で無効"}
+        fdb = os.path.join(self.var, "favicons.sqlite")
+        script = os.path.join(ROOT, "scripts/favicon/favicon.py")
+        recrawl_db = os.path.join(self.var, "recrawl.sqlite")
+        steps = []
+        if os.path.exists(recrawl_db):
+            steps.append(("import", ["--db", fdb, "import", "--recrawl", recrawl_db]))
+        steps.append(("run", ["--db", fdb, "run", "--apply", "--limit", str(a.favicon_limit), "--store-dir", os.path.join(self.var, "favicons")]))
+        steps.append(("sql", ["--db", fdb, "sql", "--since", a.date + "T00:00:00Z", "--out", self.p("favicons.sql")]))
+        notes = []
+        for name, argv in steps:
+            rc, out = run_cmd([PY, script, *argv])
+            if rc != 0:
+                self.status["guards"].append(f"favicon {name} 失敗(続行)")
+                return {"note": f"{name}: 失敗(exit {rc}、続行): " + out.strip()[-150:]}
+            notes.append(f"{name}: " + out.strip()[-80:])
+        return {"note": " / ".join(notes)}
+
     # -- 全体
     def run(self):
         os.makedirs(self.dir, exist_ok=True)
@@ -465,7 +488,7 @@ class Night:
         self.status["month_spent_usd"] = round(self.spent(), 4)
         table = [("discover", self.s_discover), ("triage", self.s_triage), ("fetch", self.s_fetch), ("judge", self.s_judge),
                  ("candidates", self.s_candidates), ("llm", self.s_llm), ("import", self.s_import), ("approve", self.s_approve),
-                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod)]
+                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon)]
         llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
@@ -593,7 +616,8 @@ def plan(a):
           f"  5 candidates 今夜の判定対象（未判定の candidate）: {n} 件（candidate 全体 {snap['state'].get('candidate', 0)}、判定上限 {a.judge_limit}）",
           f"  6 llm        haiku -> sonnet / mode={a.judge_mode}", "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
-          " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)")]
+          " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
+          " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得 -> var/nightly/{a.date}/favicons.sql(本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)")]
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
@@ -609,6 +633,7 @@ def parse_args(argv=None):
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
+    ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。SQL を作るだけで本番には触れない(#125)")
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
@@ -625,6 +650,8 @@ def parse_args(argv=None):
         ap.error("--date は YYYY-MM-DD")
     if a.wikidata_leaves < 0:
         ap.error("--wikidata-leaves は 0 以上")
+    if a.favicon_limit < 0:
+        ap.error("--favicon-limit は 0 以上")
     if a.max_add < 0 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
         ap.error("上限は 1 以上(--max-add のみ 0=上限なし)")
     if a.dry_run and a.apply_prod:
