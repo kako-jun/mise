@@ -48,17 +48,17 @@ D1 は**スキャンした行数**（`rows_read`）で課金する。プラン�
 
 ### 1 リクエストの読み取り行数の観測とキャッシュ（#157）
 
-目的は、料金の暴走（攻撃・バグ）に気づくことと、**結果を変えずに**同じ URL の繰り返しで D1 を読み直さないこと（全体の方針と検知は [usage-guard.md](../operations/usage-guard.md)）。実装は `src/usage.js`（`src/index.js` の最初のミドルウェア）。
+目的は、料金の暴走（攻撃・バグ）に気づくことと、**結果を変えずに**同じ URL の繰り返しで D1 を読み直さないこと（全体の方針と検知は [usage-guard.md](../operations/usage-guard.md)。込みの枠はアカウント全体のもので、mise はその内数）。実装は `src/usage.js`（`src/index.js` の最初のミドルウェア）。
 
-- **観測**: D1 のバインディングを包み（`meterDb`）、リクエストごとに `meta.rows_read` を合計して応答ヘッダ **`X-D1-Rows-Read`**（数値のみ。D1 を読んだ応答に付く。キャッシュのヒットは `0`）に出す。合計が `ROWS_WARN`（20,000 行。通常の一覧は数百〜数千行）を超えたリクエストだけ `console.warn` に 1 行の JSON（`event: "d1-rows-read-high"`・`rows_read`・`stmts`・`path`・`query_length`）を出す。**検索語・URL のクエリは載せない**（長さだけ）。大量リクエストでログが洪水にならないよう閾値は高くしてある。`first()` は meta を返さないので `all()` で実行して先頭行を返す（結果は同じ）。
+- **観測**: D1 のバインディングを包み（`meterDb`）、リクエストごとに `meta.rows_read` を合計して診断用の応答ヘッダ **`X-D1-Rows-Read`**（数値のみ。キャッシュのヒットは `0`）と `X-Cache`（HIT/MISS）に出す。**これらのヘッダは環境変数 `DEBUG_ROWS` が有るときだけ付く**（コストの指標を攻撃者に渡さないため、本番では出さない。`wrangler.jsonc` の `vars` には書かず、ローカル専用の `.dev.vars`［git 管理外］に `DEBUG_ROWS=1` と書く）。合計が `ROWS_WARN`（20,000 行。通常の一覧は数百〜数千行）を超えたリクエストだけ `console.warn` に 1 行の JSON（`event: "d1-rows-read-high"`・`rows_read`・`stmts`・`path`・`query_length`）を出す。**検索語・URL のクエリは載せない**（長さだけ）。大量リクエストでログが洪水にならないよう閾値は高くしてある。`first()` は meta を返さないので `all()` で実行して先頭行を返す（結果は同じ。`first(col)` で列が無いときは D1 と同じく投げる）。`raw()` は meta を返さないので行数を数えられない（現在の呼び出しは無い）。
 - **共有キャッシュ**: `caches.default`（Cache API）に GET の応答を `CACHE_TTL` = 60 秒保存する。対象は `/api/sites`・`/api/categories`・`/api/scopes`・`/api/activity`・`/sitemap.xml` と、範囲ページ・`/about/` の HTML（`/icon/` と他の `/api/*` は対象外）。ヒットなら D1 を読まず保存した応答を返す（`X-Cache: HIT`・`X-D1-Rows-Read: 0`）。保存するのは 200 と、画面側の 404（範囲外のページ番号など。判定に D1 を数十万行読むことがあった）だけ。**対象外**: `/api/picks`（毎回ランダム。キャッシュすると結果が変わる）・POST（`/api/requests`）・`Authorization` 付き・4xx/5xx の API 応答。
-  - **キャッシュキーは URL（クエリ込み）だけ**。この Worker は `Accept-Language`・`Cookie` で応答を変えない（SSR は英語固定で、言語はブラウザ側が切り替える。Cookie は使わない）ので含めない。応答を言語や Cookie で変える機能を足すときは、キーに入れるか対象外にする。
+  - **キャッシュキーは「デプロイのバージョン ID + URL（クエリ込み）」**。`caches.default` はデプロイで消えないので、`wrangler.jsonc` の `version_metadata` バインディング（`CF_VERSION_METADATA`）の `id` をキーに入れ、**デプロイするとキャッシュが切り替わる**（旧バージョンの保存分は使われず、TTL で消える）。バインディングが無い環境（テスト・一部のローカル）では空文字で動く。この Worker は `Accept-Language`・`Cookie` で応答を変えない（SSR は英語固定で、言語はブラウザ側が切り替える。Cookie は使わない）ので含めない。応答を言語や Cookie で変える機能を足すときは、キーに入れるか対象外にする。
   - 保存する応答は最終のヘッダ（`Content-Security-Policy` のインラインスクリプトのハッシュ入りの値も本文と対）を含み、`ETag` は元から付けない（`renderIndex` が消す）。保存用の `Cache-Control: public, max-age=60` に差し替えるので、元の値は別ヘッダに退避し、取り出すときに戻す（ブラウザには従来と同じ `Cache-Control` が見える）。
-  - 古さの許容は最大 60 秒（`/api/*` は元から `max-age=30` でブラウザが古さを許している）。夜間ジョブの投入は反映が最大 1 分遅れるだけで、結果の形は変わらない。キャッシュの読み書きが失敗しても通常どおり D1 から応答する。
+  - 古さの許容: エッジで 60 秒。`/api/*` はブラウザの `max-age=30` が重なるので最悪で約 90 秒。HTML は 60 秒。`/sitemap.xml` は元の `max-age=3600`（ブラウザ側）が支配する。夜間ジョブの投入は反映が遅れるだけで、結果の形は変わらない。**同じ URL への同時の MISS はすべて D1 を読む**（スタンピード対策は無い）。キャッシュの読み書きが失敗しても通常どおり D1 から応答する。
   - ローカル（`wrangler dev --local`）でも動く。`workers.dev` のドメインでは Cache API は何も保存しない（カスタムドメイン `mise.llll-ll.com` では動く）。
 - **結果の同一性**: クエリは変えていない。`tests/search-*.test.mjs` など既存テストと、`tests/usage.test.mjs`（ヒットで D1 を読まない・対象外・失敗時のフォールバック・ヘッダ）で固定。
 
-#### 1 リクエストの D1 読み取り行数（10 万件・`PROD_SHAPE=1`・ローカル D1。`X-D1-Rows-Read` の実測）
+#### 1 リクエストの D1 読み取り行数（10 万件・`PROD_SHAPE=1`・ローカル D1。`DEBUG_ROWS=1` で出る `X-D1-Rows-Read` の実測）
 
 「初回」はキャッシュが空のとき（変更前と同じ値。クエリは変えていない）、「同じ URL の 2 回目以降」は 60 秒以内のキャッシュヒット（D1 を読まない）。
 

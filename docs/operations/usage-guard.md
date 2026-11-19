@@ -4,12 +4,14 @@ Cloudflare には**金額で止まる上限の機能が無い**。Workers Paid�
 
 | 層 | 何をするか | 正本 |
 |---|---|---|
-| 1. 使用量ガード（検知） | Cloudflare の使用量を読み、込みの枠に対する割合・月末予測・急増を警告する。夜間ジョブの 1 段 | このページ・`scripts/usage_guard.py` |
-| 2. 1 リクエストの読み取りの上限（設計） | リクエストごとの D1 読み取り行数を `X-D1-Rows-Read` で観測、重い GET を短くキャッシュ | [architecture.md](../design/architecture.md#1-リクエストの読み取り行数の観測とキャッシュ157) |
-| 3. WAF のレート制限（防御） | 同一 IP の連打を Cloudflare の手前で止める。**kako-jun のダッシュボード操作** | 下の「WAF のレート制限」 |
+| 1. 使用量ガード（検知） | Cloudflare の使用量（アカウント全体）を読み、込みの枠に対する割合・月末予測・急増を警告する。夜間ジョブの 1 段 | このページ・`scripts/usage_guard.py` |
+| 2. 1 リクエストの読み取りの上限（設計） | リクエストごとの D1 読み取り行数を観測（閾値超えだけログ。診断ヘッダはローカルのみ）、重い GET を短くキャッシュ | [architecture.md](../design/architecture.md#1-リクエストの読み取り行数の観測とキャッシュ157) |
+| 3. WAF のレート制限（防御） | 同一 IP の連打を Cloudflare の手前で止める。**当面は設定しない（推奨）**。判断は kako-jun | 下の「WAF のレート制限」 |
 | 4. 最終手段 | 無料プランに戻す（上限で停止し、請求は 0 円。サイトは止まる） | 下の「対処」 |
 
 ## 込みの枠と超過料金
+
+**この枠は Cloudflare アカウント全体のもの**で、mise だけの枠ではない。同じアカウントの全 Worker・全 D1 データベースの合計に対して、月 1,000 万リクエスト・250 億行・5,000 万行が込みになる（このアカウントには mise のほか 20 以上のアプリが載っている）。だから使用量ガードは**アカウント合計**で割合・月末予測・急増を判定し、mise の Worker と mise の D1 は**内数**（表の「うち mise」の行）として表示するだけにする（判定には使わない。mise が小さくても、他のアプリの暴走で枠を超えれば請求が増えるため）。
 
 出典（2026-11-19 に確認）: [D1 の料金](https://developers.cloudflare.com/d1/platform/pricing/)・[Workers の料金](https://developers.cloudflare.com/workers/platform/pricing/)。数値は `scripts/usage_guard.py` の `METRICS`（1 か所）。
 
@@ -52,7 +54,10 @@ uv run python3 scripts/usage_guard.py --env-file PATH --var-dir DIR --date YYYY-
 
 夜間ジョブでは最後の段 `usage`（[nightly.md](nightly.md)）として**既定で動く**。`--no-usage-guard` で止める、`--usage-env PATH` で env ファイルの場所を変える。トークンが無い・API が 429/5xx/不正な応答のときも**失敗にせず**、警告を `guards`（report.md の「ガードの発動」）に載せて続行する。他の段が失敗した夜も動く。
 
-**初回は実際に流して確認する**: GraphQL の項目名（`workersInvocationsAdaptive` と `d1AnalyticsAdaptiveGroups` の `date` 次元など）はこのリポジトリの実装時に実 API で未確認（トークンが無かったため）。初回の実行で「応答の形が想定外」「GraphQL エラー」が出たら、メッセージに従って `QUERY` を直す。
+**初回は実際に流して確認する**: クエリは実 API で未実行（トークンが無かったため）。公式ドキュメントとの突き合わせ（2026-11-19）:
+- Workers: [公式の例](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/)は `workersInvocationsAdaptive` を `datetime_geq` / `datetime_leq` で絞り、次元は `datetime`・`scriptName`・`status`。**`date` 次元は例に無い**ので使わず、**日ごとに別名（`w20261119` など）で datetime 範囲を 1 日に絞り、`scriptName` 次元で合計を取る**形にした（日付は別名から UTC の日に決まる）。アカウント合計 = 全 `scriptName` の和、内数 = `mise`。変数の型は公式の例に合わせた（`$acct: string!`・`Date`）。
+- D1: [公式の例](https://developers.cloudflare.com/d1/observability/metrics-analytics/)は `d1AnalyticsAdaptiveGroups` を `date_geq` / `date_leq` で絞り、次元 `date`・`databaseId`、合計 `sum { readQueries writeQueries }`。`rowsRead` / `rowsWritten` は同ページの指標の表にあるが、**どのノード（`sum` か）に入るかは例に無く未確認**。`sum { rowsRead rowsWritten }` で取っている。
+初回の実行で「応答の形が想定外」「GraphQL エラー」が出たら、メッセージに従って `build_query` を直す。
 
 ## 表の読み方
 
@@ -60,33 +65,35 @@ uv run python3 scripts/usage_guard.py --env-file PATH --var-dir DIR --date YYYY-
 項目               当月累計   枠   割合   月末予測   昨日   7日平均   倍率   判定
 ```
 
-- **割合**: 当月（UTC）の累計 ÷ 込みの枠。今日の途中経過を含む。**50% で警告、80% で強い警告**。
+- **割合**: 当月（UTC）の**アカウント合計**の累計 ÷ 込みの枠。表の「うち mise」の行は内数（mise だけの累計と、枠に対する割合）で、判定には使わない。今日の途中経過を含む。**50% で警告、80% で強い警告**。
 - **月末予測**: 今月の**完了した日**（今日を除く）の累計 ÷ 日数 × 月の日数。1 日が終わるまでは予測しない。100% 以上で警告。
 - **昨日 / 7日平均 / 倍率**: 昨日の値と、その前 7 日の平均。**3 倍以上**で「急増」の警告（小さい数どうしの比は無視する下限あり: Workers 1 万・D1 読み取り 1,000 万行・D1 書き込み 5,000 行）。
-- JSON（`var/usage/<日付>.json`）は同じ内容。mise-ops が読む report の形は変えていない（`guards` に文字列が増えるだけ）。
+- JSON（`var/usage/<日付>.json`）は同じ内容（`scope` にアカウント合計であること、`mise_month_total` / `mise_yesterday` に内数）。mise-ops が読む report の形は変えていない（`guards` に文字列が増えるだけ）。
 
 ## 警告が出たときの対処
 
-1. **原因の切り分け**: 急増した項目と日を見る。
+1. **原因の切り分け**: 急増した項目と日を見る。**まず mise の内数を見る**。mise が小さいなら原因は同じアカウントの別のアプリ（ダッシュボードの Workers & Pages / D1 で Worker・データベース別の使用量を見る）。
    - Workers リクエストだけ急増 → 攻撃（連打・クローラ）か、フロントのバグ（無限ループでの API 呼び出し）。
-   - D1 読み取り行だけ急増 → 重いクエリ（1〜2 文字の検索・深いページ番号）の連打。ログの `d1-rows-read-high`（`wrangler tail` またはダッシュボードの Logs。検索語は載せない）でパスを確認する。応答ヘッダ `X-D1-Rows-Read` でも 1 リクエストのコストが分かる。
+   - D1 読み取り行だけ急増 → 重いクエリ（1〜2 文字の検索・深いページ番号）の連打。ログの `d1-rows-read-high`（`wrangler tail` またはダッシュボードの Logs。検索語は載せない）でパスを確認する。ローカルでは `.dev.vars` に `DEBUG_ROWS=1` を書くと応答ヘッダ `X-D1-Rows-Read` で 1 リクエストのコストが分かる（本番では出さない: コストの指標を攻撃者に渡さないため）。
    - D1 書き込み行が急増 → 夜間ジョブの大量投入、または `/api/requests` への連打（推薦フォーム）。
 2. **攻撃**: 下の WAF のレート制限を入れる／厳しくする。特定の IP・国・User-Agent なら WAF のカスタムルールでブロックする。
 3. **バグ**: 直前のデプロイを疑い、ロールバックする（[deploy.md](deploy.md)）。
 4. **最終手段**: 無料プランに戻す。枠を超えると止まり、請求は 0 円になる（サイトは止まる）。Free の枠は Workers 1 日 10 万リクエスト・D1 読み取り 1 日 500 万行・書き込み 1 日 10 万行（[出典](https://developers.cloudflare.com/d1/platform/pricing/)）。
 
-## WAF のレート制限（kako-jun のダッシュボード操作）
+## WAF のレート制限（当面は設定しない。判断は kako-jun）
 
-無料プランは**ルール 1 つ・カウント窓 10 秒・ブロック 10 秒・カウント単位は IP のみ**（[公式](https://developers.cloudflare.com/waf/rate-limiting-rules/)）。ルール式に使えるのはパスなど限られた項目。
+無料プランは**ルール 1 つ・カウント窓 10 秒・ブロック 10 秒・カウント単位は IP のみ**で、**ルール式に使える項目は「Path」と「Verified Bot」だけ**（[公式の Rate limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/)。2026-11-19 に再確認。ホストを使えるのは Pro 以上）。つまり `http.host eq "mise.llll-ll.com"` のようにホストで絞ることは**できない**。Path だけのルール（`/api/` で始まる）は、**ゾーン `llll-ll.com` の全サブドメインの `/api/` に効く**。他のサービス（同じゾーンの別アプリ）の `/api/` も、同じ IP が 10 秒に N 回を超えるとブロックされる副作用がある。
 
-1. ダッシュボード → 対象ドメイン（`llll-ll.com`）→ **Security** → **WAF** → **Rate limiting rules** → **Create rule**。
-2. 名前: `mise-api-burst`。条件: **URI Path** が `/api/` で始まる（ルール式: `starts_with(http.request.uri.path, "/api/")`。ホストも絞る: `http.host eq "mise.llll-ll.com"`。サブドメインが多いので必ず絞る）。
-3. 同一 IP が **10 秒に 40 回**を超えたら、**10 秒ブロック**（Block）。
-4. Deploy。
+設定する場合の手順（ダッシュボード → `llll-ll.com` → **Security** → **WAF** → **Rate limiting rules** → **Create rule**）: 式 `starts_with(http.request.uri.path, "/api/")`、同一 IP が 10 秒に N 回を超えたら 10 秒ブロック（Block）、Deploy。
 
-**N = 40 の根拠**: 画面の通常操作は、ページ表示で `/api/scopes`・`/api/categories`・`/api/sites`・`/api/picks`・`/api/activity` の 5 本程度、続けてスクロールや検索のたびに 1 本ずつ（`/api/sites`）。カテゴリを連続で辿っても 10 秒で 10〜15 本が上限の目安。40 は通常の 2〜3 倍の余裕で、手動の連打を止めるには十分、1 つの NAT の裏の複数人（学校・会社）にも当たりにくい。**実測の裏付けは無い**ので、運用して誤ブロックの苦情・Security → Events の Block を見て調整する（誤検知が出るなら 60〜100 に上げる）。無料は 1 ルールなので `/api/` だけを守る（画面の HTML は Cloudflare のキャッシュ・短い TTL の共有キャッシュで D1 を読まない）。
+| 案 | 利点 | 欠点 |
+|---|---|---|
+| (a) 副作用を受け入れて高めの N（例 100）で設定する | 同一 IP の機械的な連打を Cloudflare の手前で止める。Workers リクエストの課金を抑えられる可能性（下記、未確認） | 無料の唯一のルールを使い切る。同じゾーンの他のサービスにも効く（共有 NAT の裏の複数人、正常な連続操作でも誤ブロックしうる）。N の根拠となる実測が無い（画面の通常操作は 10 秒に 10〜15 本程度の見込みだけ）。IP を変える攻撃には効かない |
+| (b) 設定せず、使用量ガード＋共有キャッシュで守る | 他のサービスに副作用が無い。ルールの枠を温存できる | 連打は Worker まで届く（同じ URL はキャッシュで D1 を読まないが、Workers リクエストは数える）。検知は最大 1 日遅れ |
 
-**ブロックされたリクエストが Workers の課金に数えられるか**: WAF は Cloudflare のエッジで Worker より前に評価されるが、**ブロックされたリクエストが Worker に届かず Workers リクエストに数えられないことは、公式ドキュメントで確認できていない（未確認）**。Rate limiting rules のページには記載が無い。Workers の料金ページにも記載が無い。確認する場合は、ルールを入れた後に Security → Events の Block 数と、Workers のリクエスト数（ダッシュボードの Workers & Pages → mise → Metrics）を同じ時間帯で比べる。
+**推奨は (b)（当面設定しない）**。理由: ホストで絞れず、他のアプリに副作用が出る一方、D1 の読み取りは共有キャッシュで繰り返しから守られ、アカウント合計の使用量は夜間ジョブが毎日見る。実際に暴走を観測したら (a) を入れる。**最終的な判断は kako-jun**。
+
+**ブロックされたリクエストが Workers の課金に数えられるか**: WAF は Cloudflare のエッジで Worker より前に評価されるが、**ブロックされたリクエストが Worker に届かず Workers リクエストに数えられないことは、公式ドキュメントで確認できていない（未確認）**。Rate limiting rules のページにも Workers の料金ページにも記載が無い。(a) を入れる場合は、Security → Events の Block 数と Workers のリクエスト数（Workers & Pages → mise → Metrics）を同じ時間帯で比べて確かめる。
 
 ## 1 リクエストのコストが大きい経路（kako-jun の判断が要る案）
 
@@ -97,5 +104,5 @@ uv run python3 scripts/usage_guard.py --env-file PATH --var-dir DIR --date YYYY-
 | 1〜2 文字の検索語を拒否（400）または 3 文字以上を必須にする | 最悪 約 10 万行 → 0 | 1〜2 文字で検索できなくなる |
 | 1〜2 文字の検索を結果の打ち切り（例: 先頭 N 行を走査して止める） | 最悪を N 行に | 一部の語で該当が出ない |
 | `page` の上限を下げる（現在 999,999。深いページで約 10 万行） | 深いページの最悪 約 10 万行 → 上限 | 深いページに行けなくなる（SEO のページ番号リンクにも影響） |
-| 同一 IP の検索に WAF のレート制限を別途かける（有料プランのルール追加が必要） | 連打の抑止 | 正当な連打も止まる |
+| 同一 IP の検索に WAF のレート制限を別途かける（無料はルール 1 つで Path しか使えない。検索だけの絞り込みは Pro 以上の式が要る） | 連打の抑止 | 正当な連打も止まる |
 | タグ 2 個 AND の計画を見直す（実測 約 49 万行/回） | 最悪を数千行へ | 結果は変えずにできる可能性あり（別 Issue で設計） |

@@ -265,6 +265,13 @@ class Run(Env):
         self.assertIn('使用量: D1 読み取り行 が当月の枠の 55.0%', self.status()['guards'])
         self.assertIn('55.0%', (self.var / 'nightly' / '2026-11-18' / 'report.md').read_text())
 
+    def test_usage_guard_gets_current_utc_not_the_night_name(self):
+        # 再開・再実行で夜の名前が過去の日付でも、「今日/昨日」の基準は現在の UTC(date=None)。夜の名前を渡すと急増判定・月末予測が狂う
+        self.seed()
+        with mock.patch.object(usage_guard, 'run', return_value={'guards': [], 'note': 'x'}) as ug:
+            self.assertEqual(self.run_night(date='2026-01-05'), 0)
+        self.assertIsNone(ug.call_args[0][0])
+
     def test_no_usage_guard_option_skips_the_stage(self):
         self.seed()
         with mock.patch.object(usage_guard, 'run') as ug:

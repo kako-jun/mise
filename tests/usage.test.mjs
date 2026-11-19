@@ -29,11 +29,20 @@ test('meterDb: meta の無い応答（モック）でも落ちない・DB が無
   assert.equal(meterDb(undefined, acc), undefined);
 });
 
-test('実アプリ: D1 を読んだ応答に X-D1-Rows-Read が付く（公開しても無害な数値のみ）', async () => {
-  const res = await app.request('/api/scopes', {}, { DB: mkDb(123) });
+test('実アプリ: X-D1-Rows-Read は DEBUG_ROWS が有るときだけ付く（本番ではコストの指標を出さない）', async () => {
+  const res = await app.request('/api/scopes', {}, { DB: mkDb(123), DEBUG_ROWS: '1' });
   assert.equal(res.status, 200);
-  assert.match(res.headers.get(ROWS_HEADER), /^\d+$/);
   assert.equal(Number(res.headers.get(ROWS_HEADER)), 123);
+  for (const env of [{}, { DEBUG_ROWS: '' }, { DEBUG_ROWS: '0' }]) {
+    const r = await app.request('/api/scopes', {}, { DB: mkDb(123), ...env });
+    assert.equal(r.headers.get(ROWS_HEADER), null);
+    assert.equal(r.headers.get('X-Cache'), null);
+  }
+});
+
+test('meterDb: first(col) は列が無いと D1 と同じく投げる', async () => {
+  const db = meterDb(mkDb(1), { rows: 0, stmts: 0 });
+  await assert.rejects(() => db.prepare('x').first('nope'), /No such column/);
 });
 
 test('警告ログ: 閾値を超えたときだけ、検索語を含まない 1 行の JSON', async () => {
@@ -57,7 +66,7 @@ const cachedApp = (cache, calls, extraRoutes = () => {}) => {
   a.get('/jp/', async c => { await c.env.DB.prepare('x').all(); return c.text('nf', 404, { 'Cache-Control': 'no-store' }); });
   a.post('/api/requests', async c => { await c.env.DB.prepare('x').run(); return c.json({ ok: true }, 202); });
   extraRoutes(a);
-  return (url, init) => a.request(url, init, { DB: mkDb(500, calls) });
+  return (url, init, env = {}) => a.request(url, init, { DB: mkDb(500, calls), DEBUG_ROWS: '1', ...env });
 };
 
 test('キャッシュ: 2 回目は D1 を読まず、本文と元の Cache-Control が同じ・X-D1-Rows-Read は 0', async () => {
@@ -69,8 +78,37 @@ test('キャッシュ: 2 回目は D1 を読まず、本文と元の Cache-Contr
   assert.equal(b2, b1); assert.equal(r2.headers.get('X-Cache'), 'HIT'); assert.equal(r2.headers.get(ROWS_HEADER), '0');
   assert.equal(r2.headers.get('Cache-Control'), 'public, max-age=30', '保存用の TTL でなく元のヘッダに戻す');
   assert.equal(r2.headers.get('X-Mise-Orig-Cache-Control'), null);
-  assert.equal(cache.m.get('http://localhost/api/sites?q=abc').headers.get('Cache-Control'), `public, max-age=${CACHE_TTL}`);
+  assert.equal([...cache.m.entries()].find(([k]) => k.endsWith('/api/sites?q=abc'))[1].headers.get('Cache-Control'), `public, max-age=${CACHE_TTL}`);
   await req('/api/sites?q=abd'); assert.equal(calls.n, 2, 'クエリが違えば別キー');
+});
+
+test('キャッシュ: 元に Cache-Control が無い応答は HIT でも無い・ある応答は同じ値', async () => {
+  const calls = { n: 0 }, cache = fakeCache(), req = cachedApp(cache, calls, a => { a.get('/xx/', c => c.text('nf', 404)); });
+  const a1 = await req('/xx/'), a2 = await req('/xx/');
+  assert.equal(a1.headers.get('Cache-Control'), null);
+  assert.equal(a2.headers.get('X-Cache'), 'HIT');
+  assert.equal(a2.headers.get('Cache-Control'), null, '保存用の max-age=60 が漏れない');
+  assert.equal(a2.headers.get('X-Mise-Orig-Cc-Absent'), null);
+  const b1 = await req('/api/sites'), b2 = await req('/api/sites');
+  assert.equal(b2.headers.get('Cache-Control'), b1.headers.get('Cache-Control'));
+});
+
+test('キャッシュのキーにデプロイのバージョンが入る（違えば別キー・バインディングが無くても動く）', async () => {
+  const calls = { n: 0 }, cache = fakeCache(), req = cachedApp(cache, calls);
+  await req('/api/sites', {}, { CF_VERSION_METADATA: { id: 'v1' } });
+  await req('/api/sites', {}, { CF_VERSION_METADATA: { id: 'v1' } });
+  assert.equal(calls.n, 1);
+  await req('/api/sites', {}, { CF_VERSION_METADATA: { id: 'v2' } });
+  assert.equal(calls.n, 2, 'デプロイ後は古い応答を使わない');
+  await req('/api/sites'); await req('/api/sites');
+  assert.equal(calls.n, 3, 'バインディング無しは空文字のバージョン');
+});
+
+test('診断ヘッダは DEBUG_ROWS が無ければキャッシュのヒットにも付かない', async () => {
+  const calls = { n: 0 }, cache = fakeCache(), req = cachedApp(cache, calls);
+  await req('/api/sites', {}, { DEBUG_ROWS: undefined });
+  const r = await req('/api/sites', {}, { DEBUG_ROWS: undefined });
+  assert.equal(calls.n, 1); assert.equal(r.headers.get('X-Cache'), null); assert.equal(r.headers.get(ROWS_HEADER), null);
 });
 
 test('キャッシュ対象外: picks（ランダム）・POST・Authorization 付き・エラー応答', async () => {

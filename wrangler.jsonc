@@ -3,6 +3,8 @@
   "main": "src/index.js",
   "routes": [{ "pattern": "mise.llll-ll.com", "custom_domain": true }],
   "compatibility_date": "2026-11-01",
+  // デプロイのバージョン ID。src/usage.js の共有キャッシュのキーに入れ、デプロイ直後に古い応答を返さない。無い環境では空文字で動く。
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/*", "!/*.js", "!/*.css", "!/*.svg", "!/*.png", "!/*.jpg", "!/*.jpeg", "!/*.gif", "!/*.ico", "!/*.txt", "!/*.geojson", "!/*.json", "!/*.webmanifest", "!/*.woff", "!/*.woff2"] },
   "d1_databases": [{ "binding": "DB", "database_name": "mise", "database_id": "ebcd8092-5f2e-4119-9e15-692c1aae631a", "migrations_dir": "migrations" }],
   // 画像（ファビコン /icon/<hash>.webp、将来はサムネイル）の置き場 R2。バケットは `npx wrangler r2 bucket create mise-media` で作る（docs/operations/deploy.md）。

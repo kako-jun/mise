@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """使用量ガード（Issue #157）。Cloudflare の GraphQL Analytics API から Workers のリクエスト数と D1 の読み取り・書き込み行数を取り、
-Workers Paid の込みの枠に対する割合・月末予測・1 日の急増を出す。**読むだけ**（トークンは Account Analytics: Read のみ）。
+Workers Paid の込みの枠に対する割合・月末予測・1 日の急増を出す。**枠は Cloudflare アカウント全体のもの**（同じアカウントの全 Worker・全 D1 の合計）なので、判定は
+**アカウント合計**で行い、mise の Worker と mise の D1 は内数として別行に表示するだけ（判定には使わない）。**読むだけ**（トークンは Account Analytics: Read のみ）。
 
   uv run python3 scripts/usage_guard.py [--date YYYY-MM-DD] [--env-file PATH] [--var-dir DIR]
 
@@ -24,13 +25,13 @@ import urllib.request
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_ENV = os.path.expanduser("~/.config/mise/cloudflare-analytics.env")
 GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
-WORKER_SCRIPT = "mise"                                  # wrangler.jsonc の name
-D1_DATABASE_ID = "ebcd8092-5f2e-4119-9e15-692c1aae631a"  # wrangler.jsonc の d1_databases[0].database_id（データベース mise。秘密ではない）
+WORKER_SCRIPT = "mise"                                  # wrangler.jsonc の name。内数の表示にだけ使う（判定はアカウント合計）
+D1_DATABASE_ID = "ebcd8092-5f2e-4119-9e15-692c1aae631a"  # wrangler.jsonc の d1_databases[0].database_id（データベース mise。秘密ではない）。内数の表示にだけ使う
 
 # Workers Paid（月 $5）の込みの枠。出典（2026-11-19 に確認）:
 #   D1: https://developers.cloudflare.com/d1/platform/pricing/  読み取り月 250 億行（超過 $0.001/百万行）・書き込み月 5,000 万行（超過 $1/百万行）
 #   Workers: https://developers.cloudflare.com/workers/platform/pricing/  月 1,000 万リクエスト（超過 $0.30/百万リクエスト）
-# 枠の定数はここ 1 か所。料金表が変わったらここだけ直す。
+# **この枠はアカウント全体の合計**（mise だけの枠ではない）。枠の定数はここ 1 か所。料金表が変わったらここだけ直す。
 METRICS = {
     "workers_requests": {"label": "Workers リクエスト", "limit": 10_000_000, "overage": "$0.30/百万リクエスト", "spike_floor": 10_000},
     "d1_rows_read": {"label": "D1 読み取り行", "limit": 25_000_000_000, "overage": "$0.001/百万行", "spike_floor": 10_000_000},
@@ -41,18 +42,15 @@ SPIKE_FACTOR = 3.0                    # 直近 1 日（昨日）が、その前 
 SPIKE_BASE_DAYS = 7
 NOT_SET_MSG = "未設定: 使用量ガードは動いていません。手順は docs/operations/usage-guard.md"
 
-QUERY = """
-query Usage($acct: String!, $script: String!, $db: String!, $from: Time!, $to: Time!, $fromDate: Date!, $toDate: Date!) {
-  viewer { accounts(filter: {accountTag: $acct}) {
-    workers: workersInvocationsAdaptive(limit: 10000, filter: {scriptName: $script, datetime_geq: $from, datetime_leq: $to}) {
-      sum { requests } dimensions { date }
-    }
-    d1: d1AnalyticsAdaptiveGroups(limit: 10000, filter: {databaseId: $db, date_geq: $fromDate, date_leq: $toDate}) {
-      sum { rowsRead rowsWritten } dimensions { date }
-    }
-  } }
-}
-"""
+def build_query(days):
+    """days=[date, ...]。Workers は 1 日 1 つの別名（workersInvocationsAdaptive を datetime 範囲で絞り、scriptName 別に合計。`date` 次元は公式の例に無いので使わない）。
+    D1 は d1AnalyticsAdaptiveGroups を date・databaseId 次元で（公式の例の形）。変数の型は公式の例に合わせる。"""
+    w = "\n".join(
+        f'    w{d.strftime("%Y%m%d")}: workersInvocationsAdaptive(limit: 1000, filter: {{datetime_geq: "{d.isoformat()}T00:00:00Z", datetime_leq: "{d.isoformat()}T23:59:59Z"}}) {{ sum {{ requests }} dimensions {{ scriptName }} }}'
+        for d in days)
+    return ("query Usage($acct: string!, $fromDate: Date, $toDate: Date) {\n  viewer { accounts(filter: {accountTag: $acct}) {\n" + w +
+            "\n    d1: d1AnalyticsAdaptiveGroups(limit: 10000, filter: {date_geq: $fromDate, date_leq: $toDate}) {\n"
+            "      sum { rowsRead rowsWritten } dimensions { date databaseId }\n    }\n  } }\n}")
 
 
 class GuardError(Exception):
@@ -109,10 +107,9 @@ def http_post(url, body, token, timeout=30):
 
 
 def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
-    """start..end（date）の日別の値を {metric: {YYYY-MM-DD: n}} で返す。失敗は GuardError（429・5xx は 1 回だけやり直す）。"""
-    body = {"query": QUERY, "variables": {
-        "acct": acct, "script": WORKER_SCRIPT, "db": D1_DATABASE_ID,
-        "from": f"{start.isoformat()}T00:00:00Z", "to": f"{end.isoformat()}T23:59:59Z", "fromDate": start.isoformat(), "toDate": end.isoformat()}}
+    """start..end（date）の日別の値を返す。(アカウント合計 {metric: {date: n}}, mise の内数 {metric: {date: n}})。失敗は GuardError（429・5xx は 1 回だけやり直す）。"""
+    days = [start + datetime.timedelta(days=i) for i in range((end - start).days + 1)]
+    body = {"query": build_query(days), "variables": {"acct": acct, "fromDate": start.isoformat(), "toDate": end.isoformat()}}
     secrets = (token, acct)
     for attempt in (0, 1):
         try:
@@ -140,24 +137,33 @@ def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
     if data.get("errors"):
         msgs = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in data["errors"][:3])
         raise GuardError("GraphQL エラー: " + redact(msgs, secrets)[:200])
+    total = {k: {} for k in METRICS}
+    mine = {k: {} for k in METRICS}
+    add = lambda dst, key, d, n: dst[key].__setitem__(d, dst[key].get(d, 0) + n)
     try:
         acc = data["data"]["viewer"]["accounts"][0]
-        out = {k: {} for k in METRICS}
-        for row in acc["workers"]:
-            d = row["dimensions"]["date"]
-            out["workers_requests"][d] = out["workers_requests"].get(d, 0) + int(row["sum"]["requests"])
+        for d in days:   # Workers: 日付は別名から決める（UTC の日）。scriptName 別の行をアカウント合計に足し、mise の行は内数にも足す
+            for row in acc[f'w{d.strftime("%Y%m%d")}']:
+                n = int(row["sum"]["requests"])
+                add(total, "workers_requests", d.isoformat(), n)
+                if row["dimensions"]["scriptName"] == WORKER_SCRIPT:
+                    add(mine, "workers_requests", d.isoformat(), n)
         for row in acc["d1"]:
-            d = row["dimensions"]["date"]
-            out["d1_rows_read"][d] = out["d1_rows_read"].get(d, 0) + int(row["sum"]["rowsRead"])
-            out["d1_rows_written"][d] = out["d1_rows_written"].get(d, 0) + int(row["sum"]["rowsWritten"])
+            d, r, w = row["dimensions"]["date"], int(row["sum"]["rowsRead"]), int(row["sum"]["rowsWritten"])
+            add(total, "d1_rows_read", d, r)
+            add(total, "d1_rows_written", d, w)
+            if row["dimensions"]["databaseId"] == D1_DATABASE_ID:
+                add(mine, "d1_rows_read", d, r)
+                add(mine, "d1_rows_written", d, w)
     except (KeyError, IndexError, TypeError, ValueError):
         raise GuardError("応答の形が想定外（アカウント ID の誤り、または API の項目名の変更）")
-    return out
+    return total, mine
 
 
 # ------------------------------------------------------------------ 判定（純粋関数）
-def analyze(daily, today):
-    """daily={metric:{date:n}}、today=UTC の今日（date）。今日は途中なので、予測・急増は「昨日までの完了した日」で計算する。"""
+def analyze(daily, today, mine=None):
+    """daily=アカウント合計 {metric:{date:n}}、mine=mise の内数（表示のみ。判定に使わない）、today=UTC の今日（date）。今日は途中なので、予測・急増は「昨日までの完了した日」で計算する。"""
+    mine = mine or {}
     month = today.strftime("%Y-%m")
     dim = calendar.monthrange(today.year, today.month)[1]
     yesterday = today - datetime.timedelta(days=1)
@@ -175,27 +181,29 @@ def analyze(daily, today):
         avg = sum(base) / len(base)
         ratio = y / avg if avg > 0 else None
         spike = (ratio is not None and ratio >= SPIKE_FACTOR and y >= m["spike_floor"]) or (avg == 0 and y >= m["spike_floor"] * SPIKE_FACTOR)
+        md = mine.get(key, {})
         level = "alert" if pct >= ALERT_PCT else "warn" if pct >= WARN_PCT else "ok"
         out[key] = {"label": m["label"], "limit": m["limit"], "month_total": total, "month_pct": round(pct, 3), "today": d.get(today.isoformat(), 0),
-                    "yesterday": y, "avg_prev7": round(avg, 1), "spike_ratio": None if ratio is None else round(ratio, 2), "spike": spike,
+                    "mise_month_total": sum(v for k, v in md.items() if k.startswith(month)), "mise_yesterday": md.get(yesterday.isoformat(), 0), "yesterday": y, "avg_prev7": round(avg, 1), "spike_ratio": None if ratio is None else round(ratio, 2), "spike": spike,
                     "projected_month": None if proj is None else round(proj), "projected_pct": None if proj_pct is None else round(proj_pct, 3), "level": level}
         if level != "ok":
-            guards.append(f"使用量: {m['label']} が当月の枠の {pct:.1f}%（しきい値 {int(WARN_PCT if level == 'warn' else ALERT_PCT)}%）。超過は上限なしで課金（{m['overage']}）")
+            guards.append(f"使用量: {m['label']} がアカウント全体の当月の枠の {pct:.1f}%（しきい値 {int(WARN_PCT if level == 'warn' else ALERT_PCT)}%）。超過は上限なしで課金（{m['overage']}）")
         if proj_pct is not None and proj_pct >= 100:
-            guards.append(f"使用量: {m['label']} の月末予測が枠の {proj_pct:.0f}%（今月の完了した {done_days} 日のペース）")
+            guards.append(f"使用量: {m['label']} の月末予測がアカウント全体の枠の {proj_pct:.0f}%（今月の完了した {done_days} 日のペース）")
         if spike:
-            guards.append(f"使用量: {m['label']} が昨日急増（昨日 {y:,}、その前 {SPIKE_BASE_DAYS} 日平均 {avg:,.0f}）")
+            guards.append(f"使用量: {m['label']} がアカウント全体で昨日急増（昨日 {y:,}、その前 {SPIKE_BASE_DAYS} 日平均 {avg:,.0f}）")
     return out, guards
 
 
 def render_table(date, res):
-    L = [f"使用量ガード {date}（UTC。当月の込みの枠に対する割合。検知は最大 1 日遅れ）", "",
+    L = [f"使用量ガード {date}（UTC。アカウント全体の当月の込みの枠に対する割合。mise はその内数で、判定には使わない。検知は最大 1 日遅れ）", "",
          f"{'項目':<20}{'当月累計':>16}{'枠':>18}{'割合':>8}{'月末予測':>9}{'昨日':>16}{'7日平均':>16}{'倍率':>7}  判定"]
     for r in res.values():
         proj = "-" if r["projected_pct"] is None else f"{r['projected_pct']:.1f}%"
         ratio = "-" if r["spike_ratio"] is None else f"{r['spike_ratio']:.1f}x"
         flag = ("警告" if r["level"] == "warn" else "強い警告" if r["level"] == "alert" else "ok") + (" 急増" if r["spike"] else "")
         L.append(f"{r['label']:<20}{r['month_total']:>16,}{r['limit']:>18,}{r['month_pct']:>7.2f}%{proj:>9}{r['yesterday']:>16,}{r['avg_prev7']:>16,.0f}{ratio:>7}  {flag}")
+        L.append(f"  └ うち mise{'':<12}{r['mise_month_total']:>16,}{'':<18}{r['mise_month_total'] / r['limit'] * 100:>7.2f}%{'':>9}{r['mise_yesterday']:>16,}")
     return "\n".join(L)
 
 
@@ -210,8 +218,8 @@ def run(date=None, env_file=DEFAULT_ENV, var_dir=os.path.join(ROOT, "var"), post
     token, acct = cred
     start = min(today.replace(day=1), today - datetime.timedelta(days=SPIKE_BASE_DAYS + 1))
     try:
-        daily = fetch_daily(token, acct, start, today, post=post, sleep=sleep)
-        res, guards = analyze(daily, today)
+        daily, mine = fetch_daily(token, acct, start, today, post=post, sleep=sleep)
+        res, guards = analyze(daily, today, mine)
     except GuardError as e:
         msg = f"使用量ガード: 取得に失敗（{e}）。次回に再試行"
         out(msg)
@@ -223,7 +231,7 @@ def run(date=None, env_file=DEFAULT_ENV, var_dir=os.path.join(ROOT, "var"), post
     out(render_table(today.isoformat(), res))
     for g in guards:
         out("警告: " + g)
-    doc = {"schema": 1, "date": today.isoformat(), "metrics": res, "guards": guards, "thresholds": {"warn_pct": WARN_PCT, "alert_pct": ALERT_PCT, "spike_factor": SPIKE_FACTOR}}
+    doc = {"schema": 2, "date": today.isoformat(), "scope": "account-total (mise_* are the part of it)", "metrics": res, "guards": guards, "thresholds": {"warn_pct": WARN_PCT, "alert_pct": ALERT_PCT, "spike_factor": SPIKE_FACTOR}}
     try:
         os.makedirs(os.path.join(var_dir, "usage"), exist_ok=True)
         with open(os.path.join(var_dir, "usage", today.isoformat() + ".json"), "w", encoding="utf-8") as f:

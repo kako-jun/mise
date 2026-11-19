@@ -21,11 +21,23 @@ def day(n):
     return (TODAY - datetime.timedelta(days=n)).isoformat()
 
 
-def api_body(workers=None, d1=None):
-    """workers={date:n}, d1={date:(read, written)} から GraphQL 応答を作る。"""
-    return json.dumps({'data': {'viewer': {'accounts': [{
-        'workers': [{'sum': {'requests': n}, 'dimensions': {'date': d}} for d, n in (workers or {}).items()],
-        'd1': [{'sum': {'rowsRead': r, 'rowsWritten': w}, 'dimensions': {'date': d}} for d, (r, w) in (d1 or {}).items()]}]}}})
+def api_body(workers=None, d1=None, other_workers=None, other_d1=None):
+    """GraphQL 応答を作る。workers={date:n} は mise の Worker、other_workers={date:n} は同じアカウントの別の Worker。
+    d1={date:(read, written)} は mise の D1、other_d1 は別のデータベース。日別の別名（w<YYYYMMDD>）は 10〜11 月の全日分を作る。"""
+    acc = {}
+    for off in range(0, 70):
+        d = datetime.date(2026, 10, 1) + datetime.timedelta(days=off)
+        rows = []
+        for name, src in (('mise', workers), ('tail-match', other_workers)):
+            if src and d.isoformat() in src:
+                rows.append({'sum': {'requests': src[d.isoformat()]}, 'dimensions': {'scriptName': name}})
+        acc['w' + d.strftime('%Y%m%d')] = rows
+    rows = []
+    for dbid, src in ((ug.D1_DATABASE_ID, d1), ('other-db-id', other_d1)):
+        for d, (r, w) in (src or {}).items():
+            rows.append({'sum': {'rowsRead': r, 'rowsWritten': w}, 'dimensions': {'date': d, 'databaseId': dbid}})
+    acc['d1'] = rows
+    return json.dumps({'data': {'viewer': {'accounts': [acc]}}})
 
 
 class Base(unittest.TestCase):
@@ -51,6 +63,32 @@ class Base(unittest.TestCase):
 
 
 class Thresholds(Base):
+    def test_judges_on_account_total_and_shows_mise_as_part(self):
+        # アカウント全体の枠。mise 単独では 1% でも、他のアプリを含む合計で判定する
+        r = self.go(lambda *a: (200, api_body({'2026-11-02': 100_000}, {'2026-11-02': (1_000_000, 10)},
+                                              other_workers={'2026-11-02': 5_400_000}, other_d1={'2026-11-02': (22_000_000_000, 40_000_000)})))
+        w, rd, wr = r['result']['workers_requests'], r['result']['d1_rows_read'], r['result']['d1_rows_written']
+        self.assertEqual(w['month_total'], 5_500_000)
+        self.assertEqual(w['level'], 'warn')
+        self.assertEqual(w['mise_month_total'], 100_000)
+        self.assertEqual(rd['month_total'], 22_001_000_000)
+        self.assertEqual(rd['mise_month_total'], 1_000_000)
+        self.assertEqual(wr['level'], 'alert')   # 40,000,010 / 50,000,000 = 80%
+        self.assertTrue(any('アカウント全体' in g and 'Workers' in g for g in r['guards']))
+        text = self.out.getvalue()
+        self.assertIn('アカウント全体', text)
+        self.assertIn('うち mise', text)
+        self.assertEqual(text.count('うち mise'), 3)
+        doc = json.loads((self.t / 'var' / 'usage' / '2026-11-19.json').read_text())
+        self.assertIn('account-total', doc['scope'])
+        self.assertEqual(doc['metrics']['workers_requests']['mise_month_total'], 100_000)
+
+    def test_spike_uses_account_total(self):
+        w = {day(i): 100_000 for i in range(2, 9)}
+        o = {day(1): 800_000}     # 別アプリの急増でも検知する(アカウント合計)
+        r = self.go(lambda *a: (200, api_body(w, {}, other_workers=o)))
+        self.assertTrue(r['result']['workers_requests']['spike'])
+
     def test_ok_when_far_below_limits(self):
         r = self.go(lambda *a: (200, api_body({day(1): 1000}, {day(1): (10_000, 10)})))
         self.assertTrue(r['ok'] and r['configured'])
@@ -198,8 +236,14 @@ class Constants(unittest.TestCase):
         self.assertEqual(ug.METRICS['d1_rows_written']['limit'], 50_000_000)
         self.assertEqual((ug.WARN_PCT, ug.ALERT_PCT), (50.0, 80.0))
 
-    def test_query_never_embeds_token(self):
-        self.assertNotIn('Bearer', ug.QUERY)
+    def test_query_has_no_token_and_no_account_filter_by_script(self):
+        q = ug.build_query([TODAY])
+        self.assertNotIn('Bearer', q)
+        self.assertNotIn('scriptName:', q.split('dimensions')[0].replace('workersInvocationsAdaptive', ''))   # scriptName は次元(内訳)にだけ使い、フィルタでは絞らない
+        self.assertNotIn('databaseId:', q.split('filter:')[-1].split('}')[0])
+        self.assertIn('dimensions { scriptName }', q)
+        self.assertIn('$acct: string!', q)
+        self.assertNotIn('dimensions { date }', q.split('d1:')[0])   # Workers に date 次元は使わない
 
 
 if __name__ == '__main__':

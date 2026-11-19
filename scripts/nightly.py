@@ -489,7 +489,8 @@ class Night:
         if a.no_usage_guard:
             return {"status": "skipped", "note": "--no-usage-guard で無効"}
         try:
-            r = usage_guard.run(a.date, env_file=a.usage_env, var_dir=self.var, out=lambda *_: None)
+            # 日付は渡さない(None=現在の UTC)。夜の名前 a.date は再開・再実行で過去の日付になり、「今日/昨日」の基準(急増判定・月末予測)が狂う。a.date は使わない
+            r = usage_guard.run(None, env_file=a.usage_env, var_dir=self.var, out=lambda *_: None)
         except Exception as e:     # run() は投げない作りだが、念のため段の失敗にはしない
             r = {"guards": [f"使用量ガード: 想定外のエラー({type(e).__name__})"], "note": "想定外のエラー"}
         for g in r["guards"]:
