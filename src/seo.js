@@ -188,7 +188,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     const { items, total } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
     pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
-    siteItems = items.map(s => `<li><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${globalThis.MiseSiteHost(s.url) ? ` <small class="site-host">${esc(globalThis.MiseSiteHost(s.url))}</small>` : ''}${/^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''} — ${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</li>`).join('');
+    // 行の構造はブラウザ描画（app.js の renderSite）と同じ: 1 行目（.site-head = 中点・サイト名・国・ホスト名）、説明文は次の行の左端から。
+    siteItems = items.map(s => { const host = globalThis.MiseSiteHost(s.url), place = /^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''; return `<li><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-title"><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name)}</a>${place}${host ? ` <span class="site-host site-host-inline">${esc(host)}</span>` : ''}</span></div><p>${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</p></li>`; }).join('');
     if (isSearch) pages = 1; // 検索結果はページ番号なし（noindex。エンドレススクロールのみ）
     if (pages > 1) pagerBody = pagerHtml(path, scope, page, pages);
   }

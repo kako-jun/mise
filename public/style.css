@@ -72,15 +72,15 @@ body { touch-action: pan-y; }
 
 #directory-sites, #result-list { list-style: none; padding-left: 0; }
 /* ファビコンはサイト名の左（1 行目）にだけ出る。枠・角丸・縁・下地は付けない。説明文・タグ以下は常に行の左端から（#166） */
-.site-icon { display: flex; align-items: center; width: 18px; height: 19px; flex: 0 0 18px; border: 0; border-radius: 0; box-shadow: none; background: none; }
-.site-icon img { display: block; width: 18px; height: 18px; flex: none; object-fit: contain; border: 0; border-radius: 0; box-shadow: none; background: none; }
+.site-icon { display: flex; align-items: center; width: 16px; height: 1.46em; flex: 0 0 16px; border: 0; border-radius: 0; box-shadow: none; background: none; }
+.site-icon img { display: block; width: 16px; height: 16px; flex: none; object-fit: contain; border: 0; border-radius: 0; box-shadow: none; background: none; }
 .site-content { min-width: 0; }
 /* 1 行目（中点・ファビコン・サイト名）だけを flex にし、align-items: center でフォントに依存せず上下中央にそろえる。2 行目以降（説明文・タグ・所属）は .site-content の直下で、常に左端から（#166） */
-/* 1 行の高さを固定（19px）し、中点とファビコンを「その 1 行の中央」に置く。名前が折り返しても 1 行目の中央にそろう（フォントの字形・行高に依存しない） */
-.site-head { display: flex; align-items: flex-start; gap: 6px; }
-.site-bullet { flex: 0 0 5px; height: 19px; margin-right: 4px; display: flex; align-items: center; }
+/* 1 行の高さ（単位なしの line-height 1.46 ＝ 1.46em。文字サイズに追従する）の箱を作り、中点とファビコンを「その 1 行の中央」に置く。名前が折り返しても 1 行目の中央にそろう（フォントの字形・行高に依存しない） */
+.site-head { display: flex; align-items: flex-start; gap: 6px; line-height: 1.46; }
+.site-bullet { flex: 0 0 5px; height: 1.46em; margin-right: 4px; display: flex; align-items: center; }
 .site-bullet::before { content: ''; width: 5px; height: 5px; background: currentColor; }
-.site-title { min-width: 0; line-height: 19px; }
+.site-title { min-width: 0; }
 #pick-list .site-bullet { display: none; }
 .site-categories { font-size: 11px; }
 
@@ -345,7 +345,7 @@ html[data-theme="dark"] .region-select option { color: #effaff; background: #102
 .region-links a { color: inherit; }
 
 /* リンク先のホスト名（#166）。小さく薄い灰色。案 A（既定）はサイト名の直後（同じ行）、案 B は 2 行目の左端の独立した行（html[data-url-layout=below] で切替）。読み上げには出す（aria-hidden にしない）。 */
-.site-host { font-size: 11px; line-height: 1.4; color: #5d7f8a; overflow-wrap: anywhere; word-break: break-all; }
+.site-host { font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
 .site-host-inline { margin-left: 6px; }
 .site-host-below { display: none; }
 html[data-url-layout="below"] .site-host-inline { display: none; }

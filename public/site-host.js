@@ -11,11 +11,19 @@ const punyDecode = s => { // RFC 3492
   }
   return String.fromCodePoint(...out);
 };
-const siteHost = value => {
-  let u; try { u = new URL(value); } catch (_) { return null; }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-  const h = u.hostname; if (!h) return null;
-  return h.split('.').map(l => { if (!/^xn--/i.test(l)) return l; try { return punyDecode(l.slice(4)); } catch (_) { return l; } }).join('.');
-};
+  // Unicode に戻してよいラベルだけ戻す（偽装ドメイン対策。ブラウザの IDN 表示と同じ安全側）: (a) 漢字・ひらがな・カタカナ・長音・ラテン・数字・ハイフンだけ、または (b) ラテンと紛らわしくない 1 つの文字体系だけ。
+  const JP_LATIN = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u30fc\p{Script=Latin}0-9-]+$/u;
+  const SINGLE = ['Hangul', 'Thai', 'Arabic', 'Hebrew', 'Devanagari', 'Bengali', 'Tamil', 'Telugu', 'Gujarati', 'Kannada', 'Malayalam', 'Khmer', 'Lao', 'Georgian', 'Ethiopic', 'Sinhala', 'Myanmar', 'Tibetan'].map(n => new RegExp(`^[\\p{Script=${n}}0-9-]+$`, 'u'));
+  const safeLabel = l => JP_LATIN.test(l) || SINGLE.some(re => re.test(l));
+  const siteHost = value => {
+    let u; try { u = new URL(value); } catch (_) { return null; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const h = u.hostname; if (!h) return null;
+    if (!/(^|\.)xn--/i.test(h)) return h;
+    try {
+      const labels = h.split('.').map(l => /^xn--/i.test(l) ? punyDecode(l.slice(4)) : l);
+      return labels.every((l, i) => !/^xn--/i.test(h.split('.')[i]) || safeLabel(l)) ? labels.join('.') : h;
+    } catch (_) { return h; }
+  };
   g.MiseSiteHost = siteHost;
 })(globalThis);
