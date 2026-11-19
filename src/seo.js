@@ -62,6 +62,9 @@ const flagUrl = code => (globalThis.MISE_FLAGS ?? []).includes(code) ? `/flags/$
 
 // `q` か `tag` が付いた URL は検索結果扱い（noindex）。tag は不正（6 個以上・101 文字以上で cleanTags が null）でも、付いた時点で対象にする。
 export const isSearchQuery = sp => !!sp.get('q')?.trim() || sp.has('tag');
+// `?view=feed`(縦フィードの試作ビュー。#52)。検索結果と同じく noindex にする（canonical は view を含まないので通常ページを指す）
+export const isFeedView = sp => sp.get('view') === 'feed';
+export const wantsNoindex = sp => isSearchQuery(sp) || isFeedView(sp);
 
 // app.js の restoreLocation と同じ解決規則（id または name_ja。解決できない時点で null）
 export function resolvePath(categories, raw) {
@@ -214,7 +217,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   // 前後ページの関係（クローラ向け。Google は rel=next/prev を使わないが、他の検索エンジンと意味づけのために出す）
   const rels = [page > 1 && `<link rel="prev" href="${esc(ORIGIN + categoryHref(path, scope, page - 1))}">`, page < pages && `<link rel="next" href="${esc(ORIGIN + categoryHref(path, scope, page + 1))}">`].filter(Boolean).join('');
   if (rels) rw.on('head', { element: e => e.append(rels, { html: true }) });
-  if (isSearch) rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
+  if (wantsNoindex(url.searchParams)) rw.on('head', { element: e => e.append('<meta name="robots" content="noindex,follow">', { html: true }) });
 
   const res = rw.transform(new Response(assetResponse.body, assetResponse));
   // 元assetのETag/Last-Modifiedは書き換え後の本文と対応しないので残さない（304で別ページが返るのを防ぐ）
