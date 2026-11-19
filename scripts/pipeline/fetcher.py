@@ -8,18 +8,24 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.robotparser
+
+import freshness
 
 USER_AGENT = 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)'
 ROBOT_TOKEN = 'MiseResearchBot'
 MAX_BODY = 512 * 1024        # 1ページの本文上限（先頭のみ使う）
 MAX_ROBOTS = 128 * 1024
 MAX_REDIRECTS = 3
+MAX_FRESHNESS_REQUESTS = 2   # 更新の兆候用の追加リクエスト上限（feed / sitemap。robots 遵守・ホスト別待ち）
 MAX_CRAWL_DELAY = 10
 HOST_WAIT = 1.5              # 同一ホストへのリクエスト間隔（秒）
 TIMEOUT = 20
+ALLOWED_PORTS = (None, 80, 443)   # テストだけが偽サーバー用に差し替える
+ALLOW_PRIVATE = False             # 同上(本番では常に False)
 
 
 class FetchError(Exception):
@@ -36,6 +42,8 @@ def check_public_host(host):
     ips = sorted({i[4][0] for i in infos})
     if not ips:
         raise FetchError('dns', 'no address')
+    if ALLOW_PRIVATE:
+        return ips
     for ip in ips:
         if not ipaddress.ip_address(ip).is_global:
             raise FetchError('ssrf_blocked', f'{host} -> non-public address')
@@ -46,17 +54,19 @@ def _uses_proxy(scheme):
     return bool(os.environ.get(f'{scheme}_proxy') or os.environ.get(f'{scheme.upper()}_PROXY'))
 
 
-def http_get(url, max_body=MAX_BODY):
-    """1リクエスト。リダイレクトは追わない。戻り: (status, headers(dict, 小文字キー), body bytes)。"""
+def http_get(url, max_body=MAX_BODY, extra_headers=None):
+    """1リクエスト。リダイレクトは追わない。extra_headers は条件付き GET 用の追加ヘッダ(dict)。戻り: (status, headers(dict, 小文字キー), body bytes)。"""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         raise FetchError('bad_url', url)
-    if parts.port not in (None, 80, 443):
+    if parts.port not in ALLOWED_PORTS:
         raise FetchError('bad_port', str(parts.port))
     ips = check_public_host(parts.hostname)
     cmd = ['curl', '--silent', '--show-error', '--include', '--max-time', str(TIMEOUT), '--connect-timeout', '10',
            '--max-redirs', '0', '--compressed', '--proto', '=http,https', '--user-agent', USER_AGENT,
            '--header', 'Accept-Language: ja,en;q=0.5']
+    for k, v in (extra_headers or {}).items():
+        cmd += ['--header', f'{k}: {v}']
     if not _uses_proxy(parts.scheme):
         # 検査したIPに固定して接続する（検査と接続の間の名前解決差し替えを防ぐ）
         port = parts.port or (443 if parts.scheme == 'https' else 80)
@@ -75,6 +85,7 @@ def http_get(url, max_body=MAX_BODY):
             proc.kill()
         err = proc.stderr.read().decode('utf-8', 'replace').strip()
         proc.wait()
+        proc.stdout.close(); proc.stderr.close()
     if not buf:
         raise FetchError('connect', err[:200] or 'empty response')
     return _parse_response(buf, max_body)
@@ -158,7 +169,7 @@ class RobotsCache:
         return st, st == 'allowed_no_robots', 0
 
 
-def fetch_site(host, scheme_order=('https', 'http')):
+def fetch_site(host, scheme_order=('https', 'http'), path='/'):
     """ホストのトップページを robots 確認の上で取得する（1ホスト: robots 1〜2 + ページ 1〜4 リクエスト）。
 
     戻り dict: robots_status, status, headers, body, final_url, error(None|FetchError.code)
@@ -172,7 +183,7 @@ def fetch_site(host, scheme_order=('https', 'http')):
         for scheme in scheme_order:
             origin = f'{scheme}://{h}'
             try:
-                st, ok, delay = robots.check(origin, '/')
+                st, ok, delay = robots.check(origin, path)
             except FetchError as e:
                 out['error'] = e.code; out['error_detail'] = e.detail
                 if e.code in ('ssrf_blocked',):
@@ -183,8 +194,59 @@ def fetch_site(host, scheme_order=('https', 'http')):
                 out['error'] = 'robots_unavailable'; return out
             if not ok:
                 out['error'] = 'robots_disallowed'; return out
-            return _follow(out, origin + '/', robots, delay)
+            res = _follow(out, origin + path, robots, delay)
+            if not res['error'] and res['status'] == 200 and 'html' in res['headers'].get('content-type', 'html').lower():
+                try:
+                    res['freshness'] = collect_freshness(res, robots)
+                except Exception as e:  # 兆候は付随情報。失敗してもトップ取得の結果は捨てない
+                    print(f'freshness: {host}: {type(e).__name__}: {e}', file=sys.stderr)
+                    res['freshness'] = []
+            return res
     return out
+
+
+def collect_freshness(out, robots, today=None):
+    """トップ取得に成功したサイトの更新の兆候(header / feed / sitemap)を [(iso, source)] で返す。追加リクエストは最大 MAX_FRESHNESS_REQUESTS。
+    feed で日付が取れたら sitemap は取らない。失敗・robots 不許可は黙って飛ばす（兆候なしになるだけ）。"""
+    found = [(freshness.header_date(out.get('headers'), today), 'header')]
+    url = out.get('final_url')
+    if not url or out.get('status') != 200:
+        return found
+    parts = urllib.parse.urlsplit(url)
+    origin = f'{parts.scheme}://{parts.netloc}'
+    html = decode_body(out['body'], out['headers']) if out.get('body') else ''
+    targets = []
+    for href in freshness.feed_links(html):
+        u = urllib.parse.urljoin(url, href)
+        up = urllib.parse.urlsplit(u)
+        if up.scheme in ('http', 'https') and same_site(up.hostname or '', parts.hostname or '') and ('feed', u) not in targets:
+            targets.append(('feed', u))
+    targets = targets[:1]   # 公式に宣言された feed は 1 本だけ
+    targets.append(('sitemap', origin + '/sitemap.xml'))
+    if not targets[0][0] == 'feed':
+        targets.append(('feed', origin + '/rss.xml'))
+    done = 0
+    for kind, u in targets:
+        if done >= MAX_FRESHNESS_REQUESTS:
+            break
+        up = urllib.parse.urlsplit(u)
+        try:
+            st, ok, delay = robots.check(f'{up.scheme}://{up.netloc}', (up.path or '/') + (f'?{up.query}' if up.query else ''))
+            if not ok:
+                continue
+            time.sleep(max(HOST_WAIT, delay)); done += 1
+            status, headers, body = http_get(u)
+        except FetchError:
+            continue
+        if status != 200:
+            continue
+        text = decode_body(body, headers)
+        d = freshness.feed_date(text, today) if kind == 'feed' else freshness.sitemap_date(text, today)
+        if d:
+            found.append((d, kind))
+            if kind == 'feed':
+                break
+    return found
 
 
 def _follow(out, url, robots, delay):

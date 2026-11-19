@@ -6,3 +6,4 @@ __pycache__/
 *.pyc
 /public/_mock-thumbs/
 var/
+.dev.vars

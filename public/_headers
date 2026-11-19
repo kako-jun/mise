@@ -2,3 +2,14 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+
+# service worker と manifest は更新を遅らせない（PWA の更新反映）
+/sw.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+  Content-Type: application/manifest+json
+
+# ファイル名にバージョンを含む(-v1)ので長期キャッシュ。書体を替えるときは名前を変える
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """独立サイトの発見パイプライン（決定論。LLM/エージェントのトークンは使わない）。
 
-  uv run python3 scripts/pipeline/run.py init|discover-cc|discover-links|triage|fetch|judge|report [options]
+  uv run python3 scripts/pipeline/run.py init|discover-cc|discover-links|discover-wikidata|triage|fetch|judge|report [options]
 """
 import argparse
 import collections
@@ -10,12 +10,15 @@ import datetime
 import json
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import discover
+import discover_wikidata
 import features
 import fetcher
+import freshness
 import frontier
 from hostnames import DEFERRED_REASONS, prefilter, registrable, subdomain_of_registrable
 
@@ -34,12 +37,14 @@ def triage(db, redo=False):
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred'")
     # 共有サービスの推定: 台帳に apex も www も無く(= 本体がリンクされていない)、配下のホストだけが多数ある登録ドメイン。
     # apex/www がある登録ドメイン、または links（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群とみなして対象外。
-    keys = [k for (k,) in db.execute('SELECT key FROM frontier')]
-    exempt = {registrable(k) for k in keys if not subdomain_of_registrable(k)}
-    exempt |= {registrable(k) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
+    keys = [k.split('/')[0] for (k,) in db.execute('SELECT key FROM frontier')]   # パス付きキー(request 由来のユーザー領域)はホスト部だけで数える
+    # 免除の根拠にするのは発見元が申請(request)でない行だけ。申請者は外部の提出者で、パス付きの推薦(sharedsvc.jp/someone)は共有サービスの証拠でもあるため、
+    # 提出によって同じドメイン配下の保留を外せないようにする（申請の URL 自体は通常どおり審査される）
+    exempt = {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source!='request'") if '/' not in k and not subdomain_of_registrable(k)}
+    exempt |= {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
     fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
     for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
-        reason = prefilter(r['host'], jp_only=r['source'] != 'links')
+        reason = prefilter(r['host'], jp_only=r['source'] not in ('links', 'request', 'wikidata'))   # 申請の推薦・Wikidata(日本の項目の公式サイト)は .jp 以外も許す（国は掲載時の country_code が決める）
         if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
             reason = 'shared_service_user'   # 台帳内で同じドメイン配下のホストが多い = 共有サービスの利用者領域の可能性
         if reason in DEFERRED_REASONS:
@@ -55,12 +60,14 @@ def triage(db, redo=False):
 
 def process(row):
     """1ホストの取得と特徴抽出（ネットワークのみ。DBには触らない）。"""
-    res = fetcher.fetch_site(row['host'])
+    res = fetcher.fetch_site(row['host'], path=urllib.parse.urlsplit(row['url']).path or '/')   # 申請のパス付き推薦は、そのパスを取る（それ以外は '/'）
     out = {'key': row['key'], 'robots_status': res['robots_status'], 'status': res['status'], 'final_url': res['final_url'], 'error': res['error'], 'feat': None}
     if not res['error'] and res['status'] == 200:
         ctype = res['headers'].get('content-type', '').lower()
         if 'html' in ctype or not ctype:
             out['feat'] = features.extract(row['host'], fetcher.decode_body(res['body'], res['headers']), res['headers'])
+            footer = (out['feat']['freshness_signal_at'], out['feat']['freshness_source'])
+            out['feat']['freshness_signal_at'], out['feat']['freshness_source'] = freshness.latest(list(res.get('freshness') or []) + [footer])
         else:
             out['error'] = 'not_html'
     return out
@@ -68,7 +75,7 @@ def process(row):
 
 def fetch(db, limit, workers):
     # 新規(queued)と、バックオフが明けた failed（試行 MAX_ATTEMPTS 未満）を対象にする
-    rows = db.execute("SELECT key, host FROM frontier WHERE (state='queued' OR (state='failed' AND fetch_attempts<?)) AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY state DESC, priority DESC, key LIMIT ?", (MAX_ATTEMPTS, frontier.now(), limit)).fetchall()
+    rows = db.execute("SELECT key, host, url FROM frontier WHERE (state='queued' OR (state='failed' AND fetch_attempts<?)) AND (next_fetch_at IS NULL OR next_fetch_at<=?) ORDER BY state DESC, priority DESC, key LIMIT ?", (MAX_ATTEMPTS, frontier.now(), limit)).fetchall()
     done = 0
     with concurrent.futures.ThreadPoolExecutor(workers) as ex:
         futs = {ex.submit(process, r): r for r in rows}
@@ -138,13 +145,34 @@ def report(db, sample):
         print(f'{r["host"]} | {title} | {desc} | kind={r["site_kind"]} adult={r["adult"]} ads={r["ad_hits"]} len={r["text_len"]}')
 
 
+WIKIDATA_ABORT_EXIT = 3   # nightly.py の同名定数と同じ値
+
+
+def discover_wikidata_cmd(db, a):
+    rows = discover_wikidata.load_map()
+    errs = discover_wikidata.validate_map(rows)
+    if errs:
+        sys.exit('data/wikidata-leaf-map.csv が不正:\n' + '\n'.join(errs))
+    leaves = [l for l in (a.leaves or '').split(',') if l]
+    unknown = set(leaves) - {r['leaf_id'] for r in rows}
+    if unknown:
+        sys.exit(f'対応表に無い葉: {sorted(unknown)}')
+    sel = discover_wikidata.select_rows(rows, leaves or None, a.limit_leaves)
+    return discover_wikidata.discover_wikidata(db, sel, discover_wikidata.Client(), a.max_rows, listed=discover_wikidata.listed_keys(), ignore_cursor=a.ignore_cursor)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'triage', 'fetch', 'judge', 'report'])
+    ap.add_argument('cmd', choices=['init', 'discover-cc', 'discover-links', 'discover-wikidata', 'triage', 'fetch', 'judge', 'report'])
     ap.add_argument('--db', default=None)
     ap.add_argument('--part-file', help='discover-cc: ローカルの vertices パート (.gz)。省略時は自動取得（約40MB）')
     ap.add_argument('--sample-every', type=int, default=1000, help='discover-cc: ホスト名のハッシュで 1/N を決定論的に抽出')
     ap.add_argument('--limit', type=int, default=100, help='discover-cc: 追加上限 / fetch: 取得ホスト数上限')
+    ap.add_argument('--max-links', type=int, default=300, help='discover-links: 1 シードあたりの発見上限')
+    ap.add_argument('--leaves', help='discover-wikidata: 取る葉の id(カンマ区切り。この順)。省略時は対応表の順')
+    ap.add_argument('--limit-leaves', type=int, default=3, help='discover-wikidata: 1 回に取る葉の数の上限')
+    ap.add_argument('--max-rows', type=int, default=1000, help='discover-wikidata: 1 回に取る SPARQL 行数の合計の上限')
+    ap.add_argument('--ignore-cursor', action='store_true', help='discover-wikidata: 取り終えた行も先頭から取り直す')
     ap.add_argument('--workers', type=int, default=3, help='fetch: 並列数（2〜4。ホストは重複しない）')
     ap.add_argument('--redo', action='store_true', help='triage: 未取得の rejected を引き直す')
     ap.add_argument('--sample', type=int, default=20, help='report: 候補サンプル件数')
@@ -153,7 +181,12 @@ def main():
         ap.error('--workers は 1〜4')
     db = frontier.connect(a.db)
     if a.cmd == 'discover-cc': print(discover.discover_commoncrawl(db, a.part_file, a.sample_every, a.limit))
-    elif a.cmd == 'discover-links': print(discover.discover_links(db))
+    elif a.cmd == 'discover-links': print(discover.discover_links(db, max_links=a.max_links))
+    elif a.cmd == 'discover-wikidata':
+        res = discover_wikidata_cmd(db, a)
+        print(json.dumps(res, ensure_ascii=False))
+        if res.get('aborted'):
+            sys.exit(WIKIDATA_ABORT_EXIT)   # 429/503 で中断(Retry-After を尊重)。呼び出し側(夜間ジョブ)は続行できる
     elif a.cmd == 'triage': print(dict(triage(db, a.redo)))
     elif a.cmd == 'fetch': print('fetched', fetch(db, a.limit, a.workers))
     elif a.cmd == 'judge': print(dict(judge(db)))

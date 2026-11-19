@@ -10,7 +10,7 @@ mise の docs・Issue・コードで使う語の定義。新しい語を足す�
 | 層1 / 層2 | 収集の分担。層1=官公庁・自治体（名簿から作る。[public-bodies.md](collection/public-bodies.md)）、層2=それ以外の独立サイト（[pipeline.md](collection/pipeline.md)） |
 | 候補 | 決定論の収集・フィルタを通過したが、まだ掲載していないホスト。掲載ではない |
 | 掲載 | D1 に登録され、画面・API・sitemap に出ている状態 |
-| 範囲（scope） | 国をディレクトリ全体にかける考え方。カテゴリの木は1つで、国は絞り込み軸。URL は `/jp/` `/us/` `/all/`。実装済み（[design/ui.md](design/ui.md#範囲国)） |
+| 範囲（scope） | 国・区画（都道府県・州）をディレクトリ全体にかける考え方。カテゴリの木は1つで、国と区画は絞り込み軸。URL は `/jp/` `/us/` `/all/`、区画は `/jp/13/`。実装済み（[design/ui.md](design/ui.md#範囲国都道府県)） |
 | 運営者の所在国 / 区画 | `sites.country_code`（ISO 3166-1 alpha-2）/ `sites.region_code`（ISO 3166-2 第1階層）。公開情報で確認できたものだけ入れる |
 
 ## 収集
@@ -46,4 +46,4 @@ mise の docs・Issue・コードで使う語の定義。新しい語を足す�
 | HUD | 画面四隅の情報表示。左上=掲載総数と直近の日別登録数、左下=ACTIVITY（この端末での操作ログ） |
 | NEW | 登録から一定期間内のサイトに付くタグ |
 | サーフモード / 縦フィード | ネットサーフィンを復興する表示の構想。**構想・試作中** |
-| 申請 | 推薦（add）・取り下げ（remove）・訂正（correct）の総称。依頼であり、叶うとは限らない。**構想** |
+| 申請 | 推薦（add）・取り下げ（remove）・訂正（correct）の総称。依頼であり、叶うとは限らない。受付は実装済み（[operations/requests.md](operations/requests.md)） |

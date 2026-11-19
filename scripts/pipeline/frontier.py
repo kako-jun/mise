@@ -27,17 +27,23 @@ def connect(path=None):
         db.execute(f'INSERT INTO frontier ({shared}) SELECT {shared} FROM frontier_old')
         db.execute('DROP TABLE frontier_old'); db.commit()
     cols = [r[1] for r in db.execute('PRAGMA table_info(frontier)')]
-    for c in ('site_kind', 'adult'):
+    for c in ('site_kind', 'adult', 'freshness_signal_at', 'freshness_source', 'hint_leaf'):
         if c not in cols:
             db.execute(f'ALTER TABLE frontier ADD COLUMN {c} TEXT')  # 旧台帳の追従
+    jcols = [r[1] for r in db.execute('PRAGMA table_info(llm_judgement)')]
+    for c, decl in (('freshness', "TEXT CHECK (freshness IN ('active','stale','unknown'))"),
+                    ('exempt', "TEXT CHECK (exempt IN ('rare_genre','notable','none'))"),
+                    ('review_reason', 'TEXT')):
+        if c not in jcols:
+            db.execute(f'ALTER TABLE llm_judgement ADD COLUMN {c} {decl}')  # 旧台帳の追従（既存行は NULL）
     return db
 
 
-def add(db, key, host, url, source, source_detail=None, depth=0, state='discovered', priority=0, reject_reason=None):
+def add(db, key, host, url, source, source_detail=None, depth=0, state='discovered', priority=0, reject_reason=None, hint_leaf=None):
     """既存キーは触らない（重複検査）。新規なら True。"""
     cur = db.execute(
-        'INSERT OR IGNORE INTO frontier (key,host,url,source,source_detail,discovered_at,depth,state,priority,reject_reason,next_fetch_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-        (key, host, url, source, source_detail, now(), depth, state, priority, reject_reason, now() if state == 'queued' else None))
+        'INSERT OR IGNORE INTO frontier (key,host,url,source,source_detail,discovered_at,depth,state,priority,reject_reason,next_fetch_at,hint_leaf) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        (key, host, url, source, source_detail, now(), depth, state, priority, reject_reason, now() if state == 'queued' else None, hint_leaf))
     return cur.rowcount == 1
 
 

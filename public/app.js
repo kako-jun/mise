@@ -1,16 +1,29 @@
 const $ = selector => document.querySelector(selector);
-let pickPaused = false, categories = [], sites = [], currentPath = [], currentSearch = null, pickedIds = [], pickIndex = 0, picksVisible = false, picksHovered = false, activityStats = null;
-// 範囲（scope）: 国コード（小文字 2 文字）または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国（サイトが 1 件以上ある国）と件数。
+let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
+// 範囲（scope）: 国コード（小文字 2 文字。jp）、区画（国コード-区画。jp-13。URL は /jp/13/）、または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国・区画（サイトが 1 件以上あるもの）と件数。
 const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
-let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [] }, scopeToken = 0, scopesExpanded = false;
+let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [], regions: [] }, scopeToken = 0, scopesExpanded = false;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
-let language = storage.get('mise-language') === 'ja' ? 'ja' : 'en';
+// 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html data-initial-lang> を使う（判定は二重に持たない）。
+let keepRequestOpen = false;
+const initialLanguage = () => {
+  const saved = storage.get('mise-language');
+  if (saved === 'ja' || saved === 'en') return saved;
+  return document.documentElement.dataset.initialLang === 'ja' ? 'ja' : 'en';
+  // index.html の先頭スクリプトが決めた値（保険タイマーが lang を en に戻しても、遅れて動いた app.js は ja にできる）
+};
+let language = initialLanguage();
+const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', preparing:'推薦機能は準備中です。', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', github:'作者のGitHub', authorLabel:'作者', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', pickPause:'一時停止', pickResume:'再開', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国', lessScopes:'閉じる' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', preparing:'Site recommendations are coming soon.', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', github:'Creator on GitHub', authorLabel:'Creator', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', pickPause:'Pause', pickResume:'Resume', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'More', lessScopes:'Less' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', about:'MISE について', github:'作者のGitHub', linksLabel:'リンク', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:'他の国を表示', regionLabel:'地域（都道府県・州）', allOf:name=>`${name}全体`, lessScopes:'他の国を閉じる', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, totalCapped:n=>`該当 ${formatCap(n)} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', about:'About MISE', github:'Creator on GitHub', linksLabel:'Links', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:'Show more countries', regionLabel:'Region', allOf:name=>`All of ${name}`, lessScopes:'Hide more countries', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, totalCapped:n=>`${formatCap(n)} matches`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.' }
 };
+Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
+Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
+Object.assign(words.ja, { installText:'MISE をホーム画面に追加できます。', installAdd:'インストール', installLater:'あとで' });
+Object.assign(words.en, { installText:'Add MISE to your home screen.', installAdd:'Install', installLater:'Not now' });
 const t = key => words[language][key];
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
@@ -20,29 +33,46 @@ function activityLine(entry) { const line=document.createElement('div'); line.te
 function logActivity(message) { const first=!activity.length; activity.push(message); while (activity.length > ACTIVITY_MAX_LINES) activity.shift(); if (first) { renderLog(); return; } const box=$('#activity-entries'); box.append(activityLine(message)); while (box.children.length > activity.length) box.firstElementChild.remove(); }
 function renderLog() { $('#activity-entries').replaceChildren(...(activity.length ? activity.map(activityLine) : [Object.assign(document.createElement('div'), { textContent: t('idle') })])); }
 // 範囲の表示名。all は「全世界」、国は国名（日英）。
-const scopeName = code => code === 'all' ? t('allWorld') : (window.MISE_COUNTRIES?.[code.toUpperCase()]?.[language] ?? code.toUpperCase());
+// 範囲名 <-> URL のパス（jp-13 <-> /jp/13/）、範囲の国部分（jp-13 -> jp）。
+const scopePath = scope => `/${scope.replace('-','/')}/`;
+const scopeCountry = scope => scope.slice(0,2);
+const scopeName = code => {
+  if(code==='all') return t('allWorld');
+  const country=window.MISE_COUNTRIES?.[code.slice(0,2).toUpperCase()]?.[language] ?? code.slice(0,2).toUpperCase();
+  if(!code.includes('-')) return country;
+  const region=window.MISE_REGIONS?.[code.toUpperCase()]?.[language] ?? code.toUpperCase();
+  return `${region}${language==='ja'?'、':', '}${country}`;
+};
 function updateTitle() {
   const cur = currentPath.map(id => categories.find(x => x.id === id)).filter(Boolean);
   const place = currentScope === 'all' ? null : scopeName(currentScope);
   document.title = cur.length ? `${cur.map(name).join(' › ')}${place ? ` (${place})` : ''} — MISE` : place ? `MISE — ${place}: ${t('tagline')}` : `MISE — ${t('tagline')}`;
 }
-function applyLanguage() {
+// データ取得前でも描ける静的部分。初回の英語→日本語のちらつきを、API 応答を待たずに抑える。
+function applyStaticLanguage() {
   document.documentElement.lang = language;
-  updateTitle();
+  window.__miseReady = true;
   document.querySelectorAll('[data-i18n]').forEach(el => { const value=t(el.dataset.i18n); if (value) el.textContent=value; });
   document.querySelectorAll('[data-i18n-label]').forEach(el => { const value=t(el.dataset.i18nLabel); el.setAttribute('aria-label',value); if(el.hasAttribute('title')) el.title=value; });
   $('#query').setAttribute('aria-label',t('searchLabel'));
-  updatePickPause();
+  renderReqStatus();
   updateExternalToggle();
   $('#language-toggle').title=t('lang'); $('#language-toggle').setAttribute('aria-label',t('lang'));
   renderLog();
+  renderInstallBanner();
+}
+function applyLanguage(animate=false) {
+  applyStaticLanguage();
+  updateTitle();
   renderStats();
   renderScopeNav();
-  if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false);
+  keepRequestOpen = true; animateRedraw = animate; // 言語切替の再描画では申請フォームの開閉を変えない。範囲切替だけは一覧をフェードさせる
+  try { if (currentSearch !== null) showResults(currentSearch); else showDirectory(currentPath, false); } finally { keepRequestOpen = false; animateRedraw = false; }
 }
 // サイトURLは http/https だけをリンクにする（javascript: 等は表に出さない）。
 const safeHttpUrl = value => { try { const u=new URL(value); return u.protocol==='http:'||u.protocol==='https:' ? u.href : null; } catch (_) { return null; } };
 function configureExternalLink(a) {
+  if(a.classList.contains('site-newtab')) return; // 専用ボタンは常に別タブ（表示の出し入れは updateExternalToggle）
   const url=new URL(a.href,location.href);
   if(!['http:','https:'].includes(url.protocol) || url.origin===location.origin) return;
   if(openExternalInNewTab) { a.target='_blank'; a.rel='noopener noreferrer'; }
@@ -54,6 +84,17 @@ function updateExternalToggle() {
   button.setAttribute('aria-label',t(openExternalInNewTab?'externalOn':'externalOff'));
   button.title=button.getAttribute('aria-label');
   document.querySelectorAll('a[href]').forEach(configureExternalLink);
+  document.querySelectorAll('a.site-newtab').forEach(a=>{ a.hidden=openExternalInNewTab; });
+}
+// サイトのリンク右の「別タブで開く」ボタン（枠なしアイコン）。トグルがオンの間は hidden（全リンクが別タブで開くため）。
+function newTabButton(href, name) {
+  const a=document.createElement('a'); a.className='site-newtab'; a.href=href; a.target='_blank'; a.rel='noopener noreferrer';
+  const label=language==='ja' ? `${name} を${t('newTab')}` : `Open ${name} in new tab`; // サイト名入りで他のボタンと区別可能にする
+  a.setAttribute('aria-label',label); a.title=label; a.hidden=openExternalInNewTab;
+  const ns='http://www.w3.org/2000/svg', svg=document.createElementNS(ns,'svg'), path=document.createElementNS(ns,'path');
+  svg.setAttribute('viewBox','0 0 16 16'); svg.setAttribute('aria-hidden','true'); svg.setAttribute('focusable','false');
+  path.setAttribute('d','M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z');
+  svg.append(path); a.append(svg); return a;
 }
 $('#external-toggle').addEventListener('click',()=>{
   openExternalInNewTab=!openExternalInNewTab;
@@ -83,8 +124,9 @@ function renderStats() {
   }
 }
 // 範囲つきの URL（/jp/?category=…）。カテゴリの階層は従来どおりクエリ。
-function categoryUrl(path, scope=currentScope) { const u=new URL(`/${scope}/`,location.origin); path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
-const scopeFromLocation = () => { const m=location.pathname.match(/^\/([a-z]{2}|all)\/$/); return m ? m[1] : DEFAULT_SCOPE; };
+function categoryUrl(path, scope=currentScope) { const u=new URL(scopePath(scope),location.origin); path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
+// 区画は /jp/13/ -> jp-13。サイトのある区画かはサーバーが確かめる（サイトの無い区画の URL はサーバーが 404 にする。ここでは確かめない）。
+const scopeFromLocation = () => { const m=location.pathname.match(/^\/(?:([a-z]{2})\/([a-z0-9]{1,3})|([a-z]{2}|all))\/$/); return m ? (m[1] ? `${m[1]}-${m[2]}` : m[3]) : DEFAULT_SCOPE; };
 function link(label, path, callback) {
   const a=document.createElement('a'); a.href=categoryUrl(path); a.textContent=label;
   a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); callback(); });
@@ -116,7 +158,18 @@ function countryFlag(site) {
   if(region) { const name=document.createElement('span'); name.className='site-region'; name.textContent=language==='ja'?region.ja:region.en; wrap.append(name); }
   return wrap;
 }
-// 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗のタップ。行本体のクリックは従来どおり遷移のみ。
+// 地球を国へ向ける。PC: 行/旗のホバー・フォーカスで約300ms静止してから。スマホ: 旗または行（リンク以外）のタップ。リンクのクリックは従来どおり遷移のみ。
+// 世界全体の見え方へ戻す（ロゴ・トップ・範囲 all）。一覧を描き直すときはホールドも解く（消えた行から pointerleave/focusout が来ないため）。
+const resetGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-reset'));
+const releaseGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-release'));
+// サイト行を作り直す共通の入口。消える行からは pointerleave/focusout が来ないので、置換の前にホールドを解く（地球儀側は保持中でなければ何もしない）。
+// 範囲を変えたときの地球儀: 国別範囲はその国へ、all は世界全体へ。範囲ナビ・地球儀の選択・戻る/進むで共通。
+// 区画の範囲は区画の代表点（regions.js）へ、国は国の代表点へ。
+function globeForScope(scope) {
+  const region=scope.includes('-') ? window.MISE_REGIONS?.[scope.toUpperCase()] : null;
+  const info=region || (scope==='all' ? null : window.MISE_COUNTRIES?.[scopeCountry(scope).toUpperCase()]);
+  if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:region?'region':'country'}})); else resetGlobe();
+}
 const HOVER_DELAY_MS=300;
 // 区画（県・州）が分かるサイトは区画の代表点（国より近い距離）、無ければ国の代表点。
 function flyToPlace(site,hold) {
@@ -127,15 +180,98 @@ function flyToPlace(site,hold) {
 }
 function bindGlobeHover(row,flag,site) {
   let timer=0, flown=false;
-  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ flown=true; flyToPlace(site,true); },HOVER_DELAY_MS); };
+  const start=()=>{ clearTimeout(timer); timer=setTimeout(()=>{ if(!row.isConnected) return; flown=true; flyToPlace(site,true); },HOVER_DELAY_MS); };
   // 地球を動かしていない（300ms未満で離れた）ときは release を出さない。
   const stop=()=>{ clearTimeout(timer); timer=0; if(flown) { flown=false; window.dispatchEvent(new CustomEvent('mise-fly-release')); } };
   row.addEventListener('pointerenter',e=>{ if(e.pointerType!=='touch') start(); });
   row.addEventListener('pointerleave',e=>{ if(e.pointerType!=='touch') stop(); });
-  row.addEventListener('focusin',start);
+  // キーボード操作のフォーカスだけ（リンクのタップ/クリックによるフォーカスでは動かさない）。
+  row.addEventListener('focusin',e=>{ if(e.target.matches?.(':focus-visible')) start(); });
   row.addEventListener('focusout',e=>{ if(!row.contains(e.relatedTarget)) stop(); });
   // タップ（マウスのクリックも可）。ホールドなし＝離れて数秒で自動回転へ戻る。
   flag.addEventListener('click',()=>{ clearTimeout(timer); flown=false; flyToPlace(site,false); });
+  // スマホ: 行のリンク・旗以外（説明文・メタ情報・余白）のタップでも所在地へ。click はスクロール/スワイプでは出ない。タイトルのリンクは遷移を妨げない。
+  // 古い iOS Safari などは click が pointerType なしの MouseEvent になるため、直前の pointerdown/touchstart で入力種別を記録して判定する（pen も touch と同じ扱い）。
+  let input={type:'',at:0};
+  const note=type=>{ input={type,at:performance.now()}; };
+  row.addEventListener('pointerdown',e=>note(e.pointerType));
+  row.addEventListener('touchstart',()=>note('touch'),{passive:true});
+  row.addEventListener('click',e=>{
+    const type=performance.now()-input.at<500 ? input.type : (e.pointerType||'');
+    if(type!=='touch' && type!=='pen') return;
+    if(e.target.closest('a, button, .site-place')) return;
+    clearTimeout(timer); flown=false; flyToPlace(site,false);
+  });
+}
+// ---- タグ（#31）: 押すと検索バー横の取り消せるチップになり、検索語・範囲・カテゴリと AND で絞る。URL は ?tag=（複数は繰り返し）。 ----
+const MAX_TAGS=5, TAG_SWAP_GUARD_MS=500;
+let tagDown=null; // 直近の pointerdown で押されたタグリンク（click と同じ要素のときだけ受け付ける）
+const tagLabel=tag=>(language==='en' && tag.en) ? tag.en : tag.ja;
+const tagUrl=(key,scope=currentScope)=>{ const u=new URL(scopePath(scope),location.origin); u.searchParams.append('tag',key); return u.pathname+u.search; };
+// 結果ページ/タグ付きの URL。タグが無ければ従来どおり（検索は ?q=、ディレクトリは ?category=）。
+function stateUrl(scope=currentScope) {
+  if(currentSearch===null) return categoryUrl(currentPath,scope);
+  if(!currentTags.length) return `${scopePath(scope)}?q=${encodeURIComponent(currentSearch)}`;
+  const u=new URL(scopePath(scope),location.origin);
+  if(currentSearch) u.searchParams.set('q',currentSearch);
+  tagPath.forEach(id=>u.searchParams.append('category',id));
+  currentTags.forEach(tg=>u.searchParams.append('tag',tg.key));
+  return u.pathname+u.search;
+}
+const tagActive=key=>currentTags.some(tg=>tg.key===key);
+function tagLink(tag) {
+  const a=document.createElement('a'); a.className='site-tag'; a.href=tagUrl(tag.ja); a.textContent=tagLabel(tag); a.dataset.tagKey=tag.ja;
+  a.title=t('tagFilter')(tagLabel(tag));
+  if(tagActive(tag.ja)) { a.classList.add('is-active'); a.setAttribute('aria-current','true'); }
+  const born=performance.now();
+  // ピックアップは 8 秒ごとに入れ替わる。押した瞬間に描画中だった要素のタグだけを使い、入れ替え直後（500ms 以内（pick-enter アニメと同じ長さ））の押下と、押下〜離す間の入れ替えは無視する。
+  a.addEventListener('pointerdown', ()=>{ tagDown = (a.closest('#pick-list') && performance.now()-born<TAG_SWAP_GUARD_MS) ? null : a; });
+  a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); const ok=e.detail===0 || tagDown===a || !a.closest('#pick-list'); tagDown=null; if(!ok) return; toggleTag(tag, !!a.closest('#directory-sites')); });
+  return a;
+}
+function refreshTagLinks() {
+  document.querySelectorAll('a.site-tag').forEach(a=>{ const on=tagActive(a.dataset.tagKey); a.classList.toggle('is-active',on); if(on) a.setAttribute('aria-current','true'); else a.removeAttribute('aria-current'); });
+}
+function renderChips() {
+  const box=$('#tag-chips'); box.replaceChildren(); box.hidden=!currentTags.length;
+  for(const tg of currentTags) {
+    const chip=document.createElement('span'), label=document.createElement('span'), x=document.createElement('button'), n=tagLabel(tg);
+    chip.className='tag-chip'; label.textContent=`#${n}`; x.type='button'; x.textContent='×'; x.setAttribute('aria-label',t('tagRemove')(n)); x.title=t('tagRemove')(n);
+    x.addEventListener('click',()=>{ toggleTag(tg, false); });
+    chip.append(label,x); box.append(chip);
+  }
+  box.setAttribute('aria-label',t('tagsLabel'));
+  refreshTagLinks();
+}
+// URL から来たタグは日本語名/英語名のキーだけなので、最初の結果が届いたら表示名（日英）を埋める。
+function resolveTagLabels(items) {
+  let changed=false;
+  for(const tg of currentTags) {
+    if(tg.resolved) continue;
+    for(const it of items) { let ts=[]; try { ts=JSON.parse(it.tags_json||'[]'); } catch (_) { ts=[]; } const hit=ts.find(x=>x.ja===tg.key || x.en===tg.key); if(hit) { tg.key=hit.ja; tg.ja=hit.ja; tg.en=hit.en; tg.resolved=true; changed=true; break; } }
+  }
+  if(!changed) return;
+  // 英語名で来たタグは日本語名へ正規化する（行の太字・チップ・URL を日本語名に揃え、同じタグの二重チップも防ぐ）。
+  currentTags=currentTags.filter((tg,i)=>currentTags.findIndex(x=>x.key===tg.key)===i);
+  renderChips(); if(currentSearch!==null) setResultTitle(currentSearch);
+  if(currentSearch!==null && activeList && activeList.locKey===location.pathname+location.search) { const url=stateUrl(); if(location.pathname+location.search!==url) { history.replaceState(history.state,'',url); activeList.locKey=url; } }
+}
+// タグを付ける/外す。検索語（入力欄の文字）はそのまま残り、AND で絞る。履歴は 1 手ずつ積む（戻る/進むで復元）。
+function showTagNotice() {
+  const n=$('#tag-notice'); n.textContent=t('tagsMax'); n.hidden=false; clearTimeout(showTagNotice.timer); showTagNotice.timer=setTimeout(()=>{ n.hidden=true; },4000);
+}
+function toggleTag(tag, fromDirectory=false) {
+  const i=currentTags.findIndex(tg=>tg.key===tag.ja);
+  if(i>=0) { currentTags.splice(i,1); logActivity(`untag ${tag.ja}`); }
+  else { if(currentTags.length>=MAX_TAGS) { logActivity(t('tagsMax')); showTagNotice(); return; }
+    // カテゴリとの AND は、カテゴリ一覧の行から最初のタグを押したときだけ（検索結果・ピックアップからは範囲全体）。付いたあとは維持する。
+    if(!currentTags.length) tagPath=fromDirectory ? [...currentPath] : [];
+    currentTags.push({key:tag.ja,ja:tag.ja,en:tag.en??null,resolved:true}); logActivity(`tag ${tag.ja}`); }
+  const q=$('#query').value.trim();
+  if(q || currentTags.length) { currentSearch=q; const url=stateUrl(); if(location.pathname+location.search!==url) pushUrl(url); showResults(q); }
+  else showDirectory(currentPath);
+  // 画面（スマホは先頭が見えていないことが多い）を、検索バー（チップ）と結果の先頭が見える位置へ。ホバーは使わずタップで完結する。
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ const row=document.querySelector('.search-row'); if(row.getBoundingClientRect().top<0) row.scrollIntoView({block:'start'}); }));
 }
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
@@ -143,130 +279,422 @@ function renderSite(target, site, showCategories=false) {
   a.textContent=site.name; p.textContent=siteDescription(site);
   if(language==='en' && !site.description_en) p.lang='ja';
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
-  // Only serve previously collected icons from this origin; never probe third-party sites on page load.
-  if(site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path)) {
-    const img=document.createElement('img'); img.alt=''; img.src=site.favicon_path;
-    img.addEventListener('load',()=>{icon.hidden=false;}); img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img);
+  // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは枠ごと出さない。
+  // 枠は固定寸法で、画像の読み込み前から出しておく（読み込み後に枠が現れて行がずれるのを避ける）。失敗したら枠ごと消す。
+  const iconSrc = typeof site.favicon_url==='string' && /^\/icon\/[0-9a-f]{32}\.webp$/.test(site.favicon_url) ? site.favicon_url
+    : (site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path) ? site.favicon_path : null);
+  if(iconSrc) {
+    const img=document.createElement('img'); img.alt=''; img.width=24; img.height=24; img.decoding='async'; img.src=iconSrc;
+    img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img); icon.hidden=false;
   }
-  const content=document.createElement('div'); content.className='site-content'; content.append(a);
+  const content=document.createElement('div'); content.className='site-content'; content.append(a); if(href) content.append(newTabButton(href,site.name));
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
-  if(Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
+  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; content.append(tag); }
   content.append(p);
   const flag=countryFlag(site); if(flag) { content.insertBefore(flag,p); bindGlobeHover(li,flag,site); }
   const meta=document.createElement('p'); meta.className='site-meta';
   const crawlDate=site.last_crawled_at && !Number.isNaN(Date.parse(site.last_crawled_at)) ? site.last_crawled_at.slice(0,10) : null;
   meta.textContent=crawlDate ? `${t('crawled')}: ${crawlDate}` : '';
   let tags=[]; try { tags=JSON.parse(site.tags_json || '[]'); } catch (_) { tags=[]; }
-  for(const tag of tags) { const span=document.createElement('span'); span.className='site-tag'; span.textContent=(language==='en' && tag.en) ? tag.en : tag.ja; meta.append(' ',span); }
+  for(const tag of tags) { meta.append(' ',tagLink(tag)); }
   if(meta.textContent.trim()) content.append(meta); li.append(icon,content);
   if(showCategories) {
     const row=document.createElement('p'); row.className='site-categories'; row.append(`${t('belongs')}: `);
-    const ids=[...new Set(sites.filter(s=>s.id===site.id).map(s=>s.category_id))].filter(id=>id!=null);
+    const ids=(site.category_ids||[]).filter(id=>categories.some(c=>c.id===id));
     if(!ids.length) row.append(t('uncategorized'));
+    // 上部のパンくずと同じ構造: 各階層を個別のリンクにし、区切り ' › ' はリンクの外のテキスト（区切りに下線を付けない）
     ids.forEach((id,index)=>{
       if(index) row.append(' / ');
-      const path=categoryPath(id), text=path.map(part=>name(categories.find(c=>c.id===part))).join(' › ');
-      row.append(link(text,path,()=>{logActivity(`cd /${path.join('/')}`);showDirectory(path);}));
+      const path=categoryPath(id);
+      path.forEach((part,i)=>{
+        if(i) row.append(' › ');
+        const sub=path.slice(0,i+1);
+        row.append(link(name(categories.find(c=>c.id===part)),sub,()=>{logActivity(`cd /${sub.join('/')}`);showDirectory(sub);}));
+      });
     });
     content.append(row);
   }
   target.append(li);
 }
-function showDirectory(path, updateHistory=true) {
-  currentPath=path; currentSearch=null; updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
-  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) history.pushState(null,'',categoryUrl(path));
-  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren(); siteBox.replaceChildren();
+
+// ---- 一覧のページング（カーソル方式 API + スクロールで追加読み込み。docs/design/ui.md） ----
+// 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
+// 総件数が上限付き（API の total_capped）のときの表示。n は上限値（src/sites.js の TOTAL_CAP）で「1,000+」の形にする。
+function formatCap(n) { return n.toLocaleString('en-US')+'+'; }
+const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
+let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
+// 行を消す処理はここ 1 か所。消える行からは pointerleave/focusout が来ないので、置換の前に地球儀のホールドを解く（保持中でなければ地球側は何もしない）。追記読み込みは行を消さないので解除しない。
+function clearListRows(ul) { releaseGlobe(); ul.replaceChildren(); }
+const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
+function startList(opts) {
+  if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
+  if(activeList) activeList.stop();
+  // 一覧があるときだけ自前で位置を復元する（manual）。一覧の無い画面（トップ・子カテゴリだけの階層）はブラウザ標準の復元（auto）に任せる。履歴の項目ごとの設定なので遷移のたびに切り替える。
+  history.scrollRestoration=opts.params ? 'manual' : 'auto';
+  if(!opts.params) { activeList=null; clearListRows(opts.ul); opts.foot.replaceChildren(); return; }
+  activeList=createList(opts); activeList.start();
+}
+// 復元を打ち切る操作は「実際にスクロールしようとした」ものだけ（wheel / touchmove / スクロール系のキー）。タップ・touchstart・pointerdown では捨てない（API が遅い間にタップしても y=0 で確定させない）。
+const USER_MOVE=['wheel','touchmove','keydown'], SCROLL_KEYS=new Set(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' ','Spacebar']);
+// 入力欄の中での Space・矢印・Home・End は文字入力・カーソル移動でありスクロールではない（復元を打ち切らない）。
+const isEditable=el=>!!el && el.nodeType===1 && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable);
+function createList(opts) {
+  const L={ key:opts.key, opts, items:[], next:null, total:null, totalCapped:false, ended:false, loading:false, error:false, stopped:false, ctl:null, offset:(opts.startPage-1)*PAGE_SIZE, locKey:location.pathname+location.search, restore:null };
+  // 状態表示の文言。上限付きの総件数は「あと N 件」を計算できないので「該当 1,000+ 件」と出す。末尾に着いたら読み込んだ件数が正確な総数。
+  L.remainingText=()=>L.totalCapped ? t('totalCapped')(L.total) : t('remaining')(Math.max(0,L.total-L.offset-L.items.length));
+  L.endText=()=>t('listEnd')(L.totalCapped ? L.offset+L.items.length : L.total);
+  L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
+  const foot=opts.foot, ul=opts.ul;
+  const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && (!SCROLL_KEYS.has(e.key) || isEditable(e.target))) return; L.userMoved=true; };
+  // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
+  L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
+  if(saved && saved.key===opts.key) { L.restore=saved; for(const ev of USER_MOVE) addEventListener(ev,onMove,{passive:true}); }
+  const status=document.createElement('p'), live=document.createElement('p'), btn=document.createElement('button');
+  status.className='list-status'; live.className='visually-hidden'; live.setAttribute('role','status'); live.setAttribute('aria-live','polite');
+  btn.type='button'; btn.className='list-more'; btn.addEventListener('click',()=>L.loadMore(true));
+  const prev=document.createElement('p'); prev.className='list-prev';
+  L.render=()=>{
+    const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
+    // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
+    const hold=o.preserve && !L.items.length && (L.loading || L.error);
+    if(!hold) { clearListRows(ul); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    const empty=!L.items.length && L.ended;
+    status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? L.endText() : '') : L.total!=null ? L.remainingText() : '';
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
+    if(empty) foot.replaceChildren(); else foot.replaceChildren(status,btn,live);
+    if(hold) return;
+    if(ps) { ps.hidden=true; ps.replaceChildren(); }
+    prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
+  };
+  L.rerender=()=>{ L.render(); };
+  L.stop=()=>{ L.stopped=true; L.resolveFirst(); L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
+  // 復元は 100 件ずつ要求する（?page=N の最初の要求だけは既定の件数のまま。offset の単位が変わるため）
+  L.url=()=>{ const limit=L.restore && L.next ? 100 : 0; const u=new URLSearchParams({scope:currentScope}); for(const [k,v] of Object.entries(opts.params)) for(const x of [].concat(v)) u.append(k,x); if(L.next) u.set('cursor',L.next); else if(opts.startPage>1 && !L.items.length) u.set('page',String(opts.startPage)); if(limit) u.set('limit',String(limit)); return '/api/sites?'+u; };
+  L.loadMore=async (force)=>{
+    if(L.loading || L.stopped || (L.ended && !force)) return;
+    L.loading=true; L.error=false; status.textContent=t('loadingMore'); btn.hidden=true; L.ctl=new AbortController();
+    try {
+      const r=await fetch(L.url(),{signal:L.ctl.signal}); if(!r.ok) throw Error('API');
+      const d=await r.json(); if(L.stopped) return;
+      const first=!L.items.length && L.total==null;
+      L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) { L.total=d.total; L.totalCapped=!!d.total_capped; }
+      if(first) { L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
+    } catch (e) { if(L.stopped) return; L.error=true; /* 復元は捨てない: 保存値を守り（復元中は保存しない）、再試行で続ける */ }
+    L.loading=false; L.resolveFirst(); if(L.stopped) return;
+    status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? L.endText() : '') : L.remainingText();
+    btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended));
+    live.textContent=L.error ? t('listError') : L.ended && L.items.length ? L.endText() : '';
+    if(L.restore && !L.error) { const w=L.restore; if(L.userMoved) L.endRestore(); else if(!L.ended && L.items.length<w.loaded) return L.loadMore(); else { L.endRestore(); scrollTo(0,w.y); } }
+    if(!L.ended && !L.error && listIo) { listIo.unobserve(foot); listIo.observe(foot); }
+  };
+  L.start=()=>{
+    if(!opts.preserve) clearListRows(ul);
+    foot.replaceChildren(status,btn,live); status.textContent=t('loadingMore'); btn.hidden=true;
+    // preserve のとき SSR の 1 ページ目とページ番号リンクは最初の応答まで残す。
+    const ps=document.getElementById('site-pager'); if(ps && !opts.preserve) { ps.hidden=true; ps.replaceChildren(); }
+    L.loadMore();
+  };
+  return L;
+}
+let saveTimer=0, listDirty=false; // listDirty: 最後の保存より後にスクロールした（未保存の位置がある）。件数だけ増えた場合は保存済みの位置が旧件数の範囲内なので対象外
+addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
+// 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
+addEventListener('pagehide',()=>{ if(listDirty || !(history.state && history.state.mise && activeList && history.state.mise.key===activeList.key)) saveListState(); });
+// 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
+function pushUrl(url,state=null) { saveListState(); history.pushState(state,'',url); }
+function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
+// 一覧の入れ替えにだけ短いフェードを付ける（200ms）。画面（範囲・階層・検索語）が変わるときだけ。言語切替の再描画・SSR 初期表示・追記読み込みは対象外。
+let lastViewKey=null, activeVt=null, vtPending=false, vtLive=false, vtSeq=0, fromPop=false, animateRedraw=false;
+const VT_WAIT_MS=600;
+const reducedMotion=()=>matchMedia('(prefers-reduced-motion: reduce)').matches;
+function fadeIn(el) { if(reducedMotion() || vtLive) return; el.classList.remove('fade-in'); void el.offsetWidth; el.classList.add('fade-in'); }
+// 画面全体（列）のフェード。1200px 以上は列の中に position:fixed のコーナーパネル・ピックアップがあり、列ごと opacity を動かすと 0 から点滅するので、一覧側（#directory/#results）だけにかける。
+function fadeInView() {
+  const col=$('#view-column'), parts=[$('#directory'),$('#results')], wide=matchMedia('(min-width: 1200px)').matches;
+  [col,...parts].forEach(e=>e.classList.remove('fade-in'));
+  if(wide) parts.forEach(fadeIn); else fadeIn(col);
+}
+function swapView(viewKey, animate, fn, noVt=false) {
+  const changed=viewKey!==lastViewKey; lastViewKey=viewKey;
+  // 入れ替え待ちの遷移がある間の同じ画面の再描画（戻る/進む・範囲切替後の applyLanguage）は、待機中の描画が行うので何もしない。
+  if(!changed && vtPending) return;
+  const seq=++vtSeq; // 後から別の画面が決まったら、古い遷移の描画コールバックは何もしない（URL と画面を食い違わせない）
+  if(changed) vtPending=false;
+  if(!animate || !changed || reducedMotion()) { fn(); return; }
+  if(activeVt) { try { activeVt.skipTransition(); } catch (_) { /* already finished */ } }
+  if(document.startViewTransition && !noVt) {
+    vtPending=true;
+    // 新しい画面の最初のページ（上限 600ms）を待ってから描画を確定する。旧→空→新の二段にしない。時間切れなら行は後からフェードインする。
+    const vt=activeVt=document.startViewTransition(async()=>{
+      if(seq!==vtSeq) return;
+      vtPending=false; vtLive=true;
+      try { fn(); const L=activeList; if(L && L.firstLoad) await Promise.race([L.firstLoad,new Promise(r=>setTimeout(r,VT_WAIT_MS))]); } finally { vtLive=false; }
+    });
+    vt.ready.catch(()=>{}); vt.updateCallbackDone.catch(()=>{}); // skipTransition() で捨てられた遷移の拒否を未捕捉にしない
+    vt.finished.catch(()=>{}).finally(()=>{ if(activeVt===vt) activeVt=null; });
+    return;
+  }
+  fn(); fadeInView();
+}
+let viewShown=false;
+function showDirectory(path, updateHistory=true, preserveSsr=false) {
+  const first=!viewShown; viewShown=true;
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
+  // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
+  if(updateHistory && location.pathname+location.search!==categoryUrl(path)) pushUrl(categoryUrl(path));
+  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
+}
+function showDirectoryNow(path, updateHistory, preserveSsr) {
+  if(!keepRequestOpen) setRequestOpen(false);
+  currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
+  const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
-    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);}));
+    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
-  for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';p.textContent=categories.filter(x=>x.parent_id===c.id).map(name).join(' ');div.append(p);} box.append(div); }
-  const direct=sites.filter(s=>s.category_id===path.at(-1)); direct.forEach(s=>renderSite(siteBox,s));
+  for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); div.append(h); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
   $('#picks').hidden=false; renderPick();
-  $('#sample-label').hidden=!direct.length; $('#directory-empty').hidden=!!children.length || !!direct.length || !path.length;
+  const pageNo=path.length ? pageFromLocation() : 1;
+  startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
+    onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
+  if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
-function renderPick() {
-  const list=$('#pick-list'); list.replaceChildren();
-  if(!pickedIds.length) return;
-  const site=sites.find(s=>s.id===pickedIds[pickIndex % pickedIds.length]);
-  if(site) renderSite(list,site,true);
+function renderPick(dir=1) {
+  const list=$('#pick-list');
+  list.classList.toggle('is-prev',dir<0);
+  // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
+  const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
+  if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
+  list.replaceChildren();
+  if(!pickedSites.length) return;
+  renderSite(list,pickedSites[pickIndex % pickedSites.length],true);
+  if(focusIdx>=0){ const nl=list.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
 }
 const picks=$('#picks');
-new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks);
-picks.addEventListener('pointerenter',()=>{picksHovered=true;});
-picks.addEventListener('pointerleave',()=>{picksHovered=false;});
-function updatePickPause() { const b=$('#pick-pause'); b.textContent=t(pickPaused?'pickResume':'pickPause'); b.setAttribute('aria-pressed',String(pickPaused)); b.hidden=pickedIds.length<2; }
-$('#pick-pause').addEventListener('click',()=>{pickPaused=!pickPaused;updatePickPause();});
-setInterval(()=>{
-  if(pickedIds.length<2 || pickPaused || picks.hidden || !picksVisible || document.hidden || picksHovered || picks.contains(document.activeElement) || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  pickIndex=(pickIndex+1)%pickedIds.length;
-  renderPick();
-},8000);
+if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
+// ---- ピックアップの切替（自動 8 秒 / 横スワイプ / 左右キー、#113）。規則は docs/design/ui.md のピックアップ。 ----
+const PICK_AUTO_MS=8000, PICK_HISTORY_MAX=5, SWIPE_MIN_PX=40, SWIPE_DOMINANCE=1.5;
+let pickHistory=[], pickTimer=0, pickSwiped=false, pickSwipedTimer=0;
+const pickStatus=document.createElement('div'); pickStatus.className='visually-hidden'; pickStatus.setAttribute('role','status'); picks.append(pickStatus);
+function startPickTimer() {
+  clearInterval(pickTimer);
+  pickTimer=setInterval(()=>{
+    if(pickedSites.length<2 || picks.hidden || !picksVisible || document.hidden || reducedMotion()) return;
+    stepPick(1,false);
+  },PICK_AUTO_MS);
+}
+// dir=1: 次、dir=-1: 前（履歴を戻る。尽きたら何もしない）。manual のときだけ支援技術へ知らせ、自動入れ替えのタイマーを再始動する。
+function stepPick(dir, manual) {
+  if(pickedSites.length<2) return false;
+  if(dir>0) { pickHistory.push(pickIndex); if(pickHistory.length>PICK_HISTORY_MAX) pickHistory.shift(); pickIndex=(pickIndex+1)%pickedSites.length; }
+  else if(pickHistory.length) pickIndex=pickHistory.pop(); else return false;
+  renderPick(dir);
+  if(manual) {
+    startPickTimer();
+    const n=pickedSites.length;
+    pickStatus.textContent=`${t('picks')} ${pickIndex%n+1} / ${n}: ${pickedSites[pickIndex%n].name}`;
+  }
+  return true;
+}
+// 履歴が尽きて前へ戻れないときの控えめな弾み（reduced-motion では出さない）
+function nudgePick() {
+  if(reducedMotion()) return;
+  $('#pick-list').animate?.([{transform:'translateX(0)'},{transform:'translateX(10px)'},{transform:'translateX(0)'}],{duration:180,easing:'ease-out'});
+}
+let pickDrag=null;
+// 言語切替で古い言語の読み上げ文言が残らないよう、切替時に空にする
+$('#language-toggle').addEventListener('click',()=>{ pickStatus.textContent=''; });
+const abortPickDrag=()=>{
+  pickDrag=null;
+  removeEventListener('pointerup',endPickDrag,true); removeEventListener('pointercancel',endPickDrag,true);
+};
+// 枠外で離した等で pointerup が届かなくても、window で受けて後始末する
+function endPickDrag(e){ if(pickDrag && pickDrag.id===e.pointerId) abortPickDrag(); }
+picks.addEventListener('pointerdown',e=>{
+  if(pickDrag && !e.isPrimary) { abortPickDrag(); return; } // 2 本目以降の指（ピンチ等）はスワイプにしない
+  if(!e.isPrimary || (e.pointerType==='mouse' && e.button!==0)) return;
+  pickSwiped=false; clearTimeout(pickSwipedTimer);
+  pickDrag={id:e.pointerId,x:e.clientX,y:e.clientY,done:false};
+  addEventListener('pointerup',endPickDrag,true); addEventListener('pointercancel',endPickDrag,true);
+});
+picks.addEventListener('pointermove',e=>{
+  const d=pickDrag; if(!d || d.id!==e.pointerId) return;
+  // pointerup を取り逃した場合の保険（macOS の ctrl+クリックでコンテキストメニューが mouseup を取る、ドラッグ中のフォーカス喪失など）。ボタンなしの移動で状態を捨てる
+  if(e.pointerType==='mouse' && e.buttons===0) { abortPickDrag(); return; }
+  if(d.done) return;
+  const dx=e.clientX-d.x, dy=e.clientY-d.y;
+  if(Math.abs(dx)<SWIPE_MIN_PX || Math.abs(dx)<Math.abs(dy)*SWIPE_DOMINANCE) return;
+  d.done=true; pickSwiped=true; tagDown=null;
+  clearTimeout(pickSwipedTimer); pickSwipedTimer=setTimeout(()=>{pickSwiped=false;},600);
+  const sel=getSelection(); if(sel && sel.rangeCount && picks.contains(sel.getRangeAt(0).commonAncestorContainer)) sel.removeAllRanges();
+  if(!stepPick(dx<0 ? 1 : -1, true)) nudgePick();
+});
+// ネイティブの dragstart は押下中に数 px 動いた時点で出るため、pickDrag（押下〜離すまで存在）がある間は常に止まる。
+// つまりピックアップ内リンクのマウスドラッグ（ブックマークバー/新タブへ）はできない。スワイプを優先する意図的なトレードオフ
+// （Cmd/Ctrl/中ボタン/右クリックでの新タブ・コンテキストメニュー、キーボードは従来どおり使える）
+picks.addEventListener('dragstart',e=>{ if(pickDrag) e.preventDefault(); });
+// スワイプ・ドラッグの最後の pointerup が、タグ/リンクの click を誤発火させない（キャプチャ段階で止める）。キーボード由来（detail 0）は対象外
+picks.addEventListener('click',e=>{ if(pickSwiped && e.detail!==0) { pickSwiped=false; e.preventDefault(); e.stopPropagation(); } },true);
+picks.addEventListener('keydown',e=>{
+  if(e.altKey||e.ctrlKey||e.metaKey||e.shiftKey||(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')) return;
+  e.preventDefault(); stepPick(e.key==='ArrowRight' ? 1 : -1, true);
+});
+startPickTimer();
 function showResults(query) {
+  const first=!viewShown; viewShown=true;
+  currentSearch=query; renderChips();
+  swapView(`${currentScope}||${query}|${currentTags.map(tg=>tg.key).join('\n')}|${currentTags.length?tagPath.join('/'):''}`, (!keepRequestOpen || animateRedraw) && !first, ()=>showResultsNow(query));
+}
+function setResultTitle(query) {
+  const tagText=currentTags.map(tg=>`#${tagLabel(tg)}`).join(' ');
+  $('#result-title').textContent=currentTags.length ? (query ? `${t('results')(query)} ${tagText}` : t('taggedSites')(tagText)) : query?t('results')(query):t('all');
+}
+function showResultsNow(query) {
+  if(!keepRequestOpen) setRequestOpen(false);
   currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
-  const q=query.toLocaleLowerCase(), uniqueSites=[...new Map(sites.map(site=>[site.id,site])).values()], matches=q?uniqueSites.filter(s=>`${s.name} ${s.description_ja} ${s.description_en??''} ${s.url}`.toLocaleLowerCase().includes(q)):uniqueSites;
-  $('#result-title').textContent=q?t('results')(query):t('all'); $('#result-list').replaceChildren(); matches.forEach(s=>renderSite($('#result-list'),s,true)); $('#empty').hidden=!!matches.length;
+  // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
+  const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
+  setResultTitle(query); $('#empty').hidden=true;
+  startList({ key:`${currentScope}|?q|${query}|${tagKeys.join('\n')}|${cat??''}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query,...(tagKeys.length?{tag:tagKeys}:{}),...(cat?{category:cat}:{})}, startPage:1, showCategories:true,
+    onTotal:total=>{ $('#empty').hidden=!!total; if(activeList) resolveTagLabels(activeList.items); } });
 }
 function updateSearch() {
   const q=$('#query').value.trim();
-  if(q) showResults(q); else showDirectory(currentPath, false);
+  if(q || currentTags.length) { commitSearchUrl(q); showResults(q); } else { if(!leaveSearchUrl()) showDirectory(currentPath, false); }
 }
+// 検索（?q= / ?tag=）の URL 反映（#99）。カテゴリ等から検索に入る最初の 1 回だけ pushState、検索中の語の変更は replaceState（入力のたびに履歴を積まない）。
+const inSearchUrl=()=>{ const sp=new URLSearchParams(location.search); return sp.has('q') || sp.has('tag'); };
+function commitSearchUrl(q) {
+  const was=inSearchUrl(); currentSearch=q; const url=stateUrl();
+  if(location.pathname+location.search===url) return;
+  if(was) history.replaceState(history.state,'',url); else pushUrl(url,{searchPushed:true});
+}
+// 検索を空にして戻るとき URL を検索の項目のままにしない（#102。仕様は docs/design/ui.md）。
+// 返り値 true = history.back() 済みで、描画は popstate が行う（呼び出し側は描画しない）。false = 呼び出し側が showDirectory する。
+let leavingSearch=false, leavingTimer=0;
+function leaveSearchUrl() {
+  if(leavingSearch) return true;
+  if(!inSearchUrl()) return false;
+  if(history.state && history.state.searchPushed) {
+    leavingSearch=true;
+    leavingTimer=setTimeout(()=>{ // popstate が来なかったときの安全弁
+      if(!leavingSearch) return; leavingSearch=false;
+      if(!$('#query').value.trim() && !currentTags.length && inSearchUrl()) { history.replaceState(null,'',categoryUrl(currentPath)); showDirectory(currentPath,false); }
+    },1000);
+    history.back(); return true;
+  }
+  const url=categoryUrl(currentPath); if(location.pathname+location.search!==url) history.replaceState(null,'',url);
+  return false;
+}
+let reqStatus = null;
+let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
-$('#query').addEventListener('compositionend',()=>{composing=false;updateSearch();});
-$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearch();});
-$('#search-form').addEventListener('submit',e=>{e.preventDefault();if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);showResults(q);} else showDirectory(currentPath,false);});
-$('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);});
-$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);});
-$('#recommend-link').addEventListener('click',e=>{e.preventDefault();const m=$('#recommend');m.hidden=!m.hidden;e.currentTarget.setAttribute('aria-expanded',String(!m.hidden));});
+$('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
+$('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
+$('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {if(!leaveSearchUrl()) showDirectory(currentPath,false);}});
+$('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
+$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
+function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
+$('#request-form').addEventListener('submit',async e=>{
+  e.preventDefault(); const f=e.currentTarget, st=$('#req-status'), btn=$('#req-submit');
+  const show=(key,state)=>{reqStatus={key,state};renderReqStatus();};
+  if(btn.getAttribute('aria-disabled')==='true') return; // 二重送信ガード(disabled にするとフォーカスが外れて Esc が効かなくなる)
+  btn.setAttribute('aria-disabled','true'); show('reqSending','info');
+  try {
+    const res=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:f.type.value,url:f.url.value,reason:f.reason.value,website:f.website.value})});
+    if(res.ok){ show('reqOk','ok'); f.url.value=''; f.reason.value=''; }
+    else { const j=await res.json().catch(()=>({})); show(t('reqErr_'+j.error)?'reqErr_'+j.error:(res.status===429?'reqErr_rate_limited':'reqErr_other'),'error'); }
+  } catch(_) { show('reqErr_other','error'); }
+  finally { btn.removeAttribute('aria-disabled'); }
+});
+// 申請フォームの開閉。開いている間はカテゴリ一覧(パンくず・カテゴリ)を隠す(CSS の .req-open。再描画されても取り残されない)。
+function setRequestOpen(open, focus) {
+  const m=$('#recommend'), link=$('#recommend-link');
+  m.hidden=!open; link.setAttribute('aria-expanded',String(open)); document.documentElement.classList.toggle('req-open',open);
+  if(focus) (open?$('#req-type'):link).focus();
+}
+$('#recommend-link').addEventListener('click',e=>{e.preventDefault();setRequestOpen($('#recommend').hidden,true);});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !e.defaultPrevented && !$('#recommend').hidden){ e.preventDefault(); setRequestOpen(false,true); } });
 // 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
+// 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
+const countryLabel = code => { const e=window.MISE_COUNTRIES?.[code]?.[language]; if(e) return e; try { return new Intl.DisplayNames([language],{type:'region'}).of(code)||code; } catch (_) { return code; } };
+const scopeAria = (label,count) => language==='ja' ? `${label} ${count}件` : `${label}, ${count} ${Number(count)===1?'site':'sites'}`;
+const codeIcon = code => { const el=document.createElement('span'); el.className='scope-code'; el.setAttribute('aria-hidden','true'); el.textContent=code; return el; };
 function scopeItem(code, label, count, icon) {
   const li=document.createElement('li'), a=document.createElement('a');
-  a.className='scope-item'; a.href=`/${code}/`; if(code===currentScope) a.setAttribute('aria-current','page');
+  a.className='scope-item'; a.href=scopePath(code); if(code===currentScope) a.setAttribute('aria-current','page'); else if(currentScope.includes('-') && code===scopeCountry(currentScope)) a.setAttribute('aria-current','true'); // 区画の範囲では、その国を「いま居る国」として示す
   if(icon instanceof Node) a.append(icon); else a.insertAdjacentHTML('beforeend',icon);
-  const n=document.createElement('span'); n.className='scope-name'; n.textContent=label;
+  a.setAttribute('aria-label',scopeAria(label,count)); a.title=label;
   const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
-  a.append(n,c);
+  a.append(c);
   a.addEventListener('click',e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); chooseScope(code); });
   li.append(a); return li;
 }
+// 区画（都道府県・州）の選択。現在の範囲が国または国の中の区画で、その国に区画があるときだけ出す（all・区画のない国では出さない）。
+// 先頭は国全体。選ぶと chooseScope。SSR（src/seo.js の regionSelectHtml）と同じ構造・文言。
+function regionSelect() {
+  if(currentScope==='all') return null;
+  const cc=scopeCountry(currentScope).toUpperCase(), regions=(scopes.regions||[]).filter(r=>r.code.startsWith(cc+'-'));
+  if(!regions.length) return null;
+  const row=document.createElement('div'); row.className='region-row';
+  const sel=document.createElement('select'); sel.className='region-select'; sel.setAttribute('aria-label',t('regionLabel'));
+  const opt=(value,label,count)=>{ const o=document.createElement('option'); o.value=value; o.textContent=`${label} (${count})`; if(value===currentScope) o.selected=true; sel.append(o); };
+  opt(cc.toLowerCase(),t('allOf')(countryLabel(cc)),scopes.countries.find(r=>r.code===cc)?.count??0);
+  regions.forEach(r=>opt(r.code.toLowerCase(),window.MISE_REGIONS?.[r.code]?.[language]??r.code,r.count));
+  // キーボードの矢印などで選択が動くたびに change が発火する（閉じた状態では 1 回押すごと）。そのたびに遷移・取得が走らないよう、
+  // 直前に keydown があった change は保留し、Enter・フォーカスが外れたとき・700ms 操作が止まったときに確定する。マウス/タップの選択（keydown なし）は即時。
+  let keyAt=0, timer=0;
+  const commit=()=>{ clearTimeout(timer); timer=0; if(sel.isConnected && sel.value!==currentScope) chooseScope(sel.value); };
+  sel.addEventListener('keydown',e=>{ keyAt=e.key==='Enter' ? 0 : performance.now(); if(e.key==='Enter') commit(); });
+  sel.addEventListener('blur',()=>{ if(timer) commit(); });
+  sel.addEventListener('change',()=>{ if(keyAt && performance.now()-keyAt<150) { clearTimeout(timer); timer=setTimeout(commit,700); } else commit(); });
+  row.append(sel); return row;
+}
 function renderScopeNav() {
   const nav=$('#scope-nav'); if(!nav) return;
-  const key=document.createElement('span'); key.className='scope-key'; key.setAttribute('aria-hidden','true'); key.textContent='SCOPE';
+  // 作り直すとフォーカスが BODY に落ちるので、範囲ナビ内にあったなら同じ項目へ戻す。
+  const fa=document.activeElement, hadFocus=nav.contains(fa), focusMore=hadFocus && fa.classList?.contains('scope-more');
   const list=document.createElement('ul'); list.className='scope-list';
   list.append(scopeItem('all',t('allWorld'),scopes.total,SCOPE_ICON));
   const extras=[];
   scopes.countries.forEach((r,i)=>{
-    const code=r.code.toLowerCase(), info=window.MISE_COUNTRIES?.[r.code];
+    const code=r.code.toLowerCase();
     let icon='';
-    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>{img.hidden=true;}); icon=img; }
-    const li=scopeItem(code,info?.[language]??r.code,r.count,icon);
+    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>img.replaceWith(codeIcon(r.code))); icon=img; }
+    else icon=codeIcon(r.code);
+    const li=scopeItem(code,countryLabel(r.code),r.count,icon);
     if(i>=INLINE_SCOPES) { li.hidden=!scopesExpanded && code!==currentScope; extras.push(li); }
     list.append(li);
   });
-  const parts=[key,list];
+  const parts=[list];
   if(extras.length) {
     if(extras.some(li=>li.querySelector('[aria-current]'))) { scopesExpanded=true; extras.forEach(li=>{li.hidden=false;}); }
     const more=document.createElement('button'); more.type='button'; more.className='scope-more'; more.setAttribute('aria-expanded',String(scopesExpanded));
-    more.textContent=scopesExpanded?t('lessScopes'):`${t('moreScopes')} (${extras.length})`;
+    const label=scopesExpanded?t('lessScopes'):t('moreScopes'); // 文字は出さず、アイコン(⋯ / ▴)+ aria-label + title
+    more.setAttribute('aria-label',label); more.title=label;
+    more.innerHTML=scopesExpanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>';
     more.addEventListener('click',()=>{ scopesExpanded=!scopesExpanded; renderScopeNav(); });
     parts.push(more);
   }
+  const regionRow=regionSelect(); if(regionRow) parts.push(regionRow);
   nav.replaceChildren(...parts);
+  if(hadFocus) (fa.classList?.contains('region-select') ? nav.querySelector('.region-select') : focusMore ? nav.querySelector('.scope-more') : nav.querySelector('[aria-current="page"]'))?.focus();
   $('#home-link').href=categoryUrl([]);
   // 地球儀へ「選べる国」と現在の範囲を伝える（目印の点と、背景クリックで国を選ぶ判定に使う）。
-  window.MISE_SCOPE={ current:currentScope, countries:scopes.countries.map(r=>({code:r.code,lat:window.MISE_COUNTRIES?.[r.code]?.lat,lon:window.MISE_COUNTRIES?.[r.code]?.lon})) };
+  window.MISE_SCOPE={ current:currentScope==='all'?'all':scopeCountry(currentScope), // 地球儀の目印は国単位（区画の範囲でもその国を強調）
+    countries:scopes.countries.map(r=>({code:r.code,lat:window.MISE_COUNTRIES?.[r.code]?.lat,lon:window.MISE_COUNTRIES?.[r.code]?.lon})) };
   window.dispatchEvent(new CustomEvent('mise-scope-changed'));
 }
 // 範囲ごとのデータ（カテゴリ・サイト・活動）を取得する。同じ範囲は一度だけ（ページの寿命の間）。失敗は例外。
 function loadScopeData(scope) {
   if(!scopeCache.has(scope)) {
     const q=`?scope=${encodeURIComponent(scope)}`;
-    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/sites${q}`),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
-      if(!a.ok||!b.ok) throw Error('API');
-      return { categories:await a.json(), sites:await b.json(), stats:stats && stats.ok ? await stats.json() : null };
+    const p=Promise.all([fetch(`/api/categories${q}`),fetch(`/api/picks${q}`).catch(()=>null),fetch(`/api/activity${q}`).catch(()=>null)]).then(async ([a,b,stats])=>{
+      if(!a.ok) throw Error('API');
+      return { categories:await a.json(), picks:b && b.ok ? await b.json() : [], stats:stats && stats.ok ? await stats.json() : null };
     });
     scopeCache.set(scope,p); p.catch(()=>scopeCache.delete(scope));
   }
@@ -276,10 +704,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; sites=data.sites; activityStats=data.stats;
-  const ids=[...new Set(sites.map(s=>s.id))];
-  for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]];}
-  pickedIds=ids.slice(0,3); pickIndex=0;
+  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0; pickHistory=[];
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。
@@ -288,35 +713,78 @@ async function chooseScope(scope) {
   logActivity(`scope ${scope}`);
   let ok=false; try { ok=await switchData(scope); } catch (_) { logActivity('scope error'); return; }
   if(!ok) return;
-  const u=categoryUrl(currentPath); history.pushState(null,'',currentSearch!==null ? `/${scope}/?q=${encodeURIComponent(currentSearch)}` : u);
-  renderScopeNav(); renderStats(); applyLanguage();
-  const info=scope==='all' ? null : window.MISE_COUNTRIES?.[scope.toUpperCase()];
-  if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:'country'}}));
+  pushUrl(stateUrl(scope));
+  renderScopeNav(); renderStats(); setRequestOpen(false); applyLanguage(true);
+  globeForScope(scope);
 }
 // 地球儀の背景クリック/タップ。選べる国（サイトがある国）だけ範囲にする。
 window.addEventListener('mise-globe-pick',e=>{ const code=String(e.detail?.code||''); if(scopes.countries.some(r=>r.code===code)) chooseScope(code.toLowerCase()); });
 function restoreLocation() {
-  const q=new URLSearchParams(location.search).get('q');
-  if(q && q.trim()){ $('#query').value=q; showResults(q.trim()); return; }
+  const sp=new URLSearchParams(location.search), q=sp.get('q');
+  // ?tag=（複数は AND）。空・重複は無視し、5 個を超える分は捨てる。タグがあるときはカテゴリ階層（?category=）とも AND。
+  const keys=[...new Set(sp.getAll('tag').map(x=>x.trim()).filter(x=>x && [...x].length<=100))].slice(0,MAX_TAGS);
+  if(keys.length) {
+    const path=[]; let parent=null;
+    for(const part of sp.getAll('category')) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c) { path.length=0; break; } path.push(c.id); parent=c.id; }
+    restoredOnce=true; currentPath=path; tagPath=[...path]; currentTags=keys.map(k=>({key:k,ja:k,en:null,resolved:false}));
+    $('#query').value=(q||'').trim(); showResults((q||'').trim());
+    // 6 個以上・空・重複・不正なカテゴリなどは切り詰めた形に URL を正規化する（履歴は増やさない）。
+    const norm=stateUrl(); if(location.pathname+location.search!==norm && (sp.getAll('tag').length!==keys.length || sp.getAll('category').length!==path.length)) history.replaceState(history.state,'',norm);
+    return;
+  }
+  if(q && q.trim()){ currentTags=[]; $('#query').value=q; showResults(q.trim()); return; }
+  const first=!restoredOnce; restoredOnce=true;
   $('#query').value='';
   const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
   if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));
-  showDirectory(path,false);
+  showDirectory(path,false,first);
 }
+let restoredOnce=false;
 // 戻る/進むは範囲も復元する（範囲が変わるときはそのデータを読んでから階層・検索を復元）。
 window.addEventListener('popstate',async()=>{
-  const scope=scopeFromLocation();
-  if(scope!==currentScope) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
-  restoreLocation(); applyLanguage();
+  const leaving=leavingSearch; leavingSearch=false; clearTimeout(leavingTimer);
+  const scope=scopeFromLocation(), changed=scope!==currentScope;
+  if(changed) { try { if(!(await switchData(scope))) return; } catch (_) { return; } renderScopeNav(); renderStats(); }
+  const typed=leaving ? $('#query').value.trim() : ''; // back() 待ちの間に入力された語は、復元で消さず検索し直す
+  fromPop=true; try { restoreLocation(); } finally { fromPop=false; }
+  if(typed) { $('#query').value=typed; updateSearch(); }
+  applyLanguage();
+  if(changed) globeForScope(scope);
 });
+// インストール提案(#105)。ブラウザ標準の提案は install.js が止め(beforeinstallprompt を握って preventDefault)、ここで画面下部の控えめなバナーに置き換える。
+// 起動処理(下の即時関数)が applyStaticLanguage() → renderInstallBanner() を同期で呼ぶので、宣言は必ず起動処理より前に置く(const/let の TDZ)。tests/install-banner.test.mjs が順序を検査する。
+// [あとで]・インストール却下は 7 日間出さない(却下時刻は localStorage。読み書きが失敗してもバナー自体は動く)。standalone 起動・iOS Safari(イベントなし)では出さない。
+const INSTALL_DISMISS_KEY = 'mise-install-dismissed-at';
+// install.js が読めない(404・ネットワーク・拡張機能のブロック)と window.MiseInstall は無い。おまけ機能なので、その場合はバナーを出さないだけで例外にしない。
+const installDismissed = () => { const mi = window.MiseInstall; return !!mi && mi.isDismissActive(mi.parseDismissedAt(storage.get(INSTALL_DISMISS_KEY)), Date.now()); };
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function renderInstallBanner() {
+  const box = $('#install-banner'); if (!box) return;
+  const mi = window.MiseInstall;
+  box.hidden = !(mi && mi.event && !isStandalone() && !installDismissed());
+  $('#install-text').textContent = t('installText'); $('#install-add').textContent = t('installAdd'); $('#install-later').textContent = t('installLater');
+}
+function closeInstallBanner(remember) { if (remember) storage.set(INSTALL_DISMISS_KEY, String(Date.now())); if (window.MiseInstall) window.MiseInstall.event = null; renderInstallBanner(); }
+window.addEventListener('miseinstallprompt', renderInstallBanner);
+window.addEventListener('appinstalled', () => closeInstallBanner(false));
+$('#install-later').addEventListener('click', () => closeInstallBanner(true));
+$('#install-add').addEventListener('click', async () => {
+  const ev = window.MiseInstall && window.MiseInstall.event; if (!ev) return;
+  let dismissed = false;
+  try { await ev.prompt(); dismissed = (await ev.userChoice).outcome === 'dismissed'; } catch (_) { /* 二重呼び出し等は黙って閉じる */ }
+  closeInstallBanner(dismissed);
+});
+
 (async()=>{
   try {
     currentScope=scopeFromLocation();
+    applyStaticLanguage();
     const [, sc]=await Promise.all([switchData(currentScope), fetch('/api/scopes').then(r=>r.ok?r.json():null).catch(()=>null)]);
     if(sc) scopes=sc;
     restoreLocation(); applyLanguage();
   } catch (_) { if(!$('#categories').children.length && !$('#directory-sites').children.length) $('#directory').textContent=t('error'); }
+  finally { endI18nPending(); window.__miseBooted = true; } // 起動処理が最後まで終わった印(e2e の待ち条件。成否は画面の内容で見る)
 })();
 
 // ロゴ: S を M と同じ表示幅にし、4文字の見た目の間隔を均等にそろえる（transform はレイアウトに効かないので余白で補正）

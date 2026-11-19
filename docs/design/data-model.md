@@ -15,27 +15,74 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `name` | 表示名（言語共通） | 0001 |
 | `description_ja` | 日本語の一文紹介、必須 | 0001 |
 | `description_en` | 英語の一文紹介、NULL 可。日本語に書かれた事実だけを訳し、情報を足さない | 0010 |
-| `favicon_path` | 元サイトで確認したファビコンのローカルパス | 0002 |
+| `favicon_path` | 自前取得した 32px WebP の内容ハッシュ名（`<hash>.webp`）。取れていなければ NULL。取得・更新は [collection/favicons.md](../collection/favicons.md)。配信は Worker の `/icon/<hash>.webp`（R2 バケット `mise-media`。API は `favicon_path` をそのまま返し、配信 URL を `favicon_url` に足す。形が `<32桁16進>.webp` でない値は `favicon_url` を null にする） | 0002 |
 | `registered_at` | mise への登録日時。INSERT 時に DB のトリガが記録する | 0003, 0006 |
+| `bulk_import` | 台帳などからの一括投入の印（1）。直近登録の集計（`/api/activity`）・NEW タグ・既定の並びの先頭から外す。この場合の `registered_at` は出典の確認日 | 0015 |
 | `last_crawled_at` | 最後に取得に成功した日時 | 0007 |
 | `source_updated_at` | 元サイトの更新日（`YYYY-MM-DD`）。確認できた場合のみ | 0012 |
 | `source_updated_evidence_url` | 更新日の根拠 URL | 0012 |
 | `country_code` | 運営者の所在国（ISO 3166-1 alpha-2 大文字 2 文字、CHECK で形式を縛る） | 0011 |
 | `region_code` | 運営者の所在県・州（ISO 3166-2 第 1 階層、例 `JP-13`）。`country_code` が必須で先頭 2 文字が一致すること（CHECK） | 0013 |
 
+### インデックスと検索用列（0018）
+
+- `idx_sites_sort_<ハッシュ>`: 一覧の既定の並びの式インデックス(名前の末尾は列定義のハッシュ。`SORT_KEYS` を変えると名前が変わるので、新しい migration で新名の CREATE と旧名の `DROP INDEX` を書く。`npm run check` が「最新の migration に現在の定義がある」ことを検査する)。**並びの定義は `src/sites.js` の `SORT_KEYS` 1 か所**で、`ORDER BY`・カーソルのキー列・「次のページ」の比較条件・インデックスはそこから生成する。並びのキーを足す/変えるとき（例: 官公庁台帳 #71 で先頭に足した `bulk_import`。旧 `idx_sites_sort_2489145a` は 0019 で DROP し `idx_sites_sort_9b34c1ec` を作った）は、`SORT_KEYS` を直し、`sortIndexSql()` が出す `CREATE INDEX` を新しい migration に書く（`npm run check` が一致を検査する）。画面に出す列が増えるなら `COLUMNS` にも足す。カーソルはキー値の配列なので形式は変わらない。
+- **`SORT_KEYS` を変えたときのチェックリスト**: (1) 新しい migration に `sortIndexSql()` の新名の `CREATE INDEX` と、旧名の `DROP INDEX` を書く。(2) `mise-preview` にも適用する。旧名の DROP 漏れは自動検出できないので手で確かめる。
+- `idx_site_categories_category`: `(category_id, site_id)`。カテゴリ別一覧・件数の逆引き。
+- `idx_site_tags_label_ja`（0023）`(label_ja, site_id)` と `idx_site_tags_label_en`（0024）`(label_en, site_id)`: タグ名 → サイトの逆引き（#126 第2段）。稀なタグの絞り込みを、全サイトの走査（10 万件で 85 万行）でなくタグの索引から引く（約 300 行）。**1 本 1 migration**（書き込みは索引の行数ぶん = `site_tags` の行数。10 万件で各約 24 万行、無料プランに戻した場合の 1 日 10 万行を超えるので、その場合は日を分けて適用する。Workers Paid（契約済み）なら書き込みは月 5,000 万行込みで 1 日に分ける必要はない）。**索引はコードより先に入れる**（索引なしでコードだけ出すと、結果は同じでも読み取りが main の約 4 倍。索引どうしの順序には依存しない）。派生物（消すには `DROP INDEX`）。
+- `idx_sites_activity`（0025）`(bulk_import, date(registered_at))`: `/api/activity` の直近 7 日の日別登録数（10 万件で 8 万行 → 約 270 行）。書き込みは `sites` の行数ぶん。派生物。
+- `sites.search_text`: 検索用の正規化済みテキスト（名前・日英の紹介文・URL・タグ（日本語名・英語名。`label_ja` 昇順（BINARY、大文字が先）で「日本語名 英語名」を並べる。migration のトリガと refresh は同じ順）を空白区切りで続けて NFKC + 小文字化。#31）。`/api/sites?q=` はこの列を `instr()` で引く。migration は暫定値（SQL の `lower()` = ASCII のみ）を入れ、INSERT 時と、名前・紹介文・URL の UPDATE 時のトリガも同じ暫定値を入れる（`search_text` を明示して渡した INSERT/UPDATE は上書きしない）。`site_tags` の INSERT/UPDATE/DELETE にもトリガ（0020）があり、そのサイトの `search_text` を暫定値で作り直す（タグ側の操作は `search_text` を明示できないので常に作り直す。NFKC 版へは埋め直しで戻す）。比較は `instr()`（LIKE は D1 でパターンが約 50 バイトを超えると too complex になるため使わない）。全角半角・非 ASCII の大小を正しく扱うには、サイトを足した/直した後に `node scripts/refresh-search-text.mjs --local|--remote` で埋め直す。 `instr()` は全件スキャンで、**総件数は上限付き**（`TOTAL_CAP`。ヒットが上限を超える語は途中で数えるのをやめる）。ヒットが少ない・0 の語の全件走査（10 万件で 10 万行）は、3 文字以上の語について下の `sites_fts` で避ける（1〜2 文字は instr のまま）。
+- `sites_fts`（0027）: `search_text` の全文索引（FTS5・`tokenize='trigram'`・外部コンテンツ表 `content='sites', content_rowid='rowid'`。#126 第3段）。**派生物**で、正本は `sites.search_text`（壊れても消えても `scripts/build-search-fts.mjs` で作り直せる）。`sites` の主キーは TEXT なので、外部コンテンツの結び付きは暗黙の `rowid`。trigram は 3 文字未満の `MATCH` を**エラーにせず 0 件で返す**ので、検索コードは 3 文字以上のときだけ使う（`FTS_MIN_CHARS`）。FTS は大小の畳み込みが `instr()` と少し違う（`σ` と `ς`、`search_text` に残った非 ASCII の大文字など）ので、索引で絞った行にも `instr()` を重ねて一覧を同じにする。**例外**: 索引の該当が 1,000 件を超え、他の絞り込みが無いときの総件数は索引の件数で判断し数え直さないので、畳み込みの差で instr の真の件数が 1,000 以下になる稀なケース（該当が 1,000 件前後で、差のある文字を含む語に限る）は「1,000+」と出うる（一覧は instr と同一）。索引の大きさは 1 サイト約 0.5 KB（10 万件で約 55 MB）。
+  - 同期は `sites` の 3 トリガ（`sites_fts_ai` 登録・`sites_fts_ad` 削除・`sites_fts_au` `search_text` の変更。値が変わらない UPDATE では何もしない）。0018・0020 のトリガが `search_text` を書き直すと入れ子で発火するので、タグの追加・変更・削除も反映される。**同期トリガは `fts_state.ready = 1` のときだけ動く**: 構築前に既存行の 'delete' を渡すと外部コンテンツ表の索引が壊れ、サイトの削除・更新が失敗するため。
+  - `fts_state(name, ready)`: 索引が構築済みで検索に使ってよいか。migration は空の表とトリガ・`ready = 0` を作るだけ（10 万件の一括構築は 12〜24 秒で D1 の 1 クエリ 30 秒の上限に近いので migration に入れない）。`build-search-fts.mjs` が `ready = 0` → `delete-all` → rowid の範囲を 1 万行ずつ INSERT → `ready = 1` → 件数と `integrity-check` の検証（失敗したら `ready = 0` に戻して止まる）の順に流す（冪等。`ready = 1` を先にするのは、検証と `ready` の間の書き込みをトリガに拾わせるため）。`ready = 0`・表が無い（ロールバック後）のとき、検索は instr の経路に落ちる。検索は索引の経路の**実行の後にも** `ready` を確かめ（`delete-all` は `ready = 0` と同じ文の中でその後に流れるので、実行が空・作りかけの索引を見ても、`ready` を読む前に構築が終わっていなければ `ready = 0` が見える。残る窓は、実行が作りかけを見てから `ready` を読むまでの D1 1 往復［数 ms］の間に、残りのチャンク全部と `ready = 1` が終わり切る場合だけで、最後のチャンクは秒単位なので実際上は起きない）、1 でなければ instr でやり直す。索引の経路の例外は「表なし・索引の破損」系（`no such table` / `sites_fts` / `fts5` / `malformed`）だけ握ってログに出し、それ以外（D1 の一時エラー・本番だけの SQL エラー）は投げる。
+  - 書き込みはサイト 1 件の登録で数行〜十数行増える（タグ 1 つの追加ごとに `search_text` が書き直され、そのたびに索引の delete と insert が走る）。D1 の課金が内部表への書き込みを数えるかは未検証（ローカルの `meta.rows_written` は数えない・SQLite の `total_changes()` は数える）。`wrangler d1 export` は仮想表があると使えない（[deploy.md](../operations/deploy.md)）。
+
 ### `categories` / `site_categories` / `site_tags`
 
-- `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。
+- `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。木の中身と育て方は下の「カテゴリの木」。
 - `site_categories`: `(site_id, category_id)` が主キー。同じサイトを複数カテゴリに登録できる。
-- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示のみで、検索対象ではない。
+- **カテゴリ所属の正規形（#137）**: 1 サイトの所属は、親と子の両方が付いたら**子だけ**（祖先の除去。親の件数は集計表が子孫を数えるので変わらない）。**退避先（`business` / `society` / `business-services` / `community`。0021 が旧カテゴリから仮置きしたもの。定義の正本は `data/category-map.csv` の `fallback` 行）は外さない**: 新しい木ではこれも LLM が選べる正規のカテゴリ（`assign=llm`）で、再判定済みの付与は LLM の選択だから。旧 id の fallback が付けた退避先は他に何も残らないときだけ（単独）なので、もともと実カテゴリと並ばない。官公庁 `pb-` は `government` 直下の種別葉だけで、この規則の対象外。新しい判定は `judge.normalize_categories` で正規形にしてから台帳・`site_categories` に入り、既存分は一度きりの `scripts/fix-redundant-categories.sql` で整理する。破れていないかは `scripts/check-data-integrity.py`（検査一覧は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。
+- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。タグ名（日英）は `q` の部分一致の対象でもある（`search_text` に含める。0020・#31 第1段）。
+
+### カテゴリ件数の集計表（#126 第1段、0022）
+
+- **正本は `sites` / `site_categories` / `categories`。次の 3 表は派生物で、トリガが常に追従させる**（ずれたら 0022 の「初期集計」と同じ文で作り直せる。`tests/category-counts.test.mjs` が「集計表 = 再帰 CTE」を検査する）。
+  - `category_closure(ancestor_id, descendant_id)`: カテゴリの祖先 → 子孫（自分自身を含む）。307 行（現在 153 カテゴリ・深さ 3）。
+  - `category_counts(category_id, scope, n)`: **そのカテゴリ自身と全子孫の所属サイト数**（同じサイトが複数の子孫に属しても 1 件）。`scope` は `'all'`（全世界。`ALL_SCOPE`）・`country_code`（その国のサイトだけ。`country_code` が NULL のサイトは `'all'` のみ）・**`region_code`（その区画のサイトだけ。例 `JP-13`。0026・#127）**。区画は国の部分集合（`region_code` は `country_code` が必須）で、国だけ分かって `region_code` が NULL のサイトは `'all'` と国にだけ数える。国コード（2 文字）と区画コード（ハイフンを含む）は形が違うので衝突しない。旧 `loadCategories` の再帰 CTE（`COUNT(DISTINCT s.id)`）と同じ意味。行が無い・`n = 0` は「空」で、読み側が 0 とみなす。
+  - `scope_counts(scope, n)`: 範囲（`'all'`・国・区画）ごとのサイト数（`/api/scopes`・`/api/activity` の `total`・範囲だけを指定した `/api/sites` の `total`）。`n = 0` の行は読み側が除く。
+- **読み取り**: `loadCategories`（`/api/categories`・SSR・sitemap）は `categories LEFT JOIN category_counts`、`loadScopes` は `scope_counts`。sitemap は範囲ごとに数え直さず、`category_counts` の `n > 0` を 1 回で読む。`/api/sites` の `total` は、範囲だけなら `scope_counts`、**直下が葉のカテゴリ**だけなら `category_counts`（葉は子孫が無いので直下の所属数と同じ）から正確に読む。葉でないカテゴリ（直下の所属を集計表で出せない）・`q`・`tag` は上限付きで数える（`TOTAL_CAP`。第2段）。
+- **トリガ**（書き込み量の見積りは migration 冒頭のコメント）: `site_categories` の INSERT / DELETE（「そのサイトの、祖先の部分木に入る所属行がちょうど 1 件」の祖先だけ +1、「消した後に 0 件」の祖先だけ -1 にして二重カウントを避ける）・UPDATE（旧・新の祖先を再計算）、`sites` の INSERT / DELETE / `country_code`・`region_code` の UPDATE（国も区画も、新旧で変わった範囲だけ付け替える）、`categories` の INSERT / `parent_id` の UPDATE（閉包表を付け替え、旧親・新親の祖先の件数を再計算）/ DELETE。1 サイトの投入は通常 +3〜+14 行の書き込み（国あり・カテゴリ 1〜3 個）。区画ありはさらに最大 +3 行（0026）。夜間の一括投入（`export_approved_sql.py` の `INSERT` と `--update-categories` の `DELETE` + `INSERT OR IGNORE`）でも同じトリガが働く。
+- **作り直し**: ずれたら `scripts/rebuild-category-counts.sql`（3 表を `DELETE` → 0022 と 0026（区画）の初期集計と同じ `INSERT`）で正本から作り直せる。手順・戻し方・一致確認のクエリは `docs/operations/deploy.md`。
+- **カテゴリの木を変えるときの制約**（migration で `categories` を INSERT / UPDATE / DELETE すれば閉包表と件数は追従するが、次を守る）:
+  - **親を先に INSERT する**（子の INSERT トリガは、親の閉包表の行を引いて祖先を作るため。親が無いと子の祖先が欠ける）。
+  - **カテゴリ id の変更（`UPDATE categories SET id`）は非対応**（閉包表・件数表・`site_categories` が旧 id を指したままになる）。作り直す場合は新 id を INSERT して所属を移し、旧 id を DELETE する。
+  - **親の変更や `site_categories` 行の UPDATE は、旧親・新親の祖先の部分木を数え直す**ので、10 万件規模の一括移行（#127 第2段など）では重い。大量の付け替えは、トリガに任せず、`scripts/rebuild-category-counts.sql` で最後に 1 回作り直す形を検討する。
+  - **`INSERT OR REPLACE` は使わない**（`sites` / `site_categories` / `categories` のどれも。再帰トリガが無効な既定（`recursive_triggers=0`）では、REPLACE が消す行の DELETE トリガが発火せず、集計がずれる。0027 の全文索引も、`ready = 1` で REPLACE すると削除トリガが動かず索引に古い行が残り `integrity-check` が malformed になる）。**`sites` を作り直す migration（新表へ INSERT SELECT → DROP → RENAME）をするときは、rowid が振り直されトリガ 3 本（`sites_fts_*`）も消えるので、`fts_state.ready` を 0 にしてから行い、後で 0027 の SQL の流し直しと `build-search-fts.mjs` での索引の作り直しが必須**）。`INSERT OR IGNORE` か `DELETE` + `INSERT`、`ON CONFLICT DO UPDATE` を使う。
+- 効果（10 万件、ローカル D1 の実測）: `/api/categories` 82 万 → 459 行、トップ（SSR）112 万 → 499 行、sitemap 1,670 万 → 3,262 行。
+
+### カテゴリの木（#114 第1段、0021）
+
+- **正本は `data/categories.csv`**（`id, parent_id, name_ja, name_en, sort_order, assign`。現在 153 カテゴリ: トップ 15・第2階層 122・第3階層 16）。D1 の `categories` はこの写しで、`tests/test_taxonomy.py` が「全 migration を適用した結果 = CSV」を検査する。**木を変える migration を足すときは CSV も同じ変更にする**。LLM 判定の選択肢（`scripts/llm/judge.py` の `load_categories`）もこの CSV から読む。
+- 旧 59 → 新の対応表は `data/category-map.csv`（`keep` 同じ id を引き継ぐ / `map` 常にその新 id へ / `fallback` 主題でなく運営主体・地域だった旧カテゴリで、退避先でない新カテゴリ（keep/map/rule）を 1 つも持たないサイトにだけ、退避先をすべて付ける / `drop` 0 件で廃止 / `rule` 官公庁。LLM 側の旧 id 互換では行政・公的機関 `government`（トップ）に写す）。0021（`scripts/taxonomy_sql.py` が生成した一回限りの migration。適用後は凍結）が使い、LLM 側は旧 id の判定を新 id に写すのに使う（[llm-judge.md](../collection/llm-judge.md#カテゴリの木と指示文)）。
+- **主題の木**: カテゴリは「そのサイトが何について書いているか・何を扱っているか」。運営主体（企業・団体・個人サイト・店）は木に置かず、`site_kind` とタグで扱う。店は扱う品・サービスの主題、学校は教育、病院は健康に入れる。国・地域は木に入れない（国は範囲、県は第2段で範囲の第2階層）。1 サイトは最大 3 カテゴリ。合う葉が無いときだけ親に置く。
+- **id 規則**: 英語の kebab-case の短い slug。**親の id を前に付けない**（親子は `parent_id` だけで持つ。ノードを移しても id と URL が変わらない）。一意にならないときだけ語を足す。**`all` と 2 文字の id は使わない**（範囲の URL `/all/` `/jp/` と衝突する）。トップのうち `arts business reference education science government health society entertainment`（9 個）は旧 id を引き継ぎ、それ以外の旧 id（`親-子` 形式）は木に残らない。日本語名は 12 字程度まで、「・」で並べるのは 2〜3 語まで。英語名は sentence case。
+- **官公庁**: `government`（行政・公的機関）の下に種別 7 葉（`national-agencies` `independent-agencies` `prefectures` `cities` `special-wards` `towns` `villages`）。台帳の `type`（0015 が各サイトにタグとして付けたもの）から決定論で振り、LLM には渡さない（`assign=rule`）。台帳に無い公的機関（公社など）は LLM が `government`（トップ）か主題を選ぶ。以後の官公庁の差分 migration（`public_bodies_sql.py --since`）も種別の葉を付ける（政令市の行政区は既定では投入せず、投入した場合は 0021・`--since` とも `cities` に寄せる）。既知の限界: 台帳で団体の種別が変わったとき（町→市など）の葉・タグの付け替えは未対応（#121）。
+- **成長則**（葉の件数は、範囲を「全世界」にしたときの `/api/categories?scope=all` の `site_count`、つまり配下を含む件数で見る）:
+  - **例外: `assign=rule` の葉（官公庁の種別 7 葉）は成長則の対象外**。件数は台帳で決まり、分け方は主題でなく地域なので、子は足さない。多くなった種別（`cities` `towns` など）は、第2段の都道府県の範囲（`/jp/` の第2階層）で分ける。
+  - 葉が **50 件を超えたら分割を検討**する。**100 件を超えたら次の追加ラウンドの前に必ず子を足す**。
+  - 分けるときは、その葉の中で多い主題を 3〜8 個の子にする。子に入らない残りは親に置いたままでよい。
+  - 深さは現在最大 3 だが、**3 を超えてもよい**（件数が必要とする所だけ深くする。トップは 15 のまま保つ）。UI・URL・件数の再帰集計は任意の深さで動く。
+  - 0 件の葉は残してよい（画面は薄く表示する）。3 か月以上 0 件のままなら統合の候補にする。
+  - 木を変えるときは、新しい migration で子を INSERT し、既存サイトの `site_categories` を移す（移す前に、移す先の件数を確認する）。同時に `data/categories.csv` と LLM の指示文の一覧が自動で追従することを確かめる。
+  - 件数の見方（例）: `curl -s 'https://mise.llll-ll.com/api/categories?scope=all'` の `site_count` が 50・100 を超える葉を探す。
 
 ### 運営者の所在国（`country_code`）
 
-一覧の国旗と地球の連動、および範囲（`/jp/` など。[ui.md](ui.md#範囲国)）のための値。`NULL` のサイトは範囲 `all` にだけ出る。（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れる。**ドメイン（.jp 等）・言語・ホスティング・IP の所在だけでは決めない**。確認できなければ `NULL`（旗を出さない）。根拠は収集 JSON の `country_code` / `country_evidence` と migration のコメントに残す。
+一覧の国旗と地球の連動、および範囲（`/jp/` など。[ui.md](ui.md#範囲国都道府県)）のための値。`NULL` のサイトは範囲 `all` にだけ出る。（座標は持たない。国ごとの代表座標は静的表 `public/countries.js`）。取得内容・公開情報で運営者の所在国を確認できたものだけを入れる。**ドメイン（.jp 等）・言語・ホスティング・IP の所在だけでは決めない**。確認できなければ `NULL`（旗を出さない）。根拠は収集 JSON の `country_code` / `country_evidence` と migration のコメントに残す。
 
 ### 運営者の所在区画（`region_code`）
 
-県・州まで分かったサイトだけ、旗の右に区画名を出し、地球を区画へ向けるための値。判定基準は国と同じく公開情報に明記されたもの（サイトの記載、公的機関の公式所在地）だけで、推測しない。確認できなければ `NULL`（旗のみ）。根拠は `data/region-evidence.json`（id・region_code・出典 URL・根拠・確認日）。区画名・座標の表は `public/regions.js`（生成物）。
+県・州まで分かったサイトだけ、旗の右に区画名を出し、地球を区画へ向けるための値。**範囲（scope）として県で絞る軸でもある（#127、0026）**: `/api/*?scope=jp-13`（`JP-13` も可）・URL `/jp/13/` は `sites.region_code = 'JP-13'` のサイトだけ。新しい列は無く、集計表の scope 値に区画が増えただけ（上の「カテゴリ件数の集計表」）。一覧の絞り込みは部分索引 `idx_sites_region_sort`（0026。`(region_code, bulk_import, 新しい順, id) WHERE region_code IS NOT NULL`。並びは `SORT_KEYS` と同じで、区画は全体の一部なので並びの索引を走査して絞ると他の区画の行を読み飛ばす。`regionSortIndexSql()` が定義の正本で、`scripts/check-api-headers.mjs` が migration との一致を検査）。区画が NULL のサイトは国の範囲にだけ出る（区画で絞る価値が出るのは `region_code` を持つサイト。官公庁の名簿 `pb-` は大半が区画を持つ）。ピックアップは区画内の一括投入でないサイトから、`s.region_code = ?` の等値だけの `ORDER BY RANDOM()`（`randomPickSql`。`(? IS NULL OR …)` の形にすると索引が使われない。tests/region-scope.test.mjs が EXPLAIN で検査）で選ぶので、区画に一括投入しか無ければ空になる。判定基準は国と同じく公開情報に明記されたもの（サイトの記載、公的機関の公式所在地）だけで、推測しない。確認できなければ `NULL`（旗のみ）。根拠は `data/region-evidence.json`（id・region_code・出典 URL・根拠・確認日）。区画名・座標の表は `public/regions.js`（生成物。ブラウザと Worker の SSR が共有するので `globalThis.MISE_REGIONS`）。
 
 ### 日時の扱い
 
@@ -43,8 +90,8 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 
 ### 制約と注意
 
-- `GET /api/sites` は `site_categories` と `JOIN` するため、カテゴリ未所属のサイトは API にも検索にも出ない。
-- 官公庁の台帳（`data/public-bodies/`）と frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけ。
+- カテゴリ未所属のサイトも `GET /api/sites`（`category` 指定なし）と検索には出る（`category_ids` が空配列。画面では「未分類」）。カテゴリ別の一覧には出ない。
+- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけで、LLM 判定の承認済み候補は `scripts/llm/export_approved_sql.py` が出す SQL で入れる（[llm-judge.md](../collection/llm-judge.md#台帳への取り込みと承認)）。
 
 ## 将来案（未実装）
 
@@ -74,12 +121,12 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 
 ### 状態遷移・申請
 
-掲載の状態（`listed` / `down` / `long_down` / `suspect` …）と申請（`add` / `remove` / `correct`）のデータは未設計。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
+掲載の状態（`listed` / `down` / `long_down` / `suspect` …）のデータは未設計。申請は `requests`（`contact` 列は連絡先の廃止後は未使用で常に NULL）、拒否リストは `blocked_hosts`（[operations/requests.md](../operations/requests.md)）。[ideas/exchange-and-deliberation.md](../ideas/exchange-and-deliberation.md)、[ideas/requests.md](../ideas/requests.md)。
 
 ## 未決事項
 
 - 利用 DB の ID 方式、スキーマ移行、サイトとページの境界、正規 URL・重複・リダイレクトの扱い。
-- カテゴリ名変更時の共有 URL 互換性、複数分類や更新時の確認方法、カテゴリ削除時の扱い。
+- カテゴリ名変更時の共有 URL 互換性（#114 の決定: 旧カテゴリの id を含む URL は無効値として扱い、トップに戻す。転送表は持たない）、複数分類や更新時の確認方法。
 - 紹介文の生成タイミング、複数出典、承認・差し替え・削除の運用。
 - 所在地の取得対象、推定の許容範囲、精度、位置情報の公開基準と削除対応。
 - 巡回頻度、削除やアクセス拒否の扱い。

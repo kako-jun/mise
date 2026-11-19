@@ -60,10 +60,10 @@ def main():
     for c, v in sorted(regions.items()):
         ja = v['ja'].replace("'", "\\'"); en = v['en'].replace("'", "\\'")
         body.append(f"'{c}':{{ja:'{ja}',en:'{en}',lat:{v['lat']},lon:{v['lon']}}}")
-    out = (f"// ISO 3166-2 第1階層の区画 -> 名前(日英)と代表座標。scripts/collect-regions.py が生成する（手で編集しない）。\n"
+    out = (f"// ISO 3166-2 第1階層の区画 -> 名前(日英)と代表座標。scripts/collect-regions.py が生成する（手で編集しない）。ブラウザと Worker（src/seo.js の SSR）の両方から読めるよう globalThis に置く。\n"
            f"// 出典: Wikidata (CC0) の P300(ISO 3166-2)・P625(座標)・ja/enラベル。取得日 {today}。対象国 {','.join(COUNTRIES)}。件数 {len(regions)}。\n"
            f"// 解散扱い（P576あり）の項目、および座標またはen/mulラベルが無い項目は含めない（座標・ラベル欠損 {len(missing)} 件: {','.join(sorted(missing)) or 'なし'}。ISO の件数と一致しない国がある: 例 KR は17件中15件。KR-29・KR-46 は解散扱いで除外され、該当区画のサイトは国旗のみ表示）。\n"
-           "window.MISE_REGIONS = {\n  " + ",\n  ".join(body) + "\n};\n")
+           "globalThis.MISE_REGIONS = {\n  " + ",\n  ".join(body) + "\n};\n")
     OUT.write_text(out, encoding='utf-8')
     print(f'{len(regions)} regions, missing {len(missing)}: {sorted(missing)}', file=sys.stderr)
 
