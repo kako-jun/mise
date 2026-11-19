@@ -46,7 +46,7 @@ addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.ser
 </script>
 <script>
 // ?view=feed: 縦フィードの試作ビュー(#52)。指定が無ければ何もしない。
-if (new URLSearchParams(location.search).get("view") === "feed") { document.documentElement.classList.add("feed-mode"); const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/feed.css?v=1"; document.head.append(l); const s = document.createElement("script"); s.src = "/feed.js?v=1"; s.defer = true; document.head.append(s); }
+if (new URLSearchParams(location.search).get("view") === "feed") { document.documentElement.classList.add("feed-mode"); const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/feed.css?v=2"; document.head.append(l); for (const f of ["/feed-lib.js?v=2", "/feed.js?v=2"]) { const s = document.createElement("script"); s.src = f; s.async = false; document.head.append(s); } }
 </script>
 <script src="/cat.js?v=5" defer></script>
 </head>

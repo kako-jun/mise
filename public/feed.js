@@ -7,20 +7,22 @@
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
-  const MAX_SITES = 1000;        // 試作で読み込むサイト数の上限(100 件ずつ取得)
+  const MAX_SITES = 500;         // 1 回の範囲選択で読み込むサイト数の上限(100 件ずつ取得 = 最大 5 リクエスト)
+  const LOAD_DEBOUNCE_MS = 300;  // 範囲を続けて切り替えたとき、最後の 1 回だけ取り直す
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
   const SEEN_KEY = 'mise-seen-v1'; // 端末内保存(localStorage)。{v:1, sites:{サイトID: 初めて見た日時ISO}}
   // -------------------------------------------------------------------------------------
 
+  const L = window.MiseFeedLib;
   const $ = (s, r = document) => r.querySelector(s);
   const storage = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
     sget(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }, sset(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} } };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', proto: '試作', protoTitle: '試作ビュー(検索エンジンには載りません)', scopeAllLabel: '全世界', allOf: n => `${n}全域`, catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
+      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', note: (n, total) => `先頭 ${n} 件を表示中(全 ${total} 件)`, noteFail: '一部の読み込みに失敗', proto: '試作', protoTitle: '試作ビュー(検索エンジンには載りません)', scopeAllLabel: '全世界', allOf: n => `${n}全域`, catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
     en: { seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', proto: 'BETA', protoTitle: 'Prototype view (not indexed by search engines)', scopeAllLabel: 'World', allOf: n => `All of ${n}`, catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
+      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', note: (n, total) => `Showing the first ${n} of ${total}`, noteFail: 'part of the data failed to load', proto: 'BETA', protoTitle: 'Prototype view (not indexed by search engines)', scopeAllLabel: 'World', allOf: n => `All of ${n}`, catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
@@ -29,20 +31,23 @@
   const t = k => words[language][k];
 
   // ---- 決定論の乱数（シード = セッションごと。?seed= で再現） ----
-  function hash32(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
-  function rngOf(seedStr) { let a = hash32(String(seedStr)); return () => { a = (a + 0x6D2B79F5) | 0; let x = Math.imul(a ^ (a >>> 15), 1 | a); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; }
+  const { hash32, rngOf, updatedOf } = L;
 
   const params = new URLSearchParams(location.search);
   let seed = params.get('seed') || storage.sget('mise-feed-seed') || Math.random().toString(36).slice(2, 8);
   storage.sset('mise-feed-seed', seed);
-  const state = { scope: /^([a-z]{2}(-[a-z0-9]{1,3})?)$/i.test(params.get('scope') || '') ? params.get('scope').toLowerCase() : 'all', cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
+  let seedPinned = !!params.get('seed'); // URL に seed を載せるのは、?seed= で来たときと「並びを変える」を押したあと
+  // 範囲の初期値: ?scope= 、無ければパス(/jp/ → jp、/jp/13/ → jp-13)
+  const pathScope = (m => m ? (m[2] ? `${m[1]}-${m[2]}` : m[1]).toLowerCase() : null)(location.pathname.match(/^\/([a-z]{2})(?:\/([a-z0-9]{1,3}))?\/?$/i));
+  const state = { scope: /^(all|[a-z]{2}(-[a-z0-9]{1,3})?)$/i.test(params.get('scope') || '') ? params.get('scope').toLowerCase() : (pathScope || 'all'), cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
 
+  let loadedScope = null, loadedComplete = false, loadFailed = false, loadAbort = null, loadTimer = 0, changeScope = () => {};
   let categories = [], scopes = { countries: [], regions: [] }, all = [], list = [], current = 0, cards = [];
-  const dwell = new Map();
-  let root, scroller, bar, counter, observer, globeTimer = 0, lastPlace = '';
+  // 「見た」の滞在タイマー。一覧を作り直すとき clearAll() で古いタイマーを止める(止めないと見ていないサイトを数える)
+  const dwell = L.makeDwell(SEEN_DWELL_MS, site => { if (!document.hidden) markSeen(site); });
+  let root, scroller, bar, counter, noteEl, observer, globeTimer = 0, lastPlace = '';
 
   // ---- データ整形 ----
-  const updatedOf = s => Date.parse(s.source_updated_at || s.registered_at);
   function rootCat(id) { let n = categories.find(c => c.id === id); while (n && n.parent_id) n = categories.find(c => c.id === n.parent_id); return n || null; }
   // /api/sites は 1 サイト 1 行（category_ids を持つ）。同じ id が複数ページに跨っても 1 件にまとめる
   function build(rows) {
@@ -55,20 +60,9 @@
     }
     return [...map.values()];
   }
-  // 範囲: all / 国(jp) / 区画(jp-13)
-  const inScope = s => state.scope === 'all' || (state.scope.includes('-') ? (s.region_code || '').toLowerCase() === state.scope : (s.country_code || '').toLowerCase() === state.scope);
-  // 重み付きランダム順（Efraimidis-Spirakis）。key = u^(1/w) の降順。w = 1 + FRESH_BOOST * 0.5^(経過日/半減期)
-  function order(sites) {
-    if (state.sort === 'new') return [...sites].sort((a, b) => (updatedOf(b) || 0) - (updatedOf(a) || 0) || (a.id < b.id ? -1 : 1));
-    const rnd = rngOf(seed), now = Date.now();
-    return sites.map(s => {
-      const days = Math.max(0, (now - (updatedOf(s) || 0)) / 86400000), fresh = Number.isFinite(updatedOf(s)) ? Math.pow(.5, days / FRESH_HALF_LIFE_DAYS) : 0;
-      return { s, key: Math.pow(rnd(), 1 / (1 + FRESH_BOOST * fresh)) };
-    }).sort((a, b) => b.key - a.key || (a.s.id < b.s.id ? -1 : 1)).map(x => x.s);
-  }
   function visible() {
     // 並びは全件で一度決め、絞り込みは順序を保ったまま間引く（条件を戻すと同じ並びに戻る）
-    return order(all).filter(s => inScope(s) && (!state.cat || s.roots.has(state.cat)));
+    return L.order(all, { sort: state.sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => L.inScope(s, state.scope) && (!state.cat || s.roots.has(state.cat)));
   }
 
   // ---- 代替ビジュアル（サイトIDから決まる三毛猫の模様 + 頭文字）。thumb_url があればそちらを使う ----
@@ -89,8 +83,8 @@
     svg.append(txt);
     return svg;
   }
-  // 第三者へアクセスしないよう、同一オリジンの絶対パス(/thumb/... など。//host は不可)だけ許す
-  const thumbOf = s => (typeof s.thumb_url === 'string' && /^\/(?!\/)/.test(s.thumb_url)) ? s.thumb_url : null;
+  // 第三者へアクセスしないよう、同一オリジンの絶対パスだけ許す(//host と /\host は不可。feed-lib.js)
+  const thumbOf = s => L.thumbOf(s.thumb_url, location.origin);
 
   // ---- 場所（国旗 + 区画名） ----
   function regionInfo(s) {
@@ -124,9 +118,12 @@
       'Placeholder number three, the short pattern at around two hundred characters: a few lines pairing the author’s own words with the highlights of the site. Three highlights: hand-drawn diagrams, a timeline, and a column that prints reader corrections as they arrive. This is mockup text and does not describe any real site.'
     ]
   };
+  // 長文が無いサイトは長文欄ごと出さない。ダミーは開発用の ?mock=1 のときだけ
+  const useMock = params.get('mock') === '1';
   function longText(s) {
     const own = language === 'en' ? s.long_description_en : s.long_description_ja;
     if (own) return { text: own, mock: false };
+    if (!useMock) return null;
     const pool = MOCK_LONG[language];
     return { text: pool[hash32('long:' + s.id) % pool.length], mock: true };
   }
@@ -151,20 +148,25 @@
     body.append(h, p);
     const pl = place(s); if (pl) body.append(pl);
     // 長い紹介文（ショート動画のキャプション風）。折りたたみ時は数行、タップで全文。長ければ枠内だけ縦スクロール
-    const lt = longText(s), cap = document.createElement('div'); cap.className = 'f-cap'; cap.dataset.mock = lt.mock ? 'true' : 'false';
-    const lp = document.createElement('p'); lp.className = 'f-long'; lp.id = `f-long-${i}`; lp.textContent = lt.text;
-    if (language === 'en' && !s.long_description_en && !lt.mock) lp.lang = 'ja';
-    const more = document.createElement('button'); more.type = 'button'; more.className = 'f-more'; more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', lp.id); more.textContent = t('more');
-    const toggle = () => { const on = cap.classList.toggle('is-open'); more.setAttribute('aria-expanded', String(on)); more.textContent = t(on ? 'less' : 'more'); lp.tabIndex = on ? 0 : -1; if (!on) lp.scrollTop = 0; };
-    more.addEventListener('click', toggle);
-    lp.addEventListener('click', () => { if (String(getSelection()).length) return; toggle(); });
-    cap.append(lp, more); body.append(cap);
+    const lt = longText(s);
+    if (lt) {
+      const cap = document.createElement('div'); cap.className = 'f-cap'; cap.dataset.mock = lt.mock ? 'true' : 'false';
+      const lp = document.createElement('p'); lp.className = 'f-long'; lp.id = `f-long-${i}`; lp.textContent = lt.text;
+      if (language === 'en' && !s.long_description_en && !lt.mock) lp.lang = 'ja';
+      const more = document.createElement('button'); more.type = 'button'; more.className = 'f-more'; more.setAttribute('aria-expanded', 'false'); more.setAttribute('aria-controls', lp.id); more.textContent = t('more');
+      const toggle = () => { const on = cap.classList.toggle('is-open'); more.setAttribute('aria-expanded', String(on)); more.textContent = t(on ? 'less' : 'more'); lp.tabIndex = on ? 0 : -1; if (!on) lp.scrollTop = 0; };
+      more.addEventListener('click', toggle);
+      lp.addEventListener('click', () => { if (String(getSelection()).length) return; toggle(); });
+      cap.append(lp, more); body.append(cap);
+    }
     let tags = []; try { tags = JSON.parse(s.tags_json || '[]'); } catch (_) {}
     if (tags.length) { const ul = document.createElement('ul'); ul.className = 'f-tags'; for (const tg of tags) { const li = document.createElement('li'); li.textContent = (language === 'en' && tg.en) ? tg.en : tg.ja; ul.append(li); } body.append(ul); }
     const foot = document.createElement('div'); foot.className = 'f-foot';
     const when = (s.source_updated_at || s.registered_at || '').slice(0, 10);
     if (when) { const time = document.createElement('time'); time.className = 'f-date'; time.dateTime = when; time.textContent = `${s.source_updated_at ? t('updated') : t('added')} ${when}`; foot.append(time); }
-    const a = document.createElement('a'); a.className = 'f-open'; a.href = s.url; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${s.name}`); configureLink(a); foot.append(a);
+    // http(s) 以外(javascript: / data: / 相対 / 不正)の URL は『開く』リンクを出さない
+    const href = L.safeHttpUrl(s.url);
+    if (href) { const a = document.createElement('a'); a.className = 'f-open'; a.href = href; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${s.name}`); configureLink(a); foot.append(a); }
     body.append(foot);
     const scrim = document.createElement('div'); scrim.className = 'f-scrim'; scrim.setAttribute('aria-hidden', 'true');
     art.append(pic, scrim, body);
@@ -178,7 +180,7 @@
     const row = document.createElement('div'); row.className = 'f-end-actions';
     const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => go(0));
     row.append(top);
-    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); renderList(); go(0, true); }); row.append(re); }
+    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); go(0, true); }); row.append(re); }
     body.append(h, p, row); sec.append(body);
     return sec;
   }
@@ -190,7 +192,7 @@
   // ---- 見たサイトの累計(#58)。端末内のみ。重複なし・単調増加・ストリークなし ----
   let seen = { v: 1, sites: {} };
   function loadSeen() {
-    try { const d = JSON.parse(storage.get(SEEN_KEY) || 'null'); if (d && d.v === 1 && d.sites && typeof d.sites === 'object') seen = { v: 1, sites: Object.fromEntries(Object.entries(d.sites).filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && !Number.isNaN(Date.parse(v)))) }; } catch (_) {}
+    try { const d = JSON.parse(storage.get(SEEN_KEY) || 'null'); if (d && d.v === 1 && d.sites && typeof d.sites === 'object') seen = { v: 1, sites: L.cleanSeen(d.sites) }; } catch (_) {}
   }
   const seenCount = () => Object.keys(seen.sites).length;
   const nextMilestone = n => MILESTONES.find(m => m > n) || null;
@@ -244,8 +246,9 @@
     file.addEventListener('change', async () => {
       const msg = $('.f-panel-msg');
       try {
-        const d = JSON.parse(await file.files[0].text()); if (!d || d.v !== 1 || typeof d.sites !== 'object') throw Error('bad');
-        let add = 0; for (const [k, v] of Object.entries(d.sites)) { if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) continue; if (!seen.sites[k] || v < seen.sites[k]) { if (!seen.sites[k]) add++; seen.sites[k] = v; } }
+        const f = file.files[0]; if (!f || f.size > L.SEEN_MAX_BYTES) throw Error('bad');
+        const incoming = L.parseSeenImport(await f.text()); if (!incoming) throw Error('bad');
+        let add = 0; for (const [k, v] of Object.entries(incoming)) { if (!seen.sites[k] || v < seen.sites[k]) { if (!seen.sites[k]) add++; seen.sites[k] = v; } }
         storage.set(SEEN_KEY, JSON.stringify(seen)); updateSeenBadge(); renderPanel(); $('.f-panel-msg').textContent = t('importOk')(add);
       } catch (_) { msg.textContent = t('importBad'); }
     });
@@ -272,16 +275,18 @@
     const ext = mk('button', 'f-icon', { type: 'button', 'aria-pressed': String(newTab), 'aria-label': t(newTab ? 'extOn' : 'extOff'), title: t(newTab ? 'extOn' : 'extOff') });
     ext.innerHTML = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/></svg>';
     ext.addEventListener('click', () => { newTab = !newTab; storage.set('mise-external-new-tab', String(newTab)); ext.setAttribute('aria-pressed', String(newTab)); ext.title = ext.ariaLabel = t(newTab ? 'extOn' : 'extOff'); document.querySelectorAll('.f-open').forEach(configureLink); });
+    // テーマ切替で <meta name="theme-color"> は追従させない(通常ページ(app.js)の仕様に合わせる。試作では触らない)
     const th = mk('button', 'f-icon', { type: 'button', 'aria-label': t('theme'), title: t('theme') }); th.textContent = '◐';
     th.addEventListener('click', () => { const v = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = v; storage.set('mise-theme', v); });
     const lg = mk('button', 'f-icon', { type: 'button', 'aria-label': t('lang'), title: t('lang') }); lg.textContent = '文';
     lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); renderList(id); updateCounter(); });
-    const sb = mk('button', 'f-seen', { type: 'button', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
+    const sb = mk('button', 'f-seen', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
     sb.innerHTML = '<span class="f-seen-label" aria-hidden="true">SEEN</span> <span class="f-seen-num" aria-hidden="true"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span>';
     sb.addEventListener('click', () => ($('.f-panel').hidden ? openPanel() : closePanel()));
     const kit = mk('span', 'f-kittens', { 'aria-hidden': 'true' }); kit.innerHTML = kittensHtml();
     const row0 = mk('div', 'f-row f-row0'); const proto = mk('span', 'f-proto', { title: t('protoTitle') }); proto.textContent = t('proto');
-    row0.append(counter0(), mk('span', 'f-grow'), proto, sb);
+    noteEl = mk('span', 'f-note', { role: 'status' });
+    row0.append(counter0(), noteEl, mk('span', 'f-grow'), proto, sb); updateNote();
     row1.append(logo, kit, space, dir, ext, th, lg);
 
     const row2 = mk('div', 'f-row f-filters');
@@ -294,11 +299,11 @@
       for (const r of scopes.regions.filter(r => String(r.code).toUpperCase().startsWith(cc + '-'))) scopeSel.append(new Option(`\u00a0\u00a0${nameOf(window.MISE_REGIONS, String(r.code).toUpperCase()) || r.code} (${r.count})`, String(r.code).toLowerCase()));
     }
     if (![...scopeSel.options].some(o => o.value === state.scope)) state.scope = 'all';
-    scopeSel.value = state.scope; scopeSel.addEventListener('change', () => { state.scope = scopeSel.value; refilter(); });
+    scopeSel.value = state.scope; scopeSel.addEventListener('change', () => changeScope(scopeSel.value));
     row2.append(scopeSel);
     const sel = mk('select', 'f-select', { 'aria-label': t('catLabel') });
     sel.append(new Option(t('catAll'), ''));
-    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => inScope(s) && s.roots.has(c.id)).length; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
+    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${n})`, c.id)); }
     sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
     row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
@@ -306,36 +311,69 @@
   }
   function syncUrl() {
     const u = new URL(location.href); u.search = ''; u.searchParams.set('view', 'feed');
-    if (state.scope !== 'all') u.searchParams.set('scope', state.scope); if (state.cat) u.searchParams.set('cat', state.cat); if (state.sort !== 'mix') u.searchParams.set('sort', state.sort); if (params.get('seed')) u.searchParams.set('seed', params.get('seed'));
+    if (state.scope !== 'all' || pathScope) u.searchParams.set('scope', state.scope); if (state.cat) u.searchParams.set('cat', state.cat); if (state.sort !== 'mix') u.searchParams.set('sort', state.sort); if (seedPinned) u.searchParams.set('seed', seed);
     history.replaceState(null, '', u.pathname + u.search);
   }
   function refilter() { syncUrl(); renderBar(); renderList(); go(0, true); }
 
+  // 描画は最初の FIRST_BATCH 枚だけ先に行い、残りは少しずつ足す(1,000 枚を一度に描かない)。終了カードは常に最後に置く
+  const FIRST_BATCH = 100, BATCH = 100;
+  let rendered = 0, endEl = null, chunkTimer = 0;
+  const totalCards = () => (list.length ? list.length + 1 : 1);
+  function renderMore(upTo) {
+    if (!endEl) return;
+    const target = Math.min(list.length, Math.max(upTo, rendered)), fresh = [], frag = document.createDocumentFragment();
+    for (let i = rendered; i < target; i++) { const c = card(list[i], i, list.length); fresh.push(c); frag.append(c); }
+    if (!fresh.length) return;
+    scroller.insertBefore(frag, endEl); cards.splice(rendered, 0, ...fresh); fresh.forEach(c => observer.observe(c)); rendered = target;
+  }
+  function resetList() {
+    observer && observer.disconnect(); dwell.clearAll(); clearTimeout(chunkTimer);
+    scroller.replaceChildren(); scroller.classList.remove('f-error'); cards = []; rendered = 0; endEl = null; current = 0;
+  }
+  function showLoading() {
+    resetList(); list = [];
+    const p = mk('p', 'f-loading', { role: 'status' }); p.textContent = t('loading') + '…'; scroller.className = 'f-scroll f-error'; scroller.append(p); updateCounter(); updateButtons();
+  }
   function renderList(keepId) {
-    list = visible();
-    observer && observer.disconnect();
-    scroller.replaceChildren();
-    cards = list.map((s, i) => card(s, i, list.length));
-    scroller.append(...(cards.length ? [...cards, endCard(list.length)] : [emptyCard()]));
-    cards = [...scroller.querySelectorAll('.f-card')];
-    cards.forEach(c => observer.observe(c));
+    list = visible(); resetList(); scroller.className = 'f-scroll';
+    if (!list.length) { const e = emptyCard(); scroller.append(e); cards = [e]; }
+    else {
+      endEl = endCard(list.length); scroller.append(endEl); cards = [endEl]; observer.observe(endEl);
+      renderMore(FIRST_BATCH);
+      const tick = () => { if (rendered >= list.length) return; renderMore(rendered + BATCH); chunkTimer = setTimeout(tick, 40); };
+      chunkTimer = setTimeout(tick, 250);
+    }
     const at = keepId ? Math.max(0, list.findIndex(s => s.id === keepId)) : 0;
-    current = at; scroller.scrollTop = 0; if (at) requestAnimationFrame(() => go(at, true));
+    scroller.scrollTop = 0; if (at) { renderMore(at + 1); requestAnimationFrame(() => go(at, true)); }
     updateCounter(); updateButtons();
+  }
+  // 範囲の全体件数(/api/scopes)。読み込んだ数がそれより少ないときは、画面に正直に出す
+  function scopeTotal() {
+    if (state.scope === 'all') return scopes.total;
+    const code = state.scope.toUpperCase(), row = (state.scope.includes('-') ? scopes.regions : scopes.countries).find(r => String(r.code).toUpperCase() === code);
+    return row ? row.count : undefined;
+  }
+  function updateNote() {
+    if (!noteEl) return;
+    const total = scopeTotal(), loaded = all.length;
+    noteEl.textContent = loadedScope !== null && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(loaded, Number.isFinite(total) ? total : loaded) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
   }
   function updateCounter() { if (counter) counter.textContent = list.length ? t('itemOf')(Math.min(current + 1, list.length), list.length) : ''; }
 
   // ---- 移動 ----
   function go(i, instant) {
     if (!cards.length) return;
-    i = Math.max(0, Math.min(cards.length - 1, i));
-    cards[i].scrollIntoView({ behavior: instant || reduced.matches ? 'auto' : 'smooth', block: 'start' });
-    return cards[i];
+    i = Math.max(0, Math.min(totalCards() - 1, i));
+    if (i >= rendered && list.length) renderMore(i >= list.length ? list.length : i + 1); // まだ描いていないカードへ飛ぶときは、そこまで先に描く
+    const c = i >= list.length && list.length ? cards[cards.length - 1] : cards[i];
+    c.scrollIntoView({ behavior: instant || reduced.matches ? 'auto' : 'smooth', block: 'start' });
+    return c;
   }
   // 連打でも取りこぼさないよう、スクロールが落ち着く前は「向かっている先」を基準にする
   let navTarget = null, navTimer = 0;
-  function step(d, focus) { const base = navTarget ?? current; navTarget = Math.max(0, Math.min(cards.length - 1, base + d)); clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(navTarget); if (c && focus) c.focus({ preventScroll: true }); }
-  function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; p.disabled = current <= 0; n.disabled = !cards.length || current >= cards.length - 1; }
+  function step(d, focus) { const base = navTarget ?? current; navTarget = Math.max(0, Math.min(totalCards() - 1, base + d)); clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(navTarget); if (c && focus) c.focus({ preventScroll: true }); }
+  function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; p.disabled = current <= 0; n.disabled = !cards.length || !list.length || current >= totalCards() - 1; }
 
   // ---- 地球連動 ----
   function fly(site) {
@@ -368,8 +406,8 @@
       }
       for (const e of entries) {
         const idx = e.target.dataset.index; if (idx === 'end') continue;
-        clearTimeout(dwell.get(e.target));
-        if (e.isIntersecting) dwell.set(e.target, setTimeout(() => { if (!document.hidden) markSeen(list[Number(idx)]); }, SEEN_DWELL_MS));
+        dwell.stop(e.target);
+        if (e.isIntersecting) dwell.start(e.target, list[Number(idx)]);
       }
     }, { root: scroller, threshold: IN_VIEW_THRESHOLD });
     loadSeen();
@@ -380,24 +418,44 @@
       else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); step(-1, true); }
     });
     addEventListener('pagehide', () => window.dispatchEvent(new CustomEvent('mise-fly-release')));
-    // 全サイトを 100 件ずつ cursor でたどって読む(上限 MAX_SITES。試作なので超えた分は出さない)
-    async function loadSites() {
-      const rows = []; let cursor = null;
+    // サイトは範囲ごとにサーバーから 100 件ずつ cursor でたどって読む(上限 MAX_SITES。超えた分は出さず、画面に注記する)。
+    // 2 ページ目以降の失敗は、読めた分で続ける(注記つき)。1 ページ目の失敗はエラー
+    async function loadSites(scope, signal) {
+      const rows = []; let cursor = null, failed = false;
       for (let i = 0; i < Math.ceil(MAX_SITES / 100); i++) {
-        const r = await fetch('/api/sites?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')); if (!r.ok) throw Error('API');
-        const j = await r.json(); rows.push(...j.items); cursor = j.next_cursor; if (!cursor) break;
+        let j;
+        try {
+          const r = await fetch('/api/sites?limit=100' + (scope !== 'all' ? '&scope=' + encodeURIComponent(scope) : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { signal });
+          if (!r.ok) throw Error('API'); j = await r.json();
+        } catch (e) { if (signal.aborted || i === 0) throw e; failed = true; break; }
+        rows.push(...j.items); cursor = j.next_cursor; if (!cursor) break;
       }
-      return rows;
+      return { rows, failed, more: !!cursor };
     }
-    Promise.all([fetch('/api/categories'), loadSites(), fetch('/api/scopes').then(r => r.ok ? r.json() : null).catch(() => null)]).then(async ([a, rows, sc]) => {
+    async function reload(scope) {
+      loadAbort && loadAbort.abort(); const ctl = loadAbort = new AbortController();
+      showLoading();
+      try {
+        const res = await loadSites(scope, ctl.signal); if (ctl.signal.aborted) return;
+        all = build(res.rows); loadedScope = scope; loadedComplete = !res.more && !res.failed; loadFailed = res.failed;
+        if (!categories.some(c => c.id === state.cat && !c.parent_id)) state.cat = '';
+        renderBar(); renderList(); updateCounter();
+      } catch (e) { if (ctl.signal.aborted) return; scroller.className = 'f-scroll f-error'; scroller.textContent = t('error'); }
+    }
+    // 範囲の変更。読み込み済みの範囲に含まれる(全件読めている)なら絞り込むだけ。そうでなければ 300ms 待って取り直す(連続操作は 1 回に)
+    changeScope = v => {
+      state.scope = v; syncUrl(); clearTimeout(loadTimer);
+      if (L.covers(loadedScope, loadedComplete, v)) { loadAbort && loadAbort.abort(); if (loadedScope !== null) { renderBar(); renderList(); go(0, true); } return; }
+      showLoading(); loadTimer = setTimeout(() => reload(v), LOAD_DEBOUNCE_MS);
+    };
+    Promise.all([fetch('/api/categories'), fetch('/api/scopes').then(r => r.ok ? r.json() : null).catch(() => null)]).then(async ([a, sc]) => {
       if (!a.ok) throw Error('API');
-      if (sc && Array.isArray(sc.countries)) scopes = { countries: sc.countries, regions: Array.isArray(sc.regions) ? sc.regions : [] };
-      categories = await a.json(); all = build(rows);
-      if (!categories.some(c => c.id === state.cat && !c.parent_id)) state.cat = '';
-      renderBar(); renderList(); updateCounter(); scroller.focus({ preventScroll: true });
+      if (sc && Array.isArray(sc.countries)) scopes = { total: sc.total, countries: sc.countries, regions: Array.isArray(sc.regions) ? sc.regions : [] };
+      categories = await a.json();
+      renderBar(); await reload(state.scope); scroller.focus({ preventScroll: true });
       // globe.js は load 後に遅延読込されるため、最初のカードの向き移動を一度だけ遅れて再送する
       setTimeout(() => { if (list[current]) { lastPlace = ''; fly(list[current]); } }, 2600);
-    }).catch(() => { scroller.textContent = t('error'); scroller.className += ' f-error'; });
+    }).catch(() => { scroller.className = 'f-scroll f-error'; scroller.textContent = t('error'); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
