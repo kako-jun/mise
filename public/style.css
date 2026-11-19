@@ -150,7 +150,7 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 @media (max-width: 700px) { .hud { display: none; } .preferences { position: absolute; top: 6px; right: 8px; } header { padding-top: 0; } .author-links { padding: 8px; } }
 .site-meta { font-size: 10px; opacity: .7; }
 /* タグの高さはフォントに依存させない（#165）: 固定の height + line-height 1 + 上下中央。日本語のフォールバックフォントで行ボックスが 1px 伸びるのを防ぐ。 */
-.site-tag { display: inline-flex; align-items: center; box-sizing: border-box; height: 15px; padding: 0 4px; line-height: 1; white-space: nowrap; vertical-align: middle; border: 1px solid currentColor; border-radius: 3px; }
+.site-tag { display: inline-flex; align-items: center; box-sizing: border-box; height: 1.5em; padding: 0 4px; line-height: 1; white-space: nowrap; vertical-align: middle; border: 1px solid currentColor; border-radius: 3px; }
 #history-bars { display: flex; gap: 3px; margin: 4px 0; }
 .heat-cell { width: 9px; height: 9px; display: inline-block; background: #c7d9dc; }
 .heat-cell[data-level="1"] { background: #79bca4; }
@@ -310,13 +310,14 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 .tag-chips[hidden] { display: none; }
 .tag-notice { margin: 4px 0 0; font-size: 13px; text-align: center; opacity: .85; }
 .tag-notice[hidden] { display: none; }
-.tag-chip { display: inline-flex; align-items: center; box-sizing: border-box; height: 24px; padding: 0 1px 0 10px; line-height: 1; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
+.tag-chip { display: inline-flex; align-items: center; box-sizing: border-box; height: calc(28em / 13); padding: 0 3px 0 10px; line-height: 1; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
 html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-color: #82ddea; }
-.tag-chip button { position: relative; box-sizing: border-box; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
-/* 見た目は 20px、押せる範囲は透明な ::before で広げる（28px、タッチ端末は 44px）。 */
-.tag-chip button::before { content: ""; position: absolute; inset: -4px; }
+.tag-chip button { position: relative; box-sizing: border-box; width: calc(22em / 13); height: calc(22em / 13); padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
+/* 見た目は 22px（13px 基準。em 追従）、押せる範囲は透明な ::before で広げる（28px、タッチ端末は 44px）。 */
+.tag-chip button::before { content: ""; position: absolute; inset: -3px; }
 .tag-chip button:hover, .tag-chip button:focus-visible { background: rgba(40, 103, 115, .2); }
-@media (pointer: coarse) { .tag-chip button::before { inset: -12px; } .site-tag { margin: 8px 0; } .site-tag::before { content: ""; position: absolute; inset: -9px -6px; } }
+/* タッチ端末: × の押せる範囲は縦 44px まで広げるので、はみ出し分（上下 8px）をチップ列の余白と行間で確保し、検索欄・おすすめリンク・隣の行を奪わない。横は隣のチップに食い込まない 5px まで。 */
+@media (pointer: coarse) { .tag-chips { padding: 8px 0; row-gap: 16px; } .tag-chip button::before { inset: -11px -5px; } .site-tag { margin: 8px 0; } .site-tag::before { content: ""; position: absolute; inset: -9px -1px; } }
 @media (max-width: 700px) { .tag-chips { flex: 1 0 100%; } }
 
 /* 検索結果リンク右の「別タブで開く」ボタン。枠・背景なし、タップ領域 32px は透明な余白で確保（負マージンで行高は増やさない）。 */
