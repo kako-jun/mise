@@ -100,6 +100,16 @@ function cursorTerms(vals) {
   return terms;
 }
 
+// ---- 全文索引（#126 第3段。migration 0027 の sites_fts = search_text の FTS5 trigram）----
+// 3 文字以上の検索語は、まず索引の該当数を上限付きで数え、TOTAL_CAP 以下なら一覧も件数も索引（MATCH）から引く（読み取りは該当数に比例）。
+// 超えるときは現行の「並びの索引を走査して instr で確かめる」形のまま（該当が多い語は 41 件で止まるこの形の方が安い）。1〜2 文字は trigram が 0 件を返す（エラーにならない）ので必ず instr。
+// 索引が未構築（fts_state.ready = 0）・表が無い（ロールバック後）なら instr の経路に落ちる。FTS は大小の畳み込みが instr と少し違う（σ と ς など）ので、索引で絞った行にも instr を重ねて結果を instr と完全に一致させる。
+export const FTS_MIN_CHARS = 3;
+// 絞り込み（範囲・カテゴリ・タグ）を併用するときは、索引の該当数をここまで数える。超えた分は索引を使わない（総件数は現行どおり instr で数える）。ほぼ全件に出る語で読み取りが増えないよう小さめにしてある。
+export const FTS_EXTRA_PROBE = 3000;
+// MATCH の引数は FTS5 の文字列リテラル（" で囲み、中の " は二重にする）。trigram では空白も含めて部分文字列の一致になる。
+export const ftsQuery = q => '"' + q.replace(/"/g, '""') + '"';
+
 // ---- 検索計画（#126 第2段）----
 // SQLite の計画器は件数を知らないので、重い経路は件数に応じてアプリが形を選ぶ。結果と並びはどの形でも同じ（読み取り行数だけが変わる）。
 //   カテゴリ: 小さい（直下の所属サイトが少ない）→ `IN (所属サイト)` で所属から引いて並べ替える / 大きい → 並びの索引を走査して `EXISTS` で確かめ、1 ページ分で止まる。
@@ -109,7 +119,8 @@ const CATEGORY_IN_COST = 7, CATEGORY_EXISTS_COST = 3;
 // 計画は先頭ページ（カーソルなし）で決めて覚え、続きのページ（カーソルあり）はそれを使う。ページごとにタグの該当数を数え直さない（よく使うタグ 5 個で 1 ページ約 1 万行）。
 // 計画は読み取りの形を選ぶだけで結果は変えないので、isolate ごとのメモリに短時間覚えるだけでよい（別の isolate に当たったら計画し直す）。件数が変わって古くなっても結果は同じ。
 const PLAN_TTL_MS = 10 * 60 * 1000, PLAN_CACHE_MAX = 500, planCache = new Map();
-const planKey = ({ cc, region, category, tags }) => JSON.stringify([cc ?? null, region ?? null, category ?? null, tags ?? []]);
+// q も鍵に含める（q の該当数で索引を使うかが決まる。続きのページが先頭ページと同じ判断になる）。
+const planKey = ({ cc, region, category, tags, q }) => JSON.stringify([cc ?? null, region ?? null, category ?? null, tags ?? [], q ?? null]);
 async function planFor(db, o, fresh) {
   const key = planKey(o), hit = planCache.get(key);
   if (!fresh && hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan;
@@ -118,13 +129,15 @@ async function planFor(db, o, fresh) {
   planCache.set(key, { plan, at: Date.now() });
   return plan;
 }
-export async function planQuery(db, { cc = null, region = null, category = null, tags = [] }) {
-  const plan = { categoryMode: 'in', categoryLeafCount: null, driveTag: null, tagsOverCap: false };
+export async function planQuery(db, { cc = null, region = null, category = null, tags = [], q = null }) {
+  // qMode: 'fts'（一覧も件数も索引）/ 'instr'。qOver: 索引の該当数が TOTAL_CAP を超えると分かった。qCountViaFts: 併用ありで総件数だけ索引から数える（該当が TOTAL_CAP 超〜FTS_EXTRA_PROBE 以下）。
+  const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false };
   const jobs = [];
   if (category) jobs.push((async () => {
     const scope = scopeKeyOf({ cc, region });
     const r = await db.prepare(`SELECT (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = 'all') AS n_all, (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = ?2) AS n_scope, (SELECT n FROM scope_counts WHERE scope = ?2) AS n_base, EXISTS (SELECT 1 FROM categories WHERE parent_id = ?1) AS has_child`).bind(category, scope).first();
     const nAll = r?.n_all ?? 0, nScope = r?.n_scope ?? 0, base = r?.n_base ?? 0;
+    plan.categoryAll = nAll;
     // 葉カテゴリの category_counts は「直下の所属サイト数」と同じ（子孫が無いので）。総件数はこれをそのまま使える。
     if (r && !r.has_child) plan.categoryLeafCount = nScope;
     const costIn = nAll * CATEGORY_IN_COST, costExists = nScope > 0 ? CATEGORY_EXISTS_COST * 41 * Math.max(base, 1) / nScope : Infinity;
@@ -139,10 +152,22 @@ export async function planQuery(db, { cc = null, region = null, category = null,
     plan.tagsOverCap = tags.length === 1 && best === null; // 単独のタグが上限を超える（他の絞り込みが無ければ総件数は上限付きと分かる）
   })());
   await Promise.all(jobs);
+  // 全文索引を使うか。稀なタグで引ける（タグの索引から ≤TAG_DRIVE_MAX 件）・小さいカテゴリ（IN 形で ≤TOTAL_CAP 件）のときは、そちらが既に該当数に比例して小さいので索引の該当数を数える分だけ損になる。使わない。
+  const small = !!plan.driveTag || (category && plan.categoryMode === 'in' && plan.categoryAll <= TOTAL_CAP);
+  if (q && [...q].length >= FTS_MIN_CHARS && !small) {
+    const extras = !!(cc || region || category || tags.length), cap = extras ? FTS_EXTRA_PROBE : TOTAL_CAP;
+    try { // 表が無い（ロールバック後）・未構築のときは instr に落ちる
+      const r = await db.prepare(`SELECT (SELECT ready FROM fts_state WHERE name = 'sites_fts') AS ready, (SELECT COUNT(*) FROM (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?1 LIMIT ?2)) AS n`).bind(ftsQuery(q), cap + 1).first();
+      if (r?.ready === 1) {
+        if (r.n <= TOTAL_CAP) plan.qMode = 'fts';
+        else { plan.qOver = true; plan.qCountViaFts = extras && r.n <= cap; }
+      }
+    } catch (_) { /* instr */ }
+  }
   return plan;
 }
 
-function filters({ cc, region, category, q, tags }, plan = {}) {
+export function filters({ cc, region, category, q, tags }, plan = {}) {
   const where = [], args = [];
   // 区画は国の部分集合（region_code は country_code が必須で先頭 2 文字が一致する）ので、区画があれば区画だけで絞る（国だけ分かって区画 NULL のサイトは出ない）。
   if (region) { where.push('s.region_code = ?'); args.push(region); }
@@ -152,7 +177,8 @@ function filters({ cc, region, category, q, tags }, plan = {}) {
     else where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)');
     args.push(category);
   }
-  if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
+  if (q && plan.qMode === 'fts') { where.push('s.rowid IN (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?)', 'instr(s.search_text, ?) > 0'); args.push(ftsQuery(q), q); } // 索引で絞り、instr で確かめる（畳み込みの差を消す）
+  else if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
   for (const t of tags ?? []) { // 複数タグは AND（タグごとに 1 条件）
     if (t === plan.driveTag) { where.push('s.id IN (SELECT site_id FROM site_tags WHERE label_ja = ? UNION SELECT site_id FROM site_tags WHERE label_en = ?)'); args.push(t, t); }
     else { where.push('EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = ? OR t.label_en = ?))'); args.push(t, t); }
@@ -169,10 +195,11 @@ const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r))
 // total の出し方（読み取りが件数に比例しないように。#126 第2段）:
 //   1. 末尾まで届いた（次ページなし）なら、読んだ行数から正確に分かる（追加の読み取りなし。0 ヒットも 1 回の走査で済む）
 //   2. 範囲（国・区画）だけの絞り込みは集計表 scope_counts、直下が葉のカテゴリだけの絞り込みは category_counts（どちらも正確）
+//   2.5. q が 3 文字以上で索引の該当が TOTAL_CAP 超（かつ他の絞り込みなし）は、数えずに上限付き。TOTAL_CAP 以下なら索引から正確に数える。絞り込み併用で該当が FTS_EXTRA_PROBE 以下なら総件数だけ索引から数える
 //   3. それ以外（q・tag・葉でないカテゴリ）は TOTAL_CAP + 1 件で数えるのをやめる（単独のタグが上限を超えると分かっているときは数えもしない）。超えたら total = TOTAL_CAP、total_capped = true（画面は「1,000+」）
 export async function querySites(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }) {
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
-  const basePlan = await planFor(db, { cc, region, category, tags }, !hasCursor);
+  const basePlan = await planFor(db, { cc, region, category, tags, q }, !hasCursor);
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
@@ -182,7 +209,7 @@ export async function querySites(db, { cc = null, region = null, category = null
     return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
   };
   // IN（所属サイト・稀なタグの索引）で引く計画は、範囲条件を足すと SQLite が並びの索引の走査に切り替えて IN が効かなくなる。1 本の `A OR B OR C`（afterCursor）なら IN で引いたまま並べ替える。
-  const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag;
+  const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag || plan.qMode === 'fts'; // 索引（MATCH）も IN で引く計画
   let results;
   if (hasCursor && inDriven) { const c = afterCursor(cursor.vals); results = await run([c.sql], c.args, limit + 1, 0); }
   else if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0, t.order)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
@@ -196,6 +223,12 @@ export async function querySites(db, { cc = null, region = null, category = null
     else if (plain) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(scopeKeyOf({ cc, region })).first())?.total ?? 0; out.total_capped = false; }
     else if (plan.categoryLeafCount !== null && !q && !tags?.length) { out.total = plan.categoryLeafCount; out.total_capped = false; }
     else if (plan.tagsOverCap && !q && !category && !cc && !region) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
+    else if (plan.qOver && !category && !cc && !region && !tags?.length) { out.total = TOTAL_CAP; out.total_capped = true; } // q だけで索引の該当が上限超え: 数えない
+    else if (plan.qCountViaFts) { // 併用ありで q の該当が上限超え〜FTS_EXTRA_PROBE 以下: 一覧は instr の走査のまま、総件数だけ索引から数える
+      const f2 = filters({ cc, region, category, q, tags }, { ...plan, qMode: 'fts' });
+      const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s WHERE ${f2.where.join(' AND ')} LIMIT ${TOTAL_CAP + 1})`).bind(...f2.args).first())?.n ?? 0;
+      out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
+    }
     else {
       const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''} LIMIT ${TOTAL_CAP + 1})`).bind(...args).first())?.n ?? 0;
       out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// sites.search_text（検索用の正規化済みテキスト）を、NFKC + 小文字化で全行埋め直す。
+// sites.search_text（検索用の正規化済みテキスト）を、NFKC + 小文字化で埋め直す。値が今と同じ行は UPDATE しない（全文索引 sites_fts があると同値の UPDATE でも書き込みが増える。#126 第3段）。
 // サイトを追加・紹介文やタグを直した後に実行する（タグ ja/en も含める）（migration の暫定値は ASCII の小文字化だけ）。
 // 使い方: node scripts/refresh-search-text.mjs --local [--persist-to <dir>]        ローカル D1（DB は mise のみ）
 //         node scripts/refresh-search-text.mjs --remote [--db mise|mise-preview]   本番（既定 mise）/ プレビュー用 DB。意図して実行すること
@@ -29,18 +29,22 @@ export function parseArgs(argv) {
   return { mode, db, persistTo };
 }
 
+// 埋め直しが必要な行（今の search_text と違う行）だけを返す。rows は id・name・description_ja・description_en・url・search_text・tags を持つ。
+export const changedRows = rows => rows.filter(r => r.search_text !== searchText(r));
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   let o; try { o = parseArgs(process.argv.slice(2)); } catch (e) { console.error(e.message); process.exit(2); }
   const base = ['wrangler', 'd1', 'execute', o.db, `--${o.mode}`, ...(o.persistTo ? ['--persist-to', o.persistTo] : [])];
   const wr = args => execFileSync('npx', [...base, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
-  const rows = JSON.parse(wr(['--json', '--command', 'SELECT id, name, description_ja, description_en, url FROM sites']))[0].results;
+  const rows = JSON.parse(wr(['--json', '--command', 'SELECT id, name, description_ja, description_en, url, search_text FROM sites']))[0].results;
   const tags = JSON.parse(wr(['--json', '--command', 'SELECT site_id, label_ja, label_en FROM site_tags ORDER BY site_id, label_ja']))[0].results;
   const bySite = new Map();
   for (const t of tags) { if (!bySite.has(t.site_id)) bySite.set(t.site_id, []); bySite.get(t.site_id).push(t); }
   for (const r of rows) r.tags = bySite.get(r.id) ?? [];
+  const todo = changedRows(rows);
   const q = s => `'${s.replace(/'/g, "''")}'`;
   const dir = mkdtempSync(join(tmpdir(), 'mise-st-')), file = join(dir, 'st.sql');
-  writeFileSync(file, rows.map(r => `UPDATE sites SET search_text = ${q(searchText(r))} WHERE id = ${q(r.id)};`).join('\n'));
-  wr(['--file', file]);
-  console.log(`updated ${rows.length} rows (${o.db} --${o.mode})`);
+  writeFileSync(file, todo.map(r => `UPDATE sites SET search_text = ${q(searchText(r))} WHERE id = ${q(r.id)};`).join('\n'));
+  if (todo.length) wr(['--file', file]);
+  console.log(`updated ${todo.length} of ${rows.length} rows (${o.db} --${o.mode})`);
 }
