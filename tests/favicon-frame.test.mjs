@@ -26,3 +26,24 @@ const mutations = {
 for (const [name, frame] of Object.entries(mutations)) {
   test(`変異「${name}」は NG になる`, () => assert.notDeepEqual(faviconProblems(frame), []));
 }
+
+// 追加の変異（下半分の存在を見る検査。#151 最終確認）
+const DARKC = [0x20, 0x28, 0x31, 255];
+const more = {
+  '下半分（y8〜15）を濃色で塗る': mutate((px, set) => { for (let y = 8; y < 16; y++) for (let x = 2; x <= 13; x++) set(x, y, DARKC); }),
+  '下 6 行（y10〜15）を透明にする': mutate((px, set) => { for (let y = 10; y < 16; y++) for (let x = 0; x < 16; x++) set(x, y, [0, 0, 0, 0]); }),
+  '列2〜13・y6〜15 をクリームで埋め両側に濃色 1 画素ずつ': mutate((px, set) => { for (let y = 6; y < 16; y++) for (let x = 2; x <= 13; x++) set(x, y, CREAM); for (let y = 6; y < 16; y++) { set(2, y, DARKC); set(13, y, DARKC); } }),
+};
+for (const [name, frame] of Object.entries(more)) {
+  test(`変異「${name}」は NG になる`, () => assert.notDeepEqual(faviconProblems(frame), []));
+}
+
+// 正常系（偽陽性を出さない）: 輝度 ×0.95・1px 左ずらし・左右反転
+const normals = {
+  '輝度 ×0.95': mutate((px, set) => { for (let i = 0; i < 256; i++) for (let k = 0; k < 3; k++) px[i * 4 + k] = Math.round(px[i * 4 + k] * 0.95); }),
+  '1px 左ずらし': mutate((px, set) => { const o = Buffer.from(px); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) set(x, y, x < 15 ? Array.from(o.subarray((y * 16 + x + 1) * 4, (y * 16 + x + 1) * 4 + 4)) : [0, 0, 0, 0]); }),
+  '左右反転': mutate((px, set) => { const o = Buffer.from(px); for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) set(x, y, Array.from(o.subarray((y * 16 + 15 - x) * 4, (y * 16 + 15 - x) * 4 + 4))); }),
+};
+for (const [name, frame] of Object.entries(normals)) {
+  test(`正常系「${name}」は OK のまま`, () => assert.deepEqual(faviconProblems(frame), []));
+}

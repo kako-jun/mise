@@ -29,11 +29,13 @@ export function icoFrame(ico, size) {
 }
 
 // 16px フレームが「M」として成立しているかを調べ、問題の一覧を返す（空なら OK）。RGBA 必須。
+// 座標は 16px の実フレームに固定した回帰ロックで、デザイン（M の大きさ・位置・太さ）を少しでも変えたら座標の更新が要る。
 // 座標は 16px の実フレームに基づく: 脚は列 3〜5 と 10〜12、中央の切れ込みは列 6〜9、下の脚の隙間は列 4〜6 と 9〜11。
 export function faviconProblems({ w, h, bpp, px }) {
   if (w !== 16 || h !== 16 || bpp !== 4) return ['16x16 の RGBA ではない'];
   const at = (x, y) => { const o = (y * w + x) * 4; return { r: px[o], g: px[o + 1], b: px[o + 2], a: px[o + 3] }; };
   const dark = c => c.r + c.g + c.b < 250;
+  const veryDark = c => c.r + c.g + c.b < 200; // 脚の面の判定用（茶の面が輪郭と混ざった画素 ≈243 は面として許す。濃色の輪郭 ≈121 は面でない）
   const gapLike = c => c.a < 200 || dark(c); // 透明、または濃色の輪郭
   const problems = [];
   const colors = new Set(); let visible = 0;
@@ -43,8 +45,14 @@ export function faviconProblems({ w, h, bpp, px }) {
   // 脚: 切れ込みの左右の脚は不透明で暗くない（クリーム・橙・茶の面）
   for (const [name, xs] of [['左脚', [3, 4, 5]], ['右脚', [10, 11, 12]]]) {
     const bad = [];
-    for (let y = 1; y <= 5; y++) for (const x of xs) { const c = at(x, y); if (c.a < 250 || dark(c)) bad.push(`(${x},${y})`); }
+    for (let y = 1; y <= 5; y++) for (const x of xs) { const c = at(x, y); if (c.a < 250 || veryDark(c)) bad.push(`(${x},${y})`); }
     if (bad.length) problems.push(`${name}の面が不透明・明色でない: ${bad.slice(0, 3).join('')}`);
+  }
+  // 下の脚: 行 9〜14 の列 3 と 11〜12 が（左は 1 列だけ: 1px 左にずれても脚の隙間（列 5）に入らないように）不透明で暗くない（M の下半分が存在する）
+  for (const [name, xs] of [['左', [3]], ['右', [11, 12]]]) {
+    const bad = [];
+    for (let y = 9; y <= 14; y++) for (const x of xs) { const c = at(x, y); if (c.a < 250 || veryDark(c)) bad.push(`(${x},${y})`); }
+    if (bad.length) problems.push(`下の${name}脚の面が不透明・明色でない: ${bad.slice(0, 3).join('')}`);
   }
   // 上端の切れ込みが上から 6 行とも中央に見える
   for (let y = 0; y <= 5; y++) if (![6, 7, 8, 9].some(x => gapLike(at(x, y)))) problems.push(`行 ${y} に切れ込みが無い`);
