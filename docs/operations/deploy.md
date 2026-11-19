@@ -7,7 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
-- 画像（ファビコン等）は R2 バケット `mise-media`（バインディング `MEDIA`、`/icon/<hash>.webp` で配信）。バケットは Cloudflare アカウントで R2 を有効化したうえで作る（次の節）。
+- 画像（ファビコン等）は R2 バケット `mise-media`（バインディング `MEDIA`、`/icon/<hash>.webp`・`/thumb/<hash>.webp` で配信）。バケットは Cloudflare アカウントで R2 を有効化したうえで作る（次の節）。
 - 必須の secret は `INTAKE_SALT`（申請の IP ハッシュの塩。未設定だと申請の受付が 503 で止まる。[requests.md](requests.md)）。設定は [秘密情報](#秘密情報)。
 
 ## ローカル
@@ -63,7 +63,14 @@ npx wrangler r2 bucket list
 ```
 
 - **ローカル検証**（Cloudflare には触れない。miniflare の R2 模擬、状態は `.wrangler/state`）: `uv run --with pillow python3 scripts/favicon/favicon.py run --apply --store r2`（既定で `--local`）か、`npx wrangler r2 object put mise-media/icon/<hash>.webp --file <f> --content-type image/webp --local` で置き、`npm run dev` で `/icon/<hash>.webp`（200・`immutable`・`ETag`）、存在しない名前で 404、一覧にファビコンが出ることを確かめる。`--remote` は本番バケットへ書くので、バケット作成後にだけ使う。
-- **無料枠の目安**（R2 の無料枠。数字は課金ページで要確認）: 保存 10 GB/月、書き込み系（Class A）100 万回/月、読み取り系（Class B）1,000 万回/月、egress（転送）無料。ファビコンは 1 件 約 1.5 KB なので、10 万件で約 150 MB・初回の書き込み 10 万回。月次更新は、台帳に置いた印が無いか画像のハッシュが変わったものだけ書く（印があれば同じ中身の 200 でも書かない）ので無料枠に収まる。404 も R2 の読み取りに数えるが、不正な名前（32 桁 16 進でないもの）は R2 を見ずに 404 を返す。
+- **無料枠の目安**（R2 の無料枠。数字は課金ページで要確認）: 保存 10 GB/月、書き込み系（Class A）100 万回/月、読み取り系（Class B）1,000 万回/月、egress（転送）無料。ファビコンは 1 件 約 1.5 KB なので、10 万件で約 150 MB・初回の書き込み 10 万回。サムネイルは 1 件 約 5〜14 KB（試行 20 件。画質を上げても 20〜40 KB 想定）なので 10 万件で約 0.5〜4 GB・初回の書き込み 10 万回（ファビコンと合わせて月の枠 100 万回の 2 割）、1 日 約 3,300 枚（[thumbnails.md](../collection/thumbnails.md#量産の見積もり)）。月次更新は、台帳に置いた印が無いか画像のハッシュが変わったものだけ書く（印があれば同じ中身の 200 でも書かない）ので無料枠に収まる。404 も R2 の読み取りに数えるが、不正な名前（32 桁 16 進でないもの）は R2 を見ずに 404 を返す。
+- **サムネイル（#130。migration 0028）を本番へ流す順序**（この段では未実施。`--r2-remote`・`d1 execute --remote` の書き込みは人が承認してから）:
+  1. **migration 0028 の適用 → マージ（デプロイ）**。新 Worker は `sites.thumb_path`・`thumb_lqip` を読むので、列が無いと API が 500 になる（旧 Worker は列を読まないので、先に適用しても壊れない）。本番 `mise` とプレビュー `mise-preview` の両方に `npx wrangler d1 migrations apply <db> --remote`。0028 は列を足すだけで、FTS・集計トリガ・並びの索引には触れない（`tests/thumb-migration.test.mjs`）。
+  2. 台帳に対象を入れ、手元で撮る: `thumbnail.py import --sites ...` → `run --apply`（ローカル保存。まず少数）。
+  3. 画像を R2 本番へ置く: `thumbnail.py upload --apply --r2-remote`（または `run --apply --store r2 --r2-remote`）。**画像が先**。
+  4. D1 へ反映: `thumbnail.py sql --out var/thumbnails.sql`（既定は r2-remote の印がある画像だけ）→ 内容を確認して `npx wrangler d1 execute mise --remote --file var/thumbnails.sql`。`thumb_path` が入って初めて API が `thumb_url` を返す（画像が先、SQL が後なので 404 の時間帯が出ない）。
+  5. 戻し方: 反映を止めるだけなら `UPDATE sites SET thumb_path=NULL, thumb_lqip=NULL, thumb_captured_at=NULL`（画面は代替ビジュアルに戻る。R2 の画像は残してよい）。画像を消すときは D1 の NULL 化が先、R2 の `thumb/<hash>.webp` 削除が後。列ごと戻す場合は旧 Worker へ戻してから `ALTER TABLE sites DROP COLUMN ...`。
+  ローカル検証: `npm run db:migrate` → `thumbnail.py upload --apply`（模擬 R2）→ `sql --store r2-local` を `wrangler d1 execute mise --local --file` で適用 → `npm run dev` で `/thumb/<hash>.webp` と `?view=feed`。
 - プレビューのバケットは本番と別（`previews.r2_buckets` の `mise-media-preview`）。ブランチの未レビューのコードが本番の画像を触らないため。書き込みはしない運用で、空なら `/icon/` は 404。
 - ファビコンを本番へ流す順序は「`--r2-remote` で画像を置く → `sql`（既定の保存先 r2-remote の印があるものだけ）を D1 へ適用」。台帳は保存先ごとの印を持つ（[collection/favicons.md](../collection/favicons.md#r2-への保存と配信)）。取り下げ（#29）での削除経路は [collection/favicons.md](../collection/favicons.md) の設計（未実装）。
 

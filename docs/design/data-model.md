@@ -16,6 +16,9 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `description_ja` | 日本語の一文紹介、必須 | 0001 |
 | `description_en` | 英語の一文紹介、NULL 可。日本語に書かれた事実だけを訳し、情報を足さない | 0010 |
 | `favicon_path` | 自前取得した 32px WebP の内容ハッシュ名（`<hash>.webp`）。取れていなければ NULL。取得・更新は [collection/favicons.md](../collection/favicons.md)。配信は Worker の `/icon/<hash>.webp`（R2 バケット `mise-media`。API は `favicon_path` をそのまま返し、配信 URL を `favicon_url` に足す。形が `<32桁16進>.webp` でない値は `favicon_url` を null にする） | 0002 |
+| `thumb_path` | 撮影したサムネイル（PC 画面の最初の画面を幅 320px の WebP にしたもの）の内容ハッシュ名（`<hash>.webp`）。取れていなければ NULL。撮影・キュー・保存は [collection/thumbnails.md](../collection/thumbnails.md)。配信は Worker の `/thumb/<hash>.webp`（R2 の `thumb/`）。API は `thumb_path` を返さず、配信 URL を `thumb_url` に出す（形が `<32桁16進>.webp` でなければ null）。**撮影の状態（成否・期限・失敗回数・obscured・除外）は D1 に持たず、手元の台帳 `var/thumbnails.sqlite` に持つ** | 0028 |
+| `thumb_lqip` | 極小プレースホルダ（`data:image/webp;base64,...`、約 130 文字）。API は `thumb_lqip`（画像が無い・形が違う値は null） | 0028 |
+| `thumb_captured_at` | サムネイルの撮影日時（ISO 8601 UTC） | 0028 |
 | `registered_at` | mise への登録日時。INSERT 時に DB のトリガが記録する | 0003, 0006 |
 | `bulk_import` | 台帳などからの一括投入の印（1）。直近登録の集計（`/api/activity`）・NEW タグ・既定の並びの先頭から外す。この場合の `registered_at` は出典の確認日 | 0015 |
 | `last_crawled_at` | 最後に取得に成功した日時 | 0007 |

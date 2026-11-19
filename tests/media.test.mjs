@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import app from '../src/index.js';
-import { mediaKey, faviconUrl } from '../src/media.js';
+import { mediaKey, faviconUrl, thumbUrl } from '../src/media.js';
 
 // R2（MEDIA）から画像を配信する /icon/<hash>.webp（#125）。R2 は最小の模擬で置き換える。
 const H = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
@@ -11,7 +11,8 @@ const get = (path, env, headers) => app.request(path, { headers }, env);
 test('mediaKey/faviconUrl: 32 桁 16 進 + .webp だけ許可', () => {
   assert.equal(mediaKey('icon', `${H}.webp`), `icon/${H}.webp`);
   for (const bad of [`${H}.png`, `${H}`, `${H}.WEBP`, `${H.toUpperCase()}.webp`, `${H}0.webp`, `${H.slice(1)}.webp`, '../x.webp', `${H}.webp.x`, 'g'.repeat(32) + '.webp', '']) assert.equal(mediaKey('icon', bad), null, bad);
-  assert.equal(mediaKey('thumb', `${H}.webp`), null);   // thumb は未実装
+  assert.equal(mediaKey('thumb', `${H}.webp`), `thumb/${H}.webp`);
+  assert.equal(mediaKey('nope', `${H}.webp`), null);
   assert.equal(faviconUrl(`${H}.webp`), `/icon/${H}.webp`);
   assert.equal(faviconUrl(null), null);
   assert.equal(faviconUrl('/icons/x.png'), null);
@@ -61,7 +62,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { querySites } from '../src/sites.js';
 test('querySites: favicon_url を足し、favicon_path の形は変えない', async () => {
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
+  db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,thumb_path TEXT,thumb_lqip TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
 CREATE TABLE site_tags(site_id TEXT, label_ja TEXT NOT NULL, label_en TEXT);
 CREATE TABLE site_categories(site_id TEXT, category_id TEXT);
 CREATE TABLE scope_counts(scope TEXT PRIMARY KEY, n INTEGER NOT NULL);
@@ -113,4 +114,31 @@ test('/icon/x/ のように scope 側へ落ちるパスは R2 を見ずに 404',
     assert.notEqual(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
   }
   assert.deepEqual(env.MEDIA.calls, []);
+});
+
+// サムネイル /thumb/<hash>.webp（#130）。icon と同じ仕組み（R2 のキーだけ thumb/）。
+test('thumbUrl: 32 桁 16 進 + .webp だけ /thumb/ の URL にする', () => {
+  assert.equal(thumbUrl(`${H}.webp`), `/thumb/${H}.webp`);
+  for (const bad of [null, undefined, '', `${H}.png`, '/thumbs/x.webp', `${H}0.webp`]) assert.equal(thumbUrl(bad), null, String(bad));
+});
+
+test('/thumb/<hash>.webp: 200 + immutable 1 年 + ETag + image/webp、キーは thumb/', async () => {
+  const env = { MEDIA: fakeBucket({ [`thumb/${H}.webp`]: 'RIFFthumb' }) };
+  const r = await get(`/thumb/${H}.webp`, env);
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('Content-Type'), 'image/webp');
+  assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+  assert.equal(r.headers.get('ETag'), '"etag-1"');
+  assert.equal(await r.text(), 'RIFFthumb');
+  assert.deepEqual(env.MEDIA.calls, [`thumb/${H}.webp`]);
+  assert.equal((await get(`/thumb/${H}.webp`, env, { 'If-None-Match': '"etag-1"' })).status, 304);
+});
+
+test('/thumb/: 不正な名前は R2 を見ずに 404・無ければ 404 no-store・icon/ の画像は thumb として配信しない・MEDIA 無しでも 404', async () => {
+  const env = { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) };
+  for (const f of [`${H}.png`, 'abc.webp', `${H.toUpperCase()}.webp`, `${H}0.webp`, '..%2Fx.webp']) assert.equal((await get(`/thumb/${f}`, env)).status, 404, f);
+  assert.deepEqual(env.MEDIA.calls, []);
+  const r = await get(`/thumb/${H}.webp`, env);   // thumb/ に無ければ 404（icon/ に同じ名前があっても返さない）
+  assert.equal(r.status, 404); assert.equal(r.headers.get('Cache-Control'), 'no-store');
+  assert.equal((await get(`/thumb/${H}.webp`, {})).status, 404);
 });
