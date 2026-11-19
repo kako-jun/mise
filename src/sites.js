@@ -5,6 +5,7 @@
 //   2. sortIndexSql() と regionSortIndexSql() が返す CREATE INDEX を新しい migration に書く（scripts/check-api-headers.mjs が最新の migration と一致を検査する）。
 //   3. 追加した列が画面に必要なら COLUMNS にも足す（並びだけに使う列は足さなくてよい）。
 //   4. docs/design/ui.md の「既定の並び」を更新する。カーソルは配列なので形式の変更は不要。
+import { faviconUrl } from './media.js';
 export const PAGE_SIZE = 40, MAX_LIMIT = 100;
 // 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの、区画（都道府県・州）は region_code そのもの（0026。例 JP-13）。
 export const ALL_SCOPE = 'all';
@@ -162,7 +163,8 @@ function filters({ cc, region, category, q, tags }, plan = {}) {
 
 // 画面に出す列。bulk_import は並びのほか NEW タグの抑止に画面が使うので含める。並びだけに使う列は SORT_KEYS で足りるのでここには要らない。
 const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
-const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; return { ...r, category_ids: JSON.parse(category_ids_json || '[]') }; };
+// favicon_path はハッシュ名のまま返し、配信 URL を favicon_url に足す（取れていなければ null）。
+const shape = ({ category_ids_json, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; return { ...r, favicon_url: faviconUrl(r.favicon_path), category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
 // total は先頭ページ（カーソルなし）のときだけ入れる。q は cleanQuery 済み、tags は cleanTags 済みであること。

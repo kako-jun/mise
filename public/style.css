@@ -73,7 +73,7 @@ body { touch-action: pan-y; }
 #directory-sites, #result-list { list-style: none; padding-left: 0; }
 #directory-sites li, #result-list li { display: flex; gap: 10px; align-items: flex-start; }
 .site-icon { width: 28px; height: 28px; flex: 0 0 28px; display: grid; place-items: center; border: 1px solid #76a8b3; border-radius: 5px; font-size: 20px; color: #08788e; background: #eff9fa; }
-.site-icon img { max-width: 24px; max-height: 24px; }
+.site-icon img { width: 24px; height: 24px; object-fit: contain; }
 .site-content { min-width: 0; }
 .site-categories { font-size: 11px; }
 
@@ -219,6 +219,9 @@ html[data-theme="dark"] .search-row input[type="search"] { background: rgba(18, 
 html[data-theme="dark"] .search-icon { color: #82ddea; }
 [data-i18n="concept"] { user-select: none; -webkit-user-select: none; }
 .site-icon { width: 30px; height: 30px; flex-basis: 30px; border: 0; border-radius: 0; background: transparent; }
+/* 黒い単色ファビコンがダークの背景に溶けないよう、淡い下地を敷く（ダークは明るめの下地。ライトは縁だけで、白一色の画像は溶けうる＝稀なので許容） */
+.site-icon img { border-radius: 4px; box-shadow: 0 0 0 1px rgba(8, 120, 142, .18); }
+html[data-theme="dark"] .site-icon img { background: rgba(239, 250, 255, .16); box-shadow: 0 0 0 1px rgba(130, 221, 234, .28); }
 
 
 @media (max-width: 1199px) { .hud { display: none; } }

@@ -5,9 +5,10 @@
 - **Cloudflare 内**で配信、API、データベースを扱う。
 - API とサーバー側処理は **Cloudflare Workers + Hono**（`src/index.js`、`src/seo.js`）。
 - データベースは **Cloudflare D1**（`migrations/`）。
+- 画像（ファビコン。後でサムネイル）は **Cloudflare R2**（バケット `mise-media`、バインディング `MEDIA`）。Worker の `/icon/<hash>.webp`（`src/media.js`）が配信する。名前は内容ハッシュなので immutable・1 年キャッシュ、`ETag`/304 に対応、無ければ 404。`MEDIA` が無い環境（バケット未作成・未設定）でも Worker は落ちず 404 を返す。サムネイル `/thumb/<hash>.webp`（#130）は同じ関数で足せる。
 - 画面は **HTML / CSS / JavaScript**（`public/`）。UI フレームワークは使わない。Astro は採用しない。
 - 3D は **Three.js**。ソースは `src/client/globe.js`、three 本体は `vendor/three.module.js`（同梱）。`npm run build:globe`（esbuild で minify・tree-shake）が `public/globe.js` を生成する。globe を変えたら再ビルドして生成物もコミットする（直接編集しない）。`public/land-110m.geojson` は `scripts/slim-land.mjs` で軽量化済み（小数 2 桁・property 除去）。
-- 配信: `wrangler.jsonc` の `assets.run_worker_first` に `/*` と、静的ファイルの拡張子ごとの除外（`!/*.js` など）を指定する。`/api/*`・`/`・範囲ページ（`/jp/` `/us/` `/all/`、末尾スラッシュなしは `/jp/` へ 301）・`/sitemap.xml` は Worker が返し、それ以外（`/robots.txt`・`/style.css` など）は `public/` の静的ファイル。`public/` に新しい拡張子の静的ファイルを足すときは除外も足す（[seo.md](seo.md)）。範囲ページは `/jp/` のように階層の下から返るため、`index.html` は CSS・JS・地球儀の資源をすべて絶対パス（`/style.css` など）で参照する。
+- 配信: `wrangler.jsonc` の `assets.run_worker_first` に `/*` と、静的ファイルの拡張子ごとの除外（`!/*.js` など）を指定する。`/api/*`・`/`・範囲ページ（`/jp/` `/us/` `/all/`、末尾スラッシュなしは `/jp/` へ 301）・`/sitemap.xml` は Worker が返し、それ以外（`/robots.txt`・`/style.css` など）は `public/` の静的ファイル。**`/icon/*.webp` は Worker が返す必要があるので、`run_worker_first` の除外に `!/*.webp` を入れない**（除外すると静的ファイル扱いになり、無いときに Worker に届かず空の 404 になる。`public/` には `.webp` を置かない）。`public/` に新しい拡張子の静的ファイルを足すときは除外も足す（[seo.md](seo.md)）。範囲ページは `/jp/` のように階層の下から返るため、`index.html` は CSS・JS・地球儀の資源をすべて絶対パス（`/style.css` など）で参照する。
 
 ## API
 
