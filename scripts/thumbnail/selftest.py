@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import thumbnail as T  # noqa: E402
 
 NO_BWRAP = '--no-bwrap' in sys.argv
+NO_LIMITS = '--no-limits' in sys.argv
 log = []
 lock = threading.Lock()
 LOG_PORTS = {}
@@ -131,7 +132,7 @@ def main():
     threading.Thread(target=srv2.serve_forever, daemon=True).start()
     tmp = tempfile.mkdtemp(prefix='mise-thumbs-selftest-')
     stats_box = {}
-    cap = T.NodeCapturer(sandbox=not NO_BWRAP, timeout=120, proxy_kwargs={
+    cap = T.NodeCapturer(sandbox=not NO_BWRAP, limits=not NO_LIMITS, timeout=120, proxy_kwargs={
         'resolve_override': {'a.test': '127.0.0.1', 'b.test': '127.0.0.1', 'www.a.test': '127.0.0.1'}, 'allow_ports': {P}, 'upstream': {'http': None, 'https': None}},
         on_proxy=lambda s: stats_box.update(s))
     base = f'http://a.test:{P}'
@@ -186,11 +187,62 @@ def main():
     hit = any(w == 'bad_port' for _, w in stats_box.get('blocked', [])) and not any(p == Q for p, _ in log)
     bad += (not hit); print(f"{'PASS' if hit else 'FAIL'}\t80/443 以外のポート(サブリソース含む)を遮断し、第 2 サーバーに届いていない", file=sys.stderr)
 
+    bad += upstream_checks(cap)
     if not NO_BWRAP:
         bad += isolation(cap, tmp)
     print(f'selftest: {"all passed" if not bad else f"{bad} 件失敗"}', file=sys.stderr)
     import shutil
     shutil.rmtree(tmp, ignore_errors=True)
+    return bad
+
+
+def upstream_checks(cap):
+    """上流プロキシ経由モード: ① 上流には検査した IP 宛てで届く(名前を渡さない)、② リクエスト密輸の各形が上流に 1 件も届かない。実 Chromium で撮影も通す。"""
+    import socket
+    sys.path.insert(0, str(Path(__file__).parents[2] / 'tests'))
+    import test_netfilter as TN
+    seen = []
+
+    class U(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            with lock:
+                seen.append(self.requestline + ' | Host: ' + (self.headers.get('Host') or ''))
+            body = b'<!doctype html><title>t</title><body style="background:#48a"><h1>upstream</h1>'
+            self.send_response(200); self.send_header('Content-Type', 'text/html'); self.send_header('Content-Length', str(len(body))); self.send_header('Connection', 'close'); self.end_headers(); self.wfile.write(body)
+    up = Srv(('127.0.0.1', 0), U); threading.Thread(target=up.serve_forever, daemon=True).start(); uport = up.server_address[1]
+    ucap = T.NodeCapturer(sandbox=not NO_BWRAP, limits=not NO_LIMITS, timeout=120, proxy_kwargs={'resolve_override': {'pub.test': '93.184.216.34'}, 'upstream': {'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}})
+    rec, _ = ucap('http://pub.test/', ['http://pub.test/'])
+    ok1 = bool(rec.get('ok'))
+    ok2 = bool(seen) and seen[0].startswith('GET http://pub.test/ HTTP/1.1') and seen[0].endswith('Host: pub.test')
+    bad = 0
+    for name, ok in (('上流プロキシ経由でも実 Chromium で撮れる', ok1), ('上流へは平文 HTTP を名前のまま渡す(Squid 系は Host を URI に書き換えるため IP 宛てにできない)', ok2)):
+        bad += (not ok); print(f"{'PASS' if ok else 'FAIL'}\t上流連鎖: {name}", file=sys.stderr)
+    # 密輸の各形(上流には何も届かない)
+    from netfilter import FilterProxy
+    got = []
+    srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(32); sport = srv.getsockname()[1]
+
+    def serve():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+            got.append(c.recv(65536)); c.close()
+    threading.Thread(target=serve, daemon=True).start()
+    p = FilterProxy(resolve_override={'pub.test': '93.184.216.34'}, upstream={'http': ('127.0.0.1', sport), 'https': ('127.0.0.1', sport)}).start()
+    for name, req in TN.Proxy.SMUGGLE.items():
+        out = TN.talk(p, req)
+        ok = out.startswith(b'HTTP/1.1 403')
+        bad += (not ok); print(f"{'PASS' if ok else 'FAIL'}\t密輸: {name}", file=sys.stderr)
+    ok = not got
+    bad += (not ok); print(f"{'PASS' if ok else 'FAIL'}\t密輸の全ての形で上流に 1 件も届いていない", file=sys.stderr)
+    p.stop(); srv.close(); up.shutdown()
     return bad
 
 
@@ -206,6 +258,8 @@ ls /home | tr '\\n' ' ' | sed 's/^/HOME_LS:/'; echo
 [ -e /root ] && [ -n "$(ls -A /root 2>/dev/null)" ] && echo VISIBLE:/root
 touch /usr/x 2>/dev/null && echo WRITABLE:/usr
 touch /etc/x 2>/dev/null && echo WRITABLE:/etc
+[ -e /sys/class/net ] && echo SYSNET:visible || echo SYSNET:none
+for p in /var/tmp /opt /srv; do [ -n "$(ls -A $p 2>/dev/null)" ] && echo VISIBLE:$p; done
 touch {d}/ok 2>/dev/null && echo WRITABLE_TMPDIR:ok
 tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\\n' ' ' | sed 's/^/NETDEVS:/'; echo
 (exec 3<>/dev/tcp/1.1.1.1/53) 2>/dev/null && echo NET:reachable || echo NET:unreachable
@@ -221,6 +275,8 @@ tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' ' | tr '\\n' ' ' | sed 's/^/NET
         ('/usr・/etc に書けない', not any(l.startswith('WRITABLE:') for l in lines)),
         ('撮影用の一時ディレクトリには書ける', 'WRITABLE_TMPDIR:ok' in lines),
         ('ネットワークデバイスは lo だけ', any(l.startswith('NETDEVS:') and l.split(':', 1)[1].split() == ['lo'] for l in lines)),
+        ('/sys にホストのネットワーク IF 名が見えない', 'SYSNET:none' in lines),
+        ('/var/tmp・/opt・/srv は空', 'VISIBLE:/var/tmp' not in lines and 'VISIBLE:/opt' not in lines and 'VISIBLE:/srv' not in lines),
         ('外向きのネットワークに届かない(1.1.1.1:53)', 'NET:unreachable' in lines),
     ]
     bad = 0

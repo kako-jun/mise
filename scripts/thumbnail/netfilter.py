@@ -1,7 +1,7 @@
 """サムネイル撮影用の検査付きフィルタリングプロキシ(#130)。標準ライブラリのみ。
 
 ブラウザの全通信(ワーカー・ポップアップ・iframe・WebSocket・WebRTC・prefetch を含む)をここへ通す。ブラウザ自身には名前解決も外への経路も持たせない。
-ここが宛先を検査して通すか止めるかを決める「唯一の関所」で、**アドレス判定の表(is_public_address)もこの 1 か所だけ**(Node 側には判定を持たない)。
+ここが宛先を検査して通すか止めるかを決める「唯一の関所」で、**アドレス判定の表は scripts/pipeline/netaddr.py の 1 か所だけ**(fetcher.check_public_host も同じ表。Node 側には判定を持たない)。
 
 検査(CONNECT の宛先も平文 HTTP の宛先も同じ):
   - ポートは 80/443 だけ(テスト用の追加ポートは allow_ports で明示したときだけ)
@@ -15,9 +15,12 @@
 import asyncio
 import ipaddress
 import os
+import re
 import socket
+import sys
 import threading
 import urllib.parse
+from pathlib import Path
 
 ALLOWED_PORTS = (80, 443)
 MAX_BYTES = 48 * 1024 * 1024       # 1 ページで受け取る総バイト数(試行 20 件の最初の画面は 2〜32MB。暴走・無限ストリームを止める上限であって通常のページを止めない値)
@@ -25,34 +28,14 @@ MAX_CONNS = 300                    # 1 ページで受け付ける接続数
 MAX_HEAD = 64 * 1024
 MAX_BODY = 1024 * 1024             # 平文 HTTP のリクエスト本文の上限
 IO_TIMEOUT = 60
+MAX_LINE = 8192                    # リクエスト行・ヘッダ 1 行の長さ
+MAX_HEADERS = 100
+TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")   # RFC 9110 の token(メソッド名・ヘッダ名)
 
-# is_global が true を返しても通さない範囲(IPv4 を埋め込む移行用アドレス・非推奨の範囲。マルチキャストは is_public_address で除く)。
-# is_global が既に false にする範囲(198.18/15・192.0.0/24・ドキュメント用・100.64/10・ループバック・リンクローカル・ULA 等)はここに重ねて書かない。
-_EXTRA_BLOCKED_V6 = tuple(ipaddress.ip_network(n) for n in (
-    '::/96',          # IPv4 互換(::7f00:1 など。非推奨だが一部の実装は IPv4 として扱う)
-    '64:ff9b::/96',   # NAT64(IPv4 を埋め込む)
-    '64:ff9b:1::/48',
-    '2002::/16',      # 6to4(IPv4 を埋め込む)
-    'fec0::/10',      # サイトローカル(非推奨)
-    'fe80::/10',      # リンクローカル全体
-    '100::/64',
-))
+sys.path.insert(0, str(Path(__file__).parents[1] / 'pipeline'))
+import netaddr  # noqa: E402  (判定の表は scripts/pipeline/netaddr.py の 1 か所)
 
-
-def is_public_address(value):
-    """文字列のアドレスが公開アドレスなら True。判定は Python の is_global に揃え、IPv4 を埋め込む IPv6 は埋め込まれた側も見る。"""
-    try:
-        ip = ipaddress.ip_address(str(value).strip().strip('[]').split('%', 1)[0])
-    except ValueError:
-        return False
-    if isinstance(ip, ipaddress.IPv6Address):
-        if ip.ipv4_mapped is not None:
-            return is_public_address(str(ip.ipv4_mapped))
-        if any(ip in n for n in _EXTRA_BLOCKED_V6):
-            return False
-    if ip.is_multicast or ip.is_unspecified:   # is_global はマルチキャストを真と返すことがあるので明示的に除く
-        return False
-    return bool(ip.is_global)
+is_public_address = netaddr.is_public_address
 
 
 class Blocked(Exception):
@@ -119,6 +102,35 @@ def _split_hostport(target):
     return host, int(port)
 
 
+def parse_head(head):
+    """リクエストの先頭(リクエスト行とヘッダ)を厳密に解釈する。上流へ送る前に、リクエスト密輸になる形(行内の裸の CR・LF・NUL・制御文字、
+    obs-fold、token でないメソッド名・ヘッダ名、長すぎる行・多すぎるヘッダ)を拒否する。戻り: (method, target, [(name, value)])。"""
+    lines = head[:-4].split(b'\r\n')
+    for ln in lines:
+        if len(ln) > MAX_LINE:
+            raise Blocked('bad_request', 'line too long')
+        if any((c < 0x20 and c != 0x09) or c == 0x7f for c in ln):   # CR・LF・NUL・その他の制御文字(HTAB は許す)
+            raise Blocked('bad_request', 'control character')
+    if len(lines) - 1 > MAX_HEADERS:
+        raise Blocked('bad_request', 'too many headers')
+    parts = lines[0].decode('iso-8859-1').split(' ')
+    if len(parts) != 3 or not TOKEN.match(parts[0]) or parts[2] not in ('HTTP/1.1', 'HTTP/1.0') or not parts[1]:
+        raise Blocked('bad_request', lines[0][:60].decode('iso-8859-1'))
+    headers = []
+    for ln in lines[1:]:
+        if ln[:1] in (b' ', b'\t'):
+            raise Blocked('bad_request', 'obs-fold')
+        k, sep, v = ln.partition(b':')
+        if not sep or not TOKEN.match(k.decode('iso-8859-1')):
+            raise Blocked('bad_request', 'bad header')
+        headers.append((k.decode('iso-8859-1'), v.decode('iso-8859-1').strip(' \t')))
+    return parts[0], parts[1], headers
+
+
+def _authority(ip, port):
+    return f'[{ip}]:{port}' if ':' in ip else f'{ip}:{port}'
+
+
 class FilterProxy:
     """1 回の撮影につき 1 つ起動する。unix_path があれば Unix ソケット、無ければ 127.0.0.1 の空きポートで待ち受ける。
     resolve_override / allow_ports はテスト専用(selftest・単体テストが手元のサーバーを相手にするため)。本番では指定しない。"""
@@ -132,6 +144,7 @@ class FilterProxy:
         self.bytes = 0; self.conns = 0; self.over_limit = False
         self.blocked = []      # [(host:port, reason)]
         self.forwarded = []    # [host:port]
+        self.unpinned = []     # 上流プロキシが IP 宛て CONNECT を拒み、名前の CONNECT に戻したホスト(その接続だけ名前解決が上流＝IP を固定できない)
         self.port = None
         self._loop = None; self._server = None; self._thread = None; self._writers = set(); self._ready = threading.Event(); self._err = None
 
@@ -241,16 +254,7 @@ class FilterProxy:
         if self.over_limit:
             raise Blocked('limit', 'over limit')
         self.conns += 1
-        head = await self._read_head(r)
-        lines = head[:-4].decode('iso-8859-1').split('\r\n')
-        try:
-            method, target, _ver = lines[0].split(' ', 2)
-        except ValueError:
-            raise Blocked('bad_request', lines[0][:60])
-        headers = []
-        for ln in lines[1:]:
-            k, _, v = ln.partition(':')
-            headers.append((k.strip(), v.strip()))
+        method, target, headers = parse_head(await self._read_head(r))
         if method.upper() == 'CONNECT':
             host, port = _split_hostport(target)
             ips = await self._check(host, port)
@@ -260,7 +264,7 @@ class FilterProxy:
             if p.scheme != 'http' or not p.hostname:
                 raise Blocked('bad_request', target[:80])
             try:
-                port = p.port or 80
+                port = p.port if p.port is not None else 80   # :0 を 80 扱いにしない(0 はポート検査で拒否)
             except ValueError:
                 raise Blocked('bad_port', target[:80])
             ips = await self._check(p.hostname, port)
@@ -281,15 +285,41 @@ class FilterProxy:
                 last = e
         raise last or OSError('connect failed')
 
+    async def _upstream_connect(self, up, authority):
+        """上流プロキシへ CONNECT する。戻り: (reader, writer, status)。接続できなければ OSError。"""
+        rr, ww = await asyncio.wait_for(asyncio.open_connection(*up), 15)
+        ww.write(f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n'.encode()); await ww.drain()
+        resp = await asyncio.wait_for(rr.readuntil(b'\r\n\r\n'), 20)
+        m = re.match(rb'HTTP/\d\.\d (\d{3})', resp)
+        return rr, ww, int(m.group(1)) if m else 0
+
     async def _tunnel(self, r, w, host, port, ips):
-        up_r, up_w, via = await self._open('https', host, port, ips)
+        up = self.upstream.get('https')
+        if up:
+            # 上流経由でも、検査した IP に固定する(名前解決を上流に渡さない)。TLS の SNI・証明書検証はトンネルの中で Chromium がホスト名で行う。
+            up_r = up_w = None
+            for ip in ips:
+                rr, ww, status = await self._upstream_connect(up, _authority(ip, port))
+                if status == 200:
+                    up_r, up_w = rr, ww; break
+                ww.close()
+            if up_w is None:
+                # 上流が IP 宛ての CONNECT を拒む(4xx/5xx)場合だけ、名前の CONNECT に戻す。この場合のみ名前解決が上流＝固定できない(記録に残す)。
+                rr, ww, status = await self._upstream_connect(up, f'{host}:{port}')
+                if status != 200:
+                    ww.close(); await self._reply(w, 502, 'upstream refused'); return
+                up_r, up_w = rr, ww; self.unpinned.append(host)
+            self._writers.add(up_w)
+            try:
+                self.forwarded.append(f'{host}:{port}')
+                w.write(b'HTTP/1.1 200 Connection Established\r\n\r\n'); await w.drain()
+                await self._pipe(r, w, up_r, up_w)
+            finally:
+                self._writers.discard(up_w); up_w.close()
+            return
+        up_r, up_w, _via = await self._open('https', host, port, ips)
         self._writers.add(up_w)
         try:
-            if via:
-                up_w.write(f'CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n'.encode()); await up_w.drain()
-                resp = await asyncio.wait_for(up_r.readuntil(b'\r\n\r\n'), 20)
-                if b' 200' not in resp.split(b'\r\n', 1)[0]:
-                    await self._reply(w, 502, 'upstream refused'); return
             self.forwarded.append(f'{host}:{port}')
             w.write(b'HTTP/1.1 200 Connection Established\r\n\r\n'); await w.drain()
             await self._pipe(r, w, up_r, up_w)
@@ -297,25 +327,36 @@ class FilterProxy:
             self._writers.discard(up_w); up_w.close()
 
     async def _plain(self, r, w, method, p, port, headers, ips):
+        lengths = [v for k, v in headers if k.lower() == 'content-length']
+        if any(k.lower() == 'transfer-encoding' for k, _ in headers):
+            raise Blocked('bad_request', 'chunked request body')
+        if len(lengths) > 1:
+            raise Blocked('bad_request', 'duplicate content-length')   # 密輸に使われる(上流と解釈がずれる)
         n = 0
-        for k, v in headers:
-            if k.lower() == 'transfer-encoding':
-                raise Blocked('bad_request', 'chunked request body')
-            if k.lower() == 'content-length':
-                n = int(v) if v.isdigit() else -1
-        if n < 0 or n > MAX_BODY:
-            raise Blocked('bad_request', 'body size')
+        if lengths:
+            if not (lengths[0].isascii() and lengths[0].isdigit()) or int(lengths[0]) > MAX_BODY:
+                raise Blocked('bad_request', 'content-length')
+            n = int(lengths[0])
         body = await asyncio.wait_for(r.readexactly(n), IO_TIMEOUT) if n else b''
         up_r, up_w, via = await self._open('http', p.hostname, port, ips)
         self._writers.add(up_w)
         try:
-            drop = {'proxy-connection', 'connection', 'keep-alive', 'proxy-authorization', 'te', 'upgrade', 'host', 'transfer-encoding'}
+            drop = {'proxy-connection', 'connection', 'keep-alive', 'proxy-authorization', 'te', 'upgrade', 'host', 'transfer-encoding', 'content-length'}
             hdr = ''.join(f'{k}: {v}\r\n' for k, v in headers if k.lower() not in drop)
+            if n:
+                hdr += f'Content-Length: {n}\r\n'
             authority = p.netloc.rsplit('@', 1)[-1]
             path = p.path or '/'
             if p.query:
                 path += '?' + p.query
-            target = urllib.parse.urlunsplit(('http', authority, path, '', '')) if via else path
+            # 上流経由の平文 HTTP は、IP 宛て(絶対 URI を IP、Host を元の名前)にできない: 実機の上流プロキシ(Squid 系)は Host ヘッダを URI のホストに
+            # 書き換えるので、仮想ホストのサイトが既定ページ(403 等)を返してしまう(2026-11-19 に実機で確認)。そのため名前のまま上流へ渡し、
+            # 名前解決が上流＝IP を固定できない事実を unpinned に記録する。HTTPS(CONNECT)は IP に固定できる(_tunnel)。
+            if via:
+                target = urllib.parse.urlunsplit(('http', authority, path, '', ''))
+                self.unpinned.append(p.hostname)
+            else:
+                target = path
             up_w.write(f'{method} {target} HTTP/1.1\r\nHost: {authority}\r\n{hdr}Connection: close\r\n\r\n'.encode() + body); await up_w.drain()
             self.forwarded.append(f'{p.hostname}:{port}')
             await self._pipe(None, w, up_r, up_w)   # 以降のクライアントからの入力は読まない(2 本目のリクエストを通さない)

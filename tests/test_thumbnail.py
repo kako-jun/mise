@@ -571,6 +571,8 @@ class Sandbox(unittest.TestCase):
         for flag in ('--die-with-parent', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-net', '--new-session', '--clearenv', '--ro-bind / /', '--tmpfs /home', '--tmpfs /tmp', '--tmpfs /run', '--bind /tmp/mise-thumb-x /tmp/mise-thumb-x'):
             self.assertIn(flag, s)
         self.assertIn('systemd-run --user --scope', s); self.assertIn('MemoryMax=', s); self.assertIn('CPUQuota=', s)
+        for t in ('--tmpfs /var/tmp', '--tmpfs /opt', '--tmpfs /srv', '--tmpfs /sys', '--ro-bind /sys/devices/system/cpu /sys/devices/system/cpu'):
+            self.assertIn(t, s)
         self.assertNotIn('--dev-bind', s)   # ホストのデバイス・ルートを書き込み可で見せない
         self.assertNotIn('--no-sandbox', s)
         self.assertIn('--proxy-unix', s); self.assertNotIn('--proxy ', s)   # 外へ出る道はフィルタへの Unix ソケットだけ
@@ -585,6 +587,91 @@ class Sandbox(unittest.TestCase):
             self.assertIn(needle, js)
         self.assertNotIn("'--no-sandbox'", js)
         self.assertNotIn('proxy: {', js)   # Playwright の proxy オプション(bypass が付く)は使わない
+
+
+class Limits(unittest.TestCase):
+    def test_limits_unavailable_is_refused_unless_no_limits(self):
+        with mock.patch.object(T, '_systemd_scope_ok', return_value=False):
+            with self.assertRaises(RuntimeError):
+                T.NodeCapturer(sandbox=True, log=lambda *_: None).check_ready()
+            T.NodeCapturer(sandbox=True, limits=False, log=lambda *_: None).check_ready()   # 明示すれば進む
+            c = T.NodeCapturer(sandbox=True, limits=False, log=lambda *_: None); self.assertNotIn('systemd-run', ' '.join(c.command('/tmp/x', 'https://a.example/', ['https://a.example/'], mock.Mock(url='x'))))
+
+    def test_cli_apply_exits_3_without_limits_and_no_limits_flag_runs(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(T, '_systemd_scope_ok', return_value=False):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply']), 3)
+            self.assertIn('--no-limits', err.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(T.main(['--db', str(Path(d) / 't.sqlite'), 'run', '--apply', '--no-limits']), 0)
+
+    def test_scope_check_requires_memory_max_to_take_effect(self):
+        cg = tempfile.TemporaryDirectory(); self.addCleanup(cg.cleanup)
+        limit = 512 * 1024 * 1024
+        ok = mock.Mock(returncode=0, stdout='0::/user.slice/run-x.scope\n')
+        with mock.patch.object(T.subprocess, 'run', return_value=ok), mock.patch.object(T, 'Path', side_effect=lambda *a: Path(*a) if a != ('/sys/fs/cgroup',) else Path(cg.name)):
+            (Path(cg.name) / 'user.slice' / 'run-x.scope').mkdir(parents=True)
+            (Path(cg.name) / 'user.slice' / 'run-x.scope' / 'memory.max').write_text(f'{limit}\n')
+            self.assertTrue(T._systemd_scope_ok(limit))
+            (Path(cg.name) / 'user.slice' / 'run-x.scope' / 'memory.max').write_text('max\n')
+            self.assertFalse(T._systemd_scope_ok(limit))   # 委譲されず上限が効いていない
+        with mock.patch.object(T.subprocess, 'run', return_value=mock.Mock(returncode=1, stdout='')):
+            self.assertFalse(T._systemd_scope_ok(limit))
+
+    def test_socket_dir_is_short_even_when_tmpdir_is_long(self):
+        with mock.patch('tempfile.gettempdir', return_value='/tmp/' + 'x' * 100):
+            self.assertEqual(T.job_tmp_base(), '/tmp')
+        with mock.patch('tempfile.gettempdir', return_value='/var/tmp'):
+            self.assertEqual(T.job_tmp_base(), '/var/tmp')
+
+
+class ExcludeAndUpload(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory(); self.addCleanup(self.dir.cleanup)
+        self.db = T.connect(':memory:'); self.addCleanup(self.db.close); T.import_sites(self.db, [('a', 'https://a.example/'), ('b', 'https://b.example/')])
+        T.run(self.db, T.LocalDirStore(self.dir.name), fake_capturer({'https://a.example/': dict(OK), 'https://b.example/': dict(OK)}), T0, gate=FakeGate(), log=lambda *_: None)
+
+    def test_upload_never_uploads_excluded_sites(self):
+        T.set_exclude(self.db, ['a'])
+        calls = []; st = T.R2Store(runner=lambda a: (calls.append(a), 0)[1])
+        self.assertEqual(T.upload(self.db, st, self.dir.name, apply=True, log=lambda *_: None), 1)
+        self.assertEqual(len(calls), 1); self.assertIn('mise-media/thumb/' + T.thumb_name('b'), calls[0]); self.assertFalse(any(T.thumb_name('a') in ' '.join(c) for c in calls))
+        self.assertEqual(T.upload(self.db, st, self.dir.name, apply=False, log=lambda *_: None), 0)
+
+    def test_exclude_of_uploaded_site_warns_and_points_to_delete(self):
+        dbp = str(Path(self.dir.name) / 'x.sqlite'); db = T.connect(dbp); T.import_sites(db, [('a', 'https://a.example/'), ('b', 'https://b.example/')])
+        T._mark(db, T.thumb_name('a'), 'r2-remote', 'c'); T._mark(db, T.thumb_name('b'), 'local', 'c'); db.commit(); db.close()   # a は R2 に置いた、b はローカルだけ
+        self.assertEqual(T.uploaded_sites(T.connect(dbp), ['a', 'b']), ['a'])
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            T.main(['--db', dbp, 'import', '--exclude', 'a,b'])
+        e = err.getvalue(); self.assertIn('R2 にアップロード済み', e); self.assertIn('a', e); self.assertIn('D1 が先、R2 が後', e); self.assertNotIn('delete --site a', e)
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            T.main(['--db', dbp, 'import', '--exclude', 'a', '--delete-uploaded'])
+        self.assertIn('delete --site a --r2-remote', err.getvalue())   # dry-run の delete を案内(--apply は付けない)
+
+    def test_delete_apply_requires_d1_done_for_r2(self):
+        dbp = str(Path(self.dir.name) / 'y.sqlite'); db = T.connect(dbp); T.import_sites(db, [('a', 'https://a.example/')]); db.close()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err), mock.patch.object(T, 'R2Store', side_effect=AssertionError('must not touch R2')):
+            self.assertEqual(T.main(['--db', dbp, 'delete', '--site', 'a', '--apply']), 2)
+        self.assertIn('--d1-done', err.getvalue())
+
+    def test_unpinned_note_is_recorded_on_success_and_failure(self):
+        rec = dict(OK, proxy={'over_limit': False, 'blocked': [], 'unpinned': ['a.example']})
+        r = T.attempt('https://a.example/', FakeGate(), lambda u, a: (rec, png()))
+        self.assertEqual(r['notes'], 'upstream_dns_unpinned: a.example')
+        db = T.connect(':memory:'); self.addCleanup(db.close); T.import_sites(db, [('a', 'https://a.example/')])
+        row = db.execute('SELECT * FROM thumbs').fetchone()
+        T.record(db, T.LocalDirStore(self.dir.name), row, r, T0)
+        self.assertEqual(db.execute('SELECT notes FROM thumbs').fetchone()[0], 'upstream_dns_unpinned: a.example')
+        fail = dict(status='error', error='timeout', notes='upstream_dns_unpinned: a.example')
+        T.record(db, T.LocalDirStore(self.dir.name), db.execute('SELECT * FROM thumbs').fetchone(), fail, T0)
+        le = db.execute('SELECT last_error FROM thumbs').fetchone()[0]
+        self.assertEqual(le, 'timeout [upstream_dns_unpinned: a.example]'); self.assertEqual(T.error_code(le), 'timeout')
+        self.assertEqual(T.retry_days(le, 1), T.RETRY_DAYS)
 
 
 class Cli(unittest.TestCase):

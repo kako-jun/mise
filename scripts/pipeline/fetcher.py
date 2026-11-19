@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.robotparser
 
 import freshness
+import netaddr
 
 USER_AGENT = 'MiseResearchBot/0.1 (+https://github.com/kako-jun/mise)'
 ROBOT_TOKEN = 'MiseResearchBot'
@@ -45,7 +46,7 @@ def check_public_host(host):
     if ALLOW_PRIVATE:
         return ips
     for ip in ips:
-        if not ipaddress.ip_address(ip).is_global:
+        if not netaddr.is_public_address(ip):   # 判定の表は netaddr 1 か所(is_global だけでは ::7f00:1・64:ff9b::7f00:1 を通す)
             raise FetchError('ssrf_blocked', f'{host} -> non-public address')
     return ips
 

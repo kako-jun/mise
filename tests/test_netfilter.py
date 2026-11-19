@@ -8,7 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT / 'scripts' / 'thumbnail'))
+sys.path.insert(0, str(ROOT / 'scripts' / 'pipeline'))
 import netfilter as N
+import netaddr
 
 # アドレス判定の表(1 か所: netfilter.is_public_address)。Node 側には判定を持たないので、この表が唯一の入力表。
 PUBLIC = ['93.184.216.34', '8.8.8.8', '1.1.1.1', '2606:4700::1111', '2001:4860:4860::8888', '::ffff:8.8.8.8', '[2606:4700::1111]']
@@ -42,6 +44,29 @@ class Addresses(unittest.TestCase):
         import ipaddress
         for a in ['1.2.3.4', '100.64.1.1', '198.18.5.5', '192.0.0.9', '192.0.0.10', '169.254.1.1', '8.8.4.4']:
             self.assertEqual(N.is_public_address(a), ipaddress.ip_address(a).is_global, a)
+
+
+class FetcherSharesTable(unittest.TestCase):
+    """fetcher.check_public_host(robots 取得で使う)も同じ表(netaddr)を使う。is_global だけでは通ってしまう形を拒否する。"""
+    def check(self, ip):
+        import fetcher
+        from unittest import mock
+        fam = socket.AF_INET6 if ':' in ip else socket.AF_INET
+        with mock.patch.object(fetcher.socket, 'getaddrinfo', return_value=[(fam, socket.SOCK_STREAM, 6, '', (ip, 0))]):
+            return fetcher.check_public_host('x.example')
+
+    def test_rejects_forms_that_is_global_alone_lets_through(self):
+        import fetcher
+        for ip in ('::7f00:1', '64:ff9b::7f00:1', '2002:7f00:1::', 'fe80::1', 'fec0::1', '224.0.0.1', 'ff02::1', '127.0.0.1', '198.18.0.1', '::ffff:10.0.0.1'):
+            with self.assertRaises(fetcher.FetchError) as c:
+                self.check(ip)
+            self.assertEqual(c.exception.code, 'ssrf_blocked', ip)
+
+    def test_public_still_passes_and_same_function_is_used(self):
+        import fetcher
+        self.assertEqual(self.check('93.184.216.34'), ['93.184.216.34']); self.assertEqual(self.check('2606:4700::1111'), ['2606:4700::1111'])
+        self.assertIs(N.is_public_address, netaddr.is_public_address)   # 表は 1 か所
+        self.assertIs(fetcher.netaddr, netaddr)
 
 
 class Resolve(unittest.TestCase):
@@ -202,12 +227,11 @@ class Proxy(unittest.TestCase):
         out = talk(p, f'GET http://origin.test:{o.port}/ HTTP/1.1\r\nHost: x\r\n\r\n'.encode())
         self.assertFalse(out.endswith(b'ok')); self.assertTrue(p.over_limit); self.assertEqual(o.conns, 3)   # 上限超過は全接続を切る
 
-    def test_upstream_chain_connect_and_plain(self):
-        up = Origin(echo=True)   # 上流プロキシの代わり。受け取った先頭行を echo する
-        # 上流は CONNECT に 200 を返してからエコーする必要がある: 専用の簡易上流を使う
-        up.close()
+    # ---- 上流プロキシ経由 ----
+    def fake_upstream(self, refuse_ip_connect=False, refuse_first_ip=None):
+        """上流プロキシの代わりのサーバー。受け取ったリクエストを記録する。CONNECT には 200(refuse_ip_connect なら IP 宛てを 403)を返してからエコー。"""
         seen = []
-        srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(8); uport = srv.getsockname()[1]
+        srv = socket.socket(); srv.bind(('127.0.0.1', 0)); srv.listen(16); uport = srv.getsockname()[1]
 
         def serve():
             while True:
@@ -215,23 +239,113 @@ class Proxy(unittest.TestCase):
                     c, _ = srv.accept()
                 except OSError:
                     return
-                data = c.recv(65536); seen.append(data)
-                if data.startswith(b'CONNECT'):
-                    c.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n'); c.sendall(b'echo:' + c.recv(100))
-                else:
-                    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nup')
-                c.close()
+                try:
+                    c.settimeout(2); data = c.recv(65536); seen.append(data)
+                    if data.startswith(b'CONNECT'):
+                        dest = data.split(b' ', 2)[1].decode()
+                        is_ip = dest.rsplit(':', 1)[0].strip('[]').replace('.', '').replace(':', '').isalnum() and (dest[0].isdigit() or dest[0] == '[')
+                        if (refuse_ip_connect and is_ip) or (refuse_first_ip and dest.startswith(refuse_first_ip)):
+                            c.sendall(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+                        else:
+                            c.sendall(b'HTTP/1.1 200 Connection Established\r\n\r\n'); c.sendall(b'echo:' + c.recv(100))
+                    else:
+                        c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nup')
+                except OSError:
+                    pass
+                finally:
+                    c.close()
         threading.Thread(target=serve, daemon=True).start(); self.addCleanup(srv.close)
-        p = N.FilterProxy(resolve_override={'pub.test': '93.184.216.34'}, upstream={'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}).start(); self.addCleanup(p.stop)
+        return seen, uport
+
+    def up_proxy(self, uport, **kw):
+        kw.setdefault('resolve_override', {'pub.test': '93.184.216.34'})
+        p = N.FilterProxy(upstream={'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}, **kw).start(); self.addCleanup(p.stop)
+        return p
+
+    def test_upstream_connect_is_pinned_to_checked_ip(self):
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport)
         out = talk(p, b'CONNECT pub.test:443 HTTP/1.1\r\nHost: pub.test:443\r\n\r\n', tunnel_data=b'hi')
-        self.assertIn(b'echo:hi', out); self.assertTrue(seen[0].startswith(b'CONNECT pub.test:443 HTTP/1.1'))
-        out = talk(p, b'GET http://pub.test/p HTTP/1.1\r\nHost: pub.test\r\n\r\n')
-        self.assertTrue(out.endswith(b'up')); self.assertTrue(seen[1].startswith(b'GET http://pub.test/p HTTP/1.1'))   # 上流へは絶対 URI で
-        # 上流があっても、内部アドレス・引けない名前は上流へ送らない
-        n = len(seen)
-        for t in ('CONNECT 127.0.0.1:443 HTTP/1.1\r\n\r\n', 'CONNECT x.invalid:443 HTTP/1.1\r\n\r\n', 'CONNECT pub.test:22 HTTP/1.1\r\n\r\n'):
+        self.assertIn(b'echo:hi', out)
+        self.assertTrue(seen[0].startswith(b'CONNECT 93.184.216.34:443 HTTP/1.1'), seen[0][:60])   # 宛先は名前でなく検査した IP
+        self.assertNotIn(b'pub.test', seen[0].split(b'\r\n')[0]); self.assertEqual(p.unpinned, [])
+
+    def test_upstream_ipv6_connect_uses_bracketed_ip(self):
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport, resolve_override={'v6.test': '2606:4700::1111'})
+        talk(p, b'CONNECT v6.test:443 HTTP/1.1\r\n\r\n', tunnel_data=b'x')
+        self.assertTrue(seen[0].startswith(b'CONNECT [2606:4700::1111]:443 HTTP/1.1'), seen[0][:60])
+
+    def test_upstream_tries_next_ip_when_first_refused(self):
+        seen, uport = self.fake_upstream(refuse_first_ip='93.184.216.34')
+        p = N.FilterProxy(resolver=lambda h: ['93.184.216.34', '93.184.216.35'], upstream={'http': ('127.0.0.1', uport), 'https': ('127.0.0.1', uport)}).start(); self.addCleanup(p.stop)
+        out = talk(p, b'CONNECT multi.example:443 HTTP/1.1\r\n\r\n', tunnel_data=b'hi')
+        self.assertIn(b'echo:hi', out)
+        self.assertEqual([x.split(b' ')[1] for x in seen], [b'93.184.216.34:443', b'93.184.216.35:443']); self.assertEqual(p.unpinned, [])
+
+    def test_upstream_refusing_ip_connect_falls_back_to_name_and_is_recorded(self):
+        seen, uport = self.fake_upstream(refuse_ip_connect=True); p = self.up_proxy(uport)
+        out = talk(p, b'CONNECT pub.test:443 HTTP/1.1\r\n\r\n', tunnel_data=b'hi')
+        self.assertIn(b'echo:hi', out)
+        self.assertEqual([x.split(b' ')[1] for x in seen], [b'93.184.216.34:443', b'pub.test:443'])   # IP 宛て → 拒否 → 名前宛て
+        self.assertEqual(p.unpinned, ['pub.test'])   # 名前解決が上流＝固定できなかった事実を記録
+
+    def test_upstream_plain_http_is_passed_by_name_and_recorded_as_unpinned(self):
+        """実機の上流(Squid 系)は IP 宛ての絶対 URI だと Host を IP に書き換え、仮想ホストのサイトが 403 を返す。平文は名前のまま渡し、固定できない事実を記録する。"""
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport)
+        out = talk(p, b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\nAccept: */*\r\n\r\n')
+        self.assertTrue(out.endswith(b'up'))
+        self.assertTrue(seen[0].startswith(b'GET http://pub.test/p?q=1 HTTP/1.1\r\nHost: pub.test\r\n'), seen[0][:80])
+        self.assertEqual(p.unpinned, ['pub.test'])
+
+    def test_upstream_never_receives_blocked_destinations(self):
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport)
+        for t in ('CONNECT 127.0.0.1:443 HTTP/1.1\r\n\r\n', 'CONNECT x.invalid:443 HTTP/1.1\r\n\r\n', 'CONNECT pub.test:22 HTTP/1.1\r\n\r\n', 'GET http://10.0.0.1/ HTTP/1.1\r\n\r\n'):
             self.assertTrue(talk(p, t.encode()).startswith(b'HTTP/1.1 403'), t)
-        self.assertEqual(len(seen), n)
+        self.assertEqual(seen, [])
+
+    SMUGGLE = {
+        'duplicate content-length': b'POST http://pub.test/ HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 0\r\n\r\nhello',
+        'content-length plus': b'POST http://pub.test/ HTTP/1.1\r\nContent-Length: +5\r\n\r\nhello',
+        'content-length unicode digit': 'POST http://pub.test/ HTTP/1.1\r\nContent-Length: \u0665\r\n\r\nhello'.encode('utf-8'),
+        'transfer-encoding': b'POST http://pub.test/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET http://10.0.0.1/admin HTTP/1.1\r\n\r\n',
+        'bare LF in header value': b'GET http://pub.test/ HTTP/1.1\r\nX-A: a\nGET http://10.0.0.1/admin HTTP/1.1\r\nHost: x\r\n\r\n',
+        'bare CR in header value': b'GET http://pub.test/ HTTP/1.1\r\nX-A: a\rGET http://10.0.0.1/admin HTTP/1.1\r\n\r\n',
+        'bare LF in request line': b'GET http://pub.test/\nGET http://10.0.0.1/admin HTTP/1.1\r\nHost: x\r\n\r\n',
+        'bare LF in method': b'GET\nGET http://10.0.0.1/admin http://pub.test/ HTTP/1.1\r\n\r\n',
+        'NUL in header': b'GET http://pub.test/ HTTP/1.1\r\nX-A: a\x00b\r\n\r\n',
+        'control char in target': b'GET http://pub.test/\x01x HTTP/1.1\r\n\r\n',
+        'obs-fold': b'GET http://pub.test/ HTTP/1.1\r\nX-A: a\r\n GET http://10.0.0.1/admin HTTP/1.1\r\n\r\n',
+        'space in header name': b'GET http://pub.test/ HTTP/1.1\r\nX A: a\r\n\r\n',
+        'header without colon': b'GET http://pub.test/ HTTP/1.1\r\nGET http://10.0.0.1/admin HTTP/1.1\r\n\r\n',
+        'non-token method': b'G(T http://pub.test/ HTTP/1.1\r\n\r\n',
+        'bad version': b'GET http://pub.test/ HTTP/9.9\r\n\r\n',
+        'extra space in request line': b'GET http://pub.test/ HTTP/1.1 junk\r\n\r\n',
+        'long line': b'GET http://pub.test/ HTTP/1.1\r\nX-A: ' + b'a' * 9000 + b'\r\n\r\n',
+        'too many headers': b'GET http://pub.test/ HTTP/1.1\r\n' + b''.join(b'X-%d: a\r\n' % i for i in range(150)) + b'\r\n',
+        'connect with bare LF': b'CONNECT pub.test:443\nGET http://10.0.0.1/admin HTTP/1.1\r\n\r\n',
+    }
+
+    def test_request_smuggling_forms_never_reach_upstream(self):
+        seen, uport = self.fake_upstream(); p = self.up_proxy(uport)
+        for name, req in self.SMUGGLE.items():
+            out = talk(p, req)
+            self.assertTrue(out.startswith(b'HTTP/1.1 403'), (name, out[:40]))
+        self.assertEqual(seen, [])   # 上流には 1 件も届かない(特に 10.0.0.1/admin)
+
+    def test_request_smuggling_forms_never_reach_origin_without_upstream(self):
+        o = Origin(); p = self.mk(o)
+        for name, req in self.SMUGGLE.items():
+            req = req.replace(b'pub.test', f'origin.test:{o.port}'.encode())
+            self.assertTrue(talk(p, req).startswith(b'HTTP/1.1 403'), name)
+        self.assertEqual(o.conns, 0)
+
+    def test_valid_request_forms_still_pass(self):
+        o = Origin(); p = self.mk(o)
+        talk(p, f'POST http://origin.test:{o.port}/s HTTP/1.0\r\nContent-Length: 3\r\nX-Tab:\tv\r\n\r\nabc'.encode())
+        self.assertEqual(o.conns, 1); self.assertTrue(o.received[0].endswith(b'abc')); self.assertEqual(o.received[0].count(b'Content-Length'), 1)
+
+    def test_port_zero_is_not_treated_as_80(self):
+        o = Origin(); p = self.mk(o)
+        self.assertTrue(talk(p, b'GET http://origin.test:0/ HTTP/1.1\r\n\r\n').startswith(b'HTTP/1.1 403')); self.assertEqual(o.conns, 0)
 
     def test_unix_socket_listen(self):
         import tempfile

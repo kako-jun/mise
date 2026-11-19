@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS thumbs (
   obscured INTEGER NOT NULL DEFAULT 0, obscured_ratio REAL,    -- cookie 同意バナー・全面モーダルの疑い(撮り直しはしない。画面側の判断材料)
   exclude INTEGER NOT NULL DEFAULT 0, exclude_reason TEXT,     -- 手動の除外(成人向けの属性が sites に無い間の代わり)。撮らず、sql にも出さない
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  notes TEXT,                                                  -- 診断の注記(例: 上流プロキシが IP 宛て CONNECT を拒み、名前解決が上流になった: upstream_dns_unpinned)
   captured_at TEXT, changed_at TEXT, last_checked_at TEXT, next_check_at TEXT);
 -- どの保存先に、どのキー(<sha256(site_id)先頭32桁>.webp)で、どの内容(thumbs.thumb_hash)を置いたかの印。保存先ごとに別(local / r2-local / r2-remote)。
 -- キーはサイト固定で撮り直しは上書きなので、印は「そのキーに置いた最後の内容」を 1 つだけ持つ。
@@ -195,11 +196,28 @@ def playwright_dir():
     return str(c) if c.exists() else None
 
 
-def _systemd_scope_ok():
+def _systemd_scope_ok(limit=512 * 1024 * 1024):
+    """systemd-run --user --scope が使えて、メモリ上限が実際に効く(memory コントローラが委譲されている)か。cgroup v2 の memory.max を読んで確かめる。"""
     try:
-        return subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=512M', '--', 'true'], capture_output=True, timeout=20).returncode == 0
+        r = subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={limit}', '--', 'sh', '-c', 'cat /proc/self/cgroup'], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
         return False
+    if r.returncode != 0:
+        return False
+    line = next((l for l in r.stdout.splitlines() if l.startswith('0::')), None)
+    if not line:
+        return False
+    try:
+        return (Path('/sys/fs/cgroup') / line[3:].lstrip('/') / 'memory.max').read_text().strip() == str(limit)
+    except OSError:
+        return False
+
+
+def job_tmp_base():
+    """撮影用の一時ディレクトリの置き場。Unix ソケットのパス(108 字まで)に収まる短さにする(TMPDIR が長い環境で AF_UNIX path too long にならないように)。"""
+    import tempfile
+    base = tempfile.gettempdir()
+    return base if len(base) <= 60 else '/tmp'
 
 
 class NodeCapturer:
@@ -212,18 +230,22 @@ class NodeCapturer:
     - メモリ・CPU の上限は systemd-run --user --scope(使えない環境では上限なしで続行し、警告を出す)。
     - sandbox=False は bwrap なし・TCP のプロキシ(テスト・GPU で固まらず信頼できる環境用)。
     - 受信量・接続数の上限をフィルタが超えたら、ブラウザごと止めて resource-limit にする。"""
-    def __init__(self, sandbox=True, timeout=CAPTURE_TIMEOUT, memory_max='2G', cpu_quota='150%', proxy_kwargs=None, on_proxy=None, log=print):
-        self.sandbox = sandbox; self.timeout = timeout; self.memory_max = memory_max; self.cpu_quota = cpu_quota
+    def __init__(self, sandbox=True, timeout=CAPTURE_TIMEOUT, memory_max='2G', cpu_quota='150%', proxy_kwargs=None, on_proxy=None, log=print, limits=True):
+        self.sandbox = sandbox; self.limits = limits; self.timeout = timeout; self.memory_max = memory_max; self.cpu_quota = cpu_quota
         self.proxy_kwargs = proxy_kwargs or {}; self.on_proxy = on_proxy; self.log = log
         self.node = node_path(); self.chromium = chromium_path(); self.playwright = playwright_dir()
         self.scope = None
 
-    def _limits(self):
-        if self.scope is None:
+    def check_ready(self):
+        """起動前の確認。メモリ・CPU の上限が使えないときは、黙って続けず例外にする(`--no-limits` で明示したときだけ上限なしで進む)。"""
+        if self.limits and self.scope is None:
             self.scope = _systemd_scope_ok()
-            if not self.scope:
-                self.log('warning: systemd-run --user --scope が使えない。メモリ・CPU の上限なしで撮影する')
-        return ['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={self.memory_max}', '-p', 'MemorySwapMax=0', '-p', f'CPUQuota={self.cpu_quota}', '-p', 'TasksMax=1024', '--'] if self.scope else []
+        if self.limits and not self.scope:
+            raise RuntimeError('systemd-run --user --scope でメモリ・CPU の上限を掛けられない(memory コントローラが委譲されていない等)。上限なしで撮るなら --no-limits を付ける')
+
+    def _limits(self):
+        self.check_ready()
+        return ['systemd-run', '--user', '--scope', '--quiet', '-p', f'MemoryMax={self.memory_max}', '-p', 'MemorySwapMax=0', '-p', f'CPUQuota={self.cpu_quota}', '-p', 'TasksMax=1024', '--'] if self.limits else []
 
     def _bwrap(self, d):
         binds = []
@@ -236,11 +258,13 @@ class NodeCapturer:
             binds.append(str(Path(self.chromium).resolve().parent))
         cmd = ['bwrap', '--die-with-parent', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-net', '--new-session',
                '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc']
-        for t in ('/tmp', '/run', '/home', '/root', '/mnt', '/media'):
+        for t in ('/tmp', '/var/tmp', '/run', '/home', '/root', '/mnt', '/media', '/opt', '/srv', '/sys'):
             if Path(t).exists():
                 cmd += ['--tmpfs', t]
         for b in dict.fromkeys(binds):
             cmd += ['--ro-bind', b, b]
+        if Path('/sys/devices/system/cpu').exists():
+            cmd += ['--ro-bind', '/sys/devices/system/cpu', '/sys/devices/system/cpu']   # /sys は空にして、Chromium が CPU 数を読む所だけ見せる(ホストのネットワーク IF 名などを見せない)
         cmd += ['--bind', d, d, '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'HOME', d, '--setenv', 'TMPDIR', d, '--setenv', 'LANG', 'C.UTF-8']
         if self.playwright:
             cmd += ['--setenv', 'PLAYWRIGHT_DIR', self.playwright]
@@ -257,7 +281,7 @@ class NodeCapturer:
     def __call__(self, url, allow_urls):
         import tempfile
         import threading
-        with tempfile.TemporaryDirectory(prefix='mise-thumb-') as d:
+        with tempfile.TemporaryDirectory(prefix='mise-thumb-', dir=job_tmp_base()) as d:
             tripped = threading.Event()
             proxy = netfilter.FilterProxy(unix_path=str(Path(d) / 'p.sock') if self.sandbox else None, on_limit=tripped.set, **self.proxy_kwargs).start()
             env = dict(os.environ, TMPDIR=d)
@@ -297,7 +321,7 @@ class NodeCapturer:
                 kill(); p.wait(); proxy.stop(); raise   # Ctrl-C でもブラウザを残さない
             finally:
                 proxy.stop()
-            stats = {'over_limit': proxy.over_limit, 'blocked': list(proxy.blocked), 'bytes': proxy.bytes, 'conns': proxy.conns, 'forwarded': list(proxy.forwarded)}
+            stats = {'over_limit': proxy.over_limit, 'blocked': list(proxy.blocked), 'bytes': proxy.bytes, 'conns': proxy.conns, 'forwarded': list(proxy.forwarded), 'unpinned': list(proxy.unpinned)}
             if self.on_proxy:
                 self.on_proxy(stats)
             if proxy.over_limit:
@@ -331,6 +355,10 @@ def connect(path):
         path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path)); db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    try:
+        db.execute('ALTER TABLE thumbs ADD COLUMN notes TEXT')   # 旧い台帳に足す
+    except sqlite3.OperationalError:
+        pass
     return db
 
 
@@ -369,6 +397,18 @@ def set_exclude(db, ids, flag=True, reason='manual', missing=None):
             missing.append(sid)
     db.commit()
     return n
+
+
+def uploaded_sites(db, ids):
+    """ids のうち、R2(r2-local / r2-remote)に画像を置いた印があるサイト。除外しても R2 の /thumb/<k>.webp は公開で取れたまま残るので delete が要る。"""
+    out = []
+    for sid in ids:
+        try:
+            if db.execute("SELECT 1 FROM thumb_stored WHERE name=? AND store IN ('r2-local','r2-remote')", (thumb_name(sid),)).fetchone():
+                out.append(sid)
+        except sqlite3.OperationalError:
+            pass
+    return out
 
 
 def _marked(db, name, label, content=None):
@@ -413,7 +453,7 @@ def _plus(now, days):
 
 def error_code(error):
     """last_error から失敗コードだけ取り出す('robots_unavailable: http_503 proxy=yes' → 'robots_unavailable')。"""
-    e = error or ''
+    e = (error or '').split(' [', 1)[0]   # 末尾の注記(' [upstream_dns_unpinned: …]')を除く
     return e if e.startswith(PERMANENT_PREFIXES) else e.split(': ', 1)[0]
 
 
@@ -437,15 +477,16 @@ def record(db, store, row, res, now):
             store.put(name, res['webp'])   # 同じキーへの上書き(古い画像は残らない)
         _mark(db, name, store.label, content)   # put が例外なら印は付かない
         db.execute("UPDATE thumbs SET state='ok', last_error=NULL, http_status=?, final_url=?, thumb_hash=?, lqip=?, bytes=?, obscured=?, obscured_ratio=?, "
-                   "consecutive_failures=0, captured_at=?, changed_at=COALESCE(?, changed_at), last_checked_at=?, next_check_at=? WHERE site_id=?",
+                   "consecutive_failures=0, notes=?, captured_at=?, changed_at=COALESCE(?, changed_at), last_checked_at=?, next_check_at=? WHERE site_id=?",
                    (res.get('http_status'), res.get('final_url'), content, res['lqip'], len(res['webp']), 1 if res.get('obscured') else 0, res.get('obscured_ratio'),
-                    t, t if out == 'changed' else None, t, _plus(now, OK_INTERVAL_DAYS), sid))
+                    res.get('notes'), t, t if out == 'changed' else None, t, _plus(now, OK_INTERVAL_DAYS), sid))
     else:
         err = res.get('error') or 'error'
         fails = row['consecutive_failures'] + 1
         # 失敗しても前回の画像(thumb_hash)は消さない。一時的な不具合で絵が消えないことを優先する(消すのは取り下げ申請 #29)
-        db.execute("UPDATE thumbs SET state='failed', last_error=?, http_status=?, final_url=?, consecutive_failures=?, last_checked_at=?, next_check_at=? WHERE site_id=?",
-                   (err, res.get('http_status'), res.get('final_url'), fails, t, _plus(now, retry_days(err, fails)), sid))
+        shown = err + (f" [{res['notes']}]" if res.get('notes') else '')   # 上流が名前解決した事実を last_error にも残す
+        db.execute("UPDATE thumbs SET state='failed', last_error=?, http_status=?, final_url=?, consecutive_failures=?, notes=?, last_checked_at=?, next_check_at=? WHERE site_id=?",
+                   (shown, res.get('http_status'), res.get('final_url'), fails, res.get('notes'), t, _plus(now, retry_days(err, fails)), sid))
         out = 'error'
     db.commit()
     return out
@@ -557,7 +598,9 @@ def attempt(url, gate, capturer):
                     target = nxt
                     continue
             break
-        base = {'http_status': rec.get('http_status'), 'final_url': rec.get('final_url'), 'obscured': (rec.get('obscured_ratio') or 0) > 0.5, 'obscured_ratio': rec.get('obscured_ratio')}
+        un = (rec.get('proxy') or {}).get('unpinned') or []
+        notes = ('upstream_dns_unpinned: ' + ','.join(sorted(set(un)))) if un else None   # 上流プロキシが IP 宛て CONNECT を拒み、その接続は名前解決が上流(IP を固定できなかった)
+        base = {'notes': notes, 'http_status': rec.get('http_status'), 'final_url': rec.get('final_url'), 'obscured': (rec.get('obscured_ratio') or 0) > 0.5, 'obscured_ratio': rec.get('obscured_ratio')}
         if (rec.get('proxy') or {}).get('over_limit'):
             return dict(base, status='error', error='resource-limit')
         if not rec.get('ok') or png is None:
@@ -601,7 +644,7 @@ def run(db, store, capturer, now=None, limit=50, per_day=DEFAULT_PER_DAY, concur
                 res = {'status': 'error', 'error': f'store_failed: {type(e).__name__}'}
                 out = record(db, store, row, res, now)
             counts[out] = counts.get(out, 0) + 1
-            log(f"{row['site_id']}\t{out}\t{res.get('error') or ''}\t{len(res['webp']) if res.get('webp') else ''}")
+            log(f"{row['site_id']}\t{out}\t{res.get('error') or ''}\t{len(res['webp']) if res.get('webp') else ''}" + (f"\t{res['notes']}" if res.get('notes') else ''))
     return counts
 
 
@@ -685,10 +728,12 @@ def main(argv=None):
     p.add_argument('--sites', nargs='*', default=[], help='[{id,url}] の JSON')
     p.add_argument('--exclude', help='撮らないサイト。id のカンマ区切り、または id の JSON ファイル。成人向けの属性が sites に無い間の手動の除外')
     p.add_argument('--unexclude', help='除外を解く(同じ形式)')
+    p.add_argument('--delete-uploaded', action='store_true', help='アップロード済みのサイトを除外したとき、R2 から消す delete のコマンド(dry-run)を案内する')
     p = sub.add_parser('run', help='期限が来たサイトを撮る(--apply が無ければ計画だけ。ネットワーク・書き込みなし)')
     p.add_argument('--limit', type=int, default=50); p.add_argument('--apply', action='store_true'); p.add_argument('--store-dir', default=str(DEFAULT_STORE))
     p.add_argument('--per-day', type=int, default=DEFAULT_PER_DAY, help=f'1 日(UTC)の試行数の上限(既定 {DEFAULT_PER_DAY})')
     p.add_argument('--concurrency', type=int, default=DEFAULT_CONCURRENCY, help=f'同時に撮る数(既定 {DEFAULT_CONCURRENCY}。同じホストは常に直列)')
+    p.add_argument('--no-limits', action='store_true', help='メモリ・CPU の上限(systemd-run --user --scope)なしで撮る。上限を掛けられない環境でだけ明示する')
     p.add_argument('--no-bwrap', action='store_true', help='サンドボックス(bwrap)を使わない。信頼できる環境・テスト用(既定は使う)')
     p.add_argument('--store', choices=['local', 'r2'], default='local', help='保存先(既定 local)。r2 は --apply と併せたときだけ wrangler を呼ぶ。R2 は既定でローカル模擬')
     p.add_argument('--r2-verify', action='store_true', help='--store r2 で、台帳にある画像が R2 に在るかを 1 件ずつ確かめる(遅い)')
@@ -699,6 +744,7 @@ def main(argv=None):
     p = sub.add_parser('delete', help='サイトのサムネイルを保存先から消し、台帳で除外にする(取り下げ・除外。--apply が無ければ計画だけ。--r2-remote を明示したときだけ本番)')
     p.add_argument('--site', action='append', required=True, help='サイト id(複数回指定可)'); p.add_argument('--apply', action='store_true'); p.add_argument('--store-dir', default=str(DEFAULT_STORE))
     p.add_argument('--store', choices=['local', 'r2'], default='r2'); p.add_argument('--r2-verify', action='store_true'); p.add_argument('--r2-remote', action='store_true')
+    p.add_argument('--d1-done', action='store_true', help='R2 の画像を消す(--apply)前に、`sql` の thumb 列 NULL を D1 へ適用済みであることの確認(D1 が先、R2 が後。逆だと一覧が一瞬 404 になる)')
     p = sub.add_parser('sql', help='sites.thumb_path / thumb_lqip / thumb_captured_at 向けの UPDATE を出す(既定は R2 本番に置いた画像だけ)')
     p.add_argument('--out'); p.add_argument('--since', help='captured_at(撮影時刻)がこれ以降のものだけ(ISO)')
     p.add_argument('--store', choices=STORE_LABELS, default='r2-remote', help='この保存先に置いた印のある画像だけ出す(既定 r2-remote)')
@@ -726,6 +772,14 @@ def main(argv=None):
                 print(f'{label}={set_exclude(db, parse_ids(spec), flag, missing=missing)}')
                 if missing:
                     print(f'warning: 台帳に無い id(先に --sites で取り込む): {", ".join(missing)}', file=sys.stderr)
+                ids = [i for i in parse_ids(spec) if i not in missing]
+                up = uploaded_sites(db, ids) if flag else []
+                if up:
+                    print(f'warning: R2 にアップロード済みのサイトを除外した。除外だけでは R2 の /thumb/<k>.webp が公開で取れたまま残る: {", ".join(up)}\n'
+                          '  手順(この順): ① 除外(済) → ② `sql` を出して D1 の thumb 列を NULL にする → ③ `delete --site <id> --apply --d1-done`(R2 から消す。本番は --r2-remote)。D1 が先、R2 が後', file=sys.stderr)
+                    if a.delete_uploaded:
+                        print('  次の dry-run を確認してから --apply --d1-done を付ける:', file=sys.stderr)
+                        print('  uv run --with pillow python3 scripts/thumbnail/thumbnail.py delete ' + ' '.join(f'--site {i}' for i in up) + ' --r2-remote', file=sys.stderr)
     elif a.cmd == 'run':
         if not a.apply:
             rows = due_sites(db, now, min(a.limit, remaining_today(db, now, a.per_day))) if db else []
@@ -734,7 +788,12 @@ def main(argv=None):
             for r in rows[:20]:
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
-        print('done ' + str(run(db, make_store(a), NodeCapturer(sandbox=not a.no_bwrap), now, a.limit, a.per_day, a.concurrency)))
+        try:
+            cap = NodeCapturer(sandbox=not a.no_bwrap, limits=not a.no_limits); cap.check_ready()
+        except RuntimeError as e:
+            print(str(e), file=sys.stderr)
+            return 3
+        print('done ' + str(run(db, make_store(a), cap, now, a.limit, a.per_day, a.concurrency)))
     elif a.cmd == 'upload':
         if db is None:
             print('台帳がない'); return 0
@@ -743,6 +802,9 @@ def main(argv=None):
     elif a.cmd == 'delete':
         if db is None:
             print('台帳がない'); return 0
+        if a.apply and a.store == 'r2' and not a.d1_done:
+            print('R2 から消す前に、`sql` の出力(除外サイトの thumb 列 NULL)を D1 へ適用する。済んでいたら --d1-done を付けて再実行する(D1 が先、R2 が後)', file=sys.stderr)
+            return 2
         print(f'deleted={delete_sites(db, make_store(a), a.site, a.store_dir, a.apply)}')
     elif a.cmd == 'sql':
         text = sql_updates(db, a.since, a.store) if db else ''
