@@ -19,7 +19,7 @@ const run = (extra = {}) => {
   const ctx = { window: {}, ...extra };
   ctx.window = ctx; // window.__x = ... がグローバルに載る
   vm.createContext(ctx);
-  vm.runInContext(logoScript.replace(/\{ const go = [\s\S]*$/, ''), ctx); // 末尾の fonts 待ちは別(ここでは関数定義だけ読む)
+  vm.runInContext(logoScript.slice(logoScript.indexOf('// logo-script:begin'), logoScript.indexOf('// logo-script:end')), ctx); // マーカーの間(関数定義だけ。末尾の fonts 待ちは含めない)
   return ctx;
 };
 
@@ -38,7 +38,7 @@ test('__miseLogoLayout: 平均インク間隔が G にそろい、インク全�
   for (let k = 0; k < 3; k++) assert.ok(Math.abs(ink(k + 1)[0] - ink(k)[1] - G) < 1e-9);
   const total = x; // 行の全幅
   const l = ink(0)[0], r = total - ink(3)[1];
-  assert.ok(Math.abs(l - r) < 1e-9 || Math.min(l, r) === 0, `左右の余白 ${l} / ${r}`); // どちらかが負にならないよう margin は 0 で止める
+  assert.ok(Math.abs(l - r) < 1e-9, `左右の余白 ${l} / ${r}`);
 });
 
 test('__miseLogoLayout: 曲線の引っ込み(行ごとに端が違う)は平均で扱う', () => {
@@ -50,11 +50,11 @@ test('__miseLogoLayout: 曲線の引っ込み(行ごとに端が違う)は平均
   assert.ok(Math.abs(mg[2][0] - 15) < 1e-9, String(mg[2][0]));
 });
 
-const fakeEnv = (widths) => {
+const fakeEnv = (widths, fontFail = false) => {
   const spans = ['M', 'I', 'S', 'E'].map((t, k) => ({ textContent: t, style: {}, getBoundingClientRect: () => ({ width: widths[k] }) }));
   const classes = new Set();
   const g = {
-    clearRect() {}, fillText() {}, set font(v) {}, set textBaseline(v) {}, set fillStyle(v) {},
+    clearRect() {}, fillText() {}, get font() { return fontFail ? '10px sans-serif' : this._f || ''; }, set font(v) { this._f = v; }, set textBaseline(v) {}, set fillStyle(v) {},
     getImageData: (x, y, w, h) => { const d = new Uint8ClampedArray(w * h * 4); for (let j = 0; j < h; j++) for (let i = 8; i < w - 8; i++) d[(j * w + i) * 4 + 3] = j % 3 ? 255 : 0; return { data: d }; },
   };
   return {
@@ -64,7 +64,7 @@ const fakeEnv = (widths) => {
       createElement: () => ({ getContext: () => g }),
       documentElement: { classList: { add: (c) => classes.add(c) } },
     },
-    getComputedStyle: () => ({ fontSize: '54px', fontWeight: '1000', fontFamily: 'Mise Logo' }),
+    getComputedStyle: () => ({ fontSize: '54px', fontWeight: '1000', fontFamily: 'Mise Logo', fontStretch: '75%' }),
   };
 };
 const snap = (e) => JSON.stringify(e.spans.map((s) => [s.style.transform, s.style.margin]));
@@ -89,4 +89,32 @@ test('__miseLogo: フォント未読込(幅 0)・要素不足でも落ちず、l
   assert.ok(!e2.classes.has('logo-ready'));
   const e3 = fakeEnv([30, 12, 28, 26]); e3.document.createElement = () => { throw new Error('canvas 不可'); };
   assert.doesNotThrow(() => run(e3).__miseLogo());
+});
+
+test('__miseLogo: 成功済みの状態から測定が失敗しても、前の配置に戻す(伸ばしが外れない)', () => {
+  const e = fakeEnv([30, 12, 28, 26]), ctx = run(e);
+  ctx.__miseLogo();
+  const ok = snap(e);
+  e.document.createElement = () => { throw new Error('canvas 不可'); };
+  ctx.__miseLogo();
+  assert.equal(snap(e), ok);
+  const e2 = fakeEnv([30, 12, 28, 26]), ctx2 = run(e2); ctx2.__miseLogo(); const ok2 = snap(e2);
+  e2.spans.forEach((s) => { s.getBoundingClientRect = () => ({ width: 0 }); }); // 幅 0 の早期 return
+  ctx2.__miseLogo();
+  assert.equal(snap(e2), ok2);
+});
+
+test('__miseLogo: 初回の失敗では inline を空のまま残す(style.css のフォールバックが効く)', () => {
+  for (const mk of [() => fakeEnv([0, 0, 0, 0]), () => { const e = fakeEnv([30, 12, 28, 26]); e.document.createElement = () => { throw new Error('x'); }; return e; }]) {
+    const e = mk(); run(e).__miseLogo();
+    assert.deepEqual(e.spans.map((s) => [s.style.transform, s.style.margin]), e.spans.map(() => [undefined, undefined]));
+    assert.ok(!e.classes.has('logo-ready'));
+  }
+});
+
+test('__miseLogo: canvas の font 設定が効かない(既定の 10px sans-serif に落ちる)とき測定せず戻す', () => {
+  const e = fakeEnv([30, 12, 28, 26], true);
+  run(e).__miseLogo();
+  assert.deepEqual(e.spans.map((s) => [s.style.transform, s.style.margin]), e.spans.map(() => [undefined, undefined]));
+  assert.ok(!e.classes.has('logo-ready'));
 });

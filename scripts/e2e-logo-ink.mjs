@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // トップのロゴの実測検証 (#152)。仕様は docs/design/ui.md の「ロゴ」。
 // 各文字を 1 つずつ描き出して（他は不可視）、実際に塗られたピクセルから (1) 隣り合う文字の行ごとのインク間隔の平均、(2) 縦線の太さを測る。
-// 期待: 平均インク間隔 17px(±1)、S の太さは M の ±1px。ライト/ダーク × PC1280/スマホ390。
+// 期待: 平均インク間隔 17px(±1)、S の太さは M の ±1px、インク全体が行の中央(左右の余白差 ±1px)。ライト/ダーク × PC1280/スマホ390。
 // 前提: `npx wrangler dev --local --port 8799` が起動していること（--remote は使わない）。
+// LOGO_FALLBACK=1: ロゴの JS を無効にして style.css のフォールバックだけを測る（文字間 ±3px。太さ・中央寄せは検査せず表示のみ）。
 // 実行: PLAYWRIGHT_DIR=<node_modules/playwright> [CHROMIUM_PATH=...] node scripts/e2e-logo-ink.mjs [baseUrl=http://localhost:8799]
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
@@ -26,6 +27,7 @@ html,body{background:#fff!important}
 .logo,.logo-row{visibility:visible!important}
 html:root:root:root .logo span{visibility:hidden!important;background:none!important;background-image:none!important;opacity:1!important;-webkit-background-clip:border-box!important;background-clip:border-box!important;color:#000!important;text-shadow:none!important;transition:none!important}
 html:root:root:root .logo span:nth-child(${k + 1}){visibility:visible!important}`;
+const FB = !!process.env.LOGO_FALLBACK, TOL = FB ? 3 : 1;
 const S = 4; // deviceScaleFactor
 const browser = await chromium.launch({ executablePath: chromiumPath(), args: ['--no-sandbox', '--disable-gpu'] });
 let failed = 0;
@@ -34,10 +36,11 @@ for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
   await ctx.addInitScript((t) => { try { localStorage.setItem('mise-theme', t); } catch (_) {} }, theme);
   const page = await ctx.newPage();
   try {
+    if (FB) await page.route('**/jp/', async (r) => { const res = await r.fetch(); await r.fulfill({ response: res, body: (await res.text()).replace('window.__miseLogo = () =>', 'window.__noLogo = () =>') }); });
     await page.goto(BASE + '/jp/', { waitUntil: 'load' });
-    await page.waitForFunction(() => document.documentElement.classList.contains('logo-ready'), null, { timeout: 8000 });
+    if (FB) await page.waitForTimeout(1300); else await page.waitForFunction(() => document.documentElement.classList.contains('logo-ready'), null, { timeout: 8000 });
     await page.waitForTimeout(400);
-    const lg = await page.evaluate(() => { const r = document.querySelector('.logo').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+    const lg = await page.evaluate(() => { const r = document.querySelector('.logo').getBoundingClientRect(), o = document.querySelector('.logo-row').getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, rowC: o.x + o.width / 2 }; });
     const clip = { x: Math.max(0, lg.x - 30), y: Math.max(0, lg.y - 10), width: Math.min(width, lg.w + 60), height: lg.h + 20 };
     const inks = [];
     for (let k = 0; k < 4; k++) {
@@ -61,10 +64,13 @@ for (const width of [1280, 390]) for (const theme of ['light', 'dark']) {
     // 縦線の太さ: M は左右の脚(下寄り)、I は中央の柱、S は上下の弧の横断幅(= 縦に近い部分)、E は縦棒
     const stem = [avg([3, 4, 5].flatMap((i) => { const r = inks[0].at[i]; return [r[0], r[r.length - 1]]; })), avg([0, 2, 4].map((i) => inks[1].at[i][0])), avg([0, 4].flatMap((i) => inks[2].at[i])), avg([0, 1, 3, 4].map((i) => inks[3].at[i][0]))];
     const gaps = [0, 1, 2].map(gap);
-    const tag = `${width}px ${theme}`;
-    console.log(`${tag}: 平均インク間隔 ${gaps.map((v) => v.toFixed(1)).join(' / ')}  太さ M/I/S/E ${stem.map((v) => v.toFixed(1)).join(' / ')}`);
-    gaps.forEach((v, k) => assert.ok(Math.abs(v - 17) <= 1, `${tag}: 文字間 ${k} が ${v.toFixed(2)}px`));
-    assert.ok(Math.abs(stem[2] - stem[0]) <= 1, `${tag}: S の太さ ${stem[2].toFixed(2)} が M ${stem[0].toFixed(2)} の ±1px を超える`);
+    const first = inks[0].L.filter((v) => v !== null), last = inks[3].R.filter((v) => v !== null);
+    const inkL = Math.min(...first), inkR = Math.max(...last), off = (inkL + inkR) / 2 - lg.rowC; // 0 なら中央
+    const tag = `${width}px${FB ? ' fallback' : ''} ${theme}`;
+    console.log(`${tag}: 平均インク間隔 ${gaps.map((v) => v.toFixed(1)).join(' / ')}  太さ M/I/S/E ${stem.map((v) => v.toFixed(1)).join(' / ')}  インク全幅 ${(inkR - inkL).toFixed(0)}  中央からのずれ ${off.toFixed(2)}`);
+    gaps.forEach((v, k) => assert.ok(Math.abs(v - 17) <= TOL, `${tag}: 文字間 ${k} が ${v.toFixed(2)}px`));
+    if (!FB) assert.ok(Math.abs(off) <= 1, `${tag}: インクが中央から ${off.toFixed(2)}px ずれている`);
+    if (!FB) assert.ok(Math.abs(stem[2] - stem[0]) <= 1, `${tag}: S の太さ ${stem[2].toFixed(2)} が M ${stem[0].toFixed(2)} の ±1px を超える`);
   } catch (e) { failed++; console.log(`FAIL ${width} ${theme}: ${e.message.split('\n')[0]}`); } finally { await ctx.close(); }
 }
 await browser.close();
