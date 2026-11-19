@@ -18,7 +18,7 @@
 9 sql         承認済みの未出荷をすべて（`--max-add N` を付けたときだけ key 順に N 件まで。既定は上限なし） -> approved-sites.sql（0 件なら作らない）
 10 gate       生成 SQL をメモリ DB に流す整合チェック（integrity.gate）。違反なら停止
 11 prod       --apply-prod のときだけ: bookmark 取得 -> 本番投入 -> 整合チェック(--remote)
-12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> 取得だけ（ローカルの `var/favicons/` と台帳 `var/favicons.sqlite` に置く。**SQL は作らない**: ローカルにしか無い画像を D1 に指す SQL の誤適用を避けるため）。D1 への反映は、R2 へ置いたあと手で `sql`（既定 `--store r2-remote`、`--since` なし。[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
+12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> 取得だけ（ローカルの `var/favicons/<k>.webp`〔サイト固定のキー〕と台帳 `var/favicons.sqlite` に置く。**SQL は作らない**: ローカルにしか無い画像を D1 に指す SQL の誤適用を避けるため）。D1 への反映は、R2 へ置いたあと手で `sql`（既定 `--store r2-remote`、`--since` なし。[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
 13 usage      使用量ガード(#157。既定で有効、`--no-usage-guard` で無効): Cloudflare の Workers リクエスト・D1 行数を込みの枠(アカウント全体の合計［Workers と Pages Functions］。mise は内数の表示だけ)と比べ、50%/80%・月末予測・急増を guards に載せる(読むだけ。トークンが無い・API が失敗しても警告のみで続行し、前の段が失敗した夜も動く。手順は [usage-guard.md](usage-guard.md))
 ```
 

@@ -277,19 +277,38 @@ class Ledger(unittest.TestCase):
     def test_unchanged_hash_does_not_write_or_touch_changed_at(self):
         res = self.ok()
         self.assertEqual(favicon.record(self.db, self.store, self.row('s1'), res, T0), 'changed')
-        name = self.row('s1')['icon_hash']
+        name = favicon.site_name('s1')   # 保存先のキーはサイト固定
         written = (Path(self.tmp.name) / 'icons' / name).stat().st_mtime_ns
         t1 = T0 + datetime.timedelta(days=31)
         self.assertEqual(favicon.record(self.db, self.store, self.row('s1'), self.ok(), t1), 'same')
-        self.assertEqual((Path(self.tmp.name) / 'icons' / name).stat().st_mtime_ns, written)
         self.assertEqual(self.row('s1')['changed_at'], '2026-11-20T00:00:00Z')
         self.assertEqual(self.row('s1')['next_check_at'], '2027-01-20T00:00:00Z')   # 確認した日から 30 日後
 
-    def test_same_image_shared_between_sites(self):
+    def test_same_image_is_not_shared_between_sites(self):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
         favicon.record(self.db, self.store, self.row('s2'), self.ok(), T0)
-        self.assertEqual(self.row('s1')['icon_hash'], self.row('s2')['icon_hash'])
-        self.assertEqual(len(list((Path(self.tmp.name) / 'icons').iterdir())), 1)
+        self.assertEqual(self.row('s1')['icon_hash'], self.row('s2')['icon_hash'])   # 内容は同じ
+        names = sorted(f.name for f in (Path(self.tmp.name) / 'icons').iterdir())
+        self.assertEqual(names, sorted([favicon.site_name('s1'), favicon.site_name('s2')]))   # 別サイトは別キー(重複排除しない)
+        self.assertNotIn(self.row('s1')['icon_hash'], names)
+
+    def test_site_key_is_sha256_prefix_same_as_thumbnail(self):
+        import hashlib
+        self.assertEqual(favicon.site_key('s1'), hashlib.sha256(b's1').hexdigest()[:32])
+        self.assertEqual(favicon.site_name('s1'), favicon.site_key('s1') + '.webp')
+        sys.path.insert(0, str(ROOT / 'scripts' / 'thumbnail'))
+        import thumbnail
+        self.assertEqual(favicon.site_key('s1'), thumbnail.thumb_key('s1'))
+        self.assertEqual(favicon.icon_v('abcdef0123456789abcdef0123456789.webp'), 'abcdef01')
+
+    def test_changed_icon_overwrites_same_key_and_leaves_no_old_image(self):
+        favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
+        f = Path(self.tmp.name) / 'icons' / favicon.site_name('s1')
+        before = f.read_bytes()
+        self.assertEqual(favicon.record(self.db, self.store, self.row('s1'), self.ok((0, 0, 200, 255)), T0), 'changed')
+        self.assertEqual([x.name for x in f.parent.iterdir()], [favicon.site_name('s1')])   # 古い画像は残らない
+        self.assertNotEqual(f.read_bytes(), before)
+        self.assertTrue(favicon._marked(self.db, 's1', 'local', self.row('s1')['icon_hash']))   # 印は最後に置いた内容
 
     def test_changed_icon_overwrites_hash(self):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
@@ -316,7 +335,8 @@ class Ledger(unittest.TestCase):
     def test_sql_only_for_sites_with_icon(self):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
         sql = favicon.sql_updates(self.db)
-        self.assertIn("WHERE id='s1' AND favicon_path IS NOT", sql)
+        v = favicon.icon_v(self.row('s1')['icon_hash'])
+        self.assertEqual(sql, f"UPDATE sites SET favicon_path='{favicon.site_name('s1')}', favicon_v='{v}' WHERE id='s1' AND favicon_v IS NOT '{v}';\n")
         self.assertNotIn('s2', sql)
         self.assertEqual(favicon.sql_updates(self.db, '2026-12-01T00:00:00Z'), '')
 
@@ -331,14 +351,14 @@ class Ledger(unittest.TestCase):
 
     def test_same_hash_but_missing_in_store_is_replaced(self):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
-        name = self.row('s1')['icon_hash']
+        name = favicon.site_name('s1')
         (Path(self.tmp.name) / 'icons' / name).unlink()
         self.assertEqual(favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0), 'same')
         self.assertTrue(self.store.exists(name))
 
     def test_304_but_missing_in_store_refetches_unconditionally(self):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
-        name = self.row('s1')['icon_hash']
+        name = favicon.site_name('s1')
         (Path(self.tmp.name) / 'icons' / name).unlink()
         self.db.execute("UPDATE favicons SET next_check_at='2099-01-01T00:00:00Z' WHERE site_id='s2'")
         seen = []
@@ -557,7 +577,7 @@ class StoreMarks(unittest.TestCase):
         store = favicon.R2Store(remote=True, runner=lambda a: rc['v'])
         counts = self.go(store)
         self.assertEqual(counts, {'error': 1})
-        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM icon_stored').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM icon_put').fetchone()[0], 0)
         self.assertEqual(favicon.due_sites(self.db, T0 + datetime.timedelta(days=1), 10, store), [])   # 3 日後の再試行まで待つ
 
     def test_third_run_puts_nothing(self):
@@ -579,7 +599,7 @@ class StoreMarks(unittest.TestCase):
             db = favicon.connect(p)
             favicon.import_sites(db, [('s1', 'https://a.example/')])
             db.execute("UPDATE favicons SET icon_hash=?, status='ok'", ('a' * 32 + '.webp',))
-            favicon._mark(db, 'a' * 32 + '.webp', 'local'); db.commit(); db.close()
+            favicon._mark(db, 's1', 'local', 'a' * 32 + '.webp'); db.commit(); db.close()
             def out(*extra):
                 b = io.StringIO()
                 with contextlib.redirect_stdout(b):

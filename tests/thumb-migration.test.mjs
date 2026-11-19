@@ -65,3 +65,47 @@ test('API: thumb_url / thumb_lqip を返す。列が NULL・形が違う値・�
   assert.ok(!('thumb_path' in by.a)); assert.ok(!('thumb_captured_at' in by.a));
   assert.ok('favicon_url' in by.a);
 });
+
+// migration 0029（#163）: sites.favicon_v を足す。0028 と同様、トリガ・FTS・集計・search_text に影響しないこと。
+test('0029: favicon_v 列が増え、既存行は NULL のまま', () => {
+  const db = mkDb();
+  assert.equal(db.prepare("SELECT type FROM pragma_table_info('sites') WHERE name='favicon_v'").get()?.type, 'TEXT');
+  db.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,country_code) VALUES (?,?,?,?,?,?)').run('a', 'https://a.example', 'a', 'd', '2026-01-01T00:00:00Z', 'JP');
+  assert.equal(db.prepare('SELECT favicon_v FROM sites').get().favicon_v, null);
+});
+
+test('0029: sites のトリガはどれも favicon_v / favicon_path の更新で発火しない', () => {
+  const db = mkDb();
+  for (const t of db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='sites'").all()) {
+    if (!/AFTER UPDATE|BEFORE UPDATE/i.test(t.sql)) continue;
+    assert.match(t.sql, /UPDATE OF/i, `${t.name} は UPDATE OF で列を限る`);
+    assert.doesNotMatch(t.sql.split(/ ON sites/i)[0], /favicon_/i, t.name);
+  }
+});
+
+test('0029: favicon_path / favicon_v の UPDATE は他の表・索引を書かない（total_changes が 1 行分だけ）', () => {
+  const db = mkDb();
+  db.exec("INSERT INTO sites (id,url,name,description_ja,registered_at,country_code,region_code) VALUES ('a','https://a.example','a','d','2026-01-01T00:00:00Z','JP','JP-13')");
+  db.exec(`INSERT INTO site_categories (site_id, category_id) VALUES ('a', '${cat(db)}')`);
+  db.exec("UPDATE fts_state SET ready = 1 WHERE name = 'sites_fts'");
+  const snap = () => JSON.stringify([db.prepare('SELECT * FROM scope_counts ORDER BY scope').all(), db.prepare('SELECT * FROM category_counts ORDER BY category_id, scope').all(), db.prepare('SELECT search_text FROM sites').all()]);
+  const before = snap(), n0 = db.prepare('SELECT total_changes() AS n').get().n;
+  db.prepare('UPDATE sites SET favicon_path=?, favicon_v=? WHERE id=?').run(`${H}.webp`, 'a1b2c3d4', 'a');
+  assert.equal(db.prepare('SELECT total_changes() AS n').get().n - n0, 1);
+  assert.equal(snap(), before);
+  assert.deepEqual({ ...db.prepare('SELECT favicon_path, favicon_v FROM sites').get() }, { favicon_path: `${H}.webp`, favicon_v: 'a1b2c3d4' });
+});
+
+test('0029: API は favicon_v が NULL の旧データでは従来の /icon/<hash>.webp、あるサイトでは ?v= 付き', async () => {
+  const db = mkDb(), d = wrap(db);
+  const ins = db.prepare('INSERT INTO sites (id,url,name,description_ja,registered_at,country_code,favicon_path,favicon_v) VALUES (?,?,?,?,?,?,?,?)');
+  const OLD = 'f'.repeat(32);
+  ins.run('old', 'https://o.example', 'o', 'd', '2026-01-01T00:00:00Z', 'JP', `${OLD}.webp`, null);
+  ins.run('new', 'https://n.example', 'n', 'd', '2026-01-02T00:00:00Z', 'JP', `${H}.webp`, 'a1b2c3d4');
+  ins.run('none', 'https://x.example', 'x', 'd', '2026-01-03T00:00:00Z', 'JP', null, null);
+  const by = Object.fromEntries((await querySites(d, { cc: null, region: null, category: null, q: '', tags: [], limit: 10, cursor: null, offset: 0 })).items.map(i => [i.id, i]));
+  assert.equal(by.old.favicon_url, `/icon/${OLD}.webp`);
+  assert.equal(by.new.favicon_url, `/icon/${H}.webp?v=a1b2c3d4`);
+  assert.equal(by.none.favicon_url, null);
+  assert.ok(!('favicon_v' in by.new));
+});
