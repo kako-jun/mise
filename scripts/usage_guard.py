@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """使用量ガード（Issue #157）。Cloudflare の GraphQL Analytics API から Workers のリクエスト数と D1 の読み取り・書き込み行数を取り、
 Workers Paid の込みの枠に対する割合・月末予測・1 日の急増を出す。**枠は Cloudflare アカウント全体のもの**（同じアカウントの全 Worker・全 D1 の合計）なので、判定は
-**アカウント合計**で行い、mise の Worker と mise の D1 は内数として別行に表示するだけ（判定には使わない）。**読むだけ**（トークンは Account Analytics: Read のみ）。
+**アカウント合計**で行い、mise の Worker と mise の D1 は内数として別行に表示するだけ（判定には使わない）。Workers のリクエスト枠には **Pages Functions のリクエストも数えられる**（公式の Pages Functions の料金ページ）ので、別のクエリで取って足す（取れなければ警告だけ出して Workers 分で判定）。**読むだけ**（トークンは Account Analytics: Read のみ）。
 
   uv run python3 scripts/usage_guard.py [--date YYYY-MM-DD] [--env-file PATH] [--var-dir DIR]
 
@@ -46,7 +46,7 @@ def build_query(days):
     """days=[date, ...]。Workers は 1 日 1 つの別名（workersInvocationsAdaptive を datetime 範囲で絞り、scriptName 別に合計。`date` 次元は公式の例に無いので使わない）。
     D1 は d1AnalyticsAdaptiveGroups を date・databaseId 次元で（公式の例の形）。変数の型は公式の例に合わせる。"""
     w = "\n".join(
-        f'    w{d.strftime("%Y%m%d")}: workersInvocationsAdaptive(limit: 1000, filter: {{datetime_geq: "{d.isoformat()}T00:00:00Z", datetime_leq: "{d.isoformat()}T23:59:59Z"}}) {{ sum {{ requests }} dimensions {{ scriptName }} }}'
+        f'    w{d.strftime("%Y%m%d")}: workersInvocationsAdaptive(limit: 1000, filter: {{datetime_geq: "{d.isoformat()}T00:00:00Z", datetime_lt: "{(d + datetime.timedelta(days=1)).isoformat()}T00:00:00Z"}}) {{ sum {{ requests }} dimensions {{ scriptName }} }}'
         for d in days)
     return ("query Usage($acct: string!, $fromDate: Date, $toDate: Date) {\n  viewer { accounts(filter: {accountTag: $acct}) {\n" + w +
             "\n    d1: d1AnalyticsAdaptiveGroups(limit: 10000, filter: {date_geq: $fromDate, date_leq: $toDate}) {\n"
@@ -106,10 +106,9 @@ def http_post(url, body, token, timeout=30):
         return e.code, e.read().decode("utf-8", "replace")
 
 
-def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
-    """start..end（date）の日別の値を返す。(アカウント合計 {metric: {date: n}}, mise の内数 {metric: {date: n}})。失敗は GuardError（429・5xx は 1 回だけやり直す）。"""
-    days = [start + datetime.timedelta(days=i) for i in range((end - start).days + 1)]
-    body = {"query": build_query(days), "variables": {"acct": acct, "fromDate": start.isoformat(), "toDate": end.isoformat()}}
+def _graphql(query, variables, token, acct, post, sleep):
+    """GraphQL を 1 回呼んで data["data"]["viewer"]["accounts"][0] を返す。失敗は GuardError（429・5xx は 1 回だけやり直す）。メッセージにトークン・アカウント ID を含めない。"""
+    body = {"query": query, "variables": variables}
     secrets = (token, acct)
     for attempt in (0, 1):
         try:
@@ -137,11 +136,46 @@ def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
     if data.get("errors"):
         msgs = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e) for e in data["errors"][:3])
         raise GuardError("GraphQL エラー: " + redact(msgs, secrets)[:200])
+    try:
+        return data["data"]["viewer"]["accounts"][0]
+    except (KeyError, IndexError, TypeError):
+        raise GuardError("応答の形が想定外（アカウント ID の誤り、または API の項目名の変更）")
+
+
+def _days(start, end):
+    return [start + datetime.timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def build_pages_query(days):
+    """Pages Functions のリクエスト数。データセット名 pagesFunctionsInvocationsAdaptiveGroups は Cloudflare の公式 GraphQL データセット一覧(data-localization の GraphQL datasets)に載っているが、
+    フィールド(sum.requests・次元)は公式ドキュメントで未確認（Workers の例に合わせた推定）。Workers のクエリとは別にして、失敗しても Workers 分の判定を止めない。"""
+    w = "\n".join(
+        f'    p{d.strftime("%Y%m%d")}: pagesFunctionsInvocationsAdaptiveGroups(limit: 1000, filter: {{datetime_geq: "{d.isoformat()}T00:00:00Z", datetime_lt: "{(d + datetime.timedelta(days=1)).isoformat()}T00:00:00Z"}}) {{ sum {{ requests }} }}'
+        for d in days)
+    return "query Pages($acct: string!) {\n  viewer { accounts(filter: {accountTag: $acct}) {\n" + w + "\n  } }\n}"
+
+
+def fetch_pages(token, acct, start, end, post=http_post, sleep=time.sleep):
+    """Pages Functions のリクエスト数の日別 {date: n}。失敗は GuardError。"""
+    days = _days(start, end)
+    acc = _graphql(build_pages_query(days), {"acct": acct}, token, acct, post, sleep)
+    out = {}
+    try:
+        for d in days:
+            out[d.isoformat()] = sum(int(row["sum"]["requests"]) for row in acc[f'p{d.strftime("%Y%m%d")}'])
+    except (KeyError, TypeError, ValueError):
+        raise GuardError("Pages の応答の形が想定外")
+    return out
+
+
+def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
+    """start..end（date）の日別の値を返す。(アカウント合計 {metric: {date: n}}、mise の内数 {metric: {date: n}})。Workers と D1 だけ（Pages Functions は fetch_pages）。失敗は GuardError。"""
+    days = _days(start, end)
+    acc = _graphql(build_query(days), {"acct": acct, "fromDate": start.isoformat(), "toDate": end.isoformat()}, token, acct, post, sleep)
     total = {k: {} for k in METRICS}
     mine = {k: {} for k in METRICS}
     add = lambda dst, key, d, n: dst[key].__setitem__(d, dst[key].get(d, 0) + n)
     try:
-        acc = data["data"]["viewer"]["accounts"][0]
         for d in days:   # Workers: 日付は別名から決める（UTC の日）。scriptName 別の行をアカウント合計に足し、mise の行は内数にも足す
             for row in acc[f'w{d.strftime("%Y%m%d")}']:
                 n = int(row["sum"]["requests"])
@@ -161,9 +195,15 @@ def fetch_daily(token, acct, start, end, post=http_post, sleep=time.sleep):
 
 
 # ------------------------------------------------------------------ 判定（純粋関数）
-def analyze(daily, today, mine=None):
+def analyze(daily, today, mine=None, pages=None):
     """daily=アカウント合計 {metric:{date:n}}、mine=mise の内数（表示のみ。判定に使わない）、today=UTC の今日（date）。今日は途中なので、予測・急増は「昨日までの完了した日」で計算する。"""
     mine = mine or {}
+    workers_only = dict(daily.get("workers_requests", {}))
+    if pages is not None:    # Pages Functions のリクエストも Workers のリクエスト枠に数えられるので、日別に足してから判定する
+        merged = dict(workers_only)
+        for k, v in pages.items():
+            merged[k] = merged.get(k, 0) + v
+        daily = {**daily, "workers_requests": merged}
     month = today.strftime("%Y-%m")
     dim = calendar.monthrange(today.year, today.month)[1]
     yesterday = today - datetime.timedelta(days=1)
@@ -182,9 +222,13 @@ def analyze(daily, today, mine=None):
         ratio = y / avg if avg > 0 else None
         spike = (ratio is not None and ratio >= SPIKE_FACTOR and y >= m["spike_floor"]) or (avg == 0 and y >= m["spike_floor"] * SPIKE_FACTOR)
         md = mine.get(key, {})
+        breakdown = {}
+        if key == "workers_requests":   # 内訳: Workers / Pages Functions（Pages が取れなかったときは pages を None にして合計に含まれないことを示す）
+            breakdown = {"workers_month_total": sum(v for k, v in workers_only.items() if k.startswith(month)),
+                         "pages_month_total": None if pages is None else sum(v for k, v in pages.items() if k.startswith(month))}
         level = "alert" if pct >= ALERT_PCT else "warn" if pct >= WARN_PCT else "ok"
         out[key] = {"label": m["label"], "limit": m["limit"], "month_total": total, "month_pct": round(pct, 3), "today": d.get(today.isoformat(), 0),
-                    "mise_month_total": sum(v for k, v in md.items() if k.startswith(month)), "mise_yesterday": md.get(yesterday.isoformat(), 0), "yesterday": y, "avg_prev7": round(avg, 1), "spike_ratio": None if ratio is None else round(ratio, 2), "spike": spike,
+                    **breakdown, "mise_month_total": sum(v for k, v in md.items() if k.startswith(month)), "mise_yesterday": md.get(yesterday.isoformat(), 0), "yesterday": y, "avg_prev7": round(avg, 1), "spike_ratio": None if ratio is None else round(ratio, 2), "spike": spike,
                     "projected_month": None if proj is None else round(proj), "projected_pct": None if proj_pct is None else round(proj_pct, 3), "level": level}
         if level != "ok":
             guards.append(f"使用量: {m['label']} がアカウント全体の当月の枠の {pct:.1f}%（しきい値 {int(WARN_PCT if level == 'warn' else ALERT_PCT)}%）。超過は上限なしで課金（{m['overage']}）")
@@ -203,6 +247,9 @@ def render_table(date, res):
         ratio = "-" if r["spike_ratio"] is None else f"{r['spike_ratio']:.1f}x"
         flag = ("警告" if r["level"] == "warn" else "強い警告" if r["level"] == "alert" else "ok") + (" 急増" if r["spike"] else "")
         L.append(f"{r['label']:<20}{r['month_total']:>16,}{r['limit']:>18,}{r['month_pct']:>7.2f}%{proj:>9}{r['yesterday']:>16,}{r['avg_prev7']:>16,.0f}{ratio:>7}  {flag}")
+        if "pages_month_total" in r:
+            pg = "取得できず(合計に含まれていない)" if r["pages_month_total"] is None else f"{r['pages_month_total']:,}"
+            L.append(f"  └ 内訳: Workers {r['workers_month_total']:,} / Pages Functions {pg}")
         L.append(f"  └ うち mise{'':<12}{r['mise_month_total']:>16,}{'':<18}{r['mise_month_total'] / r['limit'] * 100:>7.2f}%{'':>9}{r['mise_yesterday']:>16,}")
     return "\n".join(L)
 
@@ -219,7 +266,14 @@ def run(date=None, env_file=DEFAULT_ENV, var_dir=os.path.join(ROOT, "var"), post
     start = min(today.replace(day=1), today - datetime.timedelta(days=SPIKE_BASE_DAYS + 1))
     try:
         daily, mine = fetch_daily(token, acct, start, today, post=post, sleep=sleep)
-        res, guards = analyze(daily, today, mine)
+        pages, pages_warn = None, None
+        try:    # Pages Functions は別のクエリ。失敗・名前の違いでも Workers 分で判定を続ける
+            pages = fetch_pages(token, acct, start, today, post=post, sleep=sleep)
+        except GuardError as e:
+            pages_warn = f"使用量ガード: Pages Functions は取得できず合計に含まれていません（{e}）。初回は docs/operations/usage-guard.md の突き合わせ手順を参照"
+        res, guards = analyze(daily, today, mine, pages)
+        if pages_warn:
+            guards.append(pages_warn)
     except GuardError as e:
         msg = f"使用量ガード: 取得に失敗（{e}）。次回に再試行"
         out(msg)

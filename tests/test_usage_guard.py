@@ -21,9 +21,9 @@ def day(n):
     return (TODAY - datetime.timedelta(days=n)).isoformat()
 
 
-def api_body(workers=None, d1=None, other_workers=None, other_d1=None):
+def api_body(workers=None, d1=None, other_workers=None, other_d1=None, pages=None, with_pages=True):
     """GraphQL 応答を作る。workers={date:n} は mise の Worker、other_workers={date:n} は同じアカウントの別の Worker。
-    d1={date:(read, written)} は mise の D1、other_d1 は別のデータベース。日別の別名（w<YYYYMMDD>）は 10〜11 月の全日分を作る。"""
+    d1={date:(read, written)} は mise の D1、other_d1 は別のデータベース。pages={date:n} は Pages Functions のリクエスト。日別の別名（w<YYYYMMDD>）は 10〜11 月の全日分を作る。"""
     acc = {}
     for off in range(0, 70):
         d = datetime.date(2026, 10, 1) + datetime.timedelta(days=off)
@@ -32,6 +32,8 @@ def api_body(workers=None, d1=None, other_workers=None, other_d1=None):
             if src and d.isoformat() in src:
                 rows.append({'sum': {'requests': src[d.isoformat()]}, 'dimensions': {'scriptName': name}})
         acc['w' + d.strftime('%Y%m%d')] = rows
+        if with_pages:
+            acc['p' + d.strftime('%Y%m%d')] = [{'sum': {'requests': (pages or {})[d.isoformat()]}}] if d.isoformat() in (pages or {}) else []
     rows = []
     for dbid, src in ((ug.D1_DATABASE_ID, d1), ('other-db-id', other_d1)):
         for d, (r, w) in (src or {}).items():
@@ -157,6 +159,82 @@ class Spike(Base):
         self.assertTrue(r['result']['workers_requests']['spike'])
 
 
+class Pages(Base):
+    """Pages Functions のリクエストも Workers のリクエスト枠に数えられる(公式の Pages Functions の料金ページ)。別のクエリで取って足す。"""
+    def test_pages_added_to_workers_total_and_changes_verdict(self):
+        w = {'2026-11-02': 4_000_000}
+        r0 = self.go(lambda *a: (200, api_body(w, {})))
+        self.assertEqual(r0['result']['workers_requests']['level'], 'ok')
+        r = self.go(lambda *a: (200, api_body(w, {}, pages={'2026-11-02': 1_500_000})))
+        x = r['result']['workers_requests']
+        self.assertEqual(x['month_total'], 5_500_000)
+        self.assertEqual(x['level'], 'warn')
+        self.assertEqual((x['workers_month_total'], x['pages_month_total']), (4_000_000, 1_500_000))
+        text = self.out.getvalue()
+        self.assertIn('内訳: Workers 4,000,000 / Pages Functions 1,500,000', text)
+        self.assertNoSecret(r)
+
+    def test_pages_spike_counts(self):
+        w = {day(i): 100_000 for i in range(2, 9)}
+        r = self.go(lambda *a: (200, api_body(w, {}, pages={day(1): 900_000})))
+        self.assertTrue(r['result']['workers_requests']['spike'])
+
+    def test_pages_query_is_separate_from_workers_query(self):
+        qs = []
+        def post(url, body, token):
+            qs.append(body['query'])
+            return 200, api_body({day(1): 5}, {})
+        self.go(post)
+        self.assertEqual(len(qs), 2)
+        self.assertIn('workersInvocationsAdaptive', qs[0]); self.assertNotIn('pagesFunctions', qs[0])
+        self.assertIn('pagesFunctionsInvocationsAdaptiveGroups', qs[1]); self.assertNotIn('workersInvocationsAdaptive', qs[1])
+
+    def test_pages_failure_warns_and_judges_on_workers_only(self):
+        def post(url, body, token):
+            if 'pagesFunctions' in body['query']:
+                return 200, json.dumps({'errors': [{'message': f'Cannot query field "pagesFunctionsInvocationsAdaptiveGroups" {TOKEN} {ACCT}'}]})
+            return 200, api_body({'2026-11-02': 5_500_000}, {})
+        r = self.go(post)
+        self.assertTrue(r['ok'])
+        self.assertEqual(r['result']['workers_requests']['level'], 'warn')
+        self.assertIsNone(r['result']['workers_requests']['pages_month_total'])
+        self.assertTrue(any('Pages Functions は取得できず合計に含まれていません' in g for g in r['guards']))
+        self.assertIn('取得できず', self.out.getvalue())
+        self.assertNoSecret(r)
+
+    def test_pages_http_error_also_only_warns(self):
+        def post(url, body, token):
+            return (500, 'x') if 'pagesFunctions' in body['query'] else (200, api_body({day(1): 5}, {}))
+        r = self.go(post, )
+        self.assertTrue(r['ok'])
+        self.assertTrue(any('Pages Functions は取得できず' in g for g in r['guards']))
+
+    def test_pages_missing_alias_is_a_warning_not_a_crash(self):
+        r = self.go(lambda *a: (200, api_body({day(1): 5}, {}, with_pages=False)))
+        self.assertTrue(r['ok'])
+        self.assertTrue(any('Pages Functions は取得できず' in g for g in r['guards']))
+
+
+class Edge(Base):
+    def test_missing_day_alias_in_workers_response_is_unexpected_shape(self):
+        body = json.loads(api_body({day(1): 5}, {}))
+        del body['data']['viewer']['accounts'][0]['w' + day(1).replace('-', '')]
+        r = self.go(lambda *a: (200, json.dumps(body)))
+        self.assertFalse(r['ok'])
+        self.assertTrue(any('想定外' in g for g in r['guards']))
+        self.assertNoSecret(r)
+
+    def test_mise_zero_days_show_zero_and_range_uses_next_day_lt(self):
+        q = ug.build_query([TODAY])
+        self.assertIn('datetime_lt: "2026-11-20T00:00:00Z"', q)
+        self.assertNotIn('23:59:59', q)
+        self.assertIn('datetime_lt: "2026-11-20T00:00:00Z"', ug.build_pages_query([TODAY]))
+        r = self.go(lambda *a: (200, api_body({}, {}, other_workers={day(1): 1000})))
+        x = r['result']['workers_requests']
+        self.assertEqual((x['month_total'], x['mise_month_total'], x['mise_yesterday']), (1000, 0, 0))
+        self.assertIn('うち mise', self.out.getvalue())
+
+
 class Unconfigured(Base):
     def test_no_env_file_warns_and_returns_ok(self):
         with redirect_stdout(self.out):
@@ -196,7 +274,7 @@ class ApiFailures(Base):
 
     def test_5xx_retry_then_success(self):
         seq = [(503, 'x'), (200, api_body({day(1): 5}, {}))]
-        r = self.go(lambda *a: seq.pop(0))
+        r = self.go(lambda *a: seq.pop(0) if seq else (200, api_body({day(1): 5}, {})))
         self.assertTrue(r['ok'])
 
     def test_5xx_persistent(self):
@@ -244,6 +322,7 @@ class Constants(unittest.TestCase):
         self.assertIn('dimensions { scriptName }', q)
         self.assertIn('$acct: string!', q)
         self.assertNotIn('dimensions { date }', q.split('d1:')[0])   # Workers に date 次元は使わない
+        self.assertNotIn('pagesFunctions', q)
 
 
 if __name__ == '__main__':

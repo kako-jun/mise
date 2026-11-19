@@ -11,7 +11,7 @@ Cloudflare には**金額で止まる上限の機能が無い**。Workers Paid�
 
 ## 込みの枠と超過料金
 
-**この枠は Cloudflare アカウント全体のもの**で、mise だけの枠ではない。同じアカウントの全 Worker・全 D1 データベースの合計に対して、月 1,000 万リクエスト・250 億行・5,000 万行が込みになる（このアカウントには mise のほか 20 以上のアプリが載っている）。だから使用量ガードは**アカウント合計**で割合・月末予測・急増を判定し、mise の Worker と mise の D1 は**内数**（表の「うち mise」の行）として表示するだけにする（判定には使わない。mise が小さくても、他のアプリの暴走で枠を超えれば請求が増えるため）。
+**この枠は Cloudflare アカウント全体のもの**で、mise だけの枠ではない。同じアカウントの全 Worker と Pages Functions・全 D1 データベースの合計に対して、月 1,000 万リクエスト・250 億行・5,000 万行が込みになる（このアカウントには mise のほか 20 以上のアプリが載っている）。だから使用量ガードは**アカウント合計**で割合・月末予測・急増を判定し、mise の Worker と mise の D1 は**内数**（表の「うち mise」の行）として表示するだけにする（判定には使わない。mise が小さくても、他のアプリの暴走で枠を超えれば請求が増えるため）。
 
 出典（2026-11-19 に確認）: [D1 の料金](https://developers.cloudflare.com/d1/platform/pricing/)・[Workers の料金](https://developers.cloudflare.com/workers/platform/pricing/)。数値は `scripts/usage_guard.py` の `METRICS`（1 か所）。
 
@@ -55,7 +55,8 @@ uv run python3 scripts/usage_guard.py --env-file PATH --var-dir DIR --date YYYY-
 夜間ジョブでは最後の段 `usage`（[nightly.md](nightly.md)）として**既定で動く**。`--no-usage-guard` で止める、`--usage-env PATH` で env ファイルの場所を変える。トークンが無い・API が 429/5xx/不正な応答のときも**失敗にせず**、警告を `guards`（report.md の「ガードの発動」）に載せて続行する。他の段が失敗した夜も動く。
 
 **初回は実際に流して確認する**: クエリは実 API で未実行（トークンが無かったため）。公式ドキュメントとの突き合わせ（2026-11-19）:
-- Workers: [公式の例](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/)は `workersInvocationsAdaptive` を `datetime_geq` / `datetime_leq` で絞り、次元は `datetime`・`scriptName`・`status`。**`date` 次元は例に無い**ので使わず、**日ごとに別名（`w20261119` など）で datetime 範囲を 1 日に絞り、`scriptName` 次元で合計を取る**形にした（日付は別名から UTC の日に決まる）。アカウント合計 = 全 `scriptName` の和、内数 = `mise`。変数の型は公式の例に合わせた（`$acct: string!`・`Date`）。
+- **Pages Functions**: Pages Functions のリクエストは **Workers のリクエストとして課金され、Workers Paid の枠に数えられる**（[公式の Pages Functions の料金](https://developers.cloudflare.com/pages/functions/pricing/):「Requests to your Pages functions count towards your quota for Workers Paid plans」）。このアカウントの `*.llll-ll.com` の多くは Pages なので、Workers のクエリとは**別のクエリ**（`pagesFunctionsInvocationsAdaptiveGroups`）で日別に取り、Workers のリクエスト数に足して判定する。表と JSON には「内訳: Workers / Pages Functions」を出す。**未確認**: データセット名は公式の [GraphQL datasets 一覧](https://developers.cloudflare.com/data-localization/metadata-boundary/graphql-datasets/)に載っているが、フィールド（`sum { requests }`）は公式ドキュメントで確認できなかった（Workers の例に合わせた推定）。取れない・名前が違うときは「Pages Functions は取得できず合計に含まれていません」と警告だけ出して Workers 分で判定を続ける（終了コードは 0）。**初回の突き合わせ手順**: 実行後、ダッシュボードの Workers & Pages の Overview（アカウント合計のリクエスト数）と表の「Workers リクエスト」の当月累計を同じ期間で比べる。表が小さければ Pages の取得が失敗している（警告が出ていなくても、フィールドが違って 0 になっていないか確認する）。
+- Workers: [公式の例](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/)は `workersInvocationsAdaptive` を `datetime_geq` / `datetime_leq` で絞り、次元は `datetime`・`scriptName`・`status`。日の範囲は `datetime_geq` が当日 00:00:00Z、`datetime_lt` が翌日 00:00:00Z（`leq` の 23:59:59Z だと最後の 1 秒が抜ける。`lt` は GraphQL の標準の比較演算子だが、公式の例は `leq` なので初回に確認）。**`date` 次元は例に無い**ので使わず、**日ごとに別名（`w20261119` など）で datetime 範囲を 1 日に絞り、`scriptName` 次元で合計を取る**形にした（日付は別名から UTC の日に決まる）。アカウント合計 = 全 `scriptName` の和、内数 = `mise`。変数の型は公式の例に合わせた（`$acct: string!`・`Date`）。
 - D1: [公式の例](https://developers.cloudflare.com/d1/observability/metrics-analytics/)は `d1AnalyticsAdaptiveGroups` を `date_geq` / `date_leq` で絞り、次元 `date`・`databaseId`、合計 `sum { readQueries writeQueries }`。`rowsRead` / `rowsWritten` は同ページの指標の表にあるが、**どのノード（`sum` か）に入るかは例に無く未確認**。`sum { rowsRead rowsWritten }` で取っている。
 初回の実行で「応答の形が想定外」「GraphQL エラー」が出たら、メッセージに従って `build_query` を直す。
 

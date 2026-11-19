@@ -93,6 +93,14 @@ test('キャッシュ: 元に Cache-Control が無い応答は HIT でも無い�
   assert.equal(b2.headers.get('Cache-Control'), b1.headers.get('Cache-Control'));
 });
 
+test('キャッシュ: 元の Cache-Control が空文字でも HIT で保存用の max-age=60 が残らない', async () => {
+  const calls = { n: 0 }, cache = fakeCache(), req = cachedApp(cache, calls, a => { a.get('/empty/', c => c.text('nf', 404, { 'Cache-Control': '' })); });
+  const a1 = await req('/empty/'), a2 = await req('/empty/');
+  assert.equal(a2.headers.get('X-Cache'), 'HIT');
+  assert.equal(a2.headers.get('Cache-Control') ?? '', a1.headers.get('Cache-Control') ?? '');
+  assert.notEqual(a2.headers.get('Cache-Control'), `public, max-age=${CACHE_TTL}`);
+});
+
 test('キャッシュのキーにデプロイのバージョンが入る（違えば別キー・バインディングが無くても動く）', async () => {
   const calls = { n: 0 }, cache = fakeCache(), req = cachedApp(cache, calls);
   await req('/api/sites', {}, { CF_VERSION_METADATA: { id: 'v1' } });

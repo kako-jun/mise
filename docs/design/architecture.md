@@ -48,7 +48,7 @@ D1 は**スキャンした行数**（`rows_read`）で課金する。プラン�
 
 ### 1 リクエストの読み取り行数の観測とキャッシュ（#157）
 
-目的は、料金の暴走（攻撃・バグ）に気づくことと、**結果を変えずに**同じ URL の繰り返しで D1 を読み直さないこと（全体の方針と検知は [usage-guard.md](../operations/usage-guard.md)。込みの枠はアカウント全体のもので、mise はその内数）。実装は `src/usage.js`（`src/index.js` の最初のミドルウェア）。
+目的は、料金の暴走（攻撃・バグ）に気づくことと、**結果を変えずに**同じ URL の繰り返しで D1 を読み直さないこと（全体の方針と検知は [usage-guard.md](../operations/usage-guard.md)。込みの枠はアカウント全体［全 Worker と Pages Functions・全 D1］のもので、mise はその内数）。実装は `src/usage.js`（`src/index.js` の最初のミドルウェア）。
 
 - **観測**: D1 のバインディングを包み（`meterDb`）、リクエストごとに `meta.rows_read` を合計して診断用の応答ヘッダ **`X-D1-Rows-Read`**（数値のみ。キャッシュのヒットは `0`）と `X-Cache`（HIT/MISS）に出す。**これらのヘッダは環境変数 `DEBUG_ROWS` が有るときだけ付く**（コストの指標を攻撃者に渡さないため、本番では出さない。`wrangler.jsonc` の `vars` には書かず、ローカル専用の `.dev.vars`［git 管理外］に `DEBUG_ROWS=1` と書く）。合計が `ROWS_WARN`（20,000 行。通常の一覧は数百〜数千行）を超えたリクエストだけ `console.warn` に 1 行の JSON（`event: "d1-rows-read-high"`・`rows_read`・`stmts`・`path`・`query_length`）を出す。**検索語・URL のクエリは載せない**（長さだけ）。大量リクエストでログが洪水にならないよう閾値は高くしてある。`first()` は meta を返さないので `all()` で実行して先頭行を返す（結果は同じ。`first(col)` で列が無いときは D1 と同じく投げる）。`raw()` は meta を返さないので行数を数えられない（現在の呼び出しは無い）。
 - **共有キャッシュ**: `caches.default`（Cache API）に GET の応答を `CACHE_TTL` = 60 秒保存する。対象は `/api/sites`・`/api/categories`・`/api/scopes`・`/api/activity`・`/sitemap.xml` と、範囲ページ・`/about/` の HTML（`/icon/` と他の `/api/*` は対象外）。ヒットなら D1 を読まず保存した応答を返す（`X-Cache: HIT`・`X-D1-Rows-Read: 0`）。保存するのは 200 と、画面側の 404（範囲外のページ番号など。判定に D1 を数十万行読むことがあった）だけ。**対象外**: `/api/picks`（毎回ランダム。キャッシュすると結果が変わる）・POST（`/api/requests`）・`Authorization` 付き・4xx/5xx の API 応答。

@@ -59,7 +59,7 @@ export function usageMiddleware({ getCache = defaultCache, ttl = CACHE_TTL, warn
         const h = new Headers(hit.headers), cc = h.get(ORIG_CC);
         const absent = h.has(ABSENT);
         h.delete(ORIG_CC); h.delete(ABSENT);
-        if (absent) h.delete('Cache-Control'); else if (cc) h.set('Cache-Control', cc);
+        if (absent) h.delete('Cache-Control'); else if (cc !== null) h.set('Cache-Control', cc); // 元が空文字でも復元する(保存用の max-age=60 を残さない)
         if (debug) { h.set(ROWS_HEADER, '0'); h.set('X-Cache', 'HIT'); }
         c.res = new Response(hit.body, { status: hit.status, headers: h });
         return;
