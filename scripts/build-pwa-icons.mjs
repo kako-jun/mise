@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // サイト自身のアイコン一式（タブのファビコン・apple-touch-icon・PWA アイコン）を書き出す。生成物は commit する（#151）。
 // 意匠: Anton の M を三毛猫のパッチ（橙・クリーム・茶）で塗り、外側にクリーム色の太い縁、その内側に濃色の輪郭（ステッカー風）。
+// ただし 16/32px の小サイズ版は濃色の輪郭（line）を縁（rim）より太くしてあり、縁は輪郭の下に隠れて見えない（輪郭の縁の半透明画素にだけ下地として効く）。
 // M は文字でなく path（ロゴと同じ自己ホスト Anton サブセットのグリフ輪郭。フォント非依存）。
-// 出力: public/favicon.svg（小サイズ向けに縁・輪郭を細くした版）/ public/favicon.ico（16・32 は小サイズ版、48 は通常版）/
+// 出力: public/favicon.svg（小サイズ版: 濃色の輪郭を太めにして M を大きくした版（クリームの縁は輪郭の下に隠れる））/ public/favicon.ico（16・32 は小サイズ版、48 は通常版）/
 //       public/pwa/icon-180.png（濃色地。iOS は透過を黒で塗るため）/ icon-192.png / icon-512.png（透過）/ icon-maskable-512.png（濃色地）
 // 実行: node scripts/build-pwa-icons.mjs（playwright と Chromium が必要。package.json の依存には入れていない。
 //   別の場所にある場合は PLAYWRIGHT_MODULE=<playwright のエントリのパス（CJS・ESM どちらも可）> CHROMIUM_PATH=<chrome 実行ファイル> で指す）
 import fs from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 const M = 'M78 0V1760H614L762 687L909 1760H1450V0H1128V1268L926 0H610L396 1268V0Z'; // グリフ座標（高さ 1760、中心 x=764）
 const GH = 1760;
 const DARK = '#202831', CREAM = '#fff8ea';
@@ -27,9 +28,10 @@ function icon({ h, rim, line, bg = null, rx = 0 }) {
     + p(`fill="${DARK}" stroke="${DARK}" stroke-width="${w(line)}" stroke-linejoin="round"`)
     + p('fill="url(#g)"') + '</svg>\n';
 }
-// 通常版（180/192/512）と、16/32px で M の内側の切れ込みを残すため縁・輪郭を細くして M を大きくした小サイズ版
+// 通常版（180/192/512）と、16/32px 用の小サイズ版（濃色の輪郭を太く・M を大きく）
 const NORMAL = { h: 420, rim: 44, line: 22 };
-// 16px で濃色の輪郭が約 1px になる太さ（白いタブでクリーム色の塗りと縁が溶けても M と読める。#151 レビュー）
+// 輪郭 line=32（512 基準）は 16px で濃色が約 0.5px、32px で約 1px。白いタブでクリーム色の塗りが溶けても M の外形が読める（#151 レビュー）
+// rim は line の下に隠れて見えないが、外すと輪郭の縁の半透明画素の色が変わる（承認済みの見た目を保つため残す）
 const SMALL = { h: 468, rim: 24, line: 32 };
 const designs = {
   small: icon(SMALL),
@@ -44,6 +46,8 @@ const mod = PW ? await import(pathToFileURL(PW).href) : await import('playwright
 const { chromium } = mod.default ?? mod;
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH, args: ['--no-sandbox', '--disable-gpu'] } : {});
 const page = await browser.newPage({ viewport: { width: 512, height: 512 }, deviceScaleFactor: 1 });
+const outputs = {};
+try {
 async function render(svg, size) {
   const uri = 'data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64');
   await page.setContent(`<body style="margin:0;background:transparent"><img src="${uri}" width="${size}" height="${size}" style="display:block"></body>`);
@@ -51,12 +55,12 @@ async function render(svg, size) {
   return page.screenshot({ clip: { x: 0, y: 0, width: size, height: size }, omitBackground: true });
 }
 // Chromium が要る処理を全部終えてからまとめて書く（途中で失敗しても半端な生成物を残さない）
-const outputs = {
+Object.assign(outputs, {
   'pwa/icon-180.png': await render(designs.apple, 180),
   'pwa/icon-192.png': await render(designs.large, 192),
   'pwa/icon-512.png': await render(designs.large, 512),
   'pwa/icon-maskable-512.png': await render(designs.maskable, 512),
-};
+});
 
 // 安全領域: maskable は中央の半径 40%（512 なら 204.8px）の円に M と縁が収まること（背景なしで描いて実測）
 await page.setContent(`<body style="margin:0"><img id="i" src="data:image/svg+xml;base64,${Buffer.from(designs.maskableContent).toString('base64')}" width="512" height="512"></body>`);
@@ -80,7 +84,9 @@ const dir = frames.map(([size, png]) => {
   offset += png.length; return e;
 });
 outputs['favicon.ico'] = Buffer.concat([head, ...dir, ...frames.map(f => f[1])]);
-await browser.close();
+} finally {
+  await browser.close();
+}
 outputs['favicon.svg'] = designs.small;
 for (const [name, data] of Object.entries(outputs)) fs.writeFileSync(root + 'public/' + name, data);
 console.log('wrote favicon.svg favicon.ico pwa/icon-*.png');

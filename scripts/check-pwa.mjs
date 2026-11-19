@@ -3,9 +3,10 @@
 // public/_headers と wrangler.jsonc の設定そのものを読んで確かめる。
 // 実行: node scripts/check-pwa.mjs
 import fs from 'node:fs';
-import zlib from 'node:zlib';
+import { fileURLToPath } from 'node:url';
+import { decodePng, icoFrame, faviconProblems } from './favicon-frame.mjs';
 import { pageCsp } from '../src/security.js';
-const root = new URL('../', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../', import.meta.url));
 const read = p => fs.readFileSync(root + p, 'utf8');
 let failed = 0;
 const check = (label, ok) => { console.log(`${ok ? 'OK  ' : 'NG  '}${label}`); if (!ok) failed++; };
@@ -62,22 +63,7 @@ const icoSizes = ico.readUInt16LE(0) === 0 && ico.readUInt16LE(2) === 1 ? Array.
 check('favicon.ico に 16・32・48 が入っている', icoSizes.join() === '16,32,48');
 check('favicon.ico の各フレームが PNG で寸法が宣言と一致', icoSizes.length === 3 && icoSizes.every((s, i) => { const off = ico.readUInt32LE(6 + i * 16 + 12); return ico.readUInt32BE(off) === 0x89504e47 && ico.readUInt32BE(off + 16) === s && ico.readUInt32BE(off + 20) === s; }));
 
-// maskable の安全領域: 背景色（四隅の色）と違う画素が、中央の半径 40% の円に収まること（PNG を自前で復号。8bit RGB/RGBA・非インターレース）
-function decodePng(buf) {
-  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20), type = buf[25], bpp = type === 6 ? 4 : 3;
-  if (buf[24] !== 8 || (type !== 6 && type !== 2) || buf[28] !== 0) throw new Error('未対応の PNG 形式');
-  const idat = []; for (let o = 8; o < buf.length;) { const n = buf.readUInt32BE(o); if (buf.toString('latin1', o + 4, o + 8) === 'IDAT') idat.push(buf.subarray(o + 8, o + 8 + n)); o += 12 + n; }
-  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = w * bpp, px = Buffer.alloc(h * stride);
-  for (let y = 0; y < h; y++) {
-    const f = raw[y * (stride + 1)], src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
-    for (let x = 0; x < stride; x++) {
-      const a = x >= bpp ? px[y * stride + x - bpp] : 0, b = y ? px[(y - 1) * stride + x] : 0, c = x >= bpp && y ? px[(y - 1) * stride + x - bpp] : 0;
-      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-      px[y * stride + x] = (src[x] + (f === 0 ? 0 : f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : (pa <= pb && pa <= pc ? a : pb <= pc ? b : c))) & 255;
-    }
-  }
-  return { w, h, bpp, px };
-}
+// maskable の安全領域: 背景色（四隅の色）と違う画素が、中央の半径 40% の円に収まること（PNG を自前で復号。scripts/favicon-frame.mjs）
 {
   const { w, h, bpp, px } = decodePng(fs.readFileSync(root + 'public/pwa/icon-maskable-512.png'));
   const at = (x, y) => [0, 1, 2].map(k => px[(y * w + x) * bpp + k]);
@@ -96,12 +82,9 @@ function decodePng(buf) {
   check('apple-touch-icon(icon-180.png) が不透明（アルファが全て 255）', opaque);
 }
 {
-  // 16px のファビコン: M の上端の切れ込み（2 つの山の間）が上から 6 行とも中央に見えていること
-  // （透明または濃色の輪郭の画素。縁・輪郭を太らせると切れ込みは透明でなく濃色の線として残る）
-  const off = ico.readUInt32LE(6 + 12), len = ico.readUInt32LE(6 + 8);
-  const { w, bpp, px } = decodePng(ico.subarray(off, off + len));
-  const seen = y => bpp === 4 && [6, 7, 8, 9].some(x => { const o = (y * w + x) * 4; return px[o + 3] < 200 || px[o] + px[o + 1] + px[o + 2] < 250; });
-  const rows = [0, 1, 2, 3, 4, 5].map(seen);
-  check(`favicon.ico の 16px で M の上端の切れ込みが上から 6 行とも残る（${rows.map(v => (v ? 1 : 0)).join('')}）`, rows.every(Boolean));
+  // 16px のファビコンが M として成立していること（脚の面・上端の切れ込み・下の脚の隙間・単色/透明でないこと。変異テストは tests/favicon-frame.test.mjs）
+  const frame = icoFrame(ico, 16);
+  const problems = frame ? faviconProblems(frame) : ['16px のフレームが無い'];
+  check(`favicon.ico の 16px が M として成立している${problems.length ? '（' + problems.join(' / ') + '）' : ''}`, problems.length === 0);
 }
 process.exit(failed ? 1 : 0);
