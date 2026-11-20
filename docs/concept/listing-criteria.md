@@ -33,7 +33,7 @@ mise に載せるサイトの基準。決定の経緯は [decisions.md](../decis
 
 優先は順位づけであって拒否ではない。5 種類以外(上の「載せる基準」に合うもの)も従来どおり載せる。
 
-**載せないもの**: グルメポータル・SNS・予約サイトの**中の**店舗ページ、ユーザーのプロフィールだけが公式のお店(例: `instagram.com/<店>`、`tabelog.com/…`、`r.gnavi.co.jp/…`、`hotpepper.jp/…`、`ameblo.jp/<ユーザー>`)。これらは拒否理由コード `platform_page` で、判定の前段(決定論)で候補から外す(ホスト一覧の正本は `scripts/pipeline/blocklist/platform_pages.txt`。[pipeline.md](../collection/pipeline.md#フィルタ))。サービス本体のトップ(パスなし、または言語パス程度。`https://www.instagram.com/`・`/ja/`)は除外しない。(4)(5)は「サービス本体/企業のトップ」であり、この除外と矛盾しない。
+**載せないもの**: グルメポータル・SNS・予約サイトの**中の**店舗ページ、ユーザーのプロフィールだけが公式のお店(例: `instagram.com/<店>`、`tabelog.com/…`、`r.gnavi.co.jp/…`、`hotpepper.jp/…`、`ameblo.jp/<ユーザー>`)。これらは拒否理由コード `platform_page` で、判定の前段(決定論)で候補から外す(ホスト一覧の正本は `scripts/pipeline/blocklist/platform_pages.txt`。[pipeline.md](../collection/pipeline.md#フィルタ))。サービス本体のトップ(パスなし、または言語パス程度。`https://www.instagram.com/`・`/ja/`)は除外しない。**既知の穴**: サービス自身のパス(`note.com/info`・`x.com/home`・`help.instagram.com/x` 等)も除外される。実害は小さい（発見元は top URL だけを持つので、影響はパス付きの申請と Wikidata のパス付き値）。載せたい企業の公式は、トップ URL で申請する。(4)(5)は「サービス本体/企業のトップ」であり、この除外と矛盾しない。
 
 ## 国と範囲
 

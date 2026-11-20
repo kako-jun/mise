@@ -16,7 +16,7 @@ REJECT = [
     'https://www.facebook.com/shop.name', 'https://m.facebook.com/shop', 'https://x.com/user', 'https://twitter.com/user/status/1',
     'https://tabelog.com/ishikawa/A1701/A170101/17000000/', 'https://s.tabelog.com/tokyo/', 'https://r.gnavi.co.jp/abc123/',
     'https://www.gurunavi.com/ja/abc', 'https://www.hotpepper.jp/strJ000000000/', 'https://retty.me/area/PRE13/ARE1/SUB101/100000000/',
-    'https://ameblo.jp/someone/', 'https://note.com/someone', 'https://line.me/R/ti/p/@shop', 'https://lin.ee/abcdef' + '/x',
+    'https://ameblo.jp/someone/', 'https://note.com/someone', 'https://line.me/R/ti/p/@shop', 'https://lin.ee/abcdef',
     'https://linktr.ee/someone', 'https://lit.link/someone', 'https://maps.app.goo.gl/AbCdEf', 'https://g.page/shop-name',
     'https://WWW.INSTAGRAM.COM/Some_Shop',                        # 大文字のホスト
     'https://www.instagram.com/some_shop?hl=ja',                  # クエリ付きでもパスがあれば除外
@@ -66,6 +66,24 @@ class PlatformPage(unittest.TestCase):
     def test_top_path_table_is_used(self):
         with mock.patch.object(hostnames, 'blocklist', return_value={'host': ['instagram.com'], 'top_path': []}):
             self.assertEqual(hostnames.platform_page('https://www.instagram.com/ja/'), P)
+
+    def test_overlap_with_platforms_txt_is_pinned(self):   # 片方からホストが消えて意図せず食い違ったら落ちる
+        pages = set(hostnames.blocklist('platform_pages.txt')['host'])
+        shared = set(hostnames.blocklist('platforms.txt')[''])
+        self.assertEqual(pages & shared, {'ameblo.jp', 'note.com'})
+
+    def test_service_own_paths_are_excluded_known_hole(self):   # 既知の穴(platform_pages.txt の先頭コメント)。変えるなら docs も直す
+        for u in ('https://note.com/info', 'https://x.com/home', 'https://www.instagram.com/accounts/login', 'https://help.instagram.com/x',
+                  'https://developers.facebook.com/docs', 'https://www.gnavi.co.jp/company/'):
+            self.assertEqual(hostnames.platform_page(u), P, u)
+
+    def test_idn_host_is_not_judged(self):   # normalize_host は非 ASCII ラベルを拒否して None(通過)。偽陰性のみで、取得前フィルタが invalid_host で落とす
+        self.assertIsNone(hostnames.platform_page('https://日本.instagram.com/x'))
+        self.assertEqual(hostnames.prefilter('日本.instagram.com', jp_only=False), 'invalid_host')
+
+    def test_more_language_paths(self):
+        for lp in ('pt', 'it', 'ko-kr', 'zh-hans', 'zh-hant', 'pt-br', 'es-es', 'fr-fr', 'de-de', 'it-it', 'pt-pt'):
+            self.assertIsNone(hostnames.platform_page(f'https://www.instagram.com/{lp}/'), lp)
 
     def test_ne_jp_and_hosting_not_listed(self):
         hosts = set(hostnames.blocklist('platform_pages.txt')['host'])

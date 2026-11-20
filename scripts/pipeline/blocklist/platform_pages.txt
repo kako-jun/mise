@@ -3,6 +3,11 @@
 #       (パスがある。ただし [top_path] の言語パスだけは本体のトップとみなす。クエリ・フラグメント・末尾スラッシュは無視)ものを
 #       理由コード platform_page で除外する。サービス本体のトップ(https://www.instagram.com/ 等)は除外しない。
 # 自作サイトのホスティング(ne.jp・sakura.ne.jp・fc2.com・jimdo・wixsite 等)はここに入れない(載せてよい。listing-criteria.md の「共有サービス配下」)。
+# 既知の穴: サービス自身のパス(note.com/info、x.com/home、instagram.com/accounts/login、help.instagram.com/x、developers.facebook.com/docs、gnavi.co.jp/company/ 等)も
+#   一覧ホスト上のパス付きとして除外される。実害は小さい(discover-links と Wikidata は top URL だけを台帳に持つ。影響はパス付きの申請と Wikidata P856 のパス付き値だけ)。
+#   免除パスの表([service_path])は、少数に収まらず一覧の保守が増えるので作らない。企業の公式として載せたいものは、トップ URL で申請/発見する。
+# 意図した重複: ameblo.jp・note.com は platforms.txt にもある。そちらは「サブドメインを保留(shared_service_user)」、ここは「パスを拒否(platform_page)」で意味が違う。
+#   食い違いは tests/test_platform_pages.py の許可リストで検知する。
 # 出典: 運用者(kako-jun)の一般知識による手作業の編集。網羅でもない。
 [host]
 instagram.com
@@ -36,6 +41,17 @@ zh
 zh-cn
 zh-tw
 ko
+ko-kr
+zh-hans
+zh-hant
 fr
+fr-fr
 de
+de-de
 es
+es-es
+it
+it-it
+pt
+pt-br
+pt-pt
