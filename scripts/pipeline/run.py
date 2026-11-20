@@ -20,7 +20,7 @@ import features
 import fetcher
 import freshness
 import frontier
-from hostnames import DEFERRED_REASONS, prefilter, registrable, subdomain_of_registrable
+from hostnames import DEFERRED_REASONS, platform_page, prefilter, registrable, subdomain_of_registrable
 
 SHARED_SUBDOMAIN_THRESHOLD = 3        # 同じ登録ドメイン配下のサブドメインホストがこれ以上台帳にあれば共有サービスとみなして保留
 
@@ -43,8 +43,10 @@ def triage(db, redo=False):
     exempt = {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source!='request'") if '/' not in k and not subdomain_of_registrable(k)}
     exempt |= {registrable(k.split('/')[0]) for (k,) in db.execute("SELECT key FROM frontier WHERE source='links'")}
     fans = collections.Counter(registrable(k) for k in keys if subdomain_of_registrable(k) and registrable(k) not in exempt)
-    for r in db.execute("SELECT key, host, source FROM frontier WHERE state='discovered'").fetchall():
+    for r in db.execute("SELECT key, host, url, source FROM frontier WHERE state='discovered'").fetchall():
         reason = prefilter(r['host'], jp_only=r['source'] not in ('links', 'request', 'wikidata'))   # 申請の推薦・Wikidata(日本の項目の公式サイト)は .jp 以外も許す（国は掲載時の country_code が決める）
+        if not reason:
+            reason = platform_page(r['url'])   # ポータル/SNS 内の店舗・ユーザーのページ(本体のトップは通す)。URL にパスを持つ行(申請など)が対象
         if not reason and subdomain_of_registrable(r['host']) and fans[registrable(r['host'])] >= SHARED_SUBDOMAIN_THRESHOLD:
             reason = 'shared_service_user'   # 台帳内で同じドメイン配下のホストが多い = 共有サービスの利用者領域の可能性
         if reason in DEFERRED_REASONS:

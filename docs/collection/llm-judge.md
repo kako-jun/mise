@@ -85,7 +85,7 @@ JSONL の1行が1候補: `id`, `url`, `title`, `meta_description`, `lang`, `body
 
 出力は構造化出力（`output_config.format = json_schema`）で固定し、**件ごとに**検証する（キー、列挙、カテゴリidが木にあること、`deferred` と `user_page` の整合、`verdict` と `kind` の対応（pass/deferred は none、reject は広告・量産・パーキング・スパムの種別、suspect は none 以外）、英語の長文の長さ上限、第1段で `ad` が y でないのに `aq` がある場合の拒否 など）。引用は、入力のうち値の部分（`url:` `title:` などのラベル・`(none)`・`<candidate>` タグ・ページ区切りを除く）に空白を1つへ正規化して照合し、語をつなげて一致させることはしない。不正な件だけを1件ずつ再試行する（打ち切りなら `max_tokens` を増やす）。`judge.py --escalate-model` の上位モデル再判定が失敗しても、最初の有効な結果は残し、失敗は `escalation_failed` に記録する。第1段・第2段の結果は `judge.py` の全項目形に正規化して保存する。`--stages full` は全項目を1回で返させる基準形。
 
-判定基準（指示文に入っている。正本は [listing-criteria.md](../concept/listing-criteria.md)）: `reject` は広告中心・量産（アフィリエイト目的等）・パーキング/売却・スパムだけ。個人/事業者/企業/大手/団体/学校/SNS本体/成人向けは理由にしない。`site_kind`（individual / business / organization / company / unknown）、`adult`、`site_scope` は属性として記録するだけ。共有サービス配下の個別ユーザーのページ（`user_page`）は `deferred`（保留）。成人向けの紹介文は中立・婉曲で、本文を再現しない。所在（国・区画）は本文に明記され、逐語引用がある場合だけ。不確かなら `null`。
+判定基準（指示文に入っている。正本は [listing-criteria.md](../concept/listing-criteria.md)）: `reject` は広告中心・量産（アフィリエイト目的等）・パーキング/売却・スパムだけ。個人/事業者/企業/大手/団体/学校/SNS本体/成人向けは理由にしない。`site_kind`（individual / business / organization / company / unknown）、`adult`、`site_scope` は属性として記録するだけ。共有サービス配下の個別ユーザーのページ（`user_page`）は `deferred`（保留）。既知のポータル/SNS の店舗・ユーザーのページ（`platform_page`）は LLM に渡す前に決定論で除外される（[listing-criteria.md](../concept/listing-criteria.md#優先して充実させる181)。サービス自身のパスも落ちる既知の穴あり。#181 の調査では、`site_kind` と `site_scope` で足りるため、指示文・出力項目は変えていない。`user_page` の保留のうち自作サイトの扱いは未見直し）。成人向けの紹介文は中立・婉曲で、本文を再現しない。所在（国・区画）は本文に明記され、逐語引用がある場合だけ。不確かなら `null`。
 
 ## カテゴリの木と指示文
 

@@ -19,7 +19,7 @@ mise の docs・Issue・コードで使う語の定義。新しい語を足す�
 |---|---|
 | frontier 台帳 | 発見したホストの状態を持つ SQLite（`var/frontier.sqlite`、再生成可能）。単位はホスト |
 | state | frontier 台帳でのホストの状態: discovered / queued / rejected / deferred / fetched / failed / blocked_by_robots / candidate |
-| deferred（保留） | 共有サービス配下の個別ユーザー領域。拒否でなく保留（基準は #50 で未決） |
+| deferred（保留） | 共有サービス配下の個別ユーザー領域。拒否でなく保留（#50 の結論は 2026-11-20: 自作サイトは載せてよい、プラットフォーム内ページ `platform_page` は載せない。保留の見直しは未了） |
 | 決定論 | LLM を使わず、スクリプトの規則だけで処理すること |
 | 台帳（名簿） | `data/public-bodies/ledger.csv`。官公庁の正本 |
 | MiseResearchBot | 収集時の User-Agent 名。robots.txt はこのトークンで判定する |

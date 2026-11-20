@@ -20,7 +20,7 @@ import urllib.request
 
 import fetcher
 import frontier
-from hostnames import host_key, normalize_host, priority
+from hostnames import host_key, normalize_host, platform_page, priority
 
 ROOT = frontier.ROOT
 MAP_PATH = ROOT / 'data' / 'wikidata-leaf-map.csv'
@@ -247,7 +247,7 @@ def discover_wikidata(db, rows, client, max_rows=1000, page_size=PAGE_SIZE, list
         if state == 'done' and not ignore_cursor:
             continue
         offset = 0 if state == 'done' else int(state)
-        st = {'leaf_id': row['leaf_id'], 'qid': row['qid'], 'label_en': row['label_en'], 'fetched': 0, 'added': 0, 'dup_listed': 0, 'dup_ledger': 0, 'invalid': 0, 'status': 'ok'}
+        st = {'leaf_id': row['leaf_id'], 'qid': row['qid'], 'label_en': row['label_en'], 'fetched': 0, 'added': 0, 'dup_listed': 0, 'dup_ledger': 0, 'invalid': 0, 'platform_page': 0, 'status': 'ok'}
         stats.append(st)
         budget = min(int(row['max_rows']), remaining)
         done_row = False
@@ -266,6 +266,8 @@ def discover_wikidata(db, rows, client, max_rows=1000, page_size=PAGE_SIZE, list
                 if not n:
                     st['invalid'] += 1; continue
                 key, host, top = n
+                if platform_page(url):   # 台帳の単位はホストでパスを捨てるため、ここで URL のうちに落とす(落とさないと instagram.com/店 が instagram.com 本体として通る)
+                    st['platform_page'] += 1; continue
                 if key in listed:
                     st['dup_listed'] += 1; continue
                 if frontier.add(db, key, host, top, SOURCE, f'wikidata:{qid} {row["qid"]}', 0, priority=priority(host) + 2, hint_leaf=row['leaf_id']):
