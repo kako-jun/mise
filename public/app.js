@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字。jp）、区画（国コード-区画。jp-13。URL は /jp/13/）、または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国・区画（サイトが 1 件以上あるもの）と件数。
-const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = 6;
+const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = globalThis.MISE_INLINE_SCOPES; // countries.js（SSR と共有）
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [], regions: [] }, scopeToken = 0, scopesExpanded = false;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };

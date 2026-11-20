@@ -341,8 +341,10 @@ html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); col
 .region-links { flex: 1 0 100%; text-align: center; margin-top: 4px; font-size: 11px; max-width: 100%; }
 .region-links ul { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 10px; margin: 4px 0 0; padding: 0; list-style: none; }
 .region-links a { color: inherit; }
-/* JS が有効な環境では見せない（hydrate 前の一瞬の表示とナビの縮みを防ぐ）。DOM には残す（クローラ・JS 無効用）。 */
-@media (scripting: enabled) { .region-links { display: none; } }
+/* JS が有効な環境では区画リンクの枠ごと見せない（hydrate 前の一瞬の表示とナビの縮みを防ぐ）。DOM には残す（クローラ・JS 無効用）。 */
+@media (scripting: enabled) { .region-row { display: none; } }
+/* JS なしでは「もっと見る」を出せないので、SSR が hidden にした国も並べて全部へ辿れるようにする（ボタンは隠す）。 */
+@media (scripting: none) { .scope-list li[hidden] { display: list-item; } .scope-more { display: none; } }
 
 /* リンク先のホスト名（#166）。サイト名の直後（同じ行）に小さく薄い灰色で。読み上げには出す（aria-hidden にしない）。 */
 .site-host { margin-left: 6px; font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
