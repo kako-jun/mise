@@ -55,7 +55,7 @@ export function decodeCursor(raw) {
 // 全角半角・大文字小文字をそろえる（検索語と sites.search_text の両方に同じ処理を使う）
 export const normalizeSearch = s => String(s ?? '').normalize('NFKC').toLowerCase();
 // 名前・日英の紹介文・URL の後ろにタグ（日本語名 英語名）を空白区切りで続ける（migration 0020 の暫定値と同じ並び。タグは label_ja 昇順の BINARY 順で渡す呼び出し側の責任で、ここでは並べ替えない）。s.tags は [{label_ja,label_en}]（省略可）。
-export const searchText = s => normalizeSearch(`${s.name} ${s.description_ja} ${s.description_en ?? ''} ${s.url}${(s.tags ?? []).map(t => ` ${t.label_ja} ${t.label_en ?? ''}`).join('')}`);
+export const searchText = s => normalizeSearch(`${s.name}${s.name_ja ? ` ${s.name_ja}` : ''}${s.name_en ? ` ${s.name_en}` : ''} ${s.description_ja} ${s.description_en ?? ''} ${s.url}${(s.tags ?? []).map(t => ` ${t.label_ja} ${t.label_en ?? ''}`).join('')}`);
 // instr で比較するので、LIKE のメタ文字のエスケープも長さの制限（D1 は LIKE のパターンが約50バイトを超えると too complex）も要らない。
 export const cleanQuery = raw => { const q = [...normalizeSearch(raw).trim()].slice(0, 100).join(''); return q || null; }; // コードポイント単位で切る
 
@@ -192,7 +192,7 @@ export function filters({ cc, region, category, q, tags }, plan = {}) {
 }
 
 // 画面に出す列。bulk_import は並びのほか NEW タグの抑止に画面が使うので含める。並びだけに使う列は SORT_KEYS で足りるのでここには要らない。
-const COLUMNS = `s.id, s.name, s.url, s.description_ja, s.description_en, s.favicon_path, s.favicon_v, s.thumb_path, s.thumb_lqip, s.thumb_captured_at, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
+const COLUMNS = `s.id, s.name, s.name_ja, s.name_en, s.url, s.description_ja, s.description_en, s.favicon_path, s.favicon_v, s.thumb_path, s.thumb_lqip, s.thumb_captured_at, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
 // favicon_path は列の値のまま返す（app.js が favicon_url の無いときに静的な /icons/… の値へ戻す経路で読むため。消さない）。配信 URL を favicon_url に足す（取れていなければ null）。favicon_v は favicon_url の ?v= になるので出さない。
 // thumb_path（サイト固定のキー名）・thumb_captured_at は返さず、配信 URL（`?v=` に撮影時刻由来のバージョン）を thumb_url、極小プレースホルダを thumb_lqip に出す（どちらも無ければ null。画像が無いのにプレースホルダだけは出さない）。
 const LQIP = /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]{1,400}$/;

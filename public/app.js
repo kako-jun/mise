@@ -25,6 +25,8 @@ Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a requ
 Object.assign(words.ja, { installText:'MISE をホーム画面に追加できます。', installAdd:'インストール', installLater:'あとで' });
 Object.assign(words.en, { installText:'Add MISE to your home screen.', installAdd:'Install', installLater:'Not now' });
 const t = key => words[language][key];
+// サイト名: 画面の言語の名前（name_ja / name_en）があればそれ、無ければ言語共通の name（#167。どの言語でも名前は消えない）
+const siteName = site => (language === 'ja' ? site.name_ja : site.name_en) || site.name;
 const siteDescription = site => language === 'en' && site.description_en ? site.description_en : site.description_ja + t('fallback');
 const name = category => category[language === 'ja' ? 'name_ja' : 'name_en'];
 const activity = [];
@@ -278,7 +280,7 @@ const siteHost = value => globalThis.MiseSiteHost ? globalThis.MiseSiteHost(valu
 function renderSite(target, site, showCategories=false) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
   const href=safeHttpUrl(site.url); if(href) { a.href=href; configureExternalLink(a); }
-  a.textContent=site.name; p.textContent=siteDescription(site);
+  const displayName=siteName(site); a.textContent=displayName; p.textContent=siteDescription(site);
   if(language==='en' && !site.description_en) p.lang='ja';
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
   // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは何も出さない（名前は左端から始まる）。
@@ -289,7 +291,7 @@ function renderSite(target, site, showCategories=false) {
     const img=document.createElement('img'); img.alt=''; img.width=16; img.height=16; img.decoding='async'; img.src=iconSrc;
     img.addEventListener('error',()=>{icon.hidden=true;icon.replaceChildren();}); icon.replaceChildren(img); icon.hidden=false;
   }
-  const content=document.createElement('div'); content.className='site-content'; const head=document.createElement('div'); head.className='site-head'; const title=document.createElement('span'); title.className='site-title'; title.append(a); if(href) title.append(newTabButton(href,site.name));
+  const content=document.createElement('div'); content.className='site-content'; const head=document.createElement('div'); head.className='site-head'; const title=document.createElement('span'); title.className='site-title'; title.append(a); if(href) title.append(newTabButton(href,displayName));
   const host=siteHost(site.url);
   const bullet=document.createElement('span'); bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true'); head.append(bullet,icon,title); content.append(head);
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
@@ -498,7 +500,7 @@ function stepPick(dir, manual) {
   if(manual) {
     startPickTimer();
     const n=pickedSites.length;
-    pickStatus.textContent=`${t('picks')} ${pickIndex%n+1} / ${n}: ${pickedSites[pickIndex%n].name}`;
+    pickStatus.textContent=`${t('picks')} ${pickIndex%n+1} / ${n}: ${siteName(pickedSites[pickIndex%n])}`;
   }
   return true;
 }

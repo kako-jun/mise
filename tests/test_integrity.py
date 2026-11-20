@@ -198,6 +198,12 @@ class CheckTests(unittest.TestCase):
         add(db, "pb-2", ["government"])  # government itself is not a leaf under government either
         add(db, "pb-3", ["cities"])  # a real leaf: fine
         add(db, "desc", ["hospitals"], name="named", desc=" ")  # only the Japanese description is empty
+        add(db, "nj-empty", ["hospitals"], name="named")
+        db.execute("UPDATE sites SET name_ja=' ' WHERE id='nj-empty'")  # name_ja が空白だけ(NULL か非空でなければならない)
+        add(db, "ne-empty", ["hospitals"], name="named")
+        db.execute("UPDATE sites SET name_en='' WHERE id='ne-empty'")
+        add(db, "n-ok", ["hospitals"], name="named")
+        db.execute("UPDATE sites SET name_ja='日本語名', name_en=NULL WHERE id='n-ok'")  # 片方だけ NULL は正常
         db.execute("PRAGMA foreign_keys=OFF")
         db.execute("INSERT INTO site_categories VALUES ('anc','ghost')")
         db.execute("INSERT INTO site_categories VALUES ('ghost-site','hospitals')")
@@ -208,7 +214,7 @@ class CheckTests(unittest.TestCase):
         self.assertEqual({r[0] for r in got["uncategorized"]}, {"none"})
         self.assertEqual({r[1] for r in got["orphan_site_categories"]}, {"ghost", "hospitals"})
         self.assertEqual([r[0] for r in got["duplicate_url"]], ["dup.example/x"])
-        self.assertEqual({r[0] for r in got["empty_text"]}, {"empty", "desc"})
+        self.assertEqual({r[0] for r in got["empty_text"]}, {"empty", "desc", "nj-empty", "ne-empty"})
 
     def test_count_tables_are_detected_when_they_drift(self):
         add(self.db, "a", ["hospitals"])

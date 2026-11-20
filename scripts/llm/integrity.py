@@ -93,8 +93,8 @@ CHECKS = [
     ("public_body_not_leaf", "error", "a public body (pb-) holding a category that is not a leaf under government",
      "SELECT x.site_id, x.category_id FROM site_categories x JOIN categories c ON c.id=x.category_id "
      "WHERE x.site_id LIKE 'pb-%' AND c.parent_id IS NOT 'government'"),
-    ("empty_text", "error", "a site with an empty name or an empty Japanese description",
-     "SELECT id FROM sites WHERE trim(name)='' OR trim(description_ja)=''"),
+    ("empty_text", "error", "a site with an empty name or an empty Japanese description, or a name_ja / name_en that is an empty string (NULL is fine: it falls back to name)",
+     "SELECT id FROM sites WHERE trim(name)='' OR trim(description_ja)='' OR trim(name_ja)='' OR trim(name_en)=''"),
     ("no_country", "warn", "a site without country_code (legal, but it appears in no country view)",
      "SELECT id FROM sites WHERE country_code IS NULL"),
 ]

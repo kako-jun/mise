@@ -5,7 +5,7 @@ import { cleanTags, MAX_TAGS, querySites, searchText, cleanQuery } from '../src/
 
 // タグ絞り込み（#31）: ?tag= の解釈と、複数タグ・検索語・範囲・カテゴリとの AND。
 const db = new DatabaseSync(':memory:');
-db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,favicon_v TEXT,thumb_path TEXT,thumb_lqip TEXT,thumb_captured_at TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
+db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,name_ja TEXT,name_en TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,favicon_v TEXT,thumb_path TEXT,thumb_lqip TEXT,thumb_captured_at TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
 CREATE TABLE site_tags(site_id TEXT, label_ja TEXT NOT NULL, label_en TEXT, PRIMARY KEY(site_id,label_ja));
 CREATE TABLE site_categories(site_id TEXT, category_id TEXT);
 CREATE TABLE scope_counts(scope TEXT PRIMARY KEY, n INTEGER NOT NULL);
