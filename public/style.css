@@ -25,7 +25,7 @@ form { margin-bottom: 16px; } input, button { font-size: 12px; } input { width: 
 hr { border: 0; border-top: 1px solid #888; }
 .notice, footer { text-align: center; font-size: 11px; } footer { margin: 22px 0; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-@media (max-width: 450px) { .categories { grid-template-columns: 1fr; width: 290px; } }
+@media (max-width: 450px) { .categories { grid-template-columns: 1fr; width: auto; margin: 0; } }
 
 #globe-background { position: fixed; inset: 0; overflow: hidden; z-index: -1; pointer-events: none; }
 #globe-background canvas { width: 100%; height: 100%; display: block; opacity: 1; }
