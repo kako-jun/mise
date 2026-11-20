@@ -160,3 +160,17 @@ html[data-theme="dark"] .f-select option { background: #0e262e; }
 /* 390 幅で並び替えが右端で切れないよう、絞り込みの行は折り返す */
 @media (max-width: 430px) { #feed .f-filters { flex-wrap: wrap; row-gap: 4px; } #feed .f-filters .f-grow { display: none; } #feed .f-select { flex: 1 1 130px; max-width: none; text-overflow: ellipsis; } #feed .f-seg { margin-left: auto; } }
 #feed .f-host { margin: 0; font-size: 12px; opacity: .72; overflow-wrap: anywhere; }
+
+/* 上下センタリング（#183）。文字は text-box: trim-both cap alphabetic で「大文字高〜ベースライン」だけにし、上下の余白は padding（em 基準）で作る。行ボックスの余白（フォントの ascent/descent）に依存しない。
+   アイコン（SVG）は display:block + margin:auto で、固定高のボタンの中央に置く。非対応ブラウザ（Firefox）は行ボックス基準のまま劣化する（壊れない）。 */
+#feed .f-icon { display: inline-block; text-box: trim-both cap alphabetic; }
+#feed .f-icon svg { display: block; margin: auto; }
+#feed .f-icon .theme-icon { width: 20px; height: 20px; }
+#feed .f-directory, #feed .f-directory:visited { display: inline-block; padding: .75em 10px; text-box: trim-both cap alphabetic; }
+#feed .f-seg button, #feed .f-seg button:hover { padding: .8em 9px; text-box: trim-both cap alphabetic; }
+@media (max-width: 699px) { #feed .f-seg button, #feed .f-seg button:hover { padding: .8em 7px; } }
+#feed .f-open, #feed .f-open:visited { display: inline-block; padding: 1.1em 18px; text-box: trim-both cap alphabetic; }
+#feed .f-end-actions button { padding: 1.07em 20px; text-box: trim-both cap alphabetic; }
+#feed .f-panel-acts button, #feed .f-panel-acts button:hover { padding: .6em 10px; text-box: trim-both cap alphabetic; }
+#feed .f-proto { padding: .3em 5px; line-height: 1; text-box: trim-both cap alphabetic; }
+#feed .f-place span { line-height: 1; text-box: trim-both cap alphabetic; }

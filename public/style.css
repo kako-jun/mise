@@ -146,7 +146,7 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 .preferences { display: flex; flex-direction: column; gap: 4px; }
 .preferences button { width: 32px; height: 32px; padding: 0; font-size: 17px; }
 .search-row { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 20px 0; }
-.search-row form { position: relative; margin: 0; }
+.search-row form { position: relative; display: flex; margin: 0; }
 .search-row input[type="search"] { width: min(280px, 48vw); padding-left: 30px; }
 .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: #286773; font-size: 18px; pointer-events: none; }
 .author-links { display: flex; gap: 10px; justify-content: flex-end; padding: 12px; }
@@ -154,8 +154,8 @@ html[data-theme="dark"] #globe-background canvas { opacity: .42; filter: brightn
 @media (min-width: 1200px) { .author-links { position: fixed; right: 0; bottom: 0; } .picks { bottom: 46px; } }
 @media (max-width: 700px) { .hud { display: none; } .preferences { position: absolute; top: 6px; right: 8px; } header { padding-top: 0; } .author-links { padding: 8px; } }
 .site-meta { font-size: 10px; opacity: .7; }
-/* タグの高さはフォントに依存させない（#165）: 固定の height + line-height 1 + 上下中央。日本語のフォールバックフォントで行ボックスが 1px 伸びるのを防ぐ。 */
-.site-tag { display: inline-flex; align-items: center; box-sizing: border-box; height: 1.5em; padding: 0 4px; line-height: 1; white-space: nowrap; vertical-align: middle; border: 1px solid currentColor; border-radius: 3px; }
+/* タグの高さはフォントに依存させない（#165）: 固定の height + line-height 1 + 上下中央。日本語のフォールバックフォントで行ボックスが 1px 伸びるのを防ぐ。文字の上下は .tag-label の text-box で「大文字高〜ベースライン」を枠の中央に置く（#183）。 */
+.site-tag { display: inline-flex; align-items: center; box-sizing: border-box; height: 1.8em; padding: 0 5px; line-height: 1; white-space: nowrap; vertical-align: middle; border: 1px solid currentColor; border-radius: 3px; }
 #history-bars { display: flex; gap: 3px; margin: 4px 0; }
 .heat-cell { width: 9px; height: 9px; display: inline-block; background: #c7d9dc; }
 .heat-cell[data-level="1"] { background: #79bca4; }
@@ -233,10 +233,10 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 @media (max-width: 1199px) { .hud { display: none; } }
 
 /* 国旗: 常時表示の小さな旗。国コードが無いサイトには出さない。 */
-.site-place { display: inline-block; margin-left: 6px; vertical-align: -2px; line-height: 0; cursor: pointer; white-space: nowrap; }
+.site-place { display: inline-flex; align-items: center; height: 1.46em; margin-left: 6px; vertical-align: top; cursor: pointer; white-space: nowrap; }
 .site-place[hidden] { display: none; }
-.site-flag { display: inline-block; line-height: 0; }
-.site-region { display: inline-block; margin-left: 5px; font-size: 11px; line-height: 13.5px; vertical-align: top; color: #4f7480; }
+.site-flag { display: block; line-height: 0; }
+.site-region { display: block; margin-left: 5px; font-size: 11px; line-height: 1; text-box: trim-both cap alphabetic; color: #4f7480; }
 .site-flag img { width: 18px; height: 13.5px; display: block; border: 1px solid rgba(0, 0, 0, .25); }
 @media (pointer: coarse) { .site-place { padding: 8px 6px; margin: -8px 0 -8px 0; } }
 
@@ -256,7 +256,7 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 .scope-nav a.scope-item:focus-visible, .scope-more:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
 .scope-flag { display: block; width: 16px; height: 12px; border: 1px solid rgba(0, 0, 0, .25); }
 .scope-globe { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
-.scope-count { margin-left: 2px; font-size: 11px; color: #3b565c; font-variant-numeric: tabular-nums; }
+.scope-count { margin-left: 2px; font-size: 11px; line-height: 1; text-box: trim-both cap alphabetic; color: #3b565c; font-variant-numeric: tabular-nums; }
 .scope-more-icon { display: block; width: 16px; height: 16px; fill: currentColor; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
 .scope-more-icon path { fill: none; }
 .scope-code { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
@@ -314,18 +314,21 @@ html.globe-hot, html.globe-hot body { cursor: pointer; }
 .tag-chips[hidden] { display: none; }
 .tag-notice { margin: 4px 0 0; font-size: 13px; text-align: center; opacity: .85; }
 .tag-notice[hidden] { display: none; }
-.tag-chip { display: inline-flex; align-items: center; box-sizing: border-box; height: calc(28em / 13); padding: 0 3px 0 10px; line-height: 1; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
+.tag-chip { display: inline-flex; align-items: center; box-sizing: border-box; height: calc(30em / 13); padding: 0 4px 0 11px; line-height: 1; border: 1px solid #286773; border-radius: 999px; font-size: 13px; background: rgba(255, 255, 255, .68); }
 html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-color: #82ddea; }
-.tag-chip button { position: relative; box-sizing: border-box; width: calc(22em / 13); height: calc(22em / 13); padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
+.tag-chip button { position: relative; display: grid; place-items: center; box-sizing: border-box; width: calc(22em / 13); height: calc(22em / 13); padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; line-height: 1; cursor: pointer; }
 /* 見た目は 22px（13px 基準。em 追従）、押せる範囲は透明な ::before で広げる（28px、タッチ端末は 44px）。 */
 .tag-chip button::before { content: ""; position: absolute; inset: -3px; }
+.tag-chip button svg { display: block; width: calc(8em / 13); height: calc(8em / 13); }
+/* 上下センタリングはインク基準（docs/design/ui.md「上下センタリングはインク基準で測る」）。行ボックスの余白でなく、大文字高〜ベースラインを枠の中央に置く。非対応ブラウザ（Firefox）は line-height: 1 の中央のままで、壊れずに劣化する。 */
+.tag-label { display: block; line-height: 1; text-box: trim-both cap alphabetic; }
 .tag-chip button:hover, .tag-chip button:focus-visible { background: rgba(40, 103, 115, .2); }
 /* タッチ端末: × の押せる範囲は縦 44px まで広げるので、はみ出し分（上下 8px）をチップ列の余白と行間で確保し、検索欄・おすすめリンク・隣の行を奪わない。横は隣のチップに食い込まない 5px まで。 */
 @media (pointer: coarse) { .tag-chips { padding: 8px 0; row-gap: 16px; } .tag-chip button::before { inset: -11px -5px; } .site-tag { margin: 8px 0; } .site-tag::before { content: ""; position: absolute; inset: -9px -1px; } }
 @media (max-width: 700px) { .tag-chips { flex: 1 0 100%; } }
 
 /* 検索結果リンク右の「別タブで開く」ボタン。枠・背景なし、タップ領域 32px は透明な余白で確保（負マージンで行高は増やさない）。 */
-.site-newtab { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: -8px 0 -8px -2px; position: relative; z-index: 1; vertical-align: middle; color: #4f7480; text-decoration: none; border-radius: 4px; }
+.site-newtab { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: calc((1.46em - 32px) / 2) 0 calc((1.46em - 32px) / 2) -2px; position: relative; z-index: 1; vertical-align: top; color: #4f7480; text-decoration: none; border-radius: 4px; }
 .site-newtab[hidden] { display: none; }
 .site-newtab svg { width: 14px; height: 14px; fill: currentColor; }
 .site-newtab:hover, .site-newtab:focus-visible { color: #007f98; }
@@ -353,3 +356,8 @@ html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); col
 /* リンク先のホスト名（#166）。サイト名の直後（同じ行）に小さく薄い灰色で。読み上げには出す（aria-hidden にしない）。 */
 .site-host { margin-left: 6px; font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
 html[data-theme="dark"] .site-host { color: #8fb0ba; }
+
+/* 上下センタリング（#183）。文字が主役のボタンは、行ボックスでなく「大文字高〜ベースライン」を枠の中央に置く（高さは各ボタンの height / min-height が決める）。アイコンは SVG を display:block + margin:auto で中央に置く（字形に依存しない）。 */
+.preferences button, .install-banner button, .request-form button { text-box: trim-both cap alphabetic; }
+.preferences button svg { display: block; width: 20px; height: 20px; margin: auto; }
+.search-row input[type="search"] { line-height: 1; }

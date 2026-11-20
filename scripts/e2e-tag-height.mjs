@@ -3,7 +3,7 @@
 // 検査: (1) .site-tag と .tag-chip の高さが、ラテンのみ／日本語のみ／混在／絵文字入りで小数点以下まで同一（フォントのフォールバックに依存しない）、
 // (2) 押せる範囲は見た目と別に確保（チップの × は 28px 以上・タッチ端末 44px 以上、結果行のタグはタッチ端末で 32px 以上。elementFromPoint で確認）。
 // 条件: PC1280（fine）/ スマホ390・360（coarse）/ 最小フォント 24px 相当（390）/ ズーム 200%（幅 640 + zoom 2）× ライト・ダーク × ja・en。
-// 追加の検査: 見た目の範囲の格子点が本来の要素に当たる（隣・検索欄・おすすめリンクに奪われない）、文字が枠（border-box）に収まる、高さが em 基準（.site-tag 1.5em / .tag-chip 28em/13）。
+// 追加の検査: 見た目の範囲の格子点が本来の要素に当たる（隣・検索欄・おすすめリンクに奪われない）、文字が枠（border-box）に収まる、高さが em 基準（.site-tag 1.8em / .tag-chip 30em/13。#183 で上げた）。
 // 前提: `npx wrangler dev --local --port 8799` が起動していて、ローカル D1 の 1 サイトに
 //   Web・寺院・Linux入門・ブログ(絵文字)・Rust のタグが付き、検索語「寺」にヒットすること（--remote は使わない）。
 // 実行: PLAYWRIGHT_DIR=<node_modules/playwright> [CHROMIUM_PATH=...] node scripts/e2e-tag-height.mjs [baseUrl=http://localhost:8799]
@@ -67,8 +67,8 @@ for (const [label, width, coarse, zoom, font] of conds) for (const theme of ['li
       for (const x of m[group]) { assert.deepEqual(x.bad, [], `${group} ${x.t}: 見た目の範囲が別の要素に奪われる ${x.bad}`); assert.ok(x.inside, `${group} ${x.t}: 文字が枠からはみ出す`); }
       checks++;
     }
-        if (!font && zoom === 1) { assert.equal(m.site[0].h, m.site[0].fs * 1.5, '.site-tag は 1.5em'); assert.ok(Math.abs(m.chip[0].h - 28) < 0.01, '.tag-chip は 13px 基準で 28px'); }
-    if (font) { assert.ok(Math.abs(m.site[0].h - m.site[0].fs * 1.5) < 0.01, '.site-tag が文字に追従しない'); assert.ok(Math.abs(m.chip[0].h - m.chip[0].fs * 28 / 13) < 0.01, '.tag-chip が文字に追従しない'); }
+        if (!font && zoom === 1) { assert.equal(m.site[0].h, m.site[0].fs * 1.8, '.site-tag は 1.8em'); assert.ok(Math.abs(m.chip[0].h - 30) < 0.01, '.tag-chip は 13px 基準で 30px'); }
+    if (font) { assert.ok(Math.abs(m.site[0].h - m.site[0].fs * 1.8) < 0.02, '.site-tag が文字に追従しない'); /* 1.8em は 2 進で割り切れず、レイアウトは 1/64px 単位に丸める（24px で 43.1875） */ assert.ok(Math.abs(m.chip[0].h - m.chip[0].fs * 30 / 13) < 0.01, '.tag-chip が文字に追従しない'); }
     const minChip = coarse ? 44 : 28;
     if (!font) for (const x of m.chip) assert.ok(x.reach >= minChip * zoom - 0.5, `チップの × の押せる範囲 ${x.reach}px < ${minChip * zoom}px (${x.t})`);
     if (coarse && !font) for (const x of m.site) assert.ok(x.reach >= 32, `結果行のタグの押せる範囲 ${x.reach}px < 32px (${x.t})`);

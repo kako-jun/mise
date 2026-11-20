@@ -24,15 +24,15 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; document.documentElement.lang = l; } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=41">
-<link rel="stylesheet" href="/about.css?v=1">
+<link rel="stylesheet" href="/style.css?v=42">
+<link rel="stylesheet" href="/about.css?v=2">
 <script src="/about.js?v=1" defer></script>
 </head>
 <body>
 <main class="about">
   <header class="about-head">
     <a href="/jp/" class="about-logo" aria-label="MISE Home">MISE</a>
-    <div class="preferences" hidden><button id="theme-toggle" type="button" aria-label="Dark / light" title="Dark / light">◐</button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
+    <div class="preferences" hidden><button id="theme-toggle" type="button" aria-label="Dark / light" title="Dark / light"><svg aria-hidden="true" class="theme-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg></button><button id="language-toggle" type="button" aria-label="Switch language" title="Switch language">文</button></div>
   </header>
 
   <div class="t-en" lang="en">
