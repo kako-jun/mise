@@ -138,6 +138,11 @@ test('SSR: 範囲ナビは app.js と同じ構造（先頭 MISE_INLINE_SCOPES �
   const open = scopeNavHtml(mk(9), 'au'); // 7 番目以降が現在 → 全部開く
   assert.doesNotMatch(open, /<li hidden>/);
   assert.match(open, /class="scope-more" aria-expanded="true"/);
+  // 区画の範囲でも、その国の項目に aria-current="true"（範囲そのものは page ではない）。app.js と同じ。
+  const reg = scopeNavHtml(mk(9), 'jp-13');
+  assert.match(reg, /<a class="scope-item" href="\/jp\/"[^>]*aria-current="true"/);
+  assert.doesNotMatch(reg, /aria-current="page"/);
+  assert.doesNotMatch(scopeNavHtml(mk(9), 'jp'), /aria-current="true"/);
   assert.doesNotMatch(scopeNavHtml(mk(n), 'jp'), /scope-more|<li hidden>/); // 残りが無ければボタンも無い
 });
 

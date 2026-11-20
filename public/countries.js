@@ -6,6 +6,8 @@
 // 旗SVG（public/flags/）がある国。ここに無い国は旗要素を作らない（404を出さない）。
 // 範囲ナビで最初から並べる国の数（残りは「もっと見る」の後ろ）。SSR（src/seo.js の scopeNavHtml）と app.js の renderScopeNav が共有する。
 globalThis.MISE_INLINE_SCOPES = 6;
+// 「もっと見る」ボタンの文言（app.js は言語で選ぶ。SSR は英語固定＝日本語表示でも JS 起動前の一瞬だけ英語が出る既存仕様）。
+globalThis.MISE_SCOPE_MORE_WORDS = { ja: { more: '他の国を表示', less: '他の国を閉じる' }, en: { more: 'Show more countries', less: 'Hide more countries' } };
 globalThis.MISE_FLAGS = ['AU','BR','CA','CN','DE','FR','GB','IN','IT','JP','KR','RU','US'];
 globalThis.MISE_COUNTRIES = {
   JP:{ja:'日本',en:'Japan',lat:36,lon:138}, US:{ja:'アメリカ合衆国',en:'United States',lat:39,lon:-98},

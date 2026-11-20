@@ -119,19 +119,19 @@ export async function sitemapXml(db, maxUrls = SITEMAP_MAX_URLS) {
 // 範囲切替の HTML（SSR。JS が起動すると app.js が同じ内容に描き直す）。現在の範囲は aria-current="page"。
 export function scopeNavHtml(scopes, scope) {
   // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。
-  const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}" aria-label="${esc(label + ", " + count + (count === 1 ? " site" : " sites"))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
+  const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}" aria-label="${esc(label + ", " + count + (count === 1 ? " site" : " sites"))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : scope.includes('-') && code === scope.split('-')[0] ? ' aria-current="true"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
   const globe = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
   const items = [item('all', '/all/', 'All world', scopes.total, globe)];
   // 構造は app.js の renderScopeNav と同じ: 先頭 MISE_INLINE_SCOPES 件だけ並べ、残りは hidden にして「もっと見る」ボタンの後ろへ（現在の国が残りにあれば全部開く）。
   // JS なしでは hidden を解いてボタンを隠し、全部の国へ辿れる（style.css の scripting: none）。
-  const inline = globalThis.MISE_INLINE_SCOPES, curCc = parseScope(scope)?.cc;
+  const inline = globalThis.MISE_INLINE_SCOPES, W = globalThis.MISE_SCOPE_MORE_WORDS.en, curCc = parseScope(scope)?.cc;
   const expanded = scopes.countries.some((r, i) => i >= inline && r.code === curCc);
   scopes.countries.forEach((r, i) => {
     const flag = flagUrl(r.code);
     const li = item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : `<span class="scope-code" aria-hidden="true">${esc(r.code)}</span>`);
     items.push(i >= inline && !expanded ? li.replace('<li>', '<li hidden>') : li);
   });
-  const more = scopes.countries.length > inline ? `<button type="button" class="scope-more" aria-expanded="${expanded}" aria-label="${expanded ? 'Hide more countries' : 'Show more countries'}" title="${expanded ? 'Hide more countries' : 'Show more countries'}">${expanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>'}</button>` : '';
+  const more = scopes.countries.length > inline ? `<button type="button" class="scope-more" aria-expanded="${expanded}" aria-label="${expanded ? W.less : W.more}" title="${expanded ? W.less : W.more}">${expanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>'}</button>` : '';
   return `<ul class="scope-list">${items.join('')}</ul>${more}${regionRowHtml(scopes, scope)}`;
 }
 // JS なしでも・クローラも区画のページへ辿れるよう、同じ区画を通常のリンク（/jp/13/ 形式）で並べた折りたたみ。サイトのある区画だけ（無い区画は 404 なので出さない）。
