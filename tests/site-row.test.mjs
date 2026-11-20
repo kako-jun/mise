@@ -70,9 +70,9 @@ test('CSS: .site-icon とその画像に枠・角丸・縁・下地を付けな�
   assert.match(rule('.site-icon'), /width:\s*16px/);
 });
 
-test('CSS: 行頭の中点は li::before（フォント依存）でなく、1 行目の flex 内の要素を 1 行ぶんの高さの箱の中で align-items:center にする', () => {
+test('CSS: 行頭の中点は li::before（フォント依存）でなく、1 行目の flex 内の要素を文字のベースライン基準（align-items:baseline + 大文字高の半分 .357em だけ上げる）にそろえる（#183）', () => {
   assert.doesNotMatch(css, /(?:#directory-sites|#result-list) li::before/);
-  assert.match(rule('.site-head'), /display:\s*flex/); assert.match(rule('.site-bullet'), /align-items:\s*center/); assert.match(rule('.site-icon'), /align-items:\s*center/);
+  assert.match(rule('.site-head'), /display:\s*flex/); assert.match(rule('.site-head'), /align-items:\s*baseline/); assert.match(rule('.site-bullet'), /translateY\(calc\(2\.5px - \.357em\)\)/); assert.match(rule('.site-icon'), /align-items:\s*center/); assert.match(rule('.site-icon'), /translateY\(calc\(8px - \.357em\)\)/);
   assert.doesNotMatch(css, /(?:#directory-sites|#result-list|#pick-list) li \{[^}]*display:\s*flex/);
 });
 
@@ -89,7 +89,7 @@ test('ホスト名: サイト名の直後（同じ行）に 1 つだけ。aria-h
 test('CSS: 行の高さは文字サイズに追従する（px 固定にしない）。サイト名の line-height も単位なし', () => {
   assert.match(rule('.site-head'), /line-height:\s*1\.46\b(?!\s*px)/);
   assert.doesNotMatch(css, /\.site-title[^{]*\{[^}]*line-height:\s*\d+px/);
-  assert.match(rule('.site-bullet'), /height:\s*1\.46em/); assert.match(rule('.site-icon'), /height:\s*1\.46em/);
+  assert.match(rule('.site-bullet'), /height:\s*5px/); assert.match(rule('.site-icon'), /height:\s*16px/); // 中点・ファビコンの位置は em（.357em）で文字サイズに追従する
 });
 
 test('1 行目の並び: 名前・新規タブ・NEW・国旗・ホスト名', () => {

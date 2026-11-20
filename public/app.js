@@ -208,6 +208,8 @@ function bindGlobeHover(row,flag,site) {
 }
 // ---- タグ（#31）: 押すと検索バー横の取り消せるチップになり、検索語・範囲・カテゴリと AND で絞る。URL は ?tag=（複数は繰り返し）。 ----
 const MAX_TAGS=5, TAG_SWAP_GUARD_MS=500;
+// チップの ×: 文字ではなく SVG（フォントの字形に依存せず、ボタンの上下左右の中央に置く。#183）
+const TAG_X_ICON='<svg aria-hidden="true" viewBox="0 0 8 8"><path d="M1 1l6 6M7 1l-6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
 let tagDown=null; // 直近の pointerdown で押されたタグリンク（click と同じ要素のときだけ受け付ける）
 const tagLabel=tag=>(language==='en' && tag.en) ? tag.en : tag.ja;
 const tagUrl=(key,scope=currentScope)=>{ const u=new URL(scopePath(scope),location.origin); u.searchParams.append('tag',key); return u.pathname+u.search; };
@@ -223,7 +225,7 @@ function stateUrl(scope=currentScope) {
 }
 const tagActive=key=>currentTags.some(tg=>tg.key===key);
 function tagLink(tag) {
-  const a=document.createElement('a'); a.className='site-tag'; a.href=tagUrl(tag.ja); a.textContent=tagLabel(tag); a.dataset.tagKey=tag.ja;
+  const a=document.createElement('a'); a.className='site-tag'; a.href=tagUrl(tag.ja); const text=document.createElement('span'); text.className='tag-label'; text.textContent=tagLabel(tag); a.append(text); a.dataset.tagKey=tag.ja;
   a.title=t('tagFilter')(tagLabel(tag));
   if(tagActive(tag.ja)) { a.classList.add('is-active'); a.setAttribute('aria-current','true'); }
   const born=performance.now();
@@ -239,7 +241,7 @@ function renderChips() {
   const box=$('#tag-chips'); box.replaceChildren(); box.hidden=!currentTags.length;
   for(const tg of currentTags) {
     const chip=document.createElement('span'), label=document.createElement('span'), x=document.createElement('button'), n=tagLabel(tg);
-    chip.className='tag-chip'; label.textContent=`#${n}`; x.type='button'; x.textContent='×'; x.setAttribute('aria-label',t('tagRemove')(n)); x.title=t('tagRemove')(n);
+    chip.className='tag-chip'; label.className='tag-label'; label.textContent=`#${n}`; x.type='button'; x.innerHTML=TAG_X_ICON; x.setAttribute('aria-label',t('tagRemove')(n)); x.title=t('tagRemove')(n);
     x.addEventListener('click',()=>{ toggleTag(tg, false); });
     chip.append(label,x); box.append(chip);
   }

@@ -241,7 +241,7 @@
   }
   function renderPanel() {
     const panel = $('.f-panel'); const n = seenCount(), m = nextMilestone(n); panel.replaceChildren();
-    const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${fmt(n)}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.textContent = '×'; x.addEventListener('click', closePanel); head.append(h, x);
+    const head = mk('div', 'f-panel-head'); const h = mk('h2'); h.textContent = `${t('seen')}: ${fmt(n)}`; const x = mk('button', 'f-panel-x', { type: 'button', 'aria-label': t('seenClose') }); x.innerHTML = '<svg aria-hidden="true" viewBox="0 0 8 8"><path d="M1 1l6 6M7 1l-6 6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>'; x.addEventListener('click', closePanel); head.append(h, x);
     const note = mk('p', 'f-panel-note'); note.textContent = m ? `${t('untilNext')(fmt(m - n))} (${fmt(m)})` : t('topMilestone');
     panel.append(head, note);
     const byId = new Map(all.map(s => [s.id, s]));
@@ -296,7 +296,7 @@
     ext.innerHTML = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/></svg>';
     ext.addEventListener('click', () => { newTab = !newTab; storage.set('mise-external-new-tab', String(newTab)); ext.setAttribute('aria-pressed', String(newTab)); ext.title = ext.ariaLabel = t(newTab ? 'extOn' : 'extOff'); document.querySelectorAll('.f-open').forEach(configureLink); });
     // テーマ切替で <meta name="theme-color"> は追従させない(通常ページ(app.js)の仕様に合わせる。試作では触らない)
-    const th = mk('button', 'f-icon', { type: 'button', 'aria-label': t('theme'), title: t('theme') }); th.textContent = '◐';
+    const th = mk('button', 'f-icon', { type: 'button', 'aria-label': t('theme'), title: t('theme') }); th.innerHTML = '<svg aria-hidden="true" class="theme-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg>';
     th.addEventListener('click', () => { const v = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = v; storage.set('mise-theme', v); });
     const lg = mk('button', 'f-icon', { type: 'button', 'aria-label': t('lang'), title: t('lang') }); lg.textContent = '文';
     lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); if (!pending()) { renderList(id); updateCounter(); } });
