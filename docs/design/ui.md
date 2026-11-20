@@ -160,4 +160,4 @@ SSR（JS 無効時の `noscript` 相当の一覧）も同じ構造（`.site-head
 
 ## 訪問カウンタ
 
-フッタ下段の左に Nostalgic Counter の累計を `views`、右に `vYYYY-MM-DD` を控えめに表示する。カウンタ ID は `mise-31f9ea08`。ページ読込ごとに API の increment を呼び、取得できない場合は表示しない。CSP の connect-src は API オリジンを許可する。バージョンは間違いサラダと同じ日本時間のビルド日で、`scripts/build-date.mjs` が Wrangler ビルド時に `public/build-date.json` を生成する。手動更新は不要で、同日の複数ビルドは同じ表記。
+リンクアイコン列より下の最下段に、左に Nostalgic Counter の累計を `views`、右に `vYYYY-MM-DD` を控えめに表示する。1200px 以上では最下段を画面下に固定し、リンク列と左下のアクティビティ表示をその上に置く。狭い画面ではリンク列の後に通常の文書フローで置く。カウンタ ID は `mise-31f9ea08`。ページ読込ごとに API の increment を呼び、取得できない場合は表示しない。CSP の connect-src は API オリジンを許可する。バージョンは間違いサラダと同じ日本時間のビルド日で、`scripts/build-date.mjs` が Wrangler ビルド時に `public/build-date.json` を生成する。手動更新は不要で、同日の複数ビルドは同じ表記。

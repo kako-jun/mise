@@ -366,6 +366,13 @@ html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited
 html[data-theme="dark"] .feed-note { color: #9cc4cc; }
 
 /* 間違いサラダと同じ、控えめな訪問数とビルド日。 */
-.footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 8px; font-size: 12px; opacity: .6; }
+.footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 20px 0 8px; font-size: 12px; opacity: .6; }
 .footer-meta #visit-counter { font-variant-numeric: tabular-nums; }
 .footer-meta #build-version { margin-left: auto; }
+
+/* 広い画面では固定されたリンク列より下に最下段を置く。 */
+@media (min-width: 1200px) {
+  .footer-meta { position: fixed; z-index: 2; left: 12px; right: 12px; bottom: 8px; margin: 0; }
+  .corner-panel { bottom: 36px; }
+  .hud.bottom-left { bottom: 36px; }
+}
