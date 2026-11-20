@@ -144,7 +144,7 @@ SSR（JS 無効時の `noscript` 相当の一覧）も同じ構造（`.site-head
 
 ## アバウトページ
 
-フッタ右下の作者リンク列（`.author-links`）の最左に、GitHub Octicons の `info`（「i」、MIT。`public/licenses/octicons-MIT.txt`）のアイコンを置き、`/about/`（同一タブ。戻るで戻れる）へ繋ぐ。大きさ・色・ホバー・フォーカス・32px のタップ領域は他の 2 アイコンと同じ規則で、`aria-label`・`title` は `data-i18n-label="about"` で日英（`MISE について` / `About MISE`）。1200px 以上は `.corner-panel`（fixed・右下）の中に列があるので、3 アイコンになってもピックアップの下に収まり重ならない。
+フッタ右下の作者リンク列（`.author-links`）の最左に、GitHub Octicons の `info`（「i」、MIT。`public/licenses/octicons-MIT.txt`）のアイコンを置き、`/about/`（同一タブ。戻るで戻れる）へ繋ぐ。大きさ・色・ホバー・フォーカス・32px のタップ領域は他の 2 アイコンと同じ規則で、`aria-label`・`title` は `data-i18n-label="about"` で日英（`MISE について` / `About MISE`）。リンク列は画面幅にかかわらず文書末尾の通常フローにあり、広幅で固定されるピックアップから分離する。
 
 `/about/`（`public/about.html` + `about.css` + `about.js`）は、MISE とは・載せる基準・しないこと（人気を出さない、AI 使用の有無を評価に使わない、既定の並び）・使い方・出典とライセンス・作者の順。内容は [overview.md](../concept/overview.md) と [listing-criteria.md](../concept/listing-criteria.md) の要約で、未実装の機能は書かない。出典は `public/licenses/` のファイルへの控えめなリンクだけにし、公共データの出典文そのものは画面に再掲しない（#111）。日英は両方 HTML に持ち `html[lang]` で切り替え、右上に本体と同じテーマ・言語ボタン（保存キーも共通）と、ロゴ文字の「MISE」リンク・末尾の「戻る」リンク（どちらも `/jp/`）。配色とダークは `style.css` を引き継ぐ。配信と SEO の扱いは [seo.md](seo.md)。
 
@@ -166,3 +166,7 @@ SSR（JS 無効時の `noscript` 相当の一覧）も同じ構造（`.site-head
 - サイトのリンク右の「別タブで開く」ボタン（`a.site-newtab`、枠・背景なしの ↗ アイコン）は外部リンク設定がオフの間だけ出す（オンなら全リンクが別タブなので `hidden`）。トグル切替で即時に出し入れし、描画時にも現在値で初期化するのでページング・再検索後も一致する。`target=_blank rel="noopener noreferrer"`、`aria-label`/`title` はサイト名入りで「<サイト名> を新しいタブで開く / Open <site> in new tab」（Issue の固定文言にサイト名を前置。スクリーンリーダーで各ボタンを区別するため）。タップ領域は 32px（透明な余白。縦だけ負マージンで行高を増やさず、`position:relative; z-index:1` で後続の説明文より前面に出して実際に押せる範囲を 32px 確保。右は負マージンにせず旗 `.site-place` と重ねない）、hover/focus-visible は色の変化とアウトラインで示す。地球儀の hover は行全体が対象なのでボタン上でも通常のリンクと同じ扱い（タップでは行のタップ移動から除外）。
 - サイトの URL は `http:` / `https:` だけをリンクにする（それ以外はテキストのみ）。
 - 英語表示で日本語の紹介文を出すときは、その段落に `lang="ja"` を付ける。
+
+## 訪問カウンタ
+
+リンクアイコン列より下の最下段に、左に Nostalgic Counter の累計を `views`、右に `vYYYY-MM-DD` を控えめに表示する。どの画面幅でもリンク列の後に通常の文書フローで置き、スクロール中に本文へ重ならない。カウンタ ID は `mise-31f9ea08`。ページ読込ごとに API の increment を呼び、取得できない場合は表示しない。CSP の connect-src は API オリジンを許可する。バージョンは間違いサラダと同じ日本時間のビルド日で、`scripts/build-date.mjs` が Wrangler ビルド時に `public/build-date.json` を生成する。手動更新は不要で、同日の複数ビルドは同じ表記。

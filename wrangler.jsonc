@@ -1,6 +1,7 @@
 {
   "name": "mise",
   "main": "src/index.js",
+  "build": { "command": "node scripts/build-date.mjs" },
   "routes": [{ "pattern": "mise.llll-ll.com", "custom_domain": true }],
   "compatibility_date": "2026-11-01",
   // デプロイのバージョン ID。src/usage.js の共有キャッシュのキーに入れ、デプロイ直後に古い応答を返さない。無い環境では空文字で動く。

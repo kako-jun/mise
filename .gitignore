@@ -7,3 +7,5 @@ __pycache__/
 /public/_mock-thumbs/
 var/
 .dev.vars
+
+/public/build-date.json
