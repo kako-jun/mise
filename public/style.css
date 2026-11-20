@@ -11,9 +11,12 @@ header { text-align: center; }
 .logo-pron { margin: -2px 0 3px; font: italic 11px/1.2 "Mise Pron", Georgia, "Times New Roman", serif; letter-spacing: .14em; opacity: .55; color: inherit; }
 form { margin-bottom: 16px; } input, button { font-size: 12px; } input { width: 170px; }
 .categories { display: grid; grid-template-columns: repeat(2, 1fr); column-gap: 28px; width: 560px; max-width: 100%; margin: auto; }
-.category { margin: 0 0 10px; padding-left: 12px; position: relative; min-width: 0; }
-.category::before { content: '・'; position: absolute; left: 0; }
-.category h2 { margin: 0 0 2px; font-size: 13px; font-weight: normal; }
+.category { margin: 0 0 10px; min-width: 0; }
+/* 見出し行は一覧のサイト行（.site-head: 中点・アイコン枠・本文）と同じ構造・同じ寸法（#182）。中点は .site-bullet、フォルダ絵は .cat-icon（ファビコンと同じ 16px 枠）を共用 */
+.category .site-head { margin-bottom: 2px; }
+.category h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: normal; }
+/* 単色フォルダ（タブ付きの輪郭）。画像リクエストなし・currentColor で明暗追従 */
+.site-icon.cat-icon { background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.75 3.75h4.2l1.5 1.8h6.8v7.7H1.75z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") center / 16px 16px no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.75 3.75h4.2l1.5 1.8h6.8v7.7H1.75z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E") center / 16px 16px no-repeat; }
 /* 子カテゴリ名の並び。トップの子は 4〜17 個になるので、3 行を超える分は省略記号で切る（全名は DOM に残り、子の一覧はリンク先で見える）。 */
 .sub span { white-space: nowrap; }
 .sub { margin: 0; font-size: 11px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
@@ -185,7 +188,6 @@ html[data-theme="dark"] .author-links a, html[data-theme="dark"] .author-links a
 .author-links a:hover, .preferences button:hover { background: rgba(8, 123, 144, .14); }
 html[data-theme="dark"] .author-links a:hover, html[data-theme="dark"] .preferences button:hover { background: rgba(130, 221, 234, .18); }
 .author-links a:focus-visible, .preferences button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.category::before { content: '▪'; font-size: 11px; line-height: 1.4; }
 
 .corner-panel { display: flex; flex-direction: column; align-items: flex-end; }
 .corner-panel .picks { position: static; width: 100%; margin: 0; }

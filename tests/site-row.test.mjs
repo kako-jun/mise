@@ -112,3 +112,17 @@ test('縦フィード: カードにホスト名を 1 行（共有の site-host.j
   assert.match(feed, /hs\.className = 'f-host'/);
   assert.match(read('public/feed.css'), /#feed \.f-host/);
 });
+
+// カテゴリ見出し行（#182）: サイト行と同じ構造（中点・16px 枠のフォルダ絵・本文）。SSR とクライアントで同じクラス構成。
+test('カテゴリ見出し行: 中点とフォルダ絵（mask・currentColor・装飾）がサイト行と同じ構造で、SSR と app.js が一致する', () => {
+  const seo = read('src/seo.js');
+  const ssr = seo.match(/<div class="category\$\{[^}]*\}[^`]*?<\/h2><\/div>/)[0];
+  assert.match(ssr, /<div class="site-head"><span class="site-bullet" aria-hidden="true"><\/span><span class="site-icon cat-icon" aria-hidden="true"><\/span><h2>/);
+  assert.match(app, /hd\.className='site-head'/);
+  assert.match(app, /bl\.className='site-bullet'; bl\.setAttribute\('aria-hidden','true'\)/);
+  assert.match(app, /ci\.className='site-icon cat-icon'; ci\.setAttribute\('aria-hidden','true'\)/);
+  assert.match(app, /hd\.append\(bl,ci,h\)/);
+  assert.match(css, /\.cat-icon \{[^}]*background: currentColor;[^}]*mask: url\("data:image\/svg\+xml/);
+  assert.doesNotMatch(css, /\.category::before/); // 旧い文字の中点は持たない
+  assert.doesNotMatch(css, /\.category \{[^}]*padding-left/);
+});
