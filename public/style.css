@@ -361,3 +361,17 @@ html[data-theme="dark"] .site-host { color: #8fb0ba; }
 .preferences button, .install-banner button, .request-form button { text-box: trim-both cap alphabetic; }
 .preferences button svg { display: block; width: 20px; height: 20px; margin: auto; }
 .search-row input[type="search"] { line-height: 1; }
+
+/* 縦フィードへの入口 (#178)。検索欄の右に常時出す文字ラベルのリンク（絵文字・アイコンなし）。寸法は素のルート、テーマは色だけ。 */
+.feed-entry, .feed-entry:visited { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 34px; min-width: 44px; padding: 0 12px; border: 1px solid #94b5be; border-radius: 6px; background: transparent; color: #087b90; font: 12px/1 monospace; text-decoration: none; white-space: nowrap; }
+.feed-entry:hover { border-color: currentColor; }
+.feed-entry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited { border-color: #4e8e9b; color: #82ddea; }
+@media (pointer: coarse) { .feed-entry { min-height: 44px; font-size: 14px; } }
+@media (max-width: 700px) { .feed-entry { min-height: 44px; font-size: 14px; } }
+.feed-note { margin: 4px 0 8px; font-size: 11px; line-height: 1.4; color: #3b565c; }
+.feed-note[hidden] { display: none; }
+html[data-theme="dark"] .feed-note { color: #9cc4cc; }
+/* 縦フィードの入口（#183）: 文字を text-box で大文字高〜ベースラインにし、高さは em の padding で作る（12px で 34px、14px で 44px 以上）。 */
+.feed-entry, .feed-entry:visited { display: inline-block; min-height: 0; padding: .975em 12px; text-align: center; text-box: trim-both cap alphabetic; }
+@media (pointer: coarse), (max-width: 700px) { .feed-entry, .feed-entry:visited { min-height: 0; padding: 1.15em 12px; } }

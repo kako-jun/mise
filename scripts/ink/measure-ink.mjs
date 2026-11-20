@@ -68,6 +68,7 @@ const collectAll = (scene) => {
     all('.region-select').forEach((s) => add({ group: 'select/region', label: 'region', strict: true, box: s, xr: 'left' }));
     all('.history-day').forEach((d) => pair('hud/history', null, d.querySelector('.history-track'), d.querySelector('.history-date')));
     all('.author-links a').forEach((a) => add({ group: 'btn/author-link', label: a.getAttribute('aria-label') || a.textContent.trim(), strict: true, box: a }));
+    all('#feed-entry').forEach((a) => add({ group: 'link/feed-entry', label: txtOf(a), strict: strictOf(txtOf(a)), box: a })); // 縦フィードの入口 (#178)
     all('#recommend-link').forEach((a) => add({ group: 'link/recommend', label: 'recommend', strict: true, box: a }));
   }
   if (scene === 'request') {
