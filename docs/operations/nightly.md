@@ -88,7 +88,7 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 3. `added`（追加数）が直近の夜と桁違いでないか（`guards` の「前日比の異常」が出ていれば本番反映は止まっている）。
 4. 保留のサンプル確認: `uv run python3 scripts/llm/review_state.py list --state pending --limit 20`。保留の理由が妥当か、本来通すべきものが落ちていないかを見る。
 5. 却下のサンプル確認: `report.md` の「却下理由別」で多い理由を選び、台帳から数件を見る（`sqlite3 var/frontier.sqlite "SELECT key,title FROM frontier WHERE state='rejected' AND reject_reason='<理由>' ORDER BY random() LIMIT 10"`）。
-6. 出荷 SQL の確認: `var/nightly/<date>/approved-sites.sql` の件数（`keys.txt` の行数）と先頭数件のサイトを実際に開いて見る。
+6. 出荷 SQL の確認: `var/nightly/<date>/approved-sites.sql` の件数（`keys.txt` の行数）と先頭数件のサイトを実際に開いて見る。 自動承認は confidence high / medium なので（2026-11-20 に緩和）、承認済みのサンプルは多めに目視する（`review_state.py list --state approved`）。
 7. 問題があれば、該当する key を `review_state.py` で却下してから再実行する（`--date` を変えず再実行すれば SQL が作り直される。成功済みの段は飛ばされるので、`sql` 以降を作り直したいときは `--from-stage sql` を付ける）。
 
 ## 本番反映の前後確認（--apply-prod）
