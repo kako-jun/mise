@@ -49,9 +49,10 @@ html[data-theme="dark"] .f-select option { background: #0e262e; }
 #feed .f-hero > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; filter: blur(var(--thumb-blur)); transform: scale(1.04); }
 /* 見切れる幅(--pan-px: 片側ぶん)があるときだけ、画像を枠より広く取って中央に置き、表示中のカードだけ左右に往復させる(transform のみ) */
 #feed .f-hero > img[data-pan] { inset: 0 auto 0 50%; width: var(--pan-w); margin-left: calc(var(--pan-w) / -2); }
-@keyframes f-pan { from { transform: translateX(calc(var(--pan-px) * -1)) scale(1.04); } to { transform: translateX(var(--pan-px)) scale(1.04); } }
+/* 動かすのは個別の translate プロパティだけ(transform: scale は基本ルールのまま)。中央(0)から始めるため、半周期ぶん遅らせて始める(alternate・ease-in-out なので表示した瞬間に飛ばない) */
+@keyframes f-pan { from { translate: calc(var(--pan-px) * -1) 0; } to { translate: var(--pan-px) 0; } }
 @media (prefers-reduced-motion: no-preference) {
-  #feed .f-card.is-active .f-hero > img[data-pan] { animation: f-pan var(--pan-sec) ease-in-out infinite alternate; }
+  #feed .f-card.is-active .f-hero > img[data-pan] { animation: f-pan var(--pan-sec) ease-in-out calc(var(--pan-sec) / -2) infinite alternate; }
 }
 #feed .f-lqip { filter: blur(22px) !important; transform: scale(1.2) !important; }
 #feed .f-bg > .f-lqip { transform: scale(1.8) !important; }
@@ -66,6 +67,7 @@ html[data-theme="dark"] .f-select option { background: #0e262e; }
   -webkit-backdrop-filter: blur(var(--scrim-blur)); backdrop-filter: blur(var(--scrim-blur));
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 26%); mask-image: linear-gradient(to bottom, transparent 0%, #000 26%); }
 #feed .f-body { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; padding: 0 18px 18px; display: flex; flex-direction: column; gap: 8px; max-height: 78%; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+@media (orientation: landscape) and (max-height: 500px) { #feed .f-body { text-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 10px rgba(0,0,0,.45); } }
 #feed .f-name { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
 #feed .f-desc { margin: 0; font-size: 15px; line-height: 1.55; }
 #feed .f-place { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 13px; opacity: .92; }

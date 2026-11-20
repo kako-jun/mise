@@ -191,3 +191,27 @@ test('feed.js: feed-mode が無い（フックが通常表示へ戻した後に�
   assert.deepEqual(calls.listeners, [], 'window/document にリスナーを足さない');
   assert.equal(calls.created, 0); assert.equal(calls.appended, 0); assert.equal(calls.fetched, 0);
 });
+
+// サムネのパン(#173)
+test('panGeometry: 見切れ幅が 8px 以上のときだけ移動量を返す(境界・枠より狭い・縦長・0/NaN)', () => {
+  const g = lib.panGeometry;
+  // 枠 390x445 に 320x200(1.6:1)→ 画像の実幅 712、見切れ 322、片側 161
+  assert.deepEqual({ ...g(390, 445, 320, 200) }, { w: 712, px: 161 });
+  assert.deepEqual({ ...g(100, 100, 108, 100) }, { w: 108, px: 4 }, 'ちょうど 8px は動かす');
+  assert.equal(g(100, 100, 107.99, 100), null, '8px 未満は動かさない');
+  assert.equal(g(500, 100, 160, 100), null, '画像が枠より狭い(枠幅 500 > 160)');
+  assert.equal(g(400, 400, 100, 200), null, '縦長画像(幅が枠に届かない)');
+  for (const bad of [[0, 100, 320, 200], [100, 0, 320, 200], [100, 100, 0, 200], [100, 100, 320, 0], [NaN, 100, 320, 200], [100, 100, 320, NaN], [100, 100, Infinity, 200], [-1, 100, 320, 200], ['100', 100, 320, 200]]) assert.equal(g(...bad), null, JSON.stringify(bad));
+});
+
+test('feed.css: パンは prefers-reduced-motion: no-preference の中で、表示中(.is-active)のカードだけにかかる', () => {
+  const uses = [...css.matchAll(/animation\s*:[^;}]*f-pan[^;}]*/g)];
+  assert.equal(uses.length, 1, 'f-pan を使う animation は 1 か所');
+  const at = css.indexOf(uses[0][0]);
+  const media = css.lastIndexOf('@media', at), open = css.indexOf('{', media), close = (() => { let d = 0; for (let i = open; i < css.length; i++) { if (css[i] === '{') d++; else if (css[i] === '}' && --d === 0) return i; } return -1; })();
+  assert.ok(media >= 0 && at > open && at < close, '@media の中');
+  assert.match(css.slice(media, open), /prefers-reduced-motion:\s*no-preference/);
+  const sel = css.slice(css.lastIndexOf('}', at) + 1, at);
+  assert.match(sel, /\.f-card\.is-active\s+\.f-hero\s*>\s*img\[data-pan\]/);
+  assert.ok(!/@keyframes f-pan[^}]*transform/.test(css), 'keyframes は translate だけ(transform を重ねない)');
+});

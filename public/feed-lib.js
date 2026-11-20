@@ -56,5 +56,15 @@
   // 要求した範囲 want のデータがまだ揃っていない（絞り込み・描画を保留する）か
   const isPending = (loaded, complete, want) => !covers(loaded, complete, want);
 
-  g.MiseFeedLib = { fmtCount, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
+  // サムネのパン(#173)。枠(fw×fh)に object-fit: cover で置く縦横比 nw:nh の画像が、横に何 px 見切れるか。
+  // 見切れ(画像の実幅 - 枠幅)が 8px 以上のときだけ { w: 画像の実幅, px: 片側の移動量 } を返し、それ未満・画像が枠より狭い・0 や NaN は null(動かさない)。
+  // 画像は scale(1.04) で中央から広がるが、広がる分は余白になるだけなので、移動量 px の範囲では端が見えない(計算に含めない)。
+  const PAN_MIN_OVER = 8;
+  const panGeometry = (fw, fh, nw, nh) => {
+    if (![fw, fh, nw, nh].every(v => typeof v === 'number' && Number.isFinite(v) && v > 0)) return null;
+    const w = fh * nw / nh, over = w - fw;
+    return over >= PAN_MIN_OVER ? { w, px: over / 2 } : null;
+  };
+
+  g.MiseFeedLib = { panGeometry, fmtCount, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
 })(globalThis);
