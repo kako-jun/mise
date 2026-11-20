@@ -543,7 +543,7 @@ def _q(s):
 
 def sql_updates(db, since=None, store=None):
     """sites.favicon_path / favicon_v へ入れる UPDATE。favicon_path はサイト固定(<sha256(site_id) 先頭32桁>.webp)、favicon_v は内容ハッシュの先頭 8 桁。
-    **冪等判定は favicon_v の変化**(内容が変わったときだけ書く。D1 の書き込み行数を使わない)。取れていないサイトは触れない。
+    **冪等判定は favicon_path・favicon_v のどちらかが違うとき**(内容が変わったときと、v は同じで path だけ旧名の行を直すとき。合っている行は書かない。D1 の書き込み行数を使わない)。取れていないサイトは触れない。
     store(ラベル名)を渡すと、その保存先のそのキーに現在の内容を置いた印のある画像だけを出す(D1 が指す画像が配信元に無い状態を作らない)。None は全件。
     除外・取り下げ(delete)のサイトは、favicon 列を NULL にする UPDATE を出す(何度流しても安全)。"""
     ex = ' AND exclude=0' if _has_exclude(db) else ''
@@ -555,11 +555,25 @@ def sql_updates(db, since=None, store=None):
     if store:
         rows = [r for r in rows if _marked(db, r['site_id'], store, r['icon_hash'])]   # 印の表が無い旧い台帳(読み取り専用)は印が 1 つも無い
     lines = [f"UPDATE sites SET favicon_path={_q(site_name(r['site_id']))}, favicon_v={_q(icon_v(r['icon_hash']))} "
-             f"WHERE id={_q(r['site_id'])} AND favicon_v IS NOT {_q(icon_v(r['icon_hash']))};" for r in rows]
+             f"WHERE id={_q(r['site_id'])} AND (favicon_path IS NOT {_q(site_name(r['site_id']))} OR favicon_v IS NOT {_q(icon_v(r['icon_hash']))});" for r in rows]
     if ex:
         for r in db.execute('SELECT site_id FROM favicons WHERE exclude=1 ORDER BY site_id'):
             lines.append(f"UPDATE sites SET favicon_path=NULL, favicon_v=NULL WHERE id={_q(r['site_id'])} AND (favicon_path IS NOT NULL OR favicon_v IS NOT NULL);")
     return '\n'.join(lines) + ('\n' if lines else '')
+
+
+def exclude_sites(db, ids, apply=False, log=print):
+    """サイトを台帳で除外にする(取り下げ・除外の最初の段。R2 には触れない)。除外にすると取得しなくなり、`sql` が favicon 列を NULL にする UPDATE を出す。
+    --apply のときだけ台帳に印を付ける。台帳に無い id は作らず報告する。戻り: 件数。"""
+    n = 0
+    for sid in ids:
+        row = db.execute('SELECT 1 FROM favicons WHERE site_id=?', (sid,)).fetchone()
+        log(f'{"exclude" if apply else "[dry-run] exclude"}\t{sid}' + ('' if row else '\t(台帳に無い)'))
+        if apply and row:
+            db.execute("UPDATE favicons SET exclude=1, exclude_reason=COALESCE(exclude_reason, 'manual') WHERE site_id=?", (sid,)); n += 1
+    if apply:
+        db.commit()
+    return n
 
 
 def delete_sites(db, store, ids, apply=False, log=print):
@@ -595,6 +609,8 @@ def main(argv=None):
     p.add_argument('--store', choices=['local', 'r2'], default='local', help='保存先(既定 local)。r2 は --apply と併せたときだけ wrangler を呼ぶ。R2 は既定でローカル模擬')
     p.add_argument('--r2-verify', action='store_true', help='--store r2 で、台帳にある画像が R2 に在るかを 1 件ずつ確かめる(遅い)')
     p.add_argument('--r2-remote', action='store_true', help='--store r2 で本番/リモートの R2 に書く(明示したときだけ)')
+    p = sub.add_parser('exclude', help='サイトを台帳で除外にする(取り下げ・除外の最初の段。--apply が無ければ計画だけ。R2 には触れない。次に `sql` で D1 の favicon 列を NULL にする)')
+    p.add_argument('--site', action='append', required=True, help='サイト id(複数回指定可)'); p.add_argument('--apply', action='store_true')
     p = sub.add_parser('delete', help='サイトのファビコンを保存先から消し、台帳で除外にする(取り下げ・除外。--apply が無ければ計画だけ。--r2-remote を明示したときだけ本番)')
     p.add_argument('--site', action='append', required=True, help='サイト id(複数回指定可)'); p.add_argument('--apply', action='store_true')
     p.add_argument('--store', choices=['local', 'r2'], default='r2'); p.add_argument('--store-dir', default=str(DEFAULT_STORE)); p.add_argument('--r2-verify', action='store_true'); p.add_argument('--r2-remote', action='store_true')
@@ -609,7 +625,7 @@ def main(argv=None):
         except ImportError:
             print('Pillow が無い。uv run --with pillow python3 scripts/favicon/favicon.py ... で起動する', file=sys.stderr)
             return 3
-    db = connect(a.db) if a.cmd == 'import' or (a.cmd == 'run' and a.apply) or (a.cmd == 'delete' and a.apply) else open_readonly(a.db)
+    db = connect(a.db) if a.cmd == 'import' or (a.cmd == 'run' and a.apply) or (a.cmd in ('delete', 'exclude') and a.apply) else open_readonly(a.db)
     if a.cmd == 'import':
         import json
         n = 0
@@ -629,11 +645,15 @@ def main(argv=None):
                 print(f"  {r['site_id']}\t{r['url']}")
             return 0
         print('done ' + str(run(db, make_store(a), now, a.limit)))
+    elif a.cmd == 'exclude':
+        if db is None:
+            print('台帳がない'); return 0
+        print(f'excluded={exclude_sites(db, a.site, a.apply)}')
     elif a.cmd == 'delete':
         if db is None:
             print('台帳がない'); return 0
         if a.apply and a.store == 'r2' and not a.d1_done:
-            print('R2 から消す前に、`sql` の出力(除外サイトの favicon 列 NULL)を D1 へ適用する。済んでいたら --d1-done を付けて再実行する(D1 が先、R2 が後)', file=sys.stderr)
+            print('R2 から消す前に、`exclude --site <id> --apply` → `sql` の出力(除外サイトの favicon 列 NULL)を D1 へ適用する。済んでいたら --d1-done を付けて再実行する(D1 が先、R2 が後)', file=sys.stderr)
             return 2
         print(f'deleted={delete_sites(db, make_store(a), a.site, a.apply)}')
     elif a.cmd == 'sql':

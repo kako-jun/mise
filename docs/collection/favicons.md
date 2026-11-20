@@ -23,9 +23,9 @@ uv run --with pillow python3 scripts/favicon/favicon.py delete --site <id>   # �
 uv run --with pillow python3 scripts/favicon/favicon.py status
 ```
 
-台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<k>.webp', favicon_v='<v>' WHERE id=... AND favicon_v IS NOT '<v>'`（`<k>` = サイト固定のキー、`<v>` = 内容ハッシュの先頭 8 桁。**内容が変わったときだけ書く**。D1 の書き込み行数を使わない）。取れていないサイトには触れない。除外・取り下げ（`delete`）したサイトには `favicon_path=NULL, favicon_v=NULL` にする UPDATE が付く（何度流しても安全）。`run`（`--apply` なし）・`sql`・`status` は台帳を読み取り専用で開き、無ければ何も作らない。
+台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<k>.webp', favicon_v='<v>' WHERE id=... AND (favicon_path IS NOT '<k>.webp' OR favicon_v IS NOT '<v>')`（`<k>` = サイト固定のキー、`<v>` = 内容ハッシュの先頭 8 桁。**内容が変わったとき（と path だけ旧名の行）だけ書く**。D1 の書き込み行数を使わない）。取れていないサイトには触れない。除外・取り下げ（`delete`）したサイトには `favicon_path=NULL, favicon_v=NULL` にする UPDATE が付く（何度流しても安全）。`run`（`--apply` なし）・`sql`・`status` は台帳を読み取り専用で開き、無ければ何も作らない。
 
-**`--since` の SQL を適用し忘れたとき**（`--since` 付きで出した SQL を適用しないまま次回が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。夜間ジョブは SQL を作らない。`AND favicon_path IS NOT ...` があるので、すでに合っている行は書かれず、何度適用しても安全。`favicon_v` 列は migration 0029（#163）。
+**`--since` の SQL を適用し忘れたとき**（`--since` 付きで出した SQL を適用しないまま次回が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。夜間ジョブは SQL を作らない。`AND (favicon_path IS NOT ... OR favicon_v IS NOT ...)` があるので、すでに合っている行は書かれず、何度適用しても安全。`favicon_v` 列は migration 0029（#163）。
 
 ## 取得作法
 
@@ -83,7 +83,7 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 
 ## 取り下げ（#29）・除外での R2 画像の削除
 
-`favicon.py delete --site <id>`（既定 dry-run）。キーがサイト ID から決まる（`icon/<k>.webp`）ので、**他サイトの参照確認なしで 1 本消せる**（サムネイルの `thumbnail.py delete` と同じ形）。`--apply` で消し、台帳ではそのサイトを除外（`exclude=1`）にして `icon_hash` を空にする。`sql` は除外サイトの `favicon_path` / `favicon_v` を NULL にする UPDATE を出す。**順序は D1（NULL 化）→ R2 削除**（逆だと一覧が一瞬 404 になる）なので、R2 を消す `--apply`（`--store r2`）は `--d1-done`（NULL 化の SQL を D1 へ適用済みの確認）が無いと実行しない。本番は `--r2-remote` も明示したときだけ（無ければ wrangler の `--local` 模擬）。CDN・ブラウザにキャッシュが残る間は表示され続けるが、immutable・1 年のため即時には消えない（許容。即時に消す必要があればキャッシュのパージを別途）。#29 の申請の受付フローとの接続は #29 側。
+`favicon.py delete --site <id>`（既定 dry-run）。キーがサイト ID から決まる（`icon/<k>.webp`）ので、**他サイトの参照確認なしで 1 本消せる**（サムネイルの `thumbnail.py delete` と同じ形）。`--apply` で消し、台帳ではそのサイトを除外（`exclude=1`）にして `icon_hash` を空にする。`sql` は除外サイトの `favicon_path` / `favicon_v` を NULL にする UPDATE を出す。**手順はこの順**: ① `favicon.py exclude --site <id> --apply`（台帳に除外の印だけ付ける。既定 dry-run。R2 には触れない）→ ② `sql --out f.sql`（除外サイトの NULL 化 UPDATE が出る）→ ③ f.sql を D1 へ適用 → ④ `delete --site <id> --apply --d1-done --r2-remote`（R2）。**D1（NULL 化）が先、R2 削除が後**（逆だと一覧が一瞬 404 になる）なので、R2 を消す `--apply`（`--store r2`）は `--d1-done`（③ の確認）が無いと実行しない。本番は `--r2-remote` も明示したときだけ（無ければ wrangler の `--local` 模擬）。CDN・ブラウザにキャッシュが残る間は表示され続けるが、immutable・1 年のため即時には消えない（許容。即時に消す必要があればキャッシュのパージを別途）。#29 の申請の受付フローとの接続は #29 側。
 
 ## 更新
 
@@ -105,8 +105,11 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 |---|---|
 | `plan` | サイト数・重複行・旧キー数・元画像の無い/壊れたものを表示（読み取りのみ） |
 | `upload [--apply] [--r2-remote] [--no-local-copy]` | 各サイトの画像を新キーで R2 に置く。置いたら台帳に印を付け、手元の `--store-dir` にも新キーで写す（夜間ジョブが全件を取り直さないため）。元画像が無い/名前と中身のハッシュが合わないものは置かず報告 |
-| `sql [--out f]` | `UPDATE sites SET favicon_path='<k>.webp', favicon_v='<v>' WHERE id=… AND favicon_v IS NOT '<v>'`。**R2 に置いた印のあるサイトだけ**出す（D1 が指す先が無い状態を作らない） |
+| `sql [--out f] [--revert]` | `UPDATE sites SET favicon_path='<k>.webp', favicon_v='<v>' WHERE id=… AND (favicon_path IS NOT '<k>.webp' OR favicon_v IS NOT '<v>')`（v が同じで path だけ旧名の行も直る）。`--revert` は戻し用（台帳の `icon_hash` の旧名を `favicon_path` に戻し `favicon_v` を NULL にする。旧画像が R2 に残るうちだけ有効）。**R2 に置いた印のあるサイトだけ**出す（D1 が指す先が無い状態を作らない） |
 | `list-old [--out f]` | 削除対象の旧キー（台帳の `icon_hash` と、旧台帳が R2 本番に置いた名前の和集合） |
-| `delete-old [--apply] [--r2-remote] [--d1-done] [--verify]` | 旧キーを消す。その名前を使っていたサイトが**全員、新キーに置いた印を持つ名前だけ**消す（残りは `kept` と表示。`--verify` で新キーの実在も R2 に問い合わせて確かめる）。`--apply` は `--d1-done` が無いと拒否 |
+| `delete-old --d1-json f.json [--apply] [--r2-remote] [--d1-done] [--verify]` | 旧キーを消す。**`--d1-json`（D1 のスナップショット）が必須**: `npx wrangler d1 execute mise --remote --json --command "SELECT id,favicon_path,favicon_v FROM sites WHERE favicon_path IS NOT NULL" > f.json`。**D1 の `favicon_path` が今も指す旧名は絶対に消さない**（`favicon_v` が NULL の旧データ行が残っていればその名前も `kept`）。そのうえで、台帳で同じ内容を使っていたサイト（取得が一時失敗中のサイトも含め、status は問わない）が全員新キーに置いた印を持つ名前だけ消す。`--verify` は新キーの実在を R2 に `--jobs` 並列で問い合わせて確かめる（1 件数秒 ÷ 並列数。1,900 件で数分）。スナップショットが古い（24 時間超）・空・行数が台帳の画像ありのサイトの半分未満なら中止（終了コード 2）。残したものがあれば内訳を表示して終了コード 3。`--apply` は `--d1-done` も要る |
 
-実行する順序（本番、詳細は [deploy.md](../operations/deploy.md#ファビコンのサイト固定キー化migration-0029本番への切替順序)）: migration 0029 → 新 Worker のデプロイ（`favicon_v` が NULL の旧データは従来の URL のまま動く）→ `upload --apply --r2-remote` → `sql` を D1 へ適用 → 配信確認 → `delete-old --apply --r2-remote --d1-done`（1 回だけ）。以降、夜間・月次の取得は新キーへ上書きする。
+実行する順序（本番、詳細は [deploy.md](../operations/deploy.md#ファビコンのサイト固定キー化migration-0029本番への切替順序)）: migration 0029 → 新 Worker のデプロイ（`favicon_v` が NULL の旧データは従来の URL のまま動く）→ `upload --apply --r2-remote` → `sql` を D1 へ適用 → 配信確認 → D1 のスナップショットを取って `delete-old --d1-json f.json --apply --r2-remote --d1-done`（1 回だけ）。以降、夜間・月次の取得は新キーへ上書きする。
+
+- **過渡期の注意**: 切替前の旧 URL（v なし）は immutable でなく `max-age=3600` になるので、切替が終わるまで Worker・R2 の呼び出しが少し増える（終われば全サイト v 付きの immutable）。
+- **`upload --apply` は夜間の favicon 段（`nightly.py`）と重ねない**（同じ台帳 SQLite に書くのでロックで衝突する）。夜間の実行時間帯を避けるか、`--favicon-limit 0` の夜に行う。

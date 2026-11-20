@@ -336,7 +336,7 @@ class Ledger(unittest.TestCase):
         favicon.record(self.db, self.store, self.row('s1'), self.ok(), T0)
         sql = favicon.sql_updates(self.db)
         v = favicon.icon_v(self.row('s1')['icon_hash'])
-        self.assertEqual(sql, f"UPDATE sites SET favicon_path='{favicon.site_name('s1')}', favicon_v='{v}' WHERE id='s1' AND favicon_v IS NOT '{v}';\n")
+        self.assertEqual(sql, f"UPDATE sites SET favicon_path='{favicon.site_name('s1')}', favicon_v='{v}' WHERE id='s1' AND (favicon_path IS NOT '{favicon.site_name('s1')}' OR favicon_v IS NOT '{v}');\n")
         self.assertNotIn('s2', sql)
         self.assertEqual(favicon.sql_updates(self.db, '2026-12-01T00:00:00Z'), '')
 
