@@ -42,6 +42,7 @@ for (const u of URLS) {
     sig[js] = await page.evaluate(signature); await ctx.close();
   }
   const a = sig[false], b = sig[true], n = Math.max(a.length, b.length), diffs = [];
+  if (!a.length) diffs.push('  比べる要素が 0 件（404 などで何も比べていない。seed に該当の国・区画のサイトが要る）');
   for (let i = 0; i < n; i++) if (a[i] !== b[i]) diffs.push(`  #${i}\n    SSR: ${a[i]}\n    JS : ${b[i]}`);
   console.log(`${diffs.length ? 'NG' : 'OK'}  ${u}  (${a.length} 要素)`);
   if (diffs.length) { bad++; console.log(diffs.join('\n')); }
