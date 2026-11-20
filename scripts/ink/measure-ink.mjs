@@ -68,7 +68,9 @@ const collectAll = (scene) => {
     all('.region-select').forEach((s) => add({ group: 'select/region', label: 'region', strict: true, box: s, xr: 'left' }));
     all('.history-day').forEach((d) => pair('hud/history', null, d.querySelector('.history-track'), d.querySelector('.history-date')));
     all('.author-links a').forEach((a) => add({ group: 'btn/author-link', label: a.getAttribute('aria-label') || a.textContent.trim(), strict: true, box: a }));
-    all('#feed-entry').forEach((a) => add({ group: 'link/feed-entry', label: txtOf(a), strict: strictOf(txtOf(a)), box: a, minH: matchMedia('(pointer: coarse)').matches ? 44 : 34 })); // 縦フィードの入口 (#178)
+  }
+  if (scene === 'folder') {
+    all('#feed-entry').forEach((a) => add({ group: 'link/feed-entry', label: txtOf(a), strict: strictOf(txtOf(a)), box: a, minH: matchMedia('(pointer: coarse)').matches ? 44 : 34 }));
   }
   if (scene === 'request') {
     all('#req-submit, #req-type, #req-url').forEach((e) => add({ group: 'form/' + e.tagName.toLowerCase(), label: e.id, strict: true, box: e, xr: e.tagName === 'SELECT' ? 'left' : undefined }));
@@ -77,13 +79,10 @@ const collectAll = (scene) => {
     all('.install-add, .install-close, #install-banner button').forEach((b) => add({ group: 'btn/install', label: txtOf(b).slice(0, 12) || b.id || b.className, strict: true, box: b }));
   }
   if (scene === 'feed') {
-    all('#feed .f-icon').forEach((b) => add({ group: 'feed/icon-btn', label: b.getAttribute('aria-label') || b.textContent.trim(), strict: true, box: b }));
-    all('#feed .f-directory').forEach((b) => add({ group: 'feed/directory', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
-    all('#feed .f-seg button').forEach((b) => add({ group: 'feed/seg', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
-    all('#feed .f-select').forEach((s) => add({ group: 'feed/select', label: 'select', strict: true, box: s, xr: 'left' }));
+    all('#feed .f-directory').forEach((b) => add({ group: 'feed/directory', label: b.getAttribute('aria-label'), strict: true, box: b, ink: b.querySelector('svg'), minH: 44 }));
+    all('#feed .f-search input').forEach((b) => add({ group: 'feed/search', label: b.getAttribute('aria-label'), strict: true, box: b, minH: 44 }));
     all('#feed .f-nav button').forEach((b) => add({ group: 'feed/nav', label: b.id, strict: true, box: b }));
     all('#feed .f-open').forEach((b) => add({ group: 'feed/open', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
-    all('#feed .f-proto').forEach((b) => add({ group: 'feed/proto', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
     all('#feed .f-seen').forEach((b) => add({ group: 'feed/seen-label', label: txtOf(b).slice(0, 10), strict: false, box: b }));
     all('#feed .f-place').slice(0, 2).forEach((p) => pair('feed/place', null, p.querySelector('img'), p.querySelector('span') || [...p.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()), { label: 'place' }));
   }
@@ -165,6 +164,7 @@ const rows = [];
 const SCENES = [
   ['results', '/jp/?q=' + encodeURIComponent('寺') + '&' + ['Web', '寺院', 'Linux入門', 'ブログ😀', 'Rust'].map((x) => 'tag=' + encodeURIComponent(x)).join('&'), 'a.site-tag'],
   ['top', '/jp/', '#query'],
+  ['folder', '/jp/?category=recent', '#feed-entry'],
   ['request', '/jp/', '#recommend-link', async (p) => { await p.evaluate(() => { const r = document.getElementById('recommend'); r.hidden = false; }); }],
   ['banner', '/jp/', '#query', async (p) => { await p.evaluate(() => { const b = document.getElementById('install-banner'); if (b) b.hidden = false; }); }],
   ['feed', '/jp/?view=feed', '#feed .f-card'],
@@ -249,10 +249,11 @@ await browser.close();
 // ---- 対象が 0 件なら NG（場面ごとに期待するグループ。黙って測定から抜けるのを防ぐ。pc=PC幅でだけ出るもの）
 const EXPECT = {
   results: ['tag/site-tag', 'tag/chip', 'tag/chip-x', 'row/bullet', 'row/newtab-icon', 'row/flag-region', 'input/search-text', 'input/search-icon'],
-  top: ['btn/preferences', 'scope/flag-count', 'btn/author-link', 'link/feed-entry', 'pc:hud/history'],
+  top: ['btn/preferences', 'scope/flag-count', 'btn/author-link', 'pc:hud/history'],
+  folder: ['link/feed-entry'],
   request: ['form/select', 'form/input', 'form/button'],
   banner: ['btn/install'],
-  feed: ['feed/icon-btn', 'feed/directory', 'feed/seg', 'feed/select', 'feed/nav', 'feed/open', 'feed/proto', 'feed/seen-label', 'feed/place', 'feed/end-btn'],
+  feed: ['feed/directory', 'feed/search', 'feed/nav', 'feed/open', 'feed/seen-label', 'feed/place', 'feed/end-btn'],
   'feed-panel': ['feed/panel-x', 'feed/panel-btn'],
   about: ['btn/preferences', 'about/logo'],
 };

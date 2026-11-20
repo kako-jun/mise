@@ -152,16 +152,6 @@ test('フック: 読み込みに失敗(onerror)・起動しない(タイムア�
   assert.ok(!c.classes.has('feed-mode'), '起動しないまま 10 秒');
 });
 
-test('isPending: 要求した範囲を含む読み込みが無い間は true（古い範囲のデータを絞り込んで出さない）', () => {
-  assert.equal(lib.isPending(null, false, 'all'), true, '最初の読み込み前');
-  assert.equal(lib.isPending('jp', true, 'us'), true, 'jp を読んでいる最中に us へ切替');
-  assert.equal(lib.isPending('all', false, 'us'), true, '上限で切れた全世界は us を含むとは言えない');
-  assert.equal(lib.isPending('all', true, 'us'), false, '全件読めた全世界なら絞り込むだけ');
-  assert.equal(lib.isPending('jp', false, 'jp'), false);
-  // feed.js は pending の間、絞り込み直し・言語切替の描画・注記を保留する
-  assert.match(appJs, /function refilter\(\) \{ syncUrl\(\); renderBar\(\); if \(pending\(\)\) return;/);
-});
-
 test('fmtCount: 表示言語に合わせた桁区切り。数でない値は NaN と出さず空文字', () => {
   assert.equal(lib.fmtCount(101868, 'en'), '101,868');
   assert.equal(lib.fmtCount(101868, 'ja'), '101,868');
@@ -170,8 +160,9 @@ test('fmtCount: 表示言語に合わせた桁区切り。数でない値は NaN
   assert.match(appJs, /String\(n\)\.padStart\(6, '0'\)/, 'SEEN の固定桁は変えない');
 });
 
-test('カテゴリ欄: 選択中のカテゴリはその範囲で 0 件でも常に選択肢に出す', () => {
-  assert.match(appJs, /if \(n \|\| c\.id === state\.cat\) sel\.append/);
+test('フォルダのフィードは API でカテゴリを絞り、一覧の並びを使う', () => {
+  assert.match(appJs, /query\.set\('category', path\.at\(-1\)\)/);
+  assert.match(appJs, /if \(requestedPath\.length\) return all;/);
 });
 
 test('「最初に戻る」「並びを変えてもう一度」は先頭カードへフォーカスを移し、連続操作の基準も 0 にする', () => {

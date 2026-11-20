@@ -1,19 +1,47 @@
-// 通常画面 → 縦フィード(?view=feed)の入口リンクの href を作る純関数 (#178)。app.js（ブラウザ）と src/seo.js（SSR）が共有する。DOM には触れない。
-// 縦フィード(feed.js)が URL から受け取るのは scope（パスの /jp/ /jp/13/ か ?scope=）・cat（トップ階層のカテゴリ id 1 つ）・sort・seed だけ。
-// 通常画面の状態のうち、引き継げるのは範囲(scope)とトップ階層のカテゴリ(cat)。引き継げず捨てるのは、2 階層目以降のカテゴリ・検索語(q)・タグ(tag)（フィード側に絞り込みが無いため）。捨てる状態のときは入口の下に NOTE を画面に出す（黙って捨てない）。
+// カテゴリ URL を通常画面・縦ビュー・SSR で共有する。DOM には触れない。
 (g => {
   const SCOPE_RE = /^(all|[a-z]{2}(-[a-z0-9]{1,3})?)$/;
   const CAT_RE = /^[A-Za-z0-9_-]{1,64}$/;
-  // scope: 'all' / 'jp' / 'jp-13'。rootCategory: トップ階層のカテゴリ id（無ければ空）。不正な値は無かったことにする。
-  function feedEntryHref(scope, rootCategory) {
-    const s = typeof scope === 'string' && SCOPE_RE.test(scope) ? scope : 'jp';
-    const q = ['view=feed'];
-    if (typeof rootCategory === 'string' && CAT_RE.test(rootCategory)) q.push('cat=' + encodeURIComponent(rootCategory));
-    return `/${s.replace('-', '/')}/?${q.join('&')}`;
+  const DEFAULT_SCOPE = 'jp', PAGE_SIZE = 40;
+  // 新着は掲載時刻から作る仮想フォルダ。分類用のカテゴリには登録しない。
+  const RECENT_CATEGORY = 'recent';
+  const RECENT_DAYS = 30;
+  const recentFolder = { id: RECENT_CATEGORY, parent_id: null, name_ja: '新着', name_en: 'New arrivals' };
+  const validScope = value => typeof value === 'string' && SCOPE_RE.test(value);
+
+  function scopeFromPath(pathname) {
+    const match = pathname.match(/^\/(?:([a-z]{2})\/([a-z0-9]{1,3})|([a-z]{2}|all))\/$/);
+    if (!match) return DEFAULT_SCOPE;
+    return match[1] ? `${match[1]}-${match[2]}` : match[3];
   }
-  // 引き継げない状態（検索語・タグ・2 段目以降のカテゴリのどれかが有効）のときだけ、入口の下に出す 1 行。文言はここ 1 か所（app.js の words と src/seo.js が共有。SSR は英語）。
-  const NOTE = { ja: '範囲とトップのカテゴリだけ引き継ぎます', en: 'Only scope and top category carry over' };
-  // search: 検索語またはタグの絞り込み中か、depth: カテゴリの階層の深さ。
-  const feedEntryLossy = (search, depth) => !!search || depth > 1;
-  g.MiseFeedEntry = { feedEntryHref, feedEntryLossy, NOTE };
+
+  const validPage = page => Number.isInteger(page) && page >= 1 && page <= 999999;
+  const parsePage = raw => raw == null || raw === '' ? 1 : /^\d{1,6}$/.test(raw) && validPage(Number(raw)) ? Number(raw) : null;
+
+  function directoryHref(scope, path = [], page = 1) {
+    const s = validScope(scope) ? scope : DEFAULT_SCOPE;
+    const params = new URLSearchParams();
+    for (const id of path) {
+      if (!CAT_RE.test(id)) break;
+      params.append('category', id);
+    }
+    if (validPage(page) && page > 1 && params.has('category')) params.set('page', String(page));
+    const q = params.toString();
+    return `/${s.replace('-', '/')}/${q ? '?' + q : ''}`;
+  }
+
+  function feedEntryHref(scope, path = [], page = 1) {
+    const url = directoryHref(scope, path, page);
+    return url + (url.includes('?') ? '&' : '?') + 'view=feed';
+  }
+
+  const sitePositionId = position => `site-row-${position}`;
+
+  function continueListHref(scope, path, page, count) {
+    if (!path.length) return directoryHref(scope, path, page);
+    const offset = (page - 1) * PAGE_SIZE + count;
+    return `${directoryHref(scope, path, Math.floor(offset / PAGE_SIZE) + 1)}#${sitePositionId(offset + 1)}`;
+  }
+
+  g.MiseFeedEntry = { DEFAULT_SCOPE, PAGE_SIZE, parsePage, validScope, scopeFromPath, directoryHref, feedEntryHref, sitePositionId, continueListHref, RECENT_CATEGORY, RECENT_DAYS, recentFolder };
 })(globalThis);

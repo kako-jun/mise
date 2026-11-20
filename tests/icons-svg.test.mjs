@@ -3,16 +3,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const read = (f) => readFileSync(new URL(`../public/${f}`, import.meta.url), 'utf8');
-test('◐ は SVG（index.html・about.html・feed.js）で、文字の ◐ は残っていない', () => {
+test('テーマ切替の ◐ は SVG（index.html・about.html）で、文字の ◐ は残っていない', () => {
   for (const f of ['index.html', 'about.html']) {
     const m = read(f).match(/<button id="theme-toggle"[^>]*>(.*?)<\/button>/s);
     assert.ok(m, `${f}: theme-toggle`);
     assert.match(m[1], /<svg aria-hidden="true"/, `${f}: SVG で aria-hidden`);
     assert.ok(!m[1].includes('◐'), `${f}: 文字の ◐ が残っている`);
   }
-  const feed = read('feed.js');
-  assert.match(feed, /th\.innerHTML = '<svg aria-hidden="true"/);
-  assert.ok(!/textContent = '◐'/.test(feed));
 });
 test('タグチップの × は SVG（aria-hidden。名前はボタンの aria-label）', () => {
   const app = read('app.js');

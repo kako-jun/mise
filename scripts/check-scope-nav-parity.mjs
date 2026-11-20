@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 範囲ナビ（#scope-nav）と縦フィードの入口と引き継ぎの案内（#feed-entry・#feed-note。#178）の SSR と JS 描き直し後の DOM が同じ構造かを、実ブラウザで突き合わせる (#177)。
+// 範囲ナビ・フォルダの縦ビュー入口・新着の SSR と JS 描き直し後の DOM を実ブラウザで突き合わせる。
 // JS 無効（SSR のまま）と JS 有効（app.js が描き直した後）で、要素の並び・class・hidden・href・title・aria-*・アイコン・文字を比べる。
 // 区画リンクの枠（.region-row）は JS 有効では描き直しで消える仕様なので比べない。
 // 前提: `npx wrangler dev --local --port 8799` が起動し、ローカル D1 にサイトがある（--remote は使わない）。CI には入れない。
@@ -11,7 +11,7 @@ import { existsSync, readdirSync } from 'node:fs';
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_DIR || 'playwright');
 const BASE = process.argv[2] || 'http://localhost:8799';
-const URLS = ['/', '/jp/', '/jp/13/', '/it/', '/all/', '/jp/13/?category=computing', '/jp/?q=blog', '/jp/?q=blog&tag=' + encodeURIComponent('ブログ'), '/jp/?category=computing&tag=' + encodeURIComponent('ブログ')];
+const URLS = ['/', '/jp/', '/jp/13/', '/it/', '/all/', '/jp/13/?category=computing&category=programming', '/jp/?category=recent', '/jp/?q=blog', '/jp/?q=blog&tag=' + encodeURIComponent('ブログ'), '/jp/?category=computing&tag=' + encodeURIComponent('ブログ')];
 function chromiumPath() {
   if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
   const base = path.join(homedir(), '.cache/ms-playwright');
@@ -23,8 +23,10 @@ function chromiumPath() {
 // #scope-nav の要素を、比べたい属性だけの文字列の並びにする（.region-row は除く）。
 const signature = () => {
   const out = [];
-  for (const el of document.querySelectorAll('#scope-nav *, #feed-entry, #feed-note')) {
-    if (el.closest('.region-row')) continue;
+  const params = new URLSearchParams(location.search);
+  const search = params.has('q') || params.has('tag');
+  for (const el of document.querySelectorAll('#scope-nav *, #feed-entry, .category-recent a')) {
+    if (el.closest('.region-row') || (search && !el.closest('#scope-nav'))) continue;
     const attrs = [...el.attributes].filter((a) => !['style'].includes(a.name)).map((a) => `${a.name}=${a.value}`).sort().join(' ');
     const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join('');
     out.push(`${el.tagName.toLowerCase()} [${attrs}] ${own}`);

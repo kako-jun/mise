@@ -23,6 +23,8 @@
 | `GET /` `/:scope/` `/:scope` `/:scope/:sub/` `/:scope/:sub` | `index.html` に範囲と URL に応じた内容を差し込んで返す（[seo.md](seo.md)）。`/` は既定範囲（日本）と同内容。区画は `/jp/13/`。サイトが 1 件も無い国・区画・不正な値は 404、大文字は小文字へ 301 |
 | `GET /sitemap.xml` | D1 から動的生成 |
 
+`/api/sites?category=recent` は仮想の新着フォルダ。登録から 30 日未満の通常掲載を、登録日時の降順・サイト ID の昇順で返す。通常の分類を返す `/api/categories` には含めない。登録日の範囲と並びは migration 0031 の範囲別索引で引く。総件数が上限付きのとき、SSR のページャーは `next_cursor` がある間は次ページを案内し、総ページ数の表示は省く。
+
 `/api/*` は（範囲内の）全件返しで、成功応答に `Cache-Control: public, max-age=30`、4xx/5xx に `no-store` を付ける（更新が速やかに反映されるよう短く。ページング・カーソル化は構想: [ideas/scope-and-search.md](../ideas/scope-and-search.md)）。ブラウザ用で、外部向け公開 API としては設計していない。
 
 ## 読み取りの設計（D1 の課金とプラン。#126）

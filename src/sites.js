@@ -6,7 +6,9 @@
 //   3. 追加した列が画面に必要なら COLUMNS にも足す（並びだけに使う列は足さなくてよい）。
 //   4. docs/design/ui.md の「既定の並び」を更新する。カーソルは配列なので形式の変更は不要。
 import { faviconUrl, thumbUrl } from './media.js';
-export const PAGE_SIZE = 40, MAX_LIMIT = 100;
+import '../public/vertical-link.js';
+export const { RECENT_CATEGORY, RECENT_DAYS, PAGE_SIZE, parsePage } = globalThis.MiseFeedEntry;
+export const MAX_LIMIT = 100;
 // 集計表（migration 0022: category_counts・scope_counts）の「全世界」の scope 値。国は country_code そのもの、区画（都道府県・州）は region_code そのもの（0026。例 JP-13）。
 export const ALL_SCOPE = 'all';
 // 範囲の集計キー: 区画 > 国 > 全世界。cc は国、region は区画（どちらも集計表の scope 値）。
@@ -28,7 +30,11 @@ export const SORT_KEYS = [
   { expr: 's.id', dir: 'ASC', type: 'string' }, // 同値の安定化（必ず最後）
   // type はカーソルの値の型（'string' | 'number'）。不一致は 400。
 ];
-export const siteOrder = () => `ORDER BY ${SORT_KEYS.map(k => `${k.expr} ${k.dir}`).join(', ')}`;
+const RECENT_SORT_KEYS = [
+  { expr: 'datetime(s.registered_at)', dir: 'DESC', type: 'string' },
+  { expr: 's.id', dir: 'ASC', type: 'string' },
+];
+export const siteOrder = (keys = SORT_KEYS) => `ORDER BY ${keys.map(k => `${k.expr} ${k.dir}`).join(', ')}`;
 // migration に書くインデックス（テーブル別名 `s.` は外す）。名前に定義のハッシュを含めるので、SORT_KEYS を変えると名前も変わり、
 // 旧インデックスと衝突（IF NOT EXISTS で作られずに残る）しない。新しい migration で新名の CREATE と旧名の DROP INDEX を書く。
 const indexCols = () => SORT_KEYS.map(k => `${k.expr.replace(/\bs\./g, '')} ${k.dir}`.replace(/ ASC$/, '')).join(', ');
@@ -37,18 +43,18 @@ export const sortIndexName = () => `idx_sites_sort_${fnv(indexCols())}`;
 export const sortIndexSql = () => `CREATE INDEX IF NOT EXISTS ${sortIndexName()} ON sites (${indexCols()});`;
 // 区画（region_code）で絞った一覧用の部分索引（migration 0026。区画 NULL の行は載せない）。並びの列は上と同じなので、SORT_KEYS を変えたらこれも新しい migration で作り直す。
 export const regionSortIndexSql = () => `CREATE INDEX IF NOT EXISTS idx_sites_region_sort ON sites (region_code, ${indexCols()}) WHERE region_code IS NOT NULL;`;
-const keyCols = () => SORT_KEYS.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
+const keyCols = keys => keys.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
 
 // ---- 入力の解釈（不正は null → 呼び出し側が 400/404） ----
 export const parseLimit = raw => { if (raw == null || raw === '') return PAGE_SIZE; if (!/^-?\d{1,9}$/.test(raw)) return null; const n = Number(raw); return n >= 1 ? Math.min(n, MAX_LIMIT) : null; }; // 上限超は MAX_LIMIT に丸める
-export const parsePage = raw => { if (raw == null || raw === '') return 1; if (!/^\d{1,6}$/.test(raw)) return null; const n = Number(raw); return n >= 1 ? n : null; };
 // カーソルは全キー値の配列（id を含む）を JSON → base64url にしたもの。キーが増えても形式は変わらない。
 export const encodeCursor = vals => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(vals)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-export function decodeCursor(raw) {
+export function decodeCursor(raw, recent = false) {
   if (!raw) return { none: true };
   try {
     const b = atob(raw.replace(/-/g, '+').replace(/_/g, '/')), vals = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
-    const ok = Array.isArray(vals) && vals.length === SORT_KEYS.length && vals.every((v, i) => v === null || (typeof v === SORT_KEYS[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
+    const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS;
+    const ok = Array.isArray(vals) && vals.length === keys.length && vals.every((v, i) => v === null || (typeof v === keys[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
     return ok && vals.at(-1) !== null ? { vals } : null;
   } catch (_) { return null; }
 }
@@ -70,11 +76,11 @@ export function cleanTags(raw) {
 
 // 「cursor の次」の条件。キーを辞書式に比較する（先頭から: 前のキーが等しく、このキーが後ろ）。NULL は dir に合わせて扱う。
 // 1 本の `A OR B OR C` なので、IN（所属サイト・稀なタグ）で引く計画のときに使う（IN で引いて並べ替える計画のまま、cursor の次だけを返せる）。
-function afterCursor(vals) {
+function afterCursor(vals, keys) {
   const alts = [], args = [];
-  SORT_KEYS.forEach((k, i) => {
+  keys.forEach((k, i) => {
     const eq = [], a = [];
-    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); a.push(vals[j]); } }
+    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${keys[j].expr} IS NULL`); else { eq.push(`${keys[j].expr} = ?`); a.push(vals[j]); } }
     let after;
     if (k.dir === 'ASC') { if (vals[i] === null) after = `${k.expr} IS NOT NULL`; else { after = `${k.expr} > ?`; a.push(vals[i]); } } // ASC: NULL が先頭
     else { if (vals[i] === null) after = null; else { after = `(${k.expr} < ? OR ${k.expr} IS NULL)`; a.push(vals[i]); } } // DESC: NULL が末尾
@@ -89,11 +95,11 @@ function afterCursor(vals) {
 // 項は並びの順に並べてある（最も深いキーの項が先、最初のキーの項が最後。DESC のキーでは NULL の項が「値が小さい」項の後）ので、前から順に取って連結すれば並びと同じになる。
 // 各項の order は、その項で「まだ決まっていないキー」だけの並び（前のキーは等しいので並べ替えは要らない）。全キーで並べると、同じ日時が大量に続く塊で
 // 索引の並びと一致せず一時 B-tree（USE TEMP B-TREE FOR LAST 2 TERMS）になり、同値の行を毎回全部読む（本番相当データで main の最大 14 倍）。
-function cursorTerms(vals) {
-  const terms = [], order = from => `ORDER BY ${SORT_KEYS.slice(from).map(k => `${k.expr} ${k.dir}`).join(', ')}`;
-  for (let i = SORT_KEYS.length - 1; i >= 0; i--) {
-    const k = SORT_KEYS[i], eq = [], eqArgs = [];
-    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${SORT_KEYS[j].expr} IS NULL`); else { eq.push(`${SORT_KEYS[j].expr} = ?`); eqArgs.push(vals[j]); } }
+function cursorTerms(vals, keys) {
+  const terms = [], order = from => siteOrder(keys.slice(from));
+  for (let i = keys.length - 1; i >= 0; i--) {
+    const k = keys[i], eq = [], eqArgs = [];
+    for (let j = 0; j < i; j++) { if (vals[j] === null) eq.push(`${keys[j].expr} IS NULL`); else { eq.push(`${keys[j].expr} = ?`); eqArgs.push(vals[j]); } }
     const push = (cond, ord, args = []) => terms.push({ sql: `(${[...eq, cond].join(' AND ')})`, args: [...eqArgs, ...args], order: ord });
     if (k.dir === 'ASC') { if (vals[i] === null) push(`${k.expr} IS NOT NULL`, order(i)); else push(`${k.expr} > ?`, order(i), [vals[i]]); } // ASC: NULL が先頭
     else if (vals[i] !== null) { push(`${k.expr} < ?`, order(i), [vals[i]]); push(`${k.expr} IS NULL`, order(i + 1)); } // DESC: NULL が末尾。値の小さい行の後に NULL の行が続く（NULL の項はこのキーが全部 NULL なので次のキーから）
@@ -172,11 +178,12 @@ export async function planQuery(db, { cc = null, region = null, category = null,
   return plan;
 }
 
-export function filters({ cc, region, category, q, tags }, plan = {}) {
+export function filters({ cc, region, category, q, tags, recent }, plan = {}) {
   const where = [], args = [];
   // 区画は国の部分集合（region_code は country_code が必須で先頭 2 文字が一致する）ので、区画があれば区画だけで絞る（国だけ分かって区画 NULL のサイトは出ない）。
   if (region) { where.push('s.region_code = ?'); args.push(region); }
   else if (cc) { where.push('s.country_code = ?'); args.push(cc); }
+  if (recent) where.push('s.bulk_import = 0', `datetime(s.registered_at) > datetime('now', '-${RECENT_DAYS} days')`, "datetime(s.registered_at) <= datetime('now')");
   if (category) {
     if (plan.categoryMode === 'exists') where.push('EXISTS (SELECT 1 FROM site_categories sc WHERE sc.category_id = ? AND sc.site_id = s.id)');
     else where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)');
@@ -210,6 +217,7 @@ const FTS_ERR = /no such table|sites_fts|fts5|CORRUPT_VTAB|malformed/i;
 const usesFts = p => p.qMode === 'fts' || p.qCountViaFts;
 const ftsReady = async db => { try { return (await db.prepare(`SELECT ready FROM fts_state WHERE name = 'sites_fts'`).first())?.ready === 1; } catch (_) { return false; } };
 export async function querySites(db, o) {
+  if (o.category === RECENT_CATEGORY) o = { ...o, category: null, recent: true };
   const hasCursor = o.cursor && !o.cursor.none, pk = { cc: o.cc, region: o.region, category: o.category, tags: o.tags, q: o.q };
   const basePlan = await planFor(db, pk, !hasCursor);
   if (!usesFts(basePlan)) return runQuery(db, o, basePlan);
@@ -228,34 +236,35 @@ export async function querySites(db, o) {
   if (!await ftsReady(db)) return fallback('ready が 1 でない（作り直し中・表なし）');
   return res;
 }
-async function runQuery(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0 }, basePlan) {
+async function runQuery(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0, recent = false }, basePlan) {
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
-  const { where, args } = filters({ cc, region, category, q, tags }, plan);
-  const run = async (extra, extraArgs, lim, off, order = siteOrder()) => {
+  const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS;
+  const { where, args } = filters({ cc, region, category, q, tags, recent }, plan);
+  const run = async (extra, extraArgs, lim, off, order = siteOrder(keys)) => {
     const conds = [...where, ...extra];
-    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols()} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
+    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
   };
   // IN（所属サイト・稀なタグの索引）で引く計画は、範囲条件を足すと SQLite が並びの索引の走査に切り替えて IN が効かなくなる。1 本の `A OR B OR C`（afterCursor）なら IN で引いたまま並べ替える。
   const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag || plan.qMode === 'fts'; // 索引（MATCH）も IN で引く計画
   let results;
-  if (hasCursor && inDriven) { const c = afterCursor(cursor.vals); results = await run([c.sql], c.args, limit + 1, 0); }
-  else if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0, t.order)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
+  if (hasCursor && inDriven) { const c = afterCursor(cursor.vals, keys); results = await run([c.sql], c.args, limit + 1, 0); }
+  else if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals, keys)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0, t.order)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
   else results = await run([], [], limit + 1, start);
   const more = results.length > limit, rows = results.slice(0, limit);
-  const next_cursor = more ? encodeCursor(SORT_KEYS.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
+  const next_cursor = more ? encodeCursor(keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
   const out = { items: rows.map(shape), next_cursor };
   if (!hasCursor) {
     const plain = !category && !q && !tags?.length;
     if (!more && (start === 0 || rows.length > 0)) { out.total = start + rows.length; out.total_capped = false; }
-    else if (plain) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(scopeKeyOf({ cc, region })).first())?.total ?? 0; out.total_capped = false; }
+    else if (plain && !recent) { out.total = (await db.prepare(`SELECT COALESCE((SELECT n FROM scope_counts WHERE scope = ?), 0) AS total`).bind(scopeKeyOf({ cc, region })).first())?.total ?? 0; out.total_capped = false; }
     else if (plan.categoryLeafCount !== null && !q && !tags?.length) { out.total = plan.categoryLeafCount; out.total_capped = false; }
-    else if (plan.tagsOverCap && !q && !category && !cc && !region) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
-    else if (plan.qOver && !category && !cc && !region && !tags?.length) { out.total = TOTAL_CAP; out.total_capped = true; } // q だけで索引の該当が上限超え: 数えない
+    else if (plan.tagsOverCap && !q && !category && !cc && !region && !recent) { out.total = TOTAL_CAP; out.total_capped = true; } // 単独のタグが上限超え: 数えない
+    else if (plan.qOver && !category && !cc && !region && !tags?.length && !recent) { out.total = TOTAL_CAP; out.total_capped = true; } // q だけで索引の該当が上限超え: 数えない
     else if (plan.qCountViaFts) { // 併用ありで q の該当が上限超え〜FTS_EXTRA_PROBE 以下: 一覧は instr の走査のまま、総件数だけ索引から数える
-      const f2 = filters({ cc, region, category, q, tags }, { ...plan, qMode: 'fts' });
+      const f2 = filters({ cc, region, category, q, tags, recent }, { ...plan, qMode: 'fts' });
       const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s WHERE ${f2.where.join(' AND ')} LIMIT ${TOTAL_CAP + 1})`).bind(...f2.args).first())?.n ?? 0;
       out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
     }
