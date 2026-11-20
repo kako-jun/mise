@@ -1,6 +1,7 @@
 """ホスト名の正規化と、取得前（ドメイン種別）フィルタ。決定論・ネットワークなし。"""
 import ipaddress
 import re
+import urllib.parse
 from pathlib import Path
 
 BLOCKLIST_DIR = Path(__file__).parent / 'blocklist'
@@ -100,6 +101,32 @@ def prefilter(host, jp_only=True):
     name = reg.split('.')[0]
     if len(name) > 30 or re.search(r'\d{6,}', name) or name.count('-') >= 4:
         return 'spam_like_name'  # 量産ドメインの形
+    return None
+
+
+PLATFORM_PAGE = 'platform_page'   # 拒否理由コード: プラットフォーム内の店舗/ユーザーのページだけが公式のもの(#181)
+
+
+def platform_page(url):
+    """URL が既知のポータル/SNS 内の店舗・ユーザーのページなら 'platform_page'、そうでなければ None。
+    サービス本体のトップ(パスなし、または blocklist/platform_pages.txt [top_path] の言語パス)は通す。
+    ホスト一覧の正本は blocklist/platform_pages.txt 1 か所。スキーム無し('host/path')も受ける。"""
+    url = (url or '').strip()
+    if '://' not in url:
+        url = '//' + url
+    try:
+        p = urllib.parse.urlsplit(url)
+        host = normalize_host(p.hostname)
+    except ValueError:
+        return None
+    if not host:
+        return None
+    lists = blocklist('platform_pages.txt')
+    if not suffix_match(host, lists['host']):
+        return None
+    path = p.path.strip('/').lower()
+    if path and path not in lists['top_path']:
+        return PLATFORM_PAGE
     return None
 
 

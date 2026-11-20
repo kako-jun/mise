@@ -115,6 +115,37 @@ test('ピックアップの区画経路: region_code の等値で idx_sites_regi
   assert.doesNotMatch(randomPickSql({ region: null }), /region_code = /); // 国・全世界の SQL は従来のまま
 });
 
+test('クライアント: app.js にプルダウン（region-select / regionSelect）が無い（#177）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /region-select|regionSelect/);
+});
+
+test('style.css: JS 有効では区画リンクの枠を隠し、JS なしでは hidden の国を開いてボタンを隠す（#177）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(scripting: enabled\) \{ \.region-row \{ display: none; \} \}/);
+  assert.match(css, /@media \(scripting: none\) \{ \.scope-list li\[hidden\] \{ display: list-item; \} \.scope-more \{ display: none; \} \}/);
+});
+
+test('SSR: 範囲ナビは app.js と同じ構造（先頭 MISE_INLINE_SCOPES 件＋残りは hidden＋もっと見るボタン。現在の国が残りなら全部開く）（#177）', async () => {
+  const mk = n => ({ total: 9, regions: [], countries: Array.from({ length: n }, (_, i) => ({ code: ['JP','US','FR','GB','CN','DE','IT','KR','AU'][i], count: 1 })) });
+  const n = globalThis.MISE_INLINE_SCOPES;
+  assert.equal(n, 6);
+  const html = scopeNavHtml(mk(9), 'jp');
+  assert.equal((html.match(/<li hidden>/g) ?? []).length, 3);
+  assert.match(html, /class="scope-more" aria-expanded="false"/);
+  const open = scopeNavHtml(mk(9), 'au'); // 7 番目以降が現在 → 全部開く
+  assert.doesNotMatch(open, /<li hidden>/);
+  assert.match(open, /class="scope-more" aria-expanded="true"/);
+  // 区画の範囲でも、その国の項目に aria-current="true"（範囲そのものは page ではない）。app.js と同じ。
+  const reg = scopeNavHtml(mk(9), 'jp-13');
+  assert.match(reg, /<a class="scope-item" href="\/jp\/"[^>]*aria-current="true"/);
+  assert.doesNotMatch(reg, /aria-current="page"/);
+  assert.doesNotMatch(scopeNavHtml(mk(9), 'jp'), /aria-current="true"/);
+  assert.doesNotMatch(scopeNavHtml(mk(n), 'jp'), /scope-more|<li hidden>/); // 残りが無ければボタンも無い
+});
+
 test('SSR: 国・区画のページに、サイトのある区画へのリンク（/jp/13/ 形式）が JS なしで出る。サイトの無い区画・区画の無い範囲では出ない', async () => {
   const db = fresh();
   const scopes = await loadScopes(d(db));
@@ -124,7 +155,7 @@ test('SSR: 国・区画のページに、サイトのある区画へのリンク
     const hrefs = [...html.matchAll(/<a href="(\/jp\/\d\d\/)">/g)].map(m => m[1]);
     assert.deepEqual(hrefs, scopes.regions.filter(r => r.code.startsWith('JP-')).map(r => `/jp/${r.code.slice(3)}/`), scope + ': サイトのある区画だけ・コード順');
     assert.ok(hrefs.includes('/jp/13/') && !hrefs.includes('/jp/99/'));
-    assert.match(html, /<option value="jp-13"/); // select も従来どおり
+    assert.doesNotMatch(html, /<select|region-select/); // プルダウンは撤去（#177）
   }
   assert.doesNotMatch(scopeNavHtml(scopes, 'all'), /region-links|region-select/);
   assert.doesNotMatch(scopeNavHtml({ ...scopes, regions: [] }, 'jp'), /region-links/);
