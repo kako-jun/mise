@@ -184,7 +184,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     : '';
   const cats = children.map(ch => {
     const sub = path.length ? '' : `<p class="sub">${categories.filter(x => x.parent_id === ch.id).map(x => `<span>${esc(x.name_en)}</span>`).join(' / ')}</p>`;
-    return `<div class="category${ch.site_count ? '' : ' is-empty'}"><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2>${sub}</div>`;
+    return `<div class="category${ch.site_count ? '' : ' is-empty'}"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2></div>${sub}</div>`;
   }).join('');
   let siteItems = '', pagerBody = '', pages = 1;
   if (path.length || tags.length) {
