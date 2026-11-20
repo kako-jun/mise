@@ -295,7 +295,7 @@ class Run(Env):
     def test_dry_run_mentions_usage_stage(self):
         with mock.patch('builtins.print') as pr:
             nightly.main(['--dry-run', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger)])
-        self.assertIn('13 usage', pr.call_args[0][0])
+        self.assertIn('14 usage', pr.call_args[0][0])
         self.assertIn('トークン未設定', pr.call_args[0][0])
 
     def test_status_schema(self):
@@ -307,7 +307,7 @@ class Run(Env):
             self.assertIn(k, st)
         for s in st['stages']:
             self.assertEqual({'name', 'status', 'seconds', 'count', 'note'} <= set(s), True)
-            self.assertIn(s['status'], ('ok', 'failed', 'skipped', 'partial'))
+            self.assertIn(s['status'], ('ok', 'failed', 'skipped', 'partial', 'warning'))
         self.assertEqual(st['added'], 2)
         self.assertEqual(st['candidates_tonight'], 2)
 
@@ -727,7 +727,7 @@ class Prod(Env):
         st = self.status('2026-11-18-2')
         self.assertEqual(st['date'], '2026-11-18-2')
         self.assertEqual([s['name'] for s in st['stages']], nightly.STAGE_NAMES)
-        skipped_ok = {'prod', 'favicon'}
+        skipped_ok = {'prod', 'favicon', 'media'}
         for s in st['stages']:
             self.assertEqual(s['status'], 'skipped' if s['name'] in skipped_ok else 'ok', s['name'])
         self.assertTrue((self.var / 'nightly' / '2026-11-18-2' / 'approved-sites.sql').exists())

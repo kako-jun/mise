@@ -25,7 +25,7 @@ uv run --with pillow python3 scripts/favicon/favicon.py status
 
 台帳は `var/favicons.sqlite`（`.gitignore`、再生成可能）。出力 SQL は `UPDATE sites SET favicon_path='<k>.webp', favicon_v='<v>' WHERE id=... AND (favicon_path IS NOT '<k>.webp' OR favicon_v IS NOT '<v>')`（`<k>` = サイト固定のキー、`<v>` = 内容ハッシュの先頭 8 桁。**内容が変わったとき（と path だけ旧名の行）だけ書く**。D1 の書き込み行数を使わない）。取れていないサイトには触れない。除外・取り下げ（`delete`）したサイトには `favicon_path=NULL, favicon_v=NULL` にする UPDATE が付く（何度流しても安全）。`run`（`--apply` なし）・`sql`・`status` は台帳を読み取り専用で開き、無ければ何も作らない。
 
-**`--since` の SQL を適用し忘れたとき**（`--since` 付きで出した SQL を適用しないまま次回が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。夜間ジョブは SQL を作らない。`AND (favicon_path IS NOT ... OR favicon_v IS NOT ...)` があるので、すでに合っている行は書かれず、何度適用しても安全。`favicon_v` 列は migration 0029（#163）。
+**`--since` の SQL を適用し忘れたとき**（`--since` 付きで出した SQL を適用しないまま次回が来た等）は、`--since` なしで全件を出し直す: `sql --out var/favicons-all.sql`。`AND (favicon_path IS NOT ... OR favicon_v IS NOT ...)` があるので、すでに合っている行は書かれず、何度適用しても安全。`favicon_v` 列は migration 0029（#163）。
 
 ## 取得作法
 
@@ -95,7 +95,7 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 
 ## 夜間ジョブ
 
-`scripts/nightly.py` の最終段 `favicon`。**既定は無効**（`--favicon-limit 0`）。`--favicon-limit N` を付けたときだけ、再巡回台帳の取り込み → 期限が来た N 件の取得までを行う（置き場はローカルの `var/favicons/`。**SQL は作らない**）。本番 D1・R2 には触れず（D1 への反映は人が、R2 へ置いたあとに `sql` で）、段が失敗しても夜間ジョブ全体は失敗にしない（guards に残す）。実サイトにアクセスするので、有効にするのは最初は少数で様子を見てから。
+`--favicon-limit N` はローカル取得用。再巡回台帳を取り込み、期限が来た N 件を `var/favicons/` に保存する。新規掲載分を R2 と D1 まで自動反映するときは `--media-favicon-limit N` を使う。どちらも既定は 0（無効）。設定と再開は [夜間ジョブの手順書](../operations/nightly.md#新規掲載の画像取得) を参照。
 
 ## 内容ハッシュ名からサイト固定キーへの移行（#163。一回きり）
 
@@ -112,4 +112,4 @@ uv run --with pillow python3 scripts/favicon/favicon.py run --limit 50 --apply -
 実行する順序（本番、詳細は [deploy.md](../operations/deploy.md#ファビコンのサイト固定キー化migration-0029本番への切替順序)）: migration 0029 → 新 Worker のデプロイ（`favicon_v` が NULL の旧データは従来の URL のまま動く）→ `upload --apply --r2-remote` → `sql` を D1 へ適用 → 配信確認 → D1 のスナップショットを取って `delete-old --d1-json f.json --apply --r2-remote --d1-done`（1 回だけ）。以降、夜間・月次の取得は新キーへ上書きする。
 
 - **過渡期の注意**: 切替前の旧 URL（v なし）は immutable でなく `max-age=3600` になるので、切替が終わるまで Worker・R2 の呼び出しが少し増える（終われば全サイト v 付きの immutable）。
-- **`upload --apply` は夜間の favicon 段（`nightly.py`）と重ねない**（同じ台帳 SQLite に書くのでロックで衝突する）。夜間の実行時間帯を避けるか、`--favicon-limit 0` の夜に行う。
+- **`upload --apply` は夜間の favicon・media 段（`nightly.py`）と重ねない**（同じ台帳 SQLite に書くのでロックで衝突する）。夜間の実行時間帯を避けるか、両方のファビコン取得上限が 0 の夜に行う。

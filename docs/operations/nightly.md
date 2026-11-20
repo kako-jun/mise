@@ -19,7 +19,8 @@
 10 gate       生成 SQL をメモリ DB に流す整合チェック（integrity.gate）。違反なら停止
 11 prod       --apply-prod のときだけ: bookmark 取得 -> 本番投入 -> 整合チェック(--remote)
 12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> 取得だけ（ローカルの `var/favicons/<k>.webp`〔サイト固定のキー〕と台帳 `var/favicons.sqlite` に置く。**SQL は作らない**: ローカルにしか無い画像を D1 に指す SQL の誤適用を避けるため）。D1 への反映は、R2 へ置いたあと手で `sql`（既定 `--store r2-remote`、`--since` なし。[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
-13 usage      使用量ガード(#157。既定で有効、`--no-usage-guard` で無効): Cloudflare の Workers リクエスト・D1 行数を込みの枠(アカウント全体の合計［Workers と Pages Functions］。mise は内数の表示だけ)と比べ、50%/80%・月末予測・急増を guards に載せる(読むだけ。トークンが無い・API が失敗しても警告のみで続行し、前の段が失敗した夜も動く。手順は [usage-guard.md](usage-guard.md))
+13 media      #176: 本番に反映したサイトを画像取得の待ち行列へ追加し、取得 → R2 → D1 の順に進める（既定は無効。[設定と再開](#新規掲載の画像取得)）
+14 usage      使用量ガード(#157。既定で有効、`--no-usage-guard` で無効): Cloudflare の Workers リクエスト・D1 行数を込みの枠(アカウント全体の合計［Workers と Pages Functions］。mise は内数の表示だけ)と比べ、50%/80%・月末予測・急増を guards に載せる(読むだけ。トークンが無い・API が失敗しても警告のみで続行し、前の段が失敗した夜も動く。手順は [usage-guard.md](usage-guard.md))
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
@@ -30,7 +31,7 @@
   - **戻し方**: 打ち切った host は台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_unresolved' AND key='<key>'`（全件なら key 条件を外す）に戻せば、次の夜に再判定される。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
-- 本番 D1 に触れるコードは prod 段の 1 か所だけで、`--apply-prod` が無ければ `wrangler` は一切呼ばれない（テストで固定）。`--dry-run` と `--apply-prod` は併用できない。
+- 本番 D1 に触れるのは prod 段と、明示的に有効にした media 段。`--apply-prod` が無ければ `wrangler` は呼ばない。`--dry-run` と `--apply-prod` は併用できない。
 - 「出荷済み」は `var/nightly/shipped.txt`（本番反映に成功した key のうち、**`export_approved_sql.py` が実際に SQL へ出した key だけ**。カテゴリ無し・重複で外れた key は記録しない。`keys.txt` も同じ）。承認済みで未出荷のものを 1 夜 `--max-add` 件まで出す。本物の台帳は変えず、`export.sqlite`（台帳のコピー）で上限をかけて書き出す。
 
 ## コマンド
@@ -69,6 +70,25 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 ```
 
 手動の確認は `ssh kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd --dry-run"'`（`--dry-run` はラッパーの先頭の `git reset` は走るが、何も書かず API も呼ばない）。
+
+## 新規掲載の画像取得
+
+- `--apply-prod --media-favicon-limit 25 --thumbnail-limit 25` で、新規掲載分のファビコンとサムネイルを取得・配信する。各上限は 1 サイクル 0〜100 件、0 は無効。上限は独立して設定できる。本番の D1 `mise` と R2 `mise-media` 専用。従来のローカル取得だけの `--favicon-limit` は別のオプションなので、自動配信時は省く。
+- Windows の rog では `--media-favicon-limit 25` でファビコンを取得・配信する。サムネイル撮影は、既存の隔離を実施できる Linux 上でのみ有効化する。必要な環境と自己検査は[サムネイルの手順書](../collection/thumbnails.md#使い方)を参照。
+- 対象は出荷 SQL の ID に一致し、D1 に実際に掲載され、該当の画像列が未設定のサイト。サムネイルは出荷時の台帳で `adult=yes` のサイトをキューに入れない。手動の除外も取得ツールが尊重する。取得と R2 の固定キーへの保存は既存のツールを使い、R2 に現在の画像を置いた印があるときだけ D1 を更新する。
+- 未処理分は実行機の `var/nightly/media.sqlite` に残る。次の本番反映モードのサイクルは、追加が 0 件でも、処理可能になった時刻が古い順に処理する。取得に失敗した分は台帳の期限まで待ち、保存済みサムネイルの R2 への転送は翌日から再試行できる。手動の除外は待ち行列から外す。掲載と画像の成功分はそのまま反映され、保存先や段自体の失敗は `guards` と `var/nightly/<date>/media.log` に残る。
+- 元の実行機で同じサイクルをやり直すには、元の `--date` と `--apply-prod --from-stage media` に画像上限オプションを付ける。成功済みの prod 段は飛ばし、画像だけを処理する。用意が間に合わなかったサイクルにも、保存済みの `keys.txt` と `export.sqlite` があれば同じ手順を使える。
+
+### Windows の掲載結果を Linux の撮影機へ渡す
+
+1. rog 上のサイクルの `status.json` を読み、`ok` と `prod_applied` が true、`prod` 段が `ok` であることを確認する。同じサイクルの `keys.txt` と `export.sqlite` を、撮影機の非公開作業ディレクトリへコピーする。出荷時の成人向け判定を使うため、別サイクルの台帳とは混ぜない。
+2. Linux の撮影機でサムネイル用の自己検査を通し、同じ本番 D1 と R2 にアクセスできる Wrangler を用意する。撮影機に永続の `var/nightly` を作る。以下では `var/nightly/2026-11-20-7` に上記2ファイルを置いた例。撮影機ではこのコマンドや他の撮影処理を同時に実行しない。
+
+   ```sh
+   uv run --with pillow python3 scripts/nightly_media.py --var var --out var/nightly/2026-11-20-7 --d1-name mise --enqueue --favicon-limit 0 --thumbnail-limit 25
+   ```
+
+3. 次回の出荷分も同じ撮影機のキューに投入する。新しい出荷分がなければ `--enqueue` を外して未処理分を進められる。掲載の `--from-stage media` による再開は、元のサイクルの状態が残っている実行機でだけ使う。
 
 ## cron の登録（kako-jun が行う）（Linux の例）
 
@@ -128,12 +148,13 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 | fetch が遅い | `--fetch-limit` を下げる。cron の間隔を空ける |
 | 追加が 0 件 | 承認ポリシーで保留が多い（朝の手順 4）。判定対象が尽きているなら `--discover-limit` を上げる |
 | favicon 段が guards に出る | Pillow が無い等。`uv run --with pillow` 起動か確認（[favicons.md](../collection/favicons.md)） |
-| ファビコンを D1 へ反映したい / 反映し忘れた | 夜間は SQL を作らない。R2 へ置いたうえで `sql --out var/favicons-all.sql`（`--since` なし、既定 r2-remote）。`IS NOT` 条件があるので何度適用しても安全（[手順](../collection/favicons.md#r2-への保存と配信)） |
+| media 段が guards に出る | `media.log` を読む。撮影環境の隔離要件と、実行機の Wrangler に R2/D1 の権限があるかを確認する |
+| ローカル取得だけで保存したファビコンを D1 へ反映したい | R2 へ置いたうえで `sql --out var/favicons-all.sql`（`--since` なし、既定 r2-remote）。`IS NOT` 条件があるので何度適用しても安全（[手順](../collection/favicons.md#r2-への保存と配信)） |
 
 ## 未対応（v1）
 
 - **Issue #124 の段 6（ローカル D1 で検証してから本番）は未対応**。現状の gate 段は生成 SQL を**空 DB（マイグレーションのみ）**に流す整合チェックで、本番の既存データでの検証ではない。`--current-db`（本番再現の sqlite）を渡せば、その上で SQL を流して判定する。cron の既定では未使用。
 - 葉（カテゴリ）の目標未達を優先した選抜（各葉 100 件の最低ライン）。今は key 順。
-- Wikidata からの発見（#128）。ファビコン取得（#125）は `favicon` 段（既定無効）まで実装済みで、R2 への配信は #125 の別 PR で実装（夜間の保存先はローカルのまま）。既存全サイトの一括取得は未対応。
+- 既存全サイトの一括画像取得は未対応。新規掲載分は [media 段](#新規掲載の画像取得)で取得できる。
 - 再巡回（[recrawl](../collection/recrawl.md)）の夜間組み込み。
 - 構想の全体は [ideas/llm-judging.md](../ideas/llm-judging.md) と Issue #124。

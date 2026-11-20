@@ -440,11 +440,13 @@ def _unmark(db, name, label):
     db.execute('DELETE FROM thumb_stored WHERE name=? AND store=?', (name, label))
 
 
-def due_sites(db, now, limit):
+def due_sites(db, now, limit, site_ids=None):
     """期限が来た(または未撮影の)サイト。除外は含めない。未撮影を先、次に期限の古い順。"""
+    scope, ids = favicon.site_filter(site_ids)
     return db.execute(
-        'SELECT * FROM thumbs WHERE exclude=0 AND (next_check_at IS NULL OR next_check_at <= ?) '
-        'ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?', (now_iso(now), max(0, limit))).fetchall()
+        'SELECT * FROM thumbs WHERE exclude=0 AND (next_check_at IS NULL OR next_check_at <= ?)'
+        f'{scope} ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?',
+        (now_iso(now), *ids, max(0, limit))).fetchall()
 
 
 def used_today(db, now):
@@ -631,12 +633,12 @@ def attempt(url, gate, capturer):
 
 # ---- 実行 ----
 
-def run(db, store, capturer, now=None, limit=50, per_day=DEFAULT_PER_DAY, concurrency=DEFAULT_CONCURRENCY, gate=None, log=print):
+def run(db, store, capturer, now=None, limit=50, per_day=DEFAULT_PER_DAY, concurrency=DEFAULT_CONCURRENCY, gate=None, log=print, site_ids=None):
     """期限が来たサイトを撮る。Ctrl-C などの中断では、起動したブラウザ・フィルタを NodeCapturer が確実に止める。"""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     gate = gate or Gate()
     budget = min(limit, remaining_today(db, now, per_day))
-    rows = due_sites(db, now, budget)
+    rows = due_sites(db, now, budget, site_ids)
     counts = {}
     if not rows:
         return counts
@@ -665,9 +667,11 @@ def run(db, store, capturer, now=None, limit=50, per_day=DEFAULT_PER_DAY, concur
     return counts
 
 
-def upload(db, store, store_dir, apply=False, log=print):
+def upload(db, store, store_dir, apply=False, log=print, site_ids=None, on_store_failure=None):
     """ローカルに撮ってある画像のうち、この保存先のキーに「現在の内容」を置いた印の無いものを置く(サイトには一切アクセスしない)。戻り: 件数。"""
-    rows = db.execute('SELECT site_id, thumb_hash FROM thumbs WHERE thumb_hash IS NOT NULL AND exclude=0 ORDER BY site_id').fetchall()
+    scope, ids = favicon.site_filter(site_ids)
+    rows = db.execute('SELECT site_id, thumb_hash FROM thumbs WHERE thumb_hash IS NOT NULL AND exclude=0'
+                      f'{scope} ORDER BY site_id', ids).fetchall()
     todo = []
     for r in rows:
         name = thumb_name(r['site_id']); f = Path(store_dir) / name
@@ -682,6 +686,8 @@ def upload(db, store, store_dir, apply=False, log=print):
             store.put(name, (Path(store_dir) / name).read_bytes())
         except OSError as e:
             log(f'{sid}\tstore_failed: {type(e).__name__}')
+            if on_store_failure:
+                on_store_failure(sid)
             continue
         _mark(db, name, store.label, content); db.commit(); n += 1
     return n
@@ -709,7 +715,7 @@ def _q(s):
     return 'NULL' if s is None else "'" + str(s).replace("'", "''") + "'"
 
 
-def sql_updates(db, since=None, store=None):
+def sql_updates(db, since=None, store=None, site_ids=None):
     """sites.thumb_path / thumb_lqip / thumb_captured_at へ入れる UPDATE。
     thumb_path はサイト固定(<sha256(site_id) 先頭32桁>.webp)で撮り直しでも変わらないので、**冪等判定は thumb_captured_at の変化**(同じ撮影時刻なら書かない)。
     store(ラベル名)を渡すと、その保存先のそのキーに現在の内容を置いた印のある画像だけを出す(D1 が指す画像が配信元に無い状態を作らない)。
@@ -718,13 +724,16 @@ def sql_updates(db, since=None, store=None):
     args = ()
     if since:
         q += ' AND captured_at >= ?'; args += (since,)
-    rows = db.execute(q + ' ORDER BY site_id', args).fetchall()
+    scope, ids = favicon.site_filter(site_ids)
+    rows = db.execute(q + scope + ' ORDER BY site_id', args + ids).fetchall()
     if store:
         rows = [r for r in rows if _marked(db, thumb_name(r['site_id']), store, r['thumb_hash'])]
+    only_missing = ' AND thumb_path IS NULL' if site_ids is not None else ''
     lines = [f"UPDATE sites SET thumb_path={_q(thumb_name(r['site_id']))}, thumb_lqip={_q(r['lqip'])}, thumb_captured_at={_q(r['captured_at'])} "
-             f"WHERE id={_q(r['site_id'])} AND thumb_captured_at IS NOT {_q(r['captured_at'])};" for r in rows]
-    for r in db.execute('SELECT site_id FROM thumbs WHERE exclude=1 ORDER BY site_id'):
-        lines.append(f"UPDATE sites SET thumb_path=NULL, thumb_lqip=NULL, thumb_captured_at=NULL WHERE id={_q(r['site_id'])} AND thumb_path IS NOT NULL;")
+             f"WHERE id={_q(r['site_id'])}{only_missing} AND thumb_captured_at IS NOT {_q(r['captured_at'])};" for r in rows]
+    if site_ids is None:  # 自動取得では既存画像の取り下げを実行しない
+        for r in db.execute('SELECT site_id FROM thumbs WHERE exclude=1 ORDER BY site_id'):
+            lines.append(f"UPDATE sites SET thumb_path=NULL, thumb_lqip=NULL, thumb_captured_at=NULL WHERE id={_q(r['site_id'])} AND thumb_path IS NOT NULL;")
     return '\n'.join(lines) + ('\n' if lines else '')
 
 
@@ -748,6 +757,7 @@ def main(argv=None):
     p.add_argument('--delete-uploaded', action='store_true', help='アップロード済みのサイトを除外したとき、R2 から消す delete のコマンド(dry-run)を案内する')
     p = sub.add_parser('run', help='期限が来たサイトを撮る(--apply が無ければ計画だけ。ネットワーク・書き込みなし)')
     p.add_argument('--limit', type=int, default=50); p.add_argument('--apply', action='store_true'); p.add_argument('--store-dir', default=str(DEFAULT_STORE))
+    p.add_argument('--only-sites', help='対象 ID を絞る [{id,url}] の JSON（台帳には先に import）')
     p.add_argument('--per-day', type=int, default=DEFAULT_PER_DAY, help=f'1 日(UTC)の試行数の上限(既定 {DEFAULT_PER_DAY})')
     p.add_argument('--concurrency', type=int, default=DEFAULT_CONCURRENCY, help=f'同時に撮る数(既定 {DEFAULT_CONCURRENCY}。同じホストは常に直列)')
     p.add_argument('--allow-unpinned-upstream', action='store_true', help='上流プロキシが IP 宛て CONNECT を受け付けなくても、名前の CONNECT で撮る(名前解決が上流になる。記録に残る)')
@@ -804,8 +814,9 @@ def main(argv=None):
                             if ids_:
                                 print('  uv run --with pillow python3 scripts/thumbnail/thumbnail.py delete ' + ' '.join(f'--site {i}' for i in ids_) + flag_, file=sys.stderr)
     elif a.cmd == 'run':
+        site_ids = [sid for sid, _ in load_sites(a.only_sites)] if a.only_sites else None
         if not a.apply:
-            rows = due_sites(db, now, min(a.limit, remaining_today(db, now, a.per_day))) if db else []
+            rows = due_sites(db, now, min(a.limit, remaining_today(db, now, a.per_day)), site_ids) if db else []
             left = remaining_today(db, now, a.per_day) if db else a.per_day
             print(f'[dry-run] 撮影対象 {len(rows)} 件(--apply で実行。実サイトにアクセスする。保存先 {make_store(a).label}。今日の残り枠 {left}/{a.per_day}、同時 {a.concurrency})')
             for r in rows[:20]:
@@ -814,11 +825,13 @@ def main(argv=None):
         try:
             ph, _, pp = a.upstream_probe.rpartition(':')
             cap = NodeCapturer(sandbox=not a.no_bwrap, limits=not a.no_limits, allow_unpinned_connect=a.allow_unpinned_upstream, allow_plain_upstream=a.allow_plain_http_upstream, probe_target=(ph, int(pp)))
+            if a.only_sites and (not cap.playwright or not cap.chromium):
+                raise RuntimeError('サムネイル取得には Playwright と Chromium が必要')
             cap.check_ready(); cap.check_upstream()
         except RuntimeError as e:
             print(str(e), file=sys.stderr)
             return 3
-        print('done ' + str(run(db, make_store(a), cap, now, a.limit, a.per_day, a.concurrency)))
+        print('done ' + str(run(db, make_store(a), cap, now, a.limit, a.per_day, a.concurrency, site_ids=site_ids)))
     elif a.cmd == 'upload':
         if db is None:
             print('台帳がない'); return 0

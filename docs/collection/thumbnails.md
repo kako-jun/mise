@@ -6,7 +6,7 @@
 
 | 実装済み（#130 第1段） | 未実装（後続） |
 |---|---|
-| 量産ジョブ `scripts/thumbnail/`（台帳・キュー・1 日の上限・除外・保存先の抽象・`sql`・`upload`・`delete`）、検査付きフィルタリングプロキシ（`netfilter.py`）とサンドボックス（bwrap）での撮影、配信ルート `/thumb/<k>.webp`、API の `thumb_url` / `thumb_lqip`、migration 0028（**本番未適用**）、デプロイ前の適用確認（`scripts/check-migrations-applied.mjs`）、20 サイトの試行（ローカル保存のみ） | 全件の撮影、R2 本番への投入と D1 への反映（[deploy.md](../operations/deploy.md)）、更新検知・閲覧トリガの再撮影、成人向け属性による自動除外、取り下げ申請（#29）の画面・API からの `delete` 呼び出し、夜間ジョブ（`nightly.py`）への組み込み、カード側の見た目（#52・#160）、ファビコンの孤児掃除（#163） |
+| 量産ジョブ `scripts/thumbnail/`（台帳・キュー・1 日の上限・除外・`sql`・`upload`・`delete`）、検査付きフィルタリングプロキシ（`netfilter.py`）とサンドボックス（bwrap）での撮影、配信ルート `/thumb/<k>.webp`、API の `thumb_url` / `thumb_lqip`、migration 0028、デプロイ前の適用確認（`scripts/check-migrations-applied.mjs`）、[夜間ジョブでの新規掲載分の取得・配信](../operations/nightly.md#新規掲載の画像取得) | 全件の撮影、更新検知・閲覧トリガの再撮影、既掲載サイトの成人向け属性による自動除外、取り下げ申請（#29）の画面・API からの `delete` 呼び出し、カード側の見た目（#52・#160）、ファビコンの孤児掃除（#163） |
 
 ## 設計（決定）
 
@@ -18,7 +18,7 @@
 - **D1 に持つのは表示に要るものだけ**（[migration 0028](../design/data-model.md)）: `sites.thumb_path` = `<k>.webp`（サイト固定。撮り直しで値は変わらない）、`thumb_lqip`、`thumb_captured_at`（撮影時刻。**表示のバージョン**）。**撮影の状態（成否・失敗の回数・期限・obscured・除外）は手元の台帳 `var/thumbnails.sqlite` に持つ**（ファビコンと同じ。D1 の書き込み行数を使わない）。例: `thumb_path='2ba21f054c932a5e914061b3d78fd45a.webp'`、`thumb_captured_at='2026-11-19T06:49:13Z'`。
 - **配信**: Worker の `/thumb/<k>.webp?v=<v>`（`src/media.js`）。API の site 項目 `thumb_url` は `/thumb/<k>.webp?v=<撮影時刻のエポック秒の 36 進>`（例: `/thumb/2ba21f054c932a5e914061b3d78fd45a.webp?v=toqlm1`。撮影時刻が読めなければ `?v` なし）。`thumb_path`・`thumb_captured_at` 自体は API に出さない。`<k>` は 32 桁 16 進だけ許可（それ以外は R2 を見ずに 404）、**Worker は query を無視して R2 を引く**。応答は `v` が正しい形（英数字 12 文字まで）なら `Cache-Control: public, max-age=31536000, immutable`（URL ごとに不変の扱い。撮り直すと `?v` が変わり、ブラウザは新しい画像を取る）、`v` 無し・不正な `v` でも 404 にならず 200 で、短いキャッシュ（`max-age=3600`）。`ETag`/304 は R2 のものを維持。無ければ 404 `no-store`。共有キャッシュ（`caches.default`。`src/usage.js` の `isCacheable`）には入れない（query の有無にかかわらず `/thumb/` を除外）。縦フィードの `thumbOf` は `?v=` 付きの同一オリジンの絶対パスを通す（`tests/feed-view.test.mjs`）。
 - **取り下げ（#29）・除外**: **アップロード済みのサイトの除外には `delete` が必須**（除外しても R2 の `/thumb/<k>.webp` は公開で取れたまま残る。`import --exclude` が R2 に置いた印のあるサイトを見つけたら警告し、`--delete-uploaded` で delete の dry-run のコマンドを案内する）。**手順はこの順**: ① `import --exclude` → ② `sql`（D1 の thumb 列を NULL にする）を適用 → ③ `thumbnail.py delete --site <id> --apply --d1-done`（R2 から消す。D1 が先、R2 が後。`--d1-done` は ② を済ませた確認で、無いと `--apply` は R2 に触れず止まる）。`delete` は既定 dry-run で、**本番 R2 へは `--r2-remote` を明示したときだけ**。キーがサイト ID から決まるので 1 本だけ消し、台帳ではそのサイトを除外にして `thumb_hash`・`lqip` を空にする。除外サイトには `sql` が `UPDATE sites SET thumb_path=NULL, thumb_lqip=NULL, thumb_captured_at=NULL WHERE id=… AND thumb_path IS NOT NULL` を出す（**除外が成人向けの唯一のフィルタ**なので、撮影後に除外したサイトの表示も D1 から消える。何度流しても安全）。順序は D1（NULL 化）→ R2 削除（逆だと一覧が一瞬 404 になる）。取り下げ申請の画面・API からの呼び出しは別 Issue（#29）。
-- **成人向け**: `sites` に成人向けの属性が**まだ無い**ため、自動では除外できない。台帳の `exclude` フラグ（`import --exclude`）で**手動で**除外する。除外は撮らず、`sql` は thumb 列を NULL にする。**撮った画像の内容を自分で性的・不適切と判定しない**（除外は属性・手動指定だけ）。属性ができたら撮影前の除外をここに足す。
+- **成人向け**: 夜間ジョブは出荷時の判定台帳で `adult=yes` のサイトを撮影キューから除外する。`sites` に成人向けの属性は無いため、それ以外は台帳の `exclude` フラグ（`import --exclude`）で手動で除外する。除外は撮らず、手動の `sql` は thumb 列を NULL にする。除外は台帳の属性・手動指定に基づく。
 
 ## 使い方
 
