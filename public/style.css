@@ -83,6 +83,8 @@ body { touch-action: pan-y; }
 .site-head { display: flex; align-items: flex-start; gap: 6px; line-height: 1.46; }
 .site-bullet { flex: 0 0 5px; height: 1.46em; margin-right: 4px; display: flex; align-items: center; }
 .site-bullet::before { content: ''; width: 5px; height: 5px; background: currentColor; }
+/* Windows ハイコントラスト（forced-colors）では background が上書きされて中点・フォルダが消えるので、文字色（CanvasText）を明示して残す */
+@media (forced-colors: active) { .site-icon.cat-icon, .site-bullet::before { background: CanvasText; forced-color-adjust: none; } }
 .site-title { min-width: 0; }
 #pick-list .site-bullet { display: none; }
 .site-categories { font-size: 11px; }

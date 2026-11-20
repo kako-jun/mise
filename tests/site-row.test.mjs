@@ -122,7 +122,10 @@ test('カテゴリ見出し行: 中点とフォルダ絵（mask・currentColor�
   assert.match(app, /bl\.className='site-bullet'; bl\.setAttribute\('aria-hidden','true'\)/);
   assert.match(app, /ci\.className='site-icon cat-icon'; ci\.setAttribute\('aria-hidden','true'\)/);
   assert.match(app, /hd\.append\(bl,ci,h\)/);
-  assert.match(css, /\.cat-icon \{[^}]*background: currentColor;[^}]*mask: url\("data:image\/svg\+xml/);
+  assert.match(css, /\.site-icon\.cat-icon \{[^}]*background: currentColor;/);
+  assert.match(css, /\.site-icon\.cat-icon \{[^}]*-webkit-mask: url\("data:image\/svg\+xml/);
+  assert.match(css, /\.site-icon\.cat-icon \{[^}]*(?<!-webkit-)mask: url\("data:image\/svg\+xml/); // 無印の mask も別に検査（-webkit- に当たらせない）
+  assert.match(css, /@media \(forced-colors: active\) \{[^}]*\.site-icon\.cat-icon[^}]*\.site-bullet::before[^}]*background: CanvasText;[^}]*forced-color-adjust: none;/);
   assert.doesNotMatch(css, /\.category::before/); // 旧い文字の中点は持たない
   assert.doesNotMatch(css, /\.category \{[^}]*padding-left/);
 });
