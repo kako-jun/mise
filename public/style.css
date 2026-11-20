@@ -353,3 +353,11 @@ html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); col
 /* リンク先のホスト名（#166）。サイト名の直後（同じ行）に小さく薄い灰色で。読み上げには出す（aria-hidden にしない）。 */
 .site-host { margin-left: 6px; font-size: 11px; color: #4f7480; overflow-wrap: anywhere; word-break: normal; }
 html[data-theme="dark"] .site-host { color: #8fb0ba; }
+
+/* 縦フィードへの入口 (#178)。検索欄の右に常時出す文字ラベルのリンク（絵文字・アイコンなし）。寸法は素のルート、テーマは色だけ。 */
+.feed-entry, .feed-entry:visited { display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-height: 34px; min-width: 44px; padding: 0 12px; border: 1px solid #94b5be; border-radius: 6px; background: transparent; color: #087b90; font: 12px/1 monospace; text-decoration: none; white-space: nowrap; }
+.feed-entry:hover { border-color: currentColor; }
+.feed-entry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited { border-color: #4e8e9b; color: #82ddea; }
+@media (pointer: coarse) { .feed-entry { min-height: 44px; font-size: 14px; } }
+@media (max-width: 700px) { .feed-entry { min-height: 44px; font-size: 14px; } }

@@ -6,6 +6,8 @@ import '../public/countries.js';
 import '../public/regions.js';
 // リンク先のホスト名の表示（ブラウザの app.js・feed.js と共有。読み込むと globalThis.MiseSiteHost が定義される）。
 import '../public/site-host.js';
+// 通常画面 → 縦フィードの入口リンクの href（ブラウザの app.js と共有。読み込むと globalThis.MiseFeedEntry が定義される）。
+import '../public/vertical-link.js';
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -214,6 +216,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('link[rel="canonical"]', { element: e => e.setAttribute('href', canonical) })
     .on('link[hreflang]', { element: e => e.setAttribute('href', canonical) })
     .on('#home-link', { element: e => e.setAttribute('href', categoryHref([], scope)) })
+    .on('#feed-entry', { element: e => e.setAttribute('href', globalThis.MiseFeedEntry.feedEntryHref(scope, path[0])) })
     .on('#scope-nav', { element: e => e.setInnerContent(scopeNavHtml(scopes, scope), { html: true }) })
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })
