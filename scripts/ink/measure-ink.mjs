@@ -194,7 +194,7 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
       if (process.env.INK_CSS) await page.addStyleTag({ content: process.env.INK_CSS }); // 試作用: 任意の CSS を足して測る
       if (setup) await setup(page);
       await page.waitForTimeout(500);
-      await page.evaluate(() => { document.fonts && document.fonts.ready; });
+      await page.evaluate(() => document.fonts.ready);
       const list = await page.evaluate(collectAll, sceneName);
       if (process.env.INK_DEBUG) console.error(sceneName, vp, theme, lang, list.length, 'targets');
       for (const d of list) {
