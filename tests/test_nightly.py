@@ -594,6 +594,70 @@ class Prod(Env):
         self.assertEqual(self.wrangler_calls(), [])
         self.assertTrue(any('前日比の異常' in g for g in self.status()['guards']))
 
+    def test_date_accepts_sequence_suffix_and_rejects_bad_forms(self):
+        for ok in ('2026-11-20', '2026-11-20-2', '2026-11-20-10'):
+            self.assertEqual(self.args(date=ok).date, ok)
+        for bad in ('2026-11-20-1', '2026-11-20-x', '2026-11-20-02', '2026-11-20-0', '2026-11-20-', '2026-11-2'):
+            with self.assertRaises(SystemExit, msg=bad), mock.patch('sys.stderr'):
+                self.args(date=bad)
+
+    def put_night(self, name, added, applied=False):
+        d = self.var / 'nightly' / name
+        d.mkdir(parents=True)
+        (d / 'status.json').write_text(json.dumps({'added': added, 'prod_applied': applied}))
+
+    def test_history_sums_applied_cycles_per_day_and_ignores_same_day(self):
+        nd = self.var / 'nightly'
+        for name, n, ap in [('2026-11-10', 10, True), ('2026-11-11', 20, True), ('2026-11-11-2', 30, True), ('2026-11-11-10', 40, True),
+                            ('2026-11-12', 5, True), ('2026-11-12-2', 99, True)]:
+            self.put_night(name, n, ap)
+        (nd / 'junk').mkdir()
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-12-2'), [90, 10])
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-13'), [104, 90, 10])
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-13', n=2), [104, 90])
+        self.assertEqual(nightly.history_added(str(nd / 'none'), '2026-11-13'), [])
+
+    def test_history_does_not_double_count_unapplied_cycles(self):
+        nd = self.var / 'nightly'
+        self.put_night('2026-11-10', 50)          # 未反映 2 回 = 同じ候補の再生成 -> 最大値
+        self.put_night('2026-11-10-2', 60)
+        self.put_night('2026-11-11', 10, True)    # 反映済みがあればそれだけ(未反映は足さない)
+        self.put_night('2026-11-11-2', 70)
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-12'), [10, 60])
+
+    def test_anomaly_factor_option(self):
+        self.assertEqual(self.args().anomaly_factor, 5)
+        self.assertEqual(self.args('--anomaly-factor', '20').anomaly_factor, 20)
+        for bad in ('0', '-1'):
+            with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+                self.args('--anomaly-factor', bad)
+        self.assertTrue(nightly.is_anomalous(60, [10, 10, 10]))
+        self.assertFalse(nightly.is_anomalous(60, [10, 10, 10], 10))
+        self.assertIn('異常ガードの倍率: 20', nightly.plan(self.args('--anomaly-factor', '20')))
+
+    def test_second_cycle_runs_every_stage_in_own_dir(self):
+        self.seed()
+        self.assertEqual(self.run_night(date='2026-11-18'), 0)
+        self.assertEqual(self.run_night(date='2026-11-18-2'), 0)
+        st = self.status('2026-11-18-2')
+        self.assertEqual(st['date'], '2026-11-18-2')
+        self.assertEqual([s['name'] for s in st['stages']], nightly.STAGE_NAMES)
+        skipped_ok = {'prod', 'favicon'}
+        for s in st['stages']:
+            self.assertEqual(s['status'], 'skipped' if s['name'] in skipped_ok else 'ok', s['name'])
+        self.assertTrue((self.var / 'nightly' / '2026-11-18-2' / 'approved-sites.sql').exists())
+
+    def test_anomaly_guard_with_suffixed_history_blocks(self):
+        self.seed()
+        for name in ('2026-11-14', '2026-11-15', '2026-11-16', '2026-11-17'):
+            self.put_night(name, 10, True)
+            self.put_night(name + '-2', 10, True)   # 日合計 20 / 日
+        self.put_night('2026-11-18', 5, True)       # 同日の他サイクルは基準に入らない
+        self.exported = 120                         # > 5 * 20
+        self.assertEqual(self.run_night('--apply-prod', date='2026-11-18-2'), 0)
+        self.assertEqual(self.wrangler_calls(), [])
+        self.assertTrue(any('前日比の異常' in g for g in self.status('2026-11-18-2')['guards']))
+
 
 if __name__ == '__main__':
     unittest.main()

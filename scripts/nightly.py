@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """夜間ジョブ（Issue #124）。発見 -> 取得 -> LLM 判定 -> 自動承認 -> 投入 SQL -> 整合チェック -> (任意で)本番反映。
 
-  uv run python3 scripts/nightly.py [--date YYYY-MM-DD] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
+  uv run python3 scripts/nightly.py [--date YYYY-MM-DD[-N]] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
 
 運用の正本は docs/operations/nightly.md。
 - 本番 D1 に触れるのは --apply-prod のときだけ（wrangler の呼び出しは prod 段の 1 か所に閉じている）。既定は SQL と報告を作るだけ。
@@ -33,8 +33,8 @@ import usage_guard  # noqa: E402
 SCHEMA = 1
 PY = sys.executable
 EST_USD_PER_CANDIDATE = 0.01      # --dry-run だけの粗い概算（実行時は pipeline.py --dry-run のオフライン見積りを使う）
-ANOMALY_FACTOR = 5                # 追加数が直近 7 夜の平均のこの倍を超えたら本番反映を止める
-ANOMALY_MIN_NIGHTS = 3            # 履歴がこれ未満の夜は比較しない
+ANOMALY_FACTOR = 5                # 1 サイクルの追加数が直近 7 日(日ごとの本番反映済み追加数の合計)の平均のこの倍を超えたら本番反映を止める(--anomaly-factor で上書き)
+ANOMALY_MIN_DAYS = 3              # 履歴がこの日数未満なら比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
 STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "usage"]
@@ -117,26 +117,50 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
+NIGHT_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:-(\d+))?")
+
+
+def parse_night(name):
+    """夜の名前 YYYY-MM-DD / YYYY-MM-DD-N(N>=2) -> (日付, 枝番)。枝なしは枝番 1。形式外は None。"""
+    m = NIGHT_RE.fullmatch(name or "")
+    if not m:
+        return None
+    seq = int(m.group(2)) if m.group(2) else 1
+    if m.group(2) and (seq < 2 or m.group(2) != str(seq)):   # -1 / -01 / -0 は不可(枝なしが 1 回目)
+        return None
+    return m.group(1), seq
+
+
 def history_added(nightly_dir, date, n=7):
-    """date より前の夜の追加数（新しい順に最大 n 夜）。"""
-    rows = []
+    """date の日より前の「日ごとの追加数」を新しい日から最大 n 日分返す。
+    日の追加数 = その日の prod_applied が true のサイクルの added の合計。本番反映済みのサイクルが無い日は、
+    全サイクルの added の最大値(未反映のサイクルを再実行しても同じ候補を二重に数えない)。
+    同日の複数サイクルが直近 7 夜を埋めて平均を歪めないよう日単位に束ねる。date と同じ日の他サイクルは含めない。
+    日の中の並びは結果に効かない(合計と最大値は順序非依存)ので、枝番のソートは持たない。"""
     try:
-        names = sorted(d for d in os.listdir(nightly_dir) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) and d < date)
+        names = [d for d in os.listdir(nightly_dir) if parse_night(d)]
     except OSError:
         return []
-    for d in reversed(names):
+    cur = parse_night(date)
+    days = {}
+    for d in names:
+        day = parse_night(d)[0]
+        if cur and day >= cur[0]:
+            continue
         st = read_json(os.path.join(nightly_dir, d, "status.json"))
         if isinstance(st, dict) and isinstance(st.get("added"), int):
-            rows.append(st["added"])
-        if len(rows) >= n:
-            break
-    return rows
+            days.setdefault(day, []).append((st["added"], st.get("prod_applied") is True))
+    out = []
+    for day in sorted(days, reverse=True)[:n]:
+        applied = [x for x, ok in days[day] if ok]
+        out.append(sum(applied) if applied else max(x for x, _ in days[day]))
+    return out
 
 
-def is_anomalous(added, past):
-    if len(past) < ANOMALY_MIN_NIGHTS or added < ANOMALY_MIN_ADDED:
+def is_anomalous(added, past, factor=ANOMALY_FACTOR):
+    if len(past) < ANOMALY_MIN_DAYS or added < ANOMALY_MIN_ADDED:
         return False
-    return added > ANOMALY_FACTOR * (sum(past) / len(past))
+    return added > factor * (sum(past) / len(past))
 
 
 # ------------------------------------------------------------------ 実行本体
@@ -421,8 +445,8 @@ class Night:
         if self.status["prod_applied"]:
             raise StageFailed("prod: この夜(--date)は本番へ投入済み。同じ --date での再投入は拒否する(bookmark は保持)。"
                               "整合 error 後の対処は docs/operations/nightly.md の「ロールバック」を見る")
-        if is_anomalous(self.status["added"], history_added(self.nightly, self.date)):
-            self.status["guards"].append(f"前日比の異常: 追加 {self.status['added']} 件が直近平均の {ANOMALY_FACTOR} 倍超。本番反映を止めた")
+        if is_anomalous(self.status["added"], history_added(self.nightly, self.date), self.a.anomaly_factor):
+            self.status["guards"].append(f"前日比の異常: 追加 {self.status['added']} 件が直近平均の {self.a.anomaly_factor:g} 倍超。本番反映を止めた")
             return {"status": "skipped", "note": "異常ガード(人の確認待ち)"}
         # 投入前に本番の整合を読み取りだけで確認する。前の夜の error が残っているなら重ねて投入しない
         rc, out = run_cmd([PY, os.path.join(ROOT, "scripts/check-data-integrity.py"), "--remote", "--db", a.d1_name])
@@ -640,13 +664,13 @@ def plan(a):
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
-          f"1 夜の追加上限: {a.max_add if a.max_add else 'なし'}", "ANTHROPIC_API_KEY: " + ("設定あり" if os.environ.get("ANTHROPIC_API_KEY") else "未設定(LLM 段で失敗する)")]
+          f"1 夜の追加上限: {a.max_add if a.max_add else 'なし'}", f"前日比の異常ガードの倍率: {a.anomaly_factor:g}", "ANTHROPIC_API_KEY: " + ("設定あり" if os.environ.get("ANTHROPIC_API_KEY") else "未設定(LLM 段で失敗する)")]
     return "\n".join(L)
 
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前(既定: UTC の今日)。再開は同じ日付で")
+    ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前 YYYY-MM-DD か YYYY-MM-DD-N(N>=2、同日の追加サイクル)。既定: UTC の今日。再開は同じ名前で")
     ap.add_argument("--max-add", type=int, default=0, help="1 夜に出荷する追加サイト数の上限(0=上限なし。既定)")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
@@ -660,6 +684,7 @@ def parse_args(argv=None):
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
     ap.add_argument("--judge-mode", choices=["batch", "sync"], default="batch")
     ap.add_argument("--budget-month", type=float, default=100.0, help="月(UTC)の LLM 予算 USD")
+    ap.add_argument("--anomaly-factor", type=float, default=ANOMALY_FACTOR, help="前日比の異常ガードの倍率(既定 5。1 サイクルの追加数が直近 7 日の日平均のこの倍を超えたら本番反映を止める)。意図的な増量運転用")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--apply-prod", action="store_true", help="本番 D1 へ反映する(これが無ければ wrangler を一切呼ばない)")
     ap.add_argument("--db", default=os.path.join(ROOT, "var", "frontier.sqlite"))
@@ -667,8 +692,10 @@ def parse_args(argv=None):
     ap.add_argument("--ledger", default=judge.DEFAULT_LEDGER)
     ap.add_argument("--d1-name", default="mise")
     a = ap.parse_args(argv)
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
-        ap.error("--date は YYYY-MM-DD")
+    if not parse_night(a.date):
+        ap.error("--date は YYYY-MM-DD か YYYY-MM-DD-N(N は 2 以上。同日の 2 回目以降のサイクル)")
+    if not a.anomaly_factor > 0:
+        ap.error("--anomaly-factor は正の数")
     if a.wikidata_leaves < 0:
         ap.error("--wikidata-leaves は 0 以上")
     if a.favicon_limit < 0:

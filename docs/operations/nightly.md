@@ -1,6 +1,6 @@
 # 夜間ジョブ（運用の正本）
 
-発見から掲載候補の SQL 作りまでを毎夜自動で回す仕組み（Issue #124）。実装は `scripts/nightly.py`、状態と成果物は `var/nightly/YYYY-MM-DD/`。`mise-ops` スキルはこの文書の手順をそのまま使う。
+発見から掲載候補の SQL 作りまでを毎夜自動で回す仕組み（Issue #124）。実装は `scripts/nightly.py`、状態と成果物は `var/nightly/<date>/`。`mise-ops` スキルはこの文書の手順をそのまま使う。
 
 方針（決定の全文は Issue #124）: 夜間ジョブは**決定論のスクリプト + cron**。LLM は判定の 1 工程（`scripts/llm/pipeline.py`、Anthropic API のバッチ）だけで、Claude Code の対話トークンは使わない。月の LLM 予算は $100。段階化は 1,000 → 1 万 → 10 万。**最初は本番に触れない運用で数夜回し、人が確認してから `--apply-prod` に切り替える。**
 
@@ -23,7 +23,7 @@
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
-- 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は UTC の日付。
+- 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は夜の名前（UTC の日付 `YYYY-MM-DD`。同日の 2 回目以降のサイクルは `YYYY-MM-DD-N`、N は 2 以上）。
 - **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
@@ -38,9 +38,18 @@ uv run python3 scripts/nightly.py --dry-run                 # 計画と見積り
 uv run python3 scripts/nightly.py                           # SQL と報告を作る(本番には触れない)
 uv run python3 scripts/nightly.py --apply-prod              # 本番反映まで
 uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の再開
+uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回目のサイクル（新しい夜として別フォルダ）
 ```
 
-主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
+### `--date` の形式と同日の複数サイクル
+
+- `--date` は `YYYY-MM-DD`（既定は UTC の今日）か `YYYY-MM-DD-N`（N は 2 以上の整数、先頭ゼロ不可）。`2026-11-20-1` は不可。名前はそのまま `var/nightly/<date>/` になる。
+- **枝なしの名前（`YYYY-MM-DD`）は cron 専用。手動の追加サイクルは必ず `-2` 以上を使う（`-2`, `-3`, …）。** 手動で枝なしを使うと、同じ名前の cron の夜が「成功済み」と見なされて黙って何もしなくなる（`prod_applied` 済みなら再投入も拒否される）。
+- 例: `uv run python3 scripts/nightly.py --date 2026-11-20-2`。別の夜として別フォルダに記録される。同じ名前での再実行の意味（成功済み段のスキップ、`prod_applied` 済みの再投入拒否）は従来どおり名前ごとに効く。
+- **前日比の異常ガードは「1 サイクルの追加数」を「直近 7 日の日平均」と比べる**。日の追加数は、その日の `prod_applied` が true のサイクルの `added` の合計（反映済みが無い日は全サイクルの最大値＝未反映の再生成を二重に数えない）。今夜と同じ日の他サイクルは基準に含めない。
+- **日の累計は抑えない**。サイクルを重ねれば 1 日の合計は平均の何倍にもなりうる。累計を見るのは人（`status.json` / `report.md`）。意図的な増量運転では `--anomaly-factor N`（既定 5、正の数。`--dry-run` にも出る）で倍率を上げる。
+
+主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--anomaly-factor 5`（前日比の異常ガードの倍率）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
 ## 実行機 kako-rog（Windows）と pi-3b の cron
 
@@ -74,7 +83,7 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 
 ## 朝の確認手順
 
-1. `cat var/nightly/$(date -u +%F)/report.md`。先頭の「結果」が成功か、「費用」が想定内かを見る。
+1. `cat var/nightly/$(date -u +%F)*/report.md`（今日の全サイクル。枝番の夜 `-2` 以降も含む）。先頭の「結果」が成功か、「費用」が想定内かを見る。
 2. `status.json` を見る。`ok` が false なら `stages` の `status: failed` の段と `note` を読む。`guards` に何か出ていれば理由を読む。`next_action` に次の一手が出る。
 3. `added`（追加数）が直近の夜と桁違いでないか（`guards` の「前日比の異常」が出ていれば本番反映は止まっている）。
 4. 保留のサンプル確認: `uv run python3 scripts/llm/review_state.py list --state pending --limit 20`。保留の理由が妥当か、本来通すべきものが落ちていないかを見る。
