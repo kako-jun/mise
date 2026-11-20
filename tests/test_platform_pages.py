@@ -81,9 +81,12 @@ class PlatformPage(unittest.TestCase):
         self.assertIsNone(hostnames.platform_page('https://日本.instagram.com/x'))
         self.assertEqual(hostnames.prefilter('日本.instagram.com', jp_only=False), 'invalid_host')
 
-    def test_more_language_paths(self):
-        for lp in ('pt', 'it', 'ko-kr', 'zh-hans', 'zh-hant', 'pt-br', 'es-es', 'fr-fr', 'de-de', 'it-it', 'pt-pt'):
+    def test_every_top_path_in_file_passes(self):   # 言語パスの正本は [top_path] 1 か所。テストは表を読んで全項目を回す(手で二重管理しない)
+        tops = hostnames.blocklist('platform_pages.txt')['top_path']
+        self.assertTrue({'ja', 'jp', 'en', 'ja-jp'} <= set(tops))   # 日本語サイトの最低限(これが消えたら落ちる)
+        for lp in tops:
             self.assertIsNone(hostnames.platform_page(f'https://www.instagram.com/{lp}/'), lp)
+            self.assertEqual(hostnames.platform_page(f'https://www.instagram.com/{lp}/shop'), P, lp)
 
     def test_ne_jp_and_hosting_not_listed(self):
         hosts = set(hostnames.blocklist('platform_pages.txt')['host'])
