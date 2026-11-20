@@ -1,6 +1,6 @@
 # 夜間ジョブ（運用の正本）
 
-発見から掲載候補の SQL 作りまでを毎夜自動で回す仕組み（Issue #124）。実装は `scripts/nightly.py`、状態と成果物は `var/nightly/YYYY-MM-DD/`。`mise-ops` スキルはこの文書の手順をそのまま使う。
+発見から掲載候補の SQL 作りまでを毎夜自動で回す仕組み（Issue #124）。実装は `scripts/nightly.py`、状態と成果物は `var/nightly/<date>/`。`mise-ops` スキルはこの文書の手順をそのまま使う。
 
 方針（決定の全文は Issue #124）: 夜間ジョブは**決定論のスクリプト + cron**。LLM は判定の 1 工程（`scripts/llm/pipeline.py`、Anthropic API のバッチ）だけで、Claude Code の対話トークンは使わない。月の LLM 予算は $100。段階化は 1,000 → 1 万 → 10 万。**最初は本番に触れない運用で数夜回し、人が確認してから `--apply-prod` に切り替える。**
 
@@ -43,12 +43,13 @@ uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回
 
 ### `--date` の形式と同日の複数サイクル
 
-- `--date` は `YYYY-MM-DD`（既定は UTC の今日）か `YYYY-MM-DD-N`（N は 2 以上の整数、先頭ゼロ不可）。`2026-11-20-1` は不可（枝なしの `2026-11-20` が 1 回目）。名前はそのまま `var/nightly/<date>/` になる。
-- 同日に続けて回したいときは `2026-11-20`（1 回目）→ `2026-11-20-2` → `2026-11-20-3` と枝番を上げる。別の夜として扱うので、成功済み段のスキップと `prod_applied` 済みの再投入拒否は夜の名前ごとに効く（同じ名前での再実行の意味は従来どおり）。
-- 並び順は日付 → 枝番の数値順（枝なしが最初。`-10` は `-2` の後）。
-- **前日比の異常ガードは日単位で集計する**: 比較の基準は「今夜より前の日」について、その日のすべてのサイクルの追加数を合計した値の直近 7 日の平均。同日の複数サイクルが直近 7 夜を埋めて平均を歪めないため。今夜と同じ日の他のサイクルは基準に含めない。
+- `--date` は `YYYY-MM-DD`（既定は UTC の今日）か `YYYY-MM-DD-N`（N は 2 以上の整数、先頭ゼロ不可）。`2026-11-20-1` は不可。名前はそのまま `var/nightly/<date>/` になる。
+- **枝なしの名前（`YYYY-MM-DD`）は cron 専用。手動の追加サイクルは必ず `-2` 以上を使う（`-2`, `-3`, …）。** 手動で枝なしを使うと、同じ名前の cron の夜が「成功済み」と見なされて黙って何もしなくなる（`prod_applied` 済みなら再投入も拒否される）。
+- 例: `uv run python3 scripts/nightly.py --date 2026-11-20-2`。別の夜として別フォルダに記録される。同じ名前での再実行の意味（成功済み段のスキップ、`prod_applied` 済みの再投入拒否）は従来どおり名前ごとに効く。
+- **前日比の異常ガードは「1 サイクルの追加数」を「直近 7 日の日平均」と比べる**。日の追加数は、その日の `prod_applied` が true のサイクルの `added` の合計（反映済みが無い日は全サイクルの最大値＝未反映の再生成を二重に数えない）。今夜と同じ日の他サイクルは基準に含めない。
+- **日の累計は抑えない**。サイクルを重ねれば 1 日の合計は平均の何倍にもなりうる。累計を見るのは人（`status.json` / `report.md`）。意図的な増量運転では `--anomaly-factor N`（既定 5、正の数。`--dry-run` にも出る）で倍率を上げる。
 
-主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
+主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--anomaly-factor 5`（前日比の異常ガードの倍率）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
 ## 実行機 kako-rog（Windows）と pi-3b の cron
 
@@ -82,7 +83,7 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 
 ## 朝の確認手順
 
-1. `cat var/nightly/$(date -u +%F)/report.md`。先頭の「結果」が成功か、「費用」が想定内かを見る。
+1. `cat var/nightly/$(date -u +%F)*/report.md`（今日の全サイクル。枝番の夜 `-2` 以降も含む）。先頭の「結果」が成功か、「費用」が想定内かを見る。
 2. `status.json` を見る。`ok` が false なら `stages` の `status: failed` の段と `note` を読む。`guards` に何か出ていれば理由を読む。`next_action` に次の一手が出る。
 3. `added`（追加数）が直近の夜と桁違いでないか（`guards` の「前日比の異常」が出ていれば本番反映は止まっている）。
 4. 保留のサンプル確認: `uv run python3 scripts/llm/review_state.py list --state pending --limit 20`。保留の理由が妥当か、本来通すべきものが落ちていないかを見る。
