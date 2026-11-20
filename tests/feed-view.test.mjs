@@ -221,3 +221,16 @@ test('feed.css: パンは prefers-reduced-motion: no-preference の中だけ。�
   assert.ok(kf, 'keyframes がある');
   assert.ok(!/transform/.test(kf[1]) && /translate/.test(kf[1]), 'keyframes 全体が translate だけ(transform を重ねない)');
 });
+
+test('feed.js: 寸法が変わったら、表示中でないカードの data-pan と --pan-w/--pan-px を消してから表示中のカードだけ測り直す', () => {
+  const ro = appJs.match(/new ResizeObserver\(\(\) => \{([^}]*)\}\)\.observe\(scroller\)/);
+  assert.ok(ro, 'scroller の ResizeObserver がある');
+  assert.match(ro[1], /clearIdlePan\(\);\s*panFit\(activeHeroes\(\)\)/, '解除→表示中だけ再計算の順');
+  const fn = appJs.match(/function clearIdlePan\(\) \{([^\n]*)\}\n/);
+  assert.ok(fn, 'clearIdlePan がある');
+  assert.match(fn[1], /\.f-card:not\(\.is-active\) \.f-hero/);
+  assert.match(fn[1], /delete el\.dataset\.pan/);
+  assert.match(fn[1], /removeProperty\('--pan-w'\)/);
+  assert.match(fn[1], /removeProperty\('--pan-px'\)/);
+  assert.ok(!/clientWidth|clientHeight|getBoundingClientRect|offsetWidth|offsetHeight/.test(fn[1]), '読まない(強制レイアウトを起こさない)');
+});
