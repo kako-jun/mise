@@ -67,7 +67,7 @@ uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --dry-run 
 uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --apply     # pending の行だけ review_state を更新
 ```
 
-- **approve**: `spam_verdict=pass` かつ `confidence=high` かつ日英の紹介文あり かつ有効なカテゴリあり かつ公的機関らしくない（名前の語彙: 市立・県立・広域連合・消防・役場・市役所・自治体・教育委員会 等と、`.lg.jp` / `.go.jp` 等のホスト。定数は `PUBLIC_WORDS` / `PUBLIC_HOST_SUFFIXES`）かつ（`site_kind` が business / organization / company と確定している、または `freshness=active` で決定論の日付と矛盾しない）。`individual` と `unknown`（NULL 含む）は個人の可能性があるので freshness が active でなければ承認しない。`review_reason=auto_approved`。
+- **approve**: `spam_verdict=pass` かつ `confidence` が high または medium（定数 `APPROVE_CONFIDENCES`。low は保留）かつ日英の紹介文あり かつ有効なカテゴリあり かつ公的機関らしくない（名前の語彙: 市立・県立・広域連合・消防・役場・市役所・自治体・教育委員会 等と、`.lg.jp` / `.go.jp` 等のホスト。定数は `PUBLIC_WORDS` / `PUBLIC_HOST_SUFFIXES`）かつ（`site_kind` が business / organization / company と確定している、または `freshness=active` で決定論の日付と矛盾しない）。`individual` と `unknown`（NULL 含む）は個人の可能性があるので freshness が active でなければ承認しない。`review_reason=auto_approved`。
 - **reject_stale**: `site_kind=individual` かつ `freshness=stale` かつ `exempt=none` かつ pass + high かつ、決定論の日付（`freshness_signal_at`）が存在し 3 年以上前で、出所が © 年だけ（`footer_copyright`）ではないときだけ。`unknown` や日付なしは更新停止の証拠ではないので hold。`review_state=rejected`、`review_reason=stale_individual`。`review_state.py pending HOST` で戻せる。
 - **hold**（人が見る）: suspect・medium・low、個人（または不明）で stale/unknown かつ exempt が rare_genre / notable、stale/unknown だが決定論の日付が無い・© 年だけのもの、#129 より前の判定（個人で freshness が NULL）、LLM の `freshness` と決定論の `freshness_signal_at` が食い違うもの、公的機関らしいもの。
 - 「3 年」は `approve_policy.STALE_YEARS` の 1 箇所。ちょうど 3 年前の日付は stale（以上）。人が approved / rejected にした行と、`pending` 以外の行には触らない。`review_state.py` で人が状態を変えると `review_reason` は消える。

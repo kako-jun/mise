@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Auto-approval policy for LLM judgements in the frontier ledger. Issue #129 (decisions: docs/decisions.md 2026-11-18).
+"""Auto-approval policy for LLM judgements in the frontier ledger. Issue #129 (decisions: docs/decisions.md 2026-11-18, 2026-11-20).
 
   uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --dry-run     # counts only
   uv run python3 scripts/llm/approve_policy.py --db var/frontier.sqlite --apply       # update review_state
 
 decide(row) -> "approve" | "hold" | "reject_stale"  (explain(row) also returns the reason).
 
-- approve: spam_verdict pass, confidence high, both descriptions, a valid category, not public-body-like, and
+- approve: spam_verdict pass, confidence high or medium (APPROVE_CONFIDENCES; low is held), both descriptions, a valid category, not public-body-like, and
   (site_kind is business / organization / company, or freshness is active and no deterministic signal contradicts it).
   site_kind individual / unknown / NULL count as a possible individual site: freshness must be active.
-- reject_stale: site_kind individual, freshness stale, exempt none, confidence high, AND a deterministic date
+- reject_stale: site_kind individual, freshness stale, exempt none, confidence high (medium is never auto-rejected: a human looks), AND a deterministic date
   (freshness_signal_at) exists, is STALE_YEARS or more old, and is not only a copyright year (freshness_source
   footer_copyright is weak). "unknown" and a missing date are doubts, not evidence of a stop: hold.
   review_state=rejected, review_reason=stale_individual. Reversible: review_state.py pending HOST.
-- hold: everything else (a human looks): suspect / medium / low, rare_genre / notable exemptions, public-body-like names,
+- hold: everything else (a human looks): suspect / low confidence, rare_genre / notable exemptions, public-body-like names,
   a judgement made before #129 (freshness NULL) of a possible individual site, stale / unknown without a usable date,
   a contradicting deterministic signal.
 Only review_state=pending rows are touched; a row a human approved / rejected is never changed. No network.
@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts", "pipeline"))
 import judge  # noqa: E402
 import frontier  # noqa: E402
 
+APPROVE_CONFIDENCES = ("high", "medium")  # confidence values that may be auto-approved (the one place; low is always held). reject_stale stays high-only
 STALE_YEARS = 3  # an individual site whose newest sign of life is this many years old or older is "stale" (the one place for this number)
 
 # Public-body-like wording (title / description_ja) and host suffixes. Public bodies are placed by a separate fixed rule
@@ -109,8 +110,8 @@ def explain(row, today=None):
         if src in WEAK_SOURCES:
             return HOLD, "weak_signal"
         return REJECT_STALE, "stale_individual"
-    if row.get("confidence") != "high":
-        return HOLD, "not_high_confidence"
+    if row.get("confidence") not in APPROVE_CONFIDENCES:
+        return HOLD, "low_confidence"
     if not (row.get("description_ja") and row.get("description_en")):
         return HOLD, "no_description"
     if not valid_categories(row.get("categories")):

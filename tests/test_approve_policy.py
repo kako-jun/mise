@@ -92,10 +92,28 @@ class Decide(unittest.TestCase):
         self.assertEqual(self.d(freshness='active', freshness_signal_at=None)[0], 'approve')   # 本文が活動を示す
         self.assertEqual(self.d(freshness=None, freshness_signal_at=None), ('hold', 'freshness_unjudged'))  # #129 以前の判定
 
-    def test_suspect_medium_hold(self):
+    def test_suspect_and_low_hold(self):
         self.assertEqual(self.d(spam_verdict='suspect')[0], 'hold')
-        self.assertEqual(self.d(confidence='medium')[0], 'hold')
-        self.assertEqual(self.d(confidence='low')[0], 'hold')
+        self.assertEqual(self.d(spam_verdict='suspect', confidence='medium')[0], 'hold')
+        self.assertEqual(self.d(spam_verdict='deferred', confidence='medium')[0], 'hold')
+        self.assertEqual(self.d(confidence='low'), ('hold', 'low_confidence'))
+        self.assertEqual(self.d(confidence=None)[0], 'hold')
+
+    def test_medium_confidence_is_approved_like_high(self):
+        self.assertEqual(self.d(confidence='medium'), ('approve', 'ok'))
+        self.assertEqual(self.d(confidence='medium', site_kind='business', freshness=None, freshness_signal_at=None)[0], 'approve')
+
+    def test_medium_still_needs_other_conditions(self):
+        self.assertEqual(self.d(confidence='medium', freshness='unknown', freshness_signal_at=None)[0], 'hold')   # 個人で active でない
+        self.assertEqual(self.d(confidence='medium', freshness=None, freshness_signal_at=None)[0], 'hold')
+        self.assertEqual(self.d(confidence='medium', site_kind='organization', description_ja='市立図書館のサイト。')[1], 'public_body')
+        self.assertEqual(self.d(confidence='medium', description_en=None), ('hold', 'no_description'))
+        self.assertEqual(self.d(confidence='medium', categories='[]'), ('hold', 'no_valid_category'))
+
+    def test_medium_is_never_auto_rejected(self):
+        # 古い個人サイトの自動却下は high だけ。medium は人の目が要るので保留
+        self.assertEqual(self.d(confidence='high', freshness='stale', freshness_signal_at='2019-01-01')[0], 'reject_stale')
+        self.assertEqual(self.d(confidence='medium', freshness='stale', freshness_signal_at='2019-01-01'), ('hold', 'stale_individual_unsure'))
 
     def test_missing_description_or_category(self):
         self.assertEqual(self.d(description_en=None), ('hold', 'no_description'))
