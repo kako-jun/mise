@@ -13,6 +13,7 @@ import datetime
 import hashlib
 import io
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -118,7 +119,10 @@ class R2Store(IconStore):
         self.known = set()
 
     def _run(self, args):
-        return subprocess.run(['npx', 'wrangler'] + args, cwd=self.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120).returncode
+        try:
+            return subprocess.run([shutil.which('npx') or 'npx', 'wrangler'] + args, cwd=self.cwd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120).returncode
+        except subprocess.TimeoutExpired as e:
+            raise OSError('wrangler r2 がタイムアウトした') from e
 
     def _flag(self):
         return ['--remote'] if self.remote else ['--local']
@@ -465,7 +469,18 @@ def _unmark(db, sid, label):
     db.execute('DELETE FROM icon_put WHERE site_id=? AND store=?', (sid, label))
 
 
-def due_sites(db, now, limit, store=None):
+def site_filter(site_ids):
+    """Optional scope for the nightly media queue, with bound SQLite parameters."""
+    if site_ids is None:
+        return '', ()
+    ids = tuple(site_ids)
+    if not ids:
+        return ' AND 0', ()
+    params = ','.join('?' for _ in ids)
+    return f' AND site_id IN ({params})', ids
+
+
+def due_sites(db, now, limit, store=None, site_ids=None):
     """期限が来たサイト(除外は含めない)。store(IconStore)を渡すと、期限前でも「画像は取れているのにその保存先のキーに現在の内容を置いた印が無い」サイトも対象にする(ローカルで置いた後の本番投入など)。"""
     ex = ' AND exclude=0' if _has_exclude(db) else ''
     args = [now_iso(now)]
@@ -473,7 +488,8 @@ def due_sites(db, now, limit, store=None):
     if store is not None and _has_marks_table(db):
         cond += (" OR (status='ok' AND icon_hash IS NOT NULL AND NOT EXISTS (SELECT 1 FROM icon_put s WHERE s.site_id=favicons.site_id AND s.store=? AND s.content=favicons.icon_hash))")
         args.append(store.label)   # 印の表が無い旧い台帳(読み取り専用)は、印なしの期限判定だけ
-    return db.execute(f'SELECT * FROM favicons WHERE ({cond}){ex} ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?', (*args, limit)).fetchall()
+    scope, ids = site_filter(site_ids)
+    return db.execute(f'SELECT * FROM favicons WHERE ({cond}){ex}{scope} ORDER BY next_check_at IS NOT NULL, next_check_at, site_id LIMIT ?', (*args, *ids, limit)).fetchall()
 
 
 def _plus(now, days):
@@ -513,11 +529,11 @@ def _present(db, store, row):
     return store.trust_ledger or store.exists(site_name(row['site_id']))
 
 
-def run(db, store, now=None, limit=50, session=None, log=print):
+def run(db, store, now=None, limit=50, session=None, log=print, site_ids=None, on_store_failure=None):
     now = now or datetime.datetime.now(datetime.timezone.utc)
     session = session or Session()
     counts = {}
-    for row in due_sites(db, now, limit, store):
+    for row in due_sites(db, now, limit, store, site_ids):
         try:
             res = fetch_favicon(session, row['url'], dict(row))
             if res['status'] == 'unchanged' and row['icon_hash'] and not _present(db, store, row):
@@ -532,6 +548,8 @@ def run(db, store, now=None, limit=50, session=None, log=print):
         except OSError as e:   # 保存先に書けない(ディスク満杯等): このサイトだけ失敗として続行
             out = record(db, store, row, {'status': 'error', 'error': 'store_failed'}, now)
             res = {'error': f'store_failed: {type(e).__name__}'}
+            if on_store_failure:
+                on_store_failure(row['site_id'])
         counts[out] = counts.get(out, 0) + 1
         log(f"{row['site_id']}\t{out}\t{res.get('error') or ''}")
     return counts
@@ -541,7 +559,7 @@ def _q(s):
     return "'" + str(s).replace("'", "''") + "'"
 
 
-def sql_updates(db, since=None, store=None):
+def sql_updates(db, since=None, store=None, site_ids=None):
     """sites.favicon_path / favicon_v へ入れる UPDATE。favicon_path はサイト固定(<sha256(site_id) 先頭32桁>.webp)、favicon_v は内容ハッシュの先頭 8 桁。
     **冪等判定は favicon_path・favicon_v のどちらかが違うとき**(内容が変わったときと、v は同じで path だけ旧名の行を直すとき。合っている行は書かない。D1 の書き込み行数を使わない)。取れていないサイトは触れない。
     store(ラベル名)を渡すと、その保存先のそのキーに現在の内容を置いた印のある画像だけを出す(D1 が指す画像が配信元に無い状態を作らない)。None は全件。
@@ -551,12 +569,14 @@ def sql_updates(db, since=None, store=None):
     args = ()
     if since:
         q += ' AND changed_at >= ?'; args += (since,)
-    rows = db.execute(q + ' ORDER BY site_id', args).fetchall()
+    scope, ids = site_filter(site_ids)
+    rows = db.execute(q + scope + ' ORDER BY site_id', args + ids).fetchall()
     if store:
         rows = [r for r in rows if _marked(db, r['site_id'], store, r['icon_hash'])]   # 印の表が無い旧い台帳(読み取り専用)は印が 1 つも無い
+    only_missing = ' AND favicon_path IS NULL' if site_ids is not None else ''
     lines = [f"UPDATE sites SET favicon_path={_q(site_name(r['site_id']))}, favicon_v={_q(icon_v(r['icon_hash']))} "
-             f"WHERE id={_q(r['site_id'])} AND (favicon_path IS NOT {_q(site_name(r['site_id']))} OR favicon_v IS NOT {_q(icon_v(r['icon_hash']))});" for r in rows]
-    if ex:
+             f"WHERE id={_q(r['site_id'])}{only_missing} AND (favicon_path IS NOT {_q(site_name(r['site_id']))} OR favicon_v IS NOT {_q(icon_v(r['icon_hash']))});" for r in rows]
+    if ex and site_ids is None:  # 自動取得では既存画像の取り下げを実行しない
         for r in db.execute('SELECT site_id FROM favicons WHERE exclude=1 ORDER BY site_id'):
             lines.append(f"UPDATE sites SET favicon_path=NULL, favicon_v=NULL WHERE id={_q(r['site_id'])} AND (favicon_path IS NOT NULL OR favicon_v IS NOT NULL);")
     return '\n'.join(lines) + ('\n' if lines else '')

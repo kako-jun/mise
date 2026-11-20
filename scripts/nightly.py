@@ -4,7 +4,7 @@
   uv run python3 scripts/nightly.py [--date YYYY-MM-DD[-N]] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
 
 運用の正本は docs/operations/nightly.md。
-- 本番 D1 に触れるのは --apply-prod のときだけ（wrangler の呼び出しは prod 段の 1 か所に閉じている）。既定は SQL と報告を作るだけ。
+- 本番 D1 に触れるのは --apply-prod のときだけ（prod 段、および明示的に有効にした media 段）。既定は SQL と報告を作るだけ。
 - 各段は冪等・再開可能。同じ --date で再実行すると、成功済みの段は飛ばして失敗した段から続ける（バッチの未精算も再開される）。
 - 決定論の段（発見・取得・承認・SQL）に LLM は使わない。LLM は判定の 1 工程（scripts/llm/pipeline.py）だけ。鍵は環境変数のみ。
 - --dry-run は外部アクセス・API・書き込みをせず、計画と見積りだけ出す。
@@ -39,7 +39,7 @@ ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見�
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
 LLM_CUTOFF_MAX_RATIO = 0.05   # 打ち切る未解決が今夜の判定対象のこの割合を超える、または
 LLM_CUTOFF_MAX_COUNT = 20     # この件数を超えたら打ち切らず partial で止める(安全弁。ここ 1 か所)
-STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "usage"]
+STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "media", "usage"]
 
 
 class StageFailed(Exception):
@@ -565,6 +565,33 @@ class Night:
             notes.append(f"{name}: " + out.strip()[-80:])
         return {"note": " / ".join(notes)}
 
+    def s_media(self):
+        a = self.a
+        if not a.apply_prod or self.partial:
+            return {"status": "skipped", "note": "本番反映モードの完了した夜だけ実行"}
+        if not (a.media_favicon_limit or a.thumbnail_limit):
+            return {"status": "skipped", "note": "画像取得の上限が 0 で無効（既定）"}
+        prod_ok = any(s["name"] == "prod" and s["status"] == "ok" for s in self.status["stages"])
+        if not prod_ok and (self.status["added"] or self.status["prod_applied"]):
+            return {"status": "skipped", "note": "今回の本番反映は未完了"}
+        cmd = [os.environ.get("UV") or "uv", "run", "--with", "pillow", "python" if os.name == "nt" else "python3",
+               os.path.join(ROOT, "scripts/nightly_media.py"),
+               "--var", self.var, "--out", self.dir, "--d1-name", a.d1_name,
+               "--favicon-limit", str(a.media_favicon_limit), "--thumbnail-limit", str(a.thumbnail_limit)]
+        if prod_ok and self.status["prod_applied"]:
+            cmd.append("--enqueue")
+        try:
+            rc, out = run_cmd(cmd)
+        except (OSError, subprocess.SubprocessError) as e:
+            rc, out = 1, str(e)
+        with open(self.p("media.log"), "w", encoding="utf-8") as f:
+            f.write(out)
+        note = "\n".join(out.strip().splitlines()[-4:])
+        if rc:
+            self.status["guards"].append("media 段で画像の取得または反映に失敗（掲載済み。media.log を確認）")
+            return {"status": "warning", "note": note}
+        return {"note": note}
+
     def s_usage(self):
         """使用量ガード(#157)。Cloudflare の使用量(読むだけ)を込みの枠と比べ、しきい値超過・急増を guards に載せる。トークンが無い・API が失敗しても警告だけで続行し、夜間ジョブを失敗にしない。"""
         a = self.a
@@ -587,7 +614,8 @@ class Night:
         self.status["month_spent_usd"] = round(self.spent(), 4)
         table = [("discover", self.s_discover), ("triage", self.s_triage), ("fetch", self.s_fetch), ("judge", self.s_judge),
                  ("candidates", self.s_candidates), ("llm", self.s_llm), ("import", self.s_import), ("approve", self.s_approve),
-                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon), ("usage", self.s_usage)]
+                 ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon),
+                 ("media", self.s_media), ("usage", self.s_usage)]
         llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
@@ -718,7 +746,8 @@ def plan(a):
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
           " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)"),
-          " 13 usage      " + ("無効(--no-usage-guard)" if a.no_usage_guard else "Cloudflare の使用量(Workers リクエスト・D1 行数。読むだけ)を込みの枠と比べる" + ("" if usage_guard.load_credentials(a.usage_env) else "。トークン未設定なので警告のみ(手順は docs/operations/usage-guard.md)"))]
+          f" 13 media      本番反映後の画像取得・配信（ファビコン上限 {a.media_favicon_limit}、サムネイル上限 {a.thumbnail_limit}）",
+          " 14 usage      " + ("無効(--no-usage-guard)" if a.no_usage_guard else "Cloudflare の使用量(Workers リクエスト・D1 行数。読むだけ)を込みの枠と比べる" + ("" if usage_guard.load_credentials(a.usage_env) else "。トークン未設定なので警告のみ(手順は docs/operations/usage-guard.md)"))]
     remaining = a.budget_month - spent
     L += [f"費用の概算(粗い): ${est:.2f}（1 件 ${EST_USD_PER_CANDIDATE}）", f"予算: 当月 ${spent:.2f} / ${a.budget_month:.2f}（残り ${remaining:.2f}）",
           "予算ガード: " + ("発動する見込み(LLM 段は実行されない)" if est > remaining else "発動しない見込み"),
@@ -736,6 +765,8 @@ def parse_args(argv=None):
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
     ap.add_argument("--favicon-limit", type=int, default=0, help="favicon 段で 1 夜に取るサイト数の上限(0 で無効。既定)。実サイトにアクセスする。取得だけ(SQL は作らない。本番には触れない。#125)")
+    ap.add_argument("--media-favicon-limit", type=int, default=0, help="本番掲載分のファビコン取得・配信の上限（0–100、0 で無効）")
+    ap.add_argument("--thumbnail-limit", type=int, default=0, help="本番掲載分のサムネイル取得・配信の上限（0–100、0 で無効）")
     ap.add_argument("--no-usage-guard", action="store_true", help="usage 段(Cloudflare の使用量ガード。#157)を動かさない。既定は有効(トークンが無ければ警告のみで続行)")
     ap.add_argument("--usage-env", default=usage_guard.DEFAULT_ENV, help="使用量ガードのトークンの env ファイル(既定 ~/.config/mise/cloudflare-analytics.env)")
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
@@ -764,6 +795,12 @@ def parse_args(argv=None):
         ap.error("--wikidata-leaves は 0 以上")
     if a.favicon_limit < 0:
         ap.error("--favicon-limit は 0 以上")
+    if not all(0 <= n <= 100 for n in (a.media_favicon_limit, a.thumbnail_limit)):
+        ap.error("--media-favicon-limit / --thumbnail-limit は 0–100 件")
+    if (a.media_favicon_limit or a.thumbnail_limit) and a.d1_name != "mise":
+        ap.error("media 段は本番 D1 mise / R2 mise-media 専用")
+    if sys.platform != "linux" and a.thumbnail_limit:
+        ap.error("サムネイル撮影は bwrap を使える Linux が必要。Windows では --thumbnail-limit 0")
     if a.max_add < 0 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
         ap.error("上限は 1 以上(--max-add のみ 0=上限なし)")
     if a.dry_run and a.apply_prod:
