@@ -204,14 +204,20 @@ test('panGeometry: 見切れ幅が 8px 以上のときだけ移動量を返す(�
   for (const bad of [[0, 100, 320, 200], [100, 0, 320, 200], [100, 100, 0, 200], [100, 100, 320, 0], [NaN, 100, 320, 200], [100, 100, 320, NaN], [100, 100, Infinity, 200], [-1, 100, 320, 200], ['100', 100, 320, 200]]) assert.equal(g(...bad), null, JSON.stringify(bad));
 });
 
-test('feed.css: パンは prefers-reduced-motion: no-preference の中で、表示中(.is-active)のカードだけにかかる', () => {
+test('feed.css: パンは prefers-reduced-motion: no-preference の中だけ。離れたカードは paused で止めた位置に留め、表示中(.is-active)だけ running', () => {
   const uses = [...css.matchAll(/animation\s*:[^;}]*f-pan[^;}]*/g)];
   assert.equal(uses.length, 1, 'f-pan を使う animation は 1 か所');
   const at = css.indexOf(uses[0][0]);
   const media = css.lastIndexOf('@media', at), open = css.indexOf('{', media), close = (() => { let d = 0; for (let i = open; i < css.length; i++) { if (css[i] === '{') d++; else if (css[i] === '}' && --d === 0) return i; } return -1; })();
   assert.ok(media >= 0 && at > open && at < close, '@media の中');
   assert.match(css.slice(media, open), /prefers-reduced-motion:\s*no-preference/);
-  const sel = css.slice(css.lastIndexOf('}', at) + 1, at);
-  assert.match(sel, /\.f-card\.is-active\s+\.f-hero\s*>\s*img\[data-pan\]/);
-  assert.ok(!/@keyframes f-pan[^}]*transform/.test(css), 'keyframes は translate だけ(transform を重ねない)');
+  const inner = css.slice(open, close);
+  assert.match(inner, /#feed \.f-hero\s*>\s*img\[data-pan\]\s*\{[^}]*animation-play-state:\s*paused/, '基本は paused(消すと translate が 0 に戻って飛ぶ)');
+  assert.match(inner, /#feed \.f-card\.is-active \.f-hero\s*>\s*img\[data-pan\]\s*\{\s*animation-play-state:\s*running/, '.is-active のときだけ running');
+  assert.ok(!/\.is-active[^{]*\{[^}]*animation\s*:/.test(inner), '.is-active 側で animation 自体は付け外ししない');
+  // 入場時に飛ばない: 半周期ぶんの負の delay で中央から始める
+  assert.match(uses[0][0], /ease-in-out\s+calc\(var\(--pan-sec\)\s*\/\s*-2\)\s+infinite\s+alternate/, '負の animation-delay で中央から始める');
+  const kf = css.match(/@keyframes f-pan\s*\{([\s\S]*?\})\s*\}/);
+  assert.ok(kf, 'keyframes がある');
+  assert.ok(!/transform/.test(kf[1]) && /translate/.test(kf[1]), 'keyframes 全体が translate だけ(transform を重ねない)');
 });
