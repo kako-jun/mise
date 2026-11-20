@@ -133,6 +133,18 @@
     const pool = MOCK_LONG[language];
     return { text: pool[hash32('long:' + s.id) % pool.length], mock: true };
   }
+  // 表示中のカードのサムネだけ、見切れ幅(L.panGeometry)を測って CSS 変数で渡す。複数枚でも、読みを先にまとめてから書く(強制レイアウトを繰り返さない)
+  function panFit(heroes) {
+    const reads = [];
+    for (const hero of heroes) { const img = hero.querySelector('img.f-img'); reads.push([hero, img && L.panGeometry(hero.clientWidth, hero.clientHeight, img.naturalWidth, img.naturalHeight)]); }
+    for (const [hero, g] of reads) {
+      for (const el of hero.querySelectorAll('img')) { if (g) el.dataset.pan = '1'; else delete el.dataset.pan; }
+      if (g) { hero.style.setProperty('--pan-w', g.w + 'px'); hero.style.setProperty('--pan-px', g.px + 'px'); } else { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); }
+    }
+  }
+  // 寸法が変わったら、離れて paused になったカードの古い translate・--pan-w/--pan-px を捨てる(回転後に戻ると古い幅で横に帯が出る)。読まずに書くだけ。次に表示になったとき panFit が測り直し、負の delay で中央から始まる
+  function clearIdlePan() { for (const hero of document.querySelectorAll('#feed .f-card:not(.is-active) .f-hero')) { for (const el of hero.querySelectorAll('img[data-pan]')) delete el.dataset.pan; hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }
+  const activeHeroes = () => [...document.querySelectorAll('#feed .f-card.is-active .f-hero')];
   function card(s, i, total) {
     const art = document.createElement('article'); art.className = 'f-card'; art.tabIndex = -1; art.dataset.index = i; art.dataset.id = s.id;
     art.setAttribute('aria-posinset', i + 1); art.setAttribute('aria-setsize', total); art.setAttribute('aria-labelledby', `f-name-${i}`);
@@ -145,7 +157,7 @@
       if (thumb) {
         if (lqip) { const l = document.createElement('img'); l.className = 'f-lqip'; l.alt = ''; l.src = lqip; layer.append(l); }
         const img = document.createElement('img'); img.className = 'f-img'; img.alt = ''; img.decoding = 'async'; img.loading = i < 2 ? 'eager' : 'lazy';
-        img.addEventListener('load', () => img.classList.add('is-in')); img.addEventListener('error', () => layer.replaceChildren(calico(s, layer === hero))); img.src = thumb; layer.append(img);
+        img.addEventListener('load', () => { img.classList.add('is-in'); if (layer === hero && art.classList.contains('is-active')) panFit([hero]); }); img.addEventListener('error', () => { layer.replaceChildren(calico(s, layer === hero)); if (layer === hero) { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }); img.src = thumb; layer.append(img);
       } else layer.append(calico(s, layer === hero));
     }
     const body = document.createElement('div'); body.className = 'f-body';
@@ -407,7 +419,7 @@
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
     nav.append(prev, next);
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
-    root.append(bar, scroller, nav, hint); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); document.body.append(root);
+    root.append(bar, scroller, nav, hint); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
     observer = new IntersectionObserver(entries => {
       for (const e of entries) if (e.isIntersecting) {
         const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null;
@@ -415,6 +427,8 @@
       }
       for (const e of entries) {
         const idx = e.target.dataset.index; if (idx === 'end') continue;
+        e.target.classList.toggle('is-active', e.isIntersecting);
+        if (e.isIntersecting) { const h = e.target.querySelector('.f-hero'); if (h) panFit([h]); }
         dwell.stop(e.target);
         if (e.isIntersecting) dwell.start(e.target, list[Number(idx)]);
       }

@@ -191,3 +191,46 @@ test('feed.js: feed-mode が無い（フックが通常表示へ戻した後に�
   assert.deepEqual(calls.listeners, [], 'window/document にリスナーを足さない');
   assert.equal(calls.created, 0); assert.equal(calls.appended, 0); assert.equal(calls.fetched, 0);
 });
+
+// サムネのパン(#173)
+test('panGeometry: 見切れ幅が 8px 以上のときだけ移動量を返す(境界・枠より狭い・縦長・0/NaN)', () => {
+  const g = lib.panGeometry;
+  // 枠 390x445 に 320x200(1.6:1)→ 画像の実幅 712、見切れ 322、片側 161
+  assert.deepEqual({ ...g(390, 445, 320, 200) }, { w: 712, px: 161 });
+  assert.deepEqual({ ...g(100, 100, 108, 100) }, { w: 108, px: 4 }, 'ちょうど 8px は動かす');
+  assert.equal(g(100, 100, 107.99, 100), null, '8px 未満は動かさない');
+  assert.equal(g(500, 100, 160, 100), null, '画像が枠より狭い(枠幅 500 > 160)');
+  assert.equal(g(400, 400, 100, 200), null, '縦長画像(幅が枠に届かない)');
+  for (const bad of [[0, 100, 320, 200], [100, 0, 320, 200], [100, 100, 0, 200], [100, 100, 320, 0], [NaN, 100, 320, 200], [100, 100, 320, NaN], [100, 100, Infinity, 200], [-1, 100, 320, 200], ['100', 100, 320, 200]]) assert.equal(g(...bad), null, JSON.stringify(bad));
+});
+
+test('feed.css: パンは prefers-reduced-motion: no-preference の中だけ。離れたカードは paused で止めた位置に留め、表示中(.is-active)だけ running', () => {
+  const uses = [...css.matchAll(/animation\s*:[^;}]*f-pan[^;}]*/g)];
+  assert.equal(uses.length, 1, 'f-pan を使う animation は 1 か所');
+  const at = css.indexOf(uses[0][0]);
+  const media = css.lastIndexOf('@media', at), open = css.indexOf('{', media), close = (() => { let d = 0; for (let i = open; i < css.length; i++) { if (css[i] === '{') d++; else if (css[i] === '}' && --d === 0) return i; } return -1; })();
+  assert.ok(media >= 0 && at > open && at < close, '@media の中');
+  assert.match(css.slice(media, open), /prefers-reduced-motion:\s*no-preference/);
+  const inner = css.slice(open, close);
+  assert.match(inner, /#feed \.f-hero\s*>\s*img\[data-pan\]\s*\{[^}]*animation-play-state:\s*paused/, '基本は paused(消すと translate が 0 に戻って飛ぶ)');
+  assert.match(inner, /#feed \.f-card\.is-active \.f-hero\s*>\s*img\[data-pan\]\s*\{\s*animation-play-state:\s*running/, '.is-active のときだけ running');
+  assert.ok(!/\.is-active[^{]*\{[^}]*animation\s*:/.test(inner), '.is-active 側で animation 自体は付け外ししない');
+  // 入場時に飛ばない: 半周期ぶんの負の delay で中央から始める
+  assert.match(uses[0][0], /ease-in-out\s+calc\(var\(--pan-sec\)\s*\/\s*-2\)\s+infinite\s+alternate/, '負の animation-delay で中央から始める');
+  const kf = css.match(/@keyframes f-pan\s*\{([\s\S]*?\})\s*\}/);
+  assert.ok(kf, 'keyframes がある');
+  assert.ok(!/transform/.test(kf[1]) && /translate/.test(kf[1]), 'keyframes 全体が translate だけ(transform を重ねない)');
+});
+
+test('feed.js: 寸法が変わったら、表示中でないカードの data-pan と --pan-w/--pan-px を消してから表示中のカードだけ測り直す', () => {
+  const ro = appJs.match(/new ResizeObserver\(\(\) => \{([^}]*)\}\)\.observe\(scroller\)/);
+  assert.ok(ro, 'scroller の ResizeObserver がある');
+  assert.match(ro[1], /clearIdlePan\(\);\s*panFit\(activeHeroes\(\)\)/, '解除→表示中だけ再計算の順');
+  const fn = appJs.match(/function clearIdlePan\(\) \{([^\n]*)\}\n/);
+  assert.ok(fn, 'clearIdlePan がある');
+  assert.match(fn[1], /\.f-card:not\(\.is-active\) \.f-hero/);
+  assert.match(fn[1], /delete el\.dataset\.pan/);
+  assert.match(fn[1], /removeProperty\('--pan-w'\)/);
+  assert.match(fn[1], /removeProperty\('--pan-px'\)/);
+  assert.ok(!/clientWidth|clientHeight|getBoundingClientRect|offsetWidth|offsetHeight/.test(fn[1]), '読まない(強制レイアウトを起こさない)');
+});
