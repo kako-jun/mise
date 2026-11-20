@@ -70,9 +70,20 @@ def discover_commoncrawl(db, part_file=None, sample_every=1000, limit=None, grap
     return {'jp_hosts_seen': seen, 'added': added}
 
 
+SEEDS_CSV = ROOT / 'data' / 'discover-seeds.csv'
+SEED_KINDS = ('town-shop', 'personal-text', 'doujin')   # #181 の種類(1)町の店 (2)個人テキスト (3)同人。種類は取得元で決まるだけで、LLM には渡さない
+
+
+def extra_seed_urls(path=SEEDS_CSV):
+    """起点ページの一覧（data/discover-seeds.csv。商店街・商工会・観光協会の会員一覧、個人サイトのリンク集、同人サークルの一覧。#181）。"""
+    import csv
+    with open(path, encoding='utf-8', newline='') as f:
+        return [r['url'] for r in csv.DictReader(f)]
+
+
 def seed_urls():
-    """既存掲載サイトのURL（data/collection-*.json）。"""
-    urls = []
+    """既存掲載サイトのURL（data/collection-*.json）と、起点ページ（data/discover-seeds.csv）。"""
+    urls = extra_seed_urls()
     for p in sorted((ROOT / 'data').glob('collection-*.json')):
         for r in json.loads(p.read_text(encoding='utf-8')):
             if r.get('url'):
@@ -84,8 +95,10 @@ def discover_links(db, seeds=None, max_links=300):
     """既存掲載サイトのトップページから外部リンク先ホストを深さ1で発見する。robots.txt 遵守の取得をシードごとに行う。"""
     added = 0; fetched = 0
     for url in (seeds or seed_urls()):
-        host = urllib.parse.urlsplit(url).hostname
-        r = fetcher.fetch_site(host)
+        sp = urllib.parse.urlsplit(url)
+        host = sp.hostname
+        path = (sp.path or '/') + (f'?{sp.query}' if sp.query else '')   # 起点ページ(data/discover-seeds.csv)はパス付き。トップだけの URL は従来どおり '/'
+        r = fetcher.fetch_site(host, path=path)
         if r['error'] or r['status'] != 200:
             continue
         fetched += 1

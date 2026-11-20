@@ -37,6 +37,8 @@ ANOMALY_FACTOR = 5                # 1 サイクルの追加数が直近 7 日(�
 ANOMALY_MIN_DAYS = 3              # 履歴がこの日数未満なら比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
+LLM_CUTOFF_MAX_RATIO = 0.05   # 打ち切る未解決が今夜の判定対象のこの割合を超える、または
+LLM_CUTOFF_MAX_COUNT = 20     # この件数を超えたら打ち切らず partial で止める(安全弁。ここ 1 か所)
 STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "usage"]
 
 
@@ -328,9 +330,18 @@ class Night:
             return {"status": "skipped", "note": f"予算ガード(当月 ${spent:.2f}, 最悪 ${worst:.2f})", "count": {"estimate_expected_usd": expected, "estimate_worst_usd": worst}}
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise StageFailed("llm: ANTHROPIC_API_KEY が環境変数に無い（~/.config/mise/anthropic.env を読み込む。値は出さない）")
-        total_now = ledger_total(a.ledger)
-        rc, out = run_cmd(base + ["--budget-run", f"{remaining:.4f}", "--budget-total", f"{total_now + remaining:.4f}", "--out", self.p("results.json"),
-                                  "--poll-seconds", "60"])
+        run_args = ["--out", self.p("results.json"), "--poll-seconds", "60"]
+
+        def run_pipeline(spent_now):
+            remaining_now = a.budget_month - spent_now
+            total_now = ledger_total(a.ledger)
+            return run_cmd(base + ["--budget-run", f"{remaining_now:.4f}", "--budget-total", f"{total_now + remaining_now:.4f}"] + run_args)
+
+        rc, out = run_pipeline(spent)
+        retried = 0
+        while rc == 2 and retried < a.llm_retries:   # 未解決は同じ実行内で再試行する(キャッシュ済みは課金されない。費用は毎回台帳の予約を通る)
+            retried += 1
+            rc, out = run_pipeline(month_spent(a.ledger, self.month))
         if rc == 3:
             self.status["guards"].append("予算ガード: pipeline.py が予算超過で停止")
         if rc not in (0, 2):
@@ -338,9 +349,56 @@ class Night:
         cost = month_spent(a.ledger, self.month) - spent
         self.status["cost_usd"] = round(cost, 4)
         res = {"count": {"cost_usd": round(cost, 4), "unresolved": 1 if rc == 2 else 0}}
-        if rc == 2:   # 未解決あり = 未完了。同じ --date で再実行すると、この段から続きを再開する
-            res.update(status="partial", note="未解決あり(同じ --date で再実行すると続きから)")
+        if retried:
+            res["count"]["llm_retries"] = retried
+        if rc == 2:
+            if a.llm_retries > 0:
+                cut = self.cut_off_unresolved(n)
+                if cut is not None:
+                    res["count"].update(unresolved=0, cut_off=cut)
+                    res["note"] = f"未解決 {cut} 件を打ち切り(llm_unresolved)"
+                    return res
+            res.update(status="partial", note="未解決あり(同じ --date で再実行すると続きから)")   # 同じ --date で再実行すると、この段から続きを再開する
         return res
+
+    def unresolved_keys(self):
+        """今夜の入力(candidates.jsonl)のうち、results.json に出力が無く llm_judgement にも行が無い candidate -> [(key, host)]。"""
+        with open(self.p("candidates.jsonl"), encoding="utf-8") as f:
+            ids = [json.loads(l)["id"] for l in f if l.strip()]
+        data = read_json(self.p("results.json"), {}) or {}
+        done = {r["id"] for r in (data.get("results") or []) if isinstance(r, dict) and r.get("output")}
+        want = set(ids) - done
+        con = ro_connect(self.db)
+        if con is None:
+            return []
+        try:
+            try:
+                judged = {r[0] for r in con.execute("SELECT key FROM llm_judgement")}
+            except sqlite3.OperationalError:
+                judged = set()
+            rows = con.execute("SELECT key, host FROM frontier WHERE state='candidate' ORDER BY key").fetchall()
+        finally:
+            con.close()
+        return [(k, h) for k, h in rows if k not in judged and export_candidates.cand_id(k) in want]
+
+    def cut_off_unresolved(self, n):
+        """再試行しても未解決が残る host を台帳で rejected/llm_unresolved にして先へ進める。打ち切った件数を返す。
+        打ち切らない(安全弁・特定不能)なら guards に理由を残して None。"""
+        keys = self.unresolved_keys()
+        if not keys:
+            self.status["guards"].append("LLM 未解決の host を特定できないため打ち切らず止めた")
+            return None
+        if len(keys) > LLM_CUTOFF_MAX_COUNT or len(keys) > LLM_CUTOFF_MAX_RATIO * n:
+            self.status["guards"].append(f"LLM 未解決 {len(keys)} 件は打ち切りの上限(判定対象 {n} 件の {LLM_CUTOFF_MAX_RATIO:.0%} か {LLM_CUTOFF_MAX_COUNT} 件)を超えるため打ち切らず止めた")
+            return None
+        con = sqlite3.connect(self.db)
+        try:
+            con.executemany("UPDATE frontier SET state='rejected', reject_reason='llm_unresolved' WHERE key=? AND state='candidate'", [(k,) for k, _ in keys])
+            con.commit()
+        finally:
+            con.close()
+        self.status["guards"].append(f"LLM 未解決 {len(keys)} 件を打ち切り（{', '.join(h or k for k, h in keys[:20])}）")
+        return len(keys)
 
     def pending_batch(self):
         """未精算の LLM バッチ状態があるか(常在の *.lock などでは true にならない)。"""
@@ -656,7 +714,7 @@ def plan(a):
     L += [f"  2 triage     台帳内の discovered を振り分け", f"  3 fetch      上限 {a.fetch_limit} ホスト（queued: {snap['state'].get('queued', 0)}）",
           f"  4 judge      取得後フィルタ（fetched: {snap['state'].get('fetched', 0)}）",
           f"  5 candidates 今夜の判定対象（未判定の candidate）: {n} 件（candidate 全体 {snap['state'].get('candidate', 0)}、判定上限 {a.judge_limit}）",
-          f"  6 llm        haiku -> sonnet / mode={a.judge_mode}", "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
+          f"  6 llm        haiku -> sonnet / mode={a.judge_mode} / 未解決の再試行 {a.llm_retries} 回" + ("(残れば台帳で rejected/llm_unresolved に打ち切って先へ進む。多すぎれば止める)" if a.llm_retries > 0 else "(0: 未解決が残れば partial で止める)"), "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
           " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)"),
@@ -683,6 +741,7 @@ def parse_args(argv=None):
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
+    ap.add_argument("--llm-retries", type=int, default=2, help="llm 段が未解決(exit 2)のとき同じ実行内で再試行する最大回数(既定 2。0 で従来動作＝即 partial)。再試行しても残った未解決は台帳で state=rejected/reject_reason=llm_unresolved に打ち切って先へ進む(多すぎれば打ち切らず partial)")
     ap.add_argument("--judge-mode", choices=["batch", "sync"], default="batch")
     ap.add_argument("--budget-month", type=float, default=100.0, help="月(UTC)の LLM 予算 USD")
     ap.add_argument("--anomaly-factor", type=float, default=ANOMALY_FACTOR, help="前日比の異常ガードの倍率(既定 5。1 サイクルの追加数が直近 7 日の日平均のこの倍を超えたら本番反映を止める)。意図的な増量運転用")
@@ -699,6 +758,8 @@ def parse_args(argv=None):
         ap.error("--anomaly-factor は正の数")
     if a.cc_sample_every < 1:
         ap.error("--cc-sample-every は 1 以上")
+    if a.llm_retries < 0:
+        ap.error("--llm-retries は 0 以上")
     if a.wikidata_leaves < 0:
         ap.error("--wikidata-leaves は 0 以上")
     if a.favicon_limit < 0:

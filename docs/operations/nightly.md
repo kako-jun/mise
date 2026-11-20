@@ -26,6 +26,8 @@
 - 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は夜の名前（UTC の日付 `YYYY-MM-DD`。同日の 2 回目以降のサイクルは `YYYY-MM-DD-N`、N は 2 以上）。
 - **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
+- **LLM 未解決の自動再試行と打ち切り（#124）**: llm 段が exit 2 のとき、同じ実行内で最大 `--llm-retries N` 回（既定 2。0 で従来動作＝即 `partial`）再試行する。再試行は再実行と同じ仕組みで、キャッシュ済みは課金されず、費用も毎回台帳の予約と予算ガードを通る。それでも未解決が残ったら、その host（今夜の入力のうち結果に出力が無く `llm_judgement` に行が無い `state='candidate'`）を台帳で `state='rejected', reject_reason='llm_unresolved'` にし、guards に「LLM 未解決 N 件を打ち切り（ホスト名一覧）」を記録して、llm 段は `ok`（note に件数）で import 以降・本番反映へ進む。**安全弁**: 打ち切る件数が今夜の判定対象の 5% を超える、または 20 件を超えるときは打ち切らず、従来どおり `partial` で止めて guards に理由を残す（定数 `LLM_CUTOFF_MAX_RATIO` / `LLM_CUTOFF_MAX_COUNT`、`scripts/nightly.py` の 1 か所）。
+  - **戻し方**: 打ち切った host は台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_unresolved' AND key='<key>'`（全件なら key 条件を外す）に戻せば、次の夜に再判定される。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
 - 本番 D1 に触れるコードは prod 段の 1 か所だけで、`--apply-prod` が無ければ `wrangler` は一切呼ばれない（テストで固定）。`--dry-run` と `--apply-prod` は併用できない。
@@ -49,7 +51,7 @@ uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回
 - **前日比の異常ガードは「1 サイクルの追加数」を「直近 7 日の日平均」と比べる**。日の追加数は、その日の `prod_applied` が true のサイクルの `added` の合計（反映済みが無い日は全サイクルの最大値＝未反映の再生成を二重に数えない）。今夜と同じ日の他サイクルは基準に含めない。
 - **日の累計は抑えない**。サイクルを重ねれば 1 日の合計は平均の何倍にもなりうる。累計を見るのは人（`status.json` / `report.md`）。意図的な増量運転では `--anomaly-factor N`（既定 5、正の数。`--dry-run` にも出る）で倍率を上げる。
 
-主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--anomaly-factor 5`（前日比の異常ガードの倍率）、`--discover-limit 200`（0 で discover-cc 無効）、`--cc-sample-every 1000`（discover-cc の抽出率。`crc32(逆ホスト) % N == 0` の .jp ホストだけ台帳に入る決定論サンプリングなので、N が台帳に入る母集団の天井になり、入れ切ると毎夜 added=0 で供給が止まる。100 で約 10 倍、10 で約 100 倍。N の小さい側は大きい側の上位集合なので既存は重複として弾かれる。`--discover-limit` が 0 のとき無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
+主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--anomaly-factor 5`（前日比の異常ガードの倍率）、`--discover-limit 200`（0 で discover-cc 無効）、`--cc-sample-every 1000`（discover-cc の抽出率。`crc32(逆ホスト) % N == 0` の .jp ホストだけ台帳に入る決定論サンプリングなので、N が台帳に入る母集団の天井になり、入れ切ると毎夜 added=0 で供給が止まる。100 で約 10 倍、10 で約 100 倍。N の小さい側は大きい側の上位集合なので既存は重複として弾かれる。`--discover-limit` が 0 のとき無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--llm-retries 2`（llm 段の未解決の自動再試行回数。0 で従来動作）、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
 ## 実行機 kako-rog（Windows）と pi-3b の cron
 
@@ -119,7 +121,7 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 | exit 75 | 別の夜間ジョブが動いている。`ps` で確認。残骸なら待つ（flock はプロセス終了で自動解除）。cron に外側の `flock` を付けていると毎夜これになる |
 | llm 段が `ANTHROPIC_API_KEY が無い` | cron のラッパーで `anthropic.env` を読み込めていない |
 | llm 段が skipped「予算ガード」 | 当月の台帳合計 + 最悪費用が `--budget-month` を超える。台帳は `~/.config/mise/llm-ledger.jsonl`。月が変われば自動で再開 |
-| llm 段が `partial`「未解決あり」 | 一部が不正出力。同じ `--date` で再実行すると続きから（キャッシュ済みは課金されない）。それまで prod 段は止まる |
+| llm 段が `partial`「未解決あり」 | 自動再試行（`--llm-retries`、既定 2）後も未解決が多い（判定対象の 5% 超か 20 件超）か、`--llm-retries 0`。少数なら自動で `llm_unresolved` に打ち切られ先へ進むので `partial` にならない。同じ `--date` で再実行すると続きから（キャッシュ済みは課金されない）。それまで prod 段は止まる。打ち切りの戻し方は上の「LLM 未解決の自動再試行と打ち切り」 |
 | 開いたままの予約（台帳） | `scripts/llm/ledger_release.py --list` で確認してから解放 |
 | sql 段 / gate 段が整合チェック違反 | `report.md` の違反行を見る。ほとんどは台帳側の判定データ。該当 key を却下して再実行 |
 | discover-cc が失敗 | 続行される（`guards` に記録）。ネットワークか Common Crawl 側 |

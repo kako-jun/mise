@@ -50,3 +50,8 @@ civic-activities,Q163740,P31,P17|P495,0,nonprofit organization,NPO・非営利�
 athletics,Q847017,P31,P17|P495,0,sports club,スポーツクラブ,300
 ball-sports,Q476028,P31,P17|P495,0,association football club,サッカークラブ,300
 business-services,Q2178147,P31,P17|P495,0,trade association,業界団体,300
+internet,Q35127,P31,P17|P495,0,website,[種類4 主要Webサービスのトップ] ウェブサイト,300
+internet,Q1668024,P31,P17|P495,1,service on the Internet,[種類4 主要Webサービスのトップ] インターネット上のサービス(SNS等の下位クラスを含む),300
+software,Q7397,P31,P17|P495,0,software,[種類4 主要Webサービスのトップ] ソフトウェア(公式サイトを持つもの),100
+business-services,Q891723,P31,P17|P495,0,public company,[種類5 主要企業の公式サイト] 上場企業,300
+business-services,Q6881511,P31,P17|P495,0,enterprise,[種類5 主要企業の公式サイト] 企業(Q4830453 business は約2.4万件で偏るため入れない),300
