@@ -115,6 +115,12 @@ test('ピックアップの区画経路: region_code の等値で idx_sites_regi
   assert.doesNotMatch(randomPickSql({ region: null }), /region_code = /); // 国・全世界の SQL は従来のまま
 });
 
+test('クライアント: app.js にプルダウン（region-select / regionSelect）が無い（#177）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /region-select|regionSelect/);
+});
+
 test('SSR: 国・区画のページに、サイトのある区画へのリンク（/jp/13/ 形式）が JS なしで出る。サイトの無い区画・区画の無い範囲では出ない', async () => {
   const db = fresh();
   const scopes = await loadScopes(d(db));
