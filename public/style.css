@@ -75,14 +75,15 @@ body { touch-action: pan-y; }
 
 #directory-sites, #result-list { list-style: none; padding-left: 0; }
 /* ファビコンはサイト名の左（1 行目）にだけ出る。枠・角丸・縁・下地は付けない。説明文・タグ以下は常に行の左端から（#166） */
-.site-icon { display: flex; align-items: center; width: 16px; height: 1.46em; flex: 0 0 16px; border: 0; border-radius: 0; box-shadow: none; background: none; }
+.site-icon { display: flex; align-items: center; width: 16px; height: 16px; flex: 0 0 16px; transform: translateY(calc(8px - .357em)); border: 0; border-radius: 0; box-shadow: none; background: none; }
 .site-icon img { display: block; width: 16px; height: 16px; flex: none; object-fit: contain; border: 0; border-radius: 0; box-shadow: none; background: none; }
 .site-content { min-width: 0; }
 /* 1 行目（中点・ファビコン・サイト名）だけを flex にし、align-items: center でフォントに依存せず上下中央にそろえる。2 行目以降（説明文・タグ・所属）は .site-content の直下で、常に左端から（#166） */
 /* 1 行の高さ（単位なしの line-height 1.46 ＝ 1.46em。文字サイズに追従する）の箱を作り、中点とファビコンを「その 1 行の中央」に置く。名前が折り返しても 1 行目の中央にそろう（フォントの字形・行高に依存しない） */
-.site-head { display: flex; align-items: flex-start; gap: 6px; line-height: 1.46; }
-.site-bullet { flex: 0 0 5px; height: 1.46em; margin-right: 4px; display: flex; align-items: center; }
-.site-bullet::before { content: ''; width: 5px; height: 5px; background: currentColor; }
+.site-head { display: flex; align-items: baseline; gap: 6px; line-height: 1.46; }
+/* 中点・ファビコン・新規タブ・旗は、行ボックスの中央でなく「文字のベースライン + 大文字高の半分（.357em）」の高さにそろえる（#183）。行ボックスの中央は、フォントの ascent/descent と日本語のフォールバックで文字の見た目の中心とずれる（DejaVu Sans で -2.5px）。.357em は大文字高（0.71〜0.73em）の半分。 */
+.site-bullet { flex: 0 0 5px; height: 5px; margin-right: 4px; display: block; transform: translateY(calc(2.5px - .357em)); }
+.site-bullet::before { content: ''; display: block; width: 5px; height: 5px; background: currentColor; }
 /* Windows ハイコントラスト（forced-colors）では background が上書きされて中点・フォルダが消えるので、文字色（CanvasText）を明示して残す */
 @media (forced-colors: active) { .site-icon.cat-icon, .site-bullet::before { background: CanvasText; forced-color-adjust: none; } }
 .site-title { min-width: 0; }
@@ -233,7 +234,7 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 @media (max-width: 1199px) { .hud { display: none; } }
 
 /* 国旗: 常時表示の小さな旗。国コードが無いサイトには出さない。 */
-.site-place { display: inline-flex; align-items: center; height: 1.46em; margin-left: 6px; vertical-align: top; cursor: pointer; white-space: nowrap; }
+.site-place { display: inline-flex; align-items: center; margin-left: 6px; vertical-align: calc(.357em - 7.75px); cursor: pointer; white-space: nowrap; }
 .site-place[hidden] { display: none; }
 .site-flag { display: block; line-height: 0; }
 .site-region { display: block; margin-left: 5px; font-size: 11px; line-height: 1; text-box: trim-both cap alphabetic; color: #4f7480; }
@@ -320,7 +321,7 @@ html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-co
 /* 見た目は 22px（13px 基準。em 追従）、押せる範囲は透明な ::before で広げる（28px、タッチ端末は 44px）。 */
 .tag-chip button::before { content: ""; position: absolute; inset: -3px; }
 .tag-chip button svg { display: block; width: calc(8em / 13); height: calc(8em / 13); }
-/* 上下センタリングはインク基準（docs/design/ui.md「上下センタリングはインク基準で測る」）。行ボックスの余白でなく、大文字高〜ベースラインを枠の中央に置く。非対応ブラウザ（Firefox）は line-height: 1 の中央のままで、壊れずに劣化する。 */
+/* 上下センタリングはインク基準（docs/design/ui.md「上下センタリングはインク基準で測る」）。行ボックスの余白でなく、大文字高〜ベースラインを枠の中央に置く。非対応の古いブラウザ（Chrome <133・Safari <18.2・対応前の Firefox）は line-height: 1 の中央のままで、壊れずに劣化する。 */
 .tag-label { display: block; line-height: 1; text-box: trim-both cap alphabetic; }
 .tag-chip button:hover, .tag-chip button:focus-visible { background: rgba(40, 103, 115, .2); }
 /* タッチ端末: × の押せる範囲は縦 44px まで広げるので、はみ出し分（上下 8px）をチップ列の余白と行間で確保し、検索欄・おすすめリンク・隣の行を奪わない。横は隣のチップに食い込まない 5px まで。 */
@@ -328,7 +329,7 @@ html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-co
 @media (max-width: 700px) { .tag-chips { flex: 1 0 100%; } }
 
 /* 検索結果リンク右の「別タブで開く」ボタン。枠・背景なし、タップ領域 32px は透明な余白で確保（負マージンで行高は増やさない）。 */
-.site-newtab { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: calc((1.46em - 32px) / 2) 0 calc((1.46em - 32px) / 2) -2px; position: relative; z-index: 1; vertical-align: top; color: #4f7480; text-decoration: none; border-radius: 4px; }
+.site-newtab { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin: -8px 0 -8px -2px; position: relative; z-index: 1; vertical-align: calc(.357em - 7px); color: #4f7480; text-decoration: none; border-radius: 4px; }
 .site-newtab[hidden] { display: none; }
 .site-newtab svg { width: 14px; height: 14px; fill: currentColor; }
 .site-newtab:hover, .site-newtab:focus-visible { color: #007f98; }
@@ -372,6 +373,8 @@ html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited
 .feed-note { margin: 4px 0 8px; font-size: 11px; line-height: 1.4; color: #3b565c; }
 .feed-note[hidden] { display: none; }
 html[data-theme="dark"] .feed-note { color: #9cc4cc; }
-/* 縦フィードの入口（#183）: 文字を text-box で大文字高〜ベースラインにし、高さは em の padding で作る（12px で 34px、14px で 44px 以上）。 */
-.feed-entry, .feed-entry:visited { display: inline-block; min-height: 0; padding: .975em 12px; text-align: center; text-box: trim-both cap alphabetic; }
-@media (pointer: coarse), (max-width: 700px) { .feed-entry, .feed-entry:visited { min-height: 0; padding: 1.15em 12px; } }
+/* 縦フィードの入口（#183）: 対応ブラウザだけ、文字を text-box で大文字高〜ベースラインにし、高さは em の padding で作る（12px で 34px、14px で 44px 以上）。非対応は従来の min-height + 中央寄せ。 */
+@supports (text-box: trim-both cap alphabetic) {
+  .feed-entry, .feed-entry:visited { display: inline-block; min-height: 0; padding: .975em 12px; text-align: center; text-box: trim-both cap alphabetic; }
+  @media (pointer: coarse), (max-width: 700px) { .feed-entry, .feed-entry:visited { min-height: 0; padding: 1.15em 12px; } }
+}

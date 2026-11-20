@@ -3,7 +3,8 @@
 .about-head { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding-top: 0; margin-bottom: 8px; }
 .about-head .preferences[hidden] { display: none; }
 .about-head .preferences { position: static; flex-direction: row; margin: 0; }
-.about-logo, .about-logo:visited { color: #c90018; font: 1000 34px/1 "Mise Logo", Impact, "Arial Narrow", sans-serif; letter-spacing: 3px; text-decoration: none; text-shadow: 1px 1px #73000b; padding: .25em 0; text-box: trim-both cap alphabetic; }
+.about-logo, .about-logo:visited { color: #c90018; font: 1000 34px/1 "Mise Logo", Impact, "Arial Narrow", sans-serif; letter-spacing: 3px; text-decoration: none; text-shadow: 1px 1px #73000b; padding: 4px 0; }
+@supports (text-box: trim-both cap alphabetic) { .about-logo, .about-logo:visited { padding: .2em 0; text-box: trim-both cap alphabetic; } } /* 非対応の古いブラウザは従来の padding（二重に膨らませない。#183） */
 html[data-theme="dark"] .about-logo, html[data-theme="dark"] .about-logo:visited { color: #ff9a55; text-shadow: none; }
 .about h1 { font-size: 22px; margin: 12px 0; }
 .about h2 { font-size: 16px; margin: 24px 0 6px; padding-bottom: 2px; border-bottom: 1px solid #888; }

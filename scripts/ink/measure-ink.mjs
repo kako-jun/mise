@@ -10,7 +10,7 @@
 //   描画が固まる環境では `bwrap --dev-bind / / --tmpfs /dev/dri node ...` で包む。
 //   終了コード: strict な行に許容外が 1 つでもあれば 1。
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 const require = createRequire(import.meta.url);
@@ -40,7 +40,7 @@ const collectAll = (scene) => {
   const T = [];
   const seen = new Set(); // 同じ group・同じ label は最初の 1 つだけ（縦フィードは同種のカードが千件ある）
   const add = (o) => { const k = o.group + '|' + o.label; if ((o.box || o.gfx) && !seen.has(k)) { seen.add(k); T.push(o); } };
-  const strictOf = (s) => !/[gjpqyQ]|\p{Extended_Pictographic}/u.test(s);
+  const strictOf = (s) => !/[gjpqyJQ]|\p{Extended_Pictographic}/u.test(s);
   const refOf = (s) => (/[A-HK-PR-Z0-9\u3040-\u30ff\u3400-\u9fff]/u.exec(s) || [s.trim().slice(0, 1)])[0];
   const txtOf = (e) => e.textContent.trim();
   const inBox = (group, els, extra = {}) => els.forEach((e) => add({ group, label: txtOf(e).slice(0, 14) || e.id || e.className, strict: strictOf(txtOf(e)), box: e, ...extra }));
@@ -68,8 +68,7 @@ const collectAll = (scene) => {
     all('.region-select').forEach((s) => add({ group: 'select/region', label: 'region', strict: true, box: s, xr: 'left' }));
     all('.history-day').forEach((d) => pair('hud/history', null, d.querySelector('.history-track'), d.querySelector('.history-date')));
     all('.author-links a').forEach((a) => add({ group: 'btn/author-link', label: a.getAttribute('aria-label') || a.textContent.trim(), strict: true, box: a }));
-    all('#feed-entry').forEach((a) => add({ group: 'link/feed-entry', label: txtOf(a), strict: strictOf(txtOf(a)), box: a })); // 縦フィードの入口 (#178)
-    all('#recommend-link').forEach((a) => add({ group: 'link/recommend', label: 'recommend', strict: true, box: a }));
+    all('#feed-entry').forEach((a) => add({ group: 'link/feed-entry', label: txtOf(a), strict: strictOf(txtOf(a)), box: a, minH: matchMedia('(pointer: coarse)').matches ? 44 : 34 })); // 縦フィードの入口 (#178)
   }
   if (scene === 'request') {
     all('#req-submit, #req-type, #req-url').forEach((e) => add({ group: 'form/' + e.tagName.toLowerCase(), label: e.id, strict: true, box: e, xr: e.tagName === 'SELECT' ? 'left' : undefined }));
@@ -87,8 +86,12 @@ const collectAll = (scene) => {
     all('#feed .f-proto').forEach((b) => add({ group: 'feed/proto', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
     all('#feed .f-seen').forEach((b) => add({ group: 'feed/seen-label', label: txtOf(b).slice(0, 10), strict: false, box: b }));
     all('#feed .f-place').slice(0, 2).forEach((p) => pair('feed/place', null, p.querySelector('img'), p.querySelector('span') || [...p.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim()), { label: 'place' }));
-    all('#feed .f-panel-x').forEach((b) => add({ group: 'feed/panel-x', label: '×', strict: true, box: b }));
-    all('#feed .f-panel-acts button').forEach((b) => add({ group: 'feed/panel-btn', label: txtOf(b), strict: strictOf(txtOf(b)), box: b }));
+  }
+  if (scene === 'feed-panel') {
+    all('#feed .f-panel-x').forEach((b) => add({ group: 'feed/panel-x', label: '×', strict: true, box: b, minH: 32 }));
+    all('#feed .f-panel-acts button').forEach((b) => add({ group: 'feed/panel-btn', label: txtOf(b), strict: strictOf(txtOf(b)), box: b, minH: 32 }));
+  }
+  if (scene === 'feed') {
     all('#feed .f-end-actions button').forEach((b) => add({ group: 'feed/end-btn', label: txtOf(b).slice(0, 12), strict: strictOf(txtOf(b)), box: b }));
   }
   if (scene === 'about') {
@@ -108,13 +111,14 @@ const prepare = (i) => {
   st.textContent = `html{background:#fff!important;background-image:none!important}body{background:none!important;background-image:none!important}
 body *{visibility:hidden!important;animation:none!important;transition:none!important}
 [data-ink-vis],[data-ink-vis] *{visibility:visible!important;color:#000!important;background:none!important;border-color:transparent!important;text-shadow:none!important;opacity:1!important;box-shadow:none!important;-webkit-text-fill-color:#000!important;text-decoration:none!important;-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
-[data-ink-vis] svg *{fill:currentColor!important}
+[data-ink-vis] svg *{fill:currentColor!important} /* アイコンのインクの上下端を測るため、輪郭だけの図形（◐ の輪など）も塗りつぶして黒くする。形の上下端は変わらない */
 *{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
 #feed .f-art,#feed .f-scrim,.f-bg,.f-hero,#globe-background{display:none!important}
 [data-ink-hide],[data-ink-hide] *{visibility:hidden!important}`;
   document.querySelectorAll('[data-ink-hide]').forEach((e) => e.removeAttribute('data-ink-hide'));
   const anchor = t.box || t.gfx;
-  anchor.scrollIntoView({ block: 'center', inline: 'center' });
+  if (!anchor.isConnected) return { stale: true }; // 描き直された（縦フィードのパネルなど）。呼び出し側が集め直す
+  { const r = anchor.getBoundingClientRect(); if (r.top < 4 || r.bottom > innerHeight - 4 || r.left < 4 || r.right > innerWidth - 4) anchor.scrollIntoView({ block: 'center', inline: 'center' }); } // 画面内なら動かさない（縦フィードのパネルはスクロールで閉じる）
   const vis = t.gfx ? [t.txt && (t.txt.nodeType === 3 ? t.txt.parentElement : t.txt), t.gfxInk ? t.gfx : null] : [t.ink || t.box];
   vis.filter(Boolean).forEach((e) => e.setAttribute('data-ink-vis', ''));
   (t.hide || []).filter(Boolean).forEach((e) => e.setAttribute('data-ink-hide', ''));
@@ -136,6 +140,7 @@ body *{visibility:hidden!important;animation:none!important;transition:none!impo
   o.clip = { x: Math.min(...rs.map((r) => r.l)) - 4, y: Math.min(...rs.map((r) => r.t)) - 4, w: 0, h: 0 };
   o.clip.w = Math.max(...rs.map((r) => r.r)) + 4 - o.clip.x; o.clip.h = Math.max(...rs.map((r) => r.b)) + 4 - o.clip.y;
   o.imgGfx = !!(t.gfx && !t.gfxInk);
+  o.minH = t.minH || 0; o.outerH = t.box ? t.box.getBoundingClientRect().height : 0; // 押せる範囲の最小の高さ（text-box 化で縮む退行を検出する）
   return o;
 };
 
@@ -162,14 +167,17 @@ const SCENES = [
   ['top', '/jp/', '#query'],
   ['request', '/jp/', '#recommend-link', async (p) => { await p.evaluate(() => { const r = document.getElementById('recommend'); r.hidden = false; }); }],
   ['banner', '/jp/', '#query', async (p) => { await p.evaluate(() => { const b = document.getElementById('install-banner'); if (b) b.hidden = false; }); }],
-  ['feed', '/jp/?view=feed', '#feed .f-card', async (p) => { await p.evaluate(() => { const pn = document.querySelector('#feed .f-panel'); if (pn) pn.hidden = false; }); }],
+  ['feed', '/jp/?view=feed', '#feed .f-card'],
+  // パネルは開いたときに中身が描かれ、スクロールで閉じる。別の場面にして、クリックで開いた直後に（スクロールせずに）測る
+  ['feed-panel', '/jp/?view=feed', '#feed .f-seen', async (p) => { if (await p.$('#feed .f-panel[hidden]')) await p.click('#feed .f-seen'); await p.waitForSelector('#feed .f-panel:not([hidden]) .f-panel-acts button'); }],
   ['about', '/about/', '.about-logo'],
 ];
+// テーマ: 既定はライトだけ。測定は対象を白地・黒に固定して描くので、ライトとダークで値は同じ（色は幾何に効かない）。INK_BOTH_THEMES=1 で両方。
 // INK_QUICK=1: PC1280・ライト・ja だけ（開発中の素早い確認）
 const CONDS = [['pc1280', 1280, 900, false], ['sp390', 390, 844, true]];
 for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
   const [sceneName, url, waitFor, setup] = scene;
-  for (const [vp, width, height, coarse] of CONDS.filter((c) => !process.env.INK_QUICK || c[0] === 'pc1280')) for (const theme of (process.env.INK_QUICK ? ['light'] : ['light', 'dark'])) for (const lang of (process.env.INK_QUICK ? ['ja'] : ['ja', 'en'])) {
+  for (const [vp, width, height, coarse] of CONDS.filter((c) => !process.env.INK_QUICK || c[0] === 'pc1280')) for (const theme of (process.env.INK_QUICK || !process.env.INK_BOTH_THEMES ? ['light'] : ['light', 'dark'])) for (const lang of (process.env.INK_QUICK ? ['ja'] : ['ja', 'en'])) {
     const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: S, hasTouch: coarse, isMobile: coarse, bypassCSP: true, serviceWorkers: 'block' });
     await ctx.addInitScript(([t, l]) => { try { localStorage.setItem('mise-theme', t); localStorage.setItem('mise-language', l); localStorage.setItem('mise-install-dismissed', '0'); } catch (_) {} }, [theme, lang]);
     // 縦フィードの背景（ぼかし・backdrop-filter）は DSF 4 のソフトウェア描画では重くて固まる。測定に無関係で、絶対配置なので配置は変わらない。
@@ -181,8 +189,9 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
     page.on('console', (m) => { if (m.type() === 'error' && !/favicon|thumb|Failed to load resource/.test(m.text())) errs.push(m.text()); });
     try {
       await page.goto(BASE + url, { waitUntil: 'networkidle' });
-      await page.waitForSelector(waitFor, { timeout: 8000 }).catch(async (e) => { await page.screenshot({ path: process.env.INK_FAILSHOT || '/tmp/ink-fail.png' }); throw new Error(e.message + ' url=' + page.url()); });
+      await page.waitForSelector(waitFor, { timeout: 8000 }).catch(async (e) => { await page.screenshot({ path: process.env.INK_FAILSHOT || path.join(tmpdir(), 'mise-ink-fail.png') }); throw new Error(e.message + ' url=' + page.url()); });
       if (process.env.INK_FONT) await page.addStyleTag({ content: `html:root body, html:root button, html:root input, html:root select, html:root #feed { font-family: ${process.env.INK_FONT} !important; }` });
+      if (process.env.INK_CSS) await page.addStyleTag({ content: process.env.INK_CSS }); // 試作用: 任意の CSS を足して測る
       if (setup) await setup(page);
       await page.waitForTimeout(500);
       await page.evaluate(() => { document.fonts && document.fonts.ready; });
@@ -190,7 +199,13 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
       if (process.env.INK_DEBUG) console.error(sceneName, vp, theme, lang, list.length, 'targets');
       for (const d of list) {
         if (ONLY.length && !ONLY.some((o) => d.group.includes(o) || sceneName === o)) continue;
-        const p = await page.evaluate(prepare, d.i);
+        let p = await page.evaluate(prepare, d.i);
+        for (let k = 0; p.stale && k < 3; k++) { // 対象が描き直されていたら、場面の準備をやり直して集め直す
+          if (setup) await setup(page);
+          const again = (await page.evaluate(collectAll, sceneName)).find((x) => x.group === d.group && x.label === d.label);
+          if (again) { d.i = again.i; p = await page.evaluate(prepare, d.i); }
+        }
+        if (p.stale) { rows.push({ scene: sceneName, vp, theme, lang, group: d.group, label: d.label, strict: d.strict, ok: false, err: '対象が描き直されて測れない' }); continue; }
         await page.waitForTimeout(30);
         const clip = { x: p.clip.x, y: p.clip.y, width: Math.max(1, p.clip.w), height: Math.max(1, p.clip.h) };
         const png = await page.screenshot({ clip, animations: 'disabled' });
@@ -211,6 +226,7 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
         }
         // strict: 中心のずれ ≤ 0.5px。参考値の行（ディセンダー・絵文字・見出し）: 枠にインクが 1px 未満まで迫らない（in のみ）。
         if (row.top !== undefined) row.margin = Math.min(row.top, row.bottom);
+        if (p.minH) { row.h = +p.outerH.toFixed(2); if (p.outerH < p.minH - 0.3) row.err = `高さ ${p.outerH.toFixed(1)}px < ${p.minH}px（押せる範囲）`; }
         row.ok = row.err ? false : d.strict ? Math.abs(row.off) <= TOL + 1e-9 : row.margin === undefined ? Math.abs(row.off) <= TOL + 1.0 : row.margin >= 1;
         rows.push(row);
       }
@@ -220,6 +236,25 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
   }
 }
 await browser.close();
+
+// ---- 対象が 0 件なら NG（場面ごとに期待するグループ。黙って測定から抜けるのを防ぐ。pc=PC幅でだけ出るもの）
+const EXPECT = {
+  results: ['tag/site-tag', 'tag/chip', 'tag/chip-x', 'row/bullet', 'row/newtab-icon', 'row/flag-region', 'input/search-text', 'input/search-icon'],
+  top: ['btn/preferences', 'scope/flag-count', 'btn/author-link', 'link/feed-entry', 'pc:hud/history'],
+  request: ['form/select', 'form/input', 'form/button'],
+  banner: ['btn/install'],
+  feed: ['feed/icon-btn', 'feed/directory', 'feed/seg', 'feed/select', 'feed/nav', 'feed/open', 'feed/proto', 'feed/seen-label', 'feed/place', 'feed/end-btn'],
+  'feed-panel': ['feed/panel-x', 'feed/panel-btn'],
+  about: ['btn/preferences', 'about/logo'],
+};
+for (const [sc, groups] of Object.entries(EXPECT)) {
+  if (ONLY.length && !ONLY.includes(sc)) continue;
+  const conds = new Set(rows.filter((r) => r.scene === sc).map((r) => `${r.vp}|${r.theme}|${r.lang}`));
+  for (const c of conds) {
+    const [vp, theme, lang] = c.split('|');
+    for (const g of groups) { const pc = g.startsWith('pc:'), name = pc ? g.slice(3) : g; if (pc && vp !== 'pc1280') continue; if (!rows.some((r) => r.scene === sc && r.vp === vp && r.theme === theme && r.lang === lang && r.group === name)) rows.push({ scene: sc, vp, theme, lang, group: '(missing) ' + name, label: '対象が 0 件', strict: true, ok: false, err: '期待するグループが測定に出ていない' }); }
+  }
+}
 
 // ---- 集計 --------------------------------------------------------------------------------------------------
 const fmt = (r) => r.err ? `${r.err}` : r.mode === 'in' ? `上 ${r.top} / 下 ${r.bottom} / off ${r.off >= 0 ? '+' : ''}${r.off} (枠高 ${r.h})` : `中心差 ${r.off >= 0 ? '+' : ''}${r.off} (相手 ${r.gfxC} / 文字 ${r.txtC})`;
