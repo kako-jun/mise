@@ -199,8 +199,16 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
       if (process.env.INK_DEBUG) console.error(sceneName, vp, theme, lang, list.length, 'targets');
       for (const d of list) {
         if (ONLY.length && !ONLY.some((o) => d.group.includes(o) || sceneName === o)) continue;
+        if (sceneName === 'feed-panel') {
+          await page.evaluate(() => document.getElementById('__ink_style')?.remove());
+          await setup(page);
+          await page.waitForTimeout(500);
+          const current = (await page.evaluate(collectAll, sceneName)).find((x) => x.group === d.group && x.label === d.label);
+          if (current) d.i = current.i;
+        }
         let p = await page.evaluate(prepare, d.i);
         for (let k = 0; p.stale && k < 3; k++) { // 対象が描き直されていたら、場面の準備をやり直して集め直す
+          await page.evaluate(() => document.getElementById('__ink_style')?.remove());
           if (setup) await setup(page);
           const again = (await page.evaluate(collectAll, sceneName)).find((x) => x.group === d.group && x.label === d.label);
           if (again) { await page.waitForTimeout(400); d.i = again.i; p = await page.evaluate(prepare, d.i); }
