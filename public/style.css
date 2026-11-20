@@ -193,7 +193,7 @@ html[data-theme="dark"] .author-links a:hover, html[data-theme="dark"] .preferen
 
 .corner-panel { display: flex; flex-direction: column; align-items: flex-end; }
 .corner-panel .picks { position: static; width: 100%; margin: 0; }
-.corner-panel .author-links { position: static; padding: 4px 0; }
+.author-links { position: static; padding: 4px 0; }
 @media (min-width: 1200px) { .corner-panel { position: fixed; z-index: 2; right: 12px; bottom: 12px; width: 260px; } }
 @media (max-width: 1199px) { .corner-panel { position: static; width: min(560px, calc(100% - 24px)); margin: 20px auto; } }
 
@@ -369,10 +369,3 @@ html[data-theme="dark"] .feed-note { color: #9cc4cc; }
 .footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 20px 0 8px; font-size: 12px; opacity: .6; }
 .footer-meta #visit-counter { font-variant-numeric: tabular-nums; }
 .footer-meta #build-version { margin-left: auto; }
-
-/* 広い画面では固定されたリンク列より下に最下段を置く。 */
-@media (min-width: 1200px) {
-  .footer-meta { position: fixed; z-index: 2; left: 12px; right: 12px; bottom: 8px; margin: 0; }
-  .corner-panel { bottom: 36px; }
-  .hud.bottom-left { bottom: 36px; }
-}
