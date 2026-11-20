@@ -1,7 +1,8 @@
 const $ = selector => document.querySelector(selector);
 let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字。jp）、区画（国コード-区画。jp-13。URL は /jp/13/）、または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国・区画（サイトが 1 件以上あるもの）と件数。
-const DEFAULT_SCOPE = 'jp', INLINE_SCOPES = globalThis.MISE_INLINE_SCOPES; // countries.js（SSR と共有）
+const { DEFAULT_SCOPE, PAGE_SIZE }=globalThis.MiseFeedEntry;
+const INLINE_SCOPES = globalThis.MISE_INLINE_SCOPES; // countries.js（SSR と共有）
 let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [], regions: [] }, scopeToken = 0, scopesExpanded = false;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
@@ -17,8 +18,8 @@ let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', about:'MISE について', github:'作者のGitHub', linksLabel:'リンク', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:MISE_SCOPE_MORE_WORDS.ja.more, lessScopes:MISE_SCOPE_MORE_WORDS.ja.less, loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, totalCapped:n=>`該当 ${formatCap(n)} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。', feedEntry:'縦で見る', feedEntryTitle:'縦スクロールのフィードで見る(試作)', feedNote:globalThis.MiseFeedEntry?.NOTE.ja ?? '' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', about:'About MISE', github:'Creator on GitHub', linksLabel:'Links', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:MISE_SCOPE_MORE_WORDS.en.more, lessScopes:MISE_SCOPE_MORE_WORDS.en.less, loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, totalCapped:n=>`${formatCap(n)} matches`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.', feedEntry:'Feed', feedEntryTitle:'Browse as a vertical feed (beta)', feedNote:globalThis.MiseFeedEntry?.NOTE.en ?? '' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', about:'MISE について', github:'作者のGitHub', linksLabel:'リンク', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', crawled:'最終巡回', uncrawled:'巡回日不明', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:MISE_SCOPE_MORE_WORDS.ja.more, lessScopes:MISE_SCOPE_MORE_WORDS.ja.less, loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, totalCapped:n=>`該当 ${formatCap(n)} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。', feedEntry:'縦で見る', feedEntryTitle:'縦スクロールのフィードで見る', listView:'箇条書き' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', about:'About MISE', github:'Creator on GitHub', linksLabel:'Links', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', crawled:'Last crawled', uncrawled:'Crawl date unknown', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:MISE_SCOPE_MORE_WORDS.en.more, lessScopes:MISE_SCOPE_MORE_WORDS.en.less, loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, totalCapped:n=>`${formatCap(n)} matches`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.', feedEntry:'Feed', feedEntryTitle:'Browse as a vertical feed', listView:'List view' }
 };
 Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
 Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
@@ -127,9 +128,9 @@ function renderStats() {
   }
 }
 // 範囲つきの URL（/jp/?category=…）。カテゴリの階層は従来どおりクエリ。
-function categoryUrl(path, scope=currentScope) { const u=new URL(scopePath(scope),location.origin); path.forEach(id=>u.searchParams.append('category',id)); return u.pathname+u.search; }
+function categoryUrl(path, scope=currentScope) { return globalThis.MiseFeedEntry.directoryHref(scope,path); }
 // 区画は /jp/13/ -> jp-13。サイトのある区画かはサーバーが確かめる（サイトの無い区画の URL はサーバーが 404 にする。ここでは確かめない）。
-const scopeFromLocation = () => { const m=location.pathname.match(/^\/(?:([a-z]{2})\/([a-z0-9]{1,3})|([a-z]{2}|all))\/$/); return m ? (m[1] ? `${m[1]}-${m[2]}` : m[3]) : DEFAULT_SCOPE; };
+const scopeFromLocation = () => globalThis.MiseFeedEntry.scopeFromPath(location.pathname);
 function link(label, path, callback) {
   const a=document.createElement('a'); a.href=categoryUrl(path); a.textContent=label;
   a.addEventListener('click', e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); callback(); });
@@ -280,8 +281,9 @@ function toggleTag(tag, fromDirectory=false) {
 }
 // リンク先のホスト名の表示（public/site-host.js。SSR の src/seo.js と縦フィードと共有する 1 本）
 const siteHost = value => globalThis.MiseSiteHost ? globalThis.MiseSiteHost(value) : null; // site-host.js の読み込み失敗でも一覧は出す（ホスト名だけ出ない）
-function renderSite(target, site, showCategories=false) {
+function renderSite(target, site, showCategories=false, position=null) {
   const li=document.createElement('li'), a=document.createElement('a'), p=document.createElement('p');
+  if(position!==null) li.id=globalThis.MiseFeedEntry.sitePositionId(position);
   const href=safeHttpUrl(site.url); if(href) { a.href=href; configureExternalLink(a); }
   const displayName=siteName(site); a.textContent=displayName; p.textContent=siteDescription(site);
   if(language==='en' && !site.description_en) p.lang='ja';
@@ -298,7 +300,7 @@ function renderSite(target, site, showCategories=false) {
   const host=siteHost(site.url);
   const bullet=document.createElement('span'); bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true'); head.append(bullet,icon,title); content.append(head);
   const registered=Date.parse(site.registered_at), age=Date.now()-registered;
-  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<30*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; title.append(tag); }
+  if(!site.bulk_import && Number.isFinite(registered) && age>=0 && age<globalThis.MiseFeedEntry.RECENT_DAYS*24*60*60*1000) { const tag=document.createElement('span'); tag.className='new-tag'; tag.textContent=' NEW'; title.append(tag); }
   content.append(p);
   const flag=countryFlag(site); if(flag) { title.append(flag); bindGlobeHover(li,flag,site); }
   if(host) { const hs=document.createElement('span'); hs.className='site-host'; hs.textContent=host; title.append(hs); } // 1 行目の最後（名前・新規タブ・NEW・国旗・ホスト名の順。スマホで長い名前だと折り返して次の行に落ちることがある＝既知・受け入れ済み）
@@ -331,11 +333,10 @@ function renderSite(target, site, showCategories=false) {
 // 1 つの一覧（カテゴリ直下 or 検索結果）= 1 つの list。key が同じなら描き直すだけで再取得しない（言語切替など）。
 // 総件数が上限付き（API の total_capped）のときの表示。n は上限値（src/sites.js の TOTAL_CAP）で「1,000+」の形にする。
 function formatCap(n) { return n.toLocaleString('en-US')+'+'; }
-const PAGE_SIZE=40; // src/sites.js の PAGE_SIZE と同じ（?page=N の開始位置と「あと何件」の計算に使う）
 let activeList=null; const listIo=(typeof IntersectionObserver!=='undefined') ? new IntersectionObserver(entries=>{ if(activeList && entries.some(e=>e.isIntersecting)) activeList.loadMore(); },{rootMargin:'0px 0px 600px 0px'}) : null;
 // 行を消す処理はここ 1 か所。消える行からは pointerleave/focusout が来ないので、置換の前に地球儀のホールドを解く（保持中でなければ地球側は何もしない）。追記読み込みは行を消さないので解除しない。
 function clearListRows(ul) { releaseGlobe(); ul.replaceChildren(); }
-const pageFromLocation=()=>{ const n=/^\d{1,6}$/.test(new URLSearchParams(location.search).get('page')||'') ? Number(new URLSearchParams(location.search).get('page')) : 1; return n>=1?n:1; };
+const pageFromLocation=()=>globalThis.MiseFeedEntry.parsePage(new URLSearchParams(location.search).get('page'))??1;
 function startList(opts) {
   if(activeList && activeList.key===opts.key) { activeList.opts={...opts,preserve:activeList.opts.preserve}; activeList.rerender(); return; }
   if(activeList) activeList.stop();
@@ -355,6 +356,8 @@ function createList(opts) {
   L.endText=()=>t('listEnd')(L.totalCapped ? L.offset+L.items.length : L.total);
   L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
   const foot=opts.foot, ul=opts.ul;
+  const isDirectory=ul.id==='directory-sites';
+  const renderRow=(site,index)=>renderSite(ul,site,!!opts.showCategories,isDirectory ? L.offset+index+1 : null);
   const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && (!SCROLL_KEYS.has(e.key) || isEditable(e.target))) return; L.userMoved=true; };
   // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
   L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
@@ -367,7 +370,7 @@ function createList(opts) {
     const o=L.opts, ps=ul.parentNode.querySelector('#site-pager');
     // 最初の応答が来るまで（または最初の応答が失敗したら）、一覧と SSR のページ番号リンクには触らない（SSR の 1 ページ目を残す）。
     const hold=o.preserve && !L.items.length && (L.loading || L.error);
-    if(!hold) { clearListRows(ul); L.items.forEach(s=>renderSite(ul,s,!!o.showCategories)); }
+    if(!hold) { clearListRows(ul); L.items.forEach(renderRow); }
     const empty=!L.items.length && L.ended;
     status.textContent=L.loading ? t('loadingMore') : L.error ? t('listError') : L.ended ? (L.items.length ? L.endText() : '') : L.total!=null ? L.remainingText() : '';
     btn.textContent=t(L.error?'retry':'loadMore'); btn.hidden=!(L.error || (!listIo && !L.ended && !L.loading));
@@ -387,8 +390,16 @@ function createList(opts) {
       const r=await fetch(L.url(),{signal:L.ctl.signal}); if(!r.ok) throw Error('API');
       const d=await r.json(); if(L.stopped) return;
       const first=!L.items.length && L.total==null;
+      const prevLength=L.items.length;
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) { L.total=d.total; L.totalCapped=!!d.total_capped; }
-      if(first) { L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total); } else { d.items.forEach(s=>renderSite(ul,s,!!opts.showCategories)); }
+      if(first) {
+        L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total);
+        // SSR の行から API の行に描き直すと高さが変わるので、縦ビューの続きの行へ合わせ直す。
+        const hash=location.hash;
+        if(isDirectory && !L.restore && /^#site-row-\d+$/.test(hash)) requestAnimationFrame(()=>{
+          if(!L.stopped && location.hash===hash) document.getElementById(hash.slice(1))?.scrollIntoView({block:'start'});
+        });
+      } else { d.items.forEach((s,i)=>renderRow(s,prevLength+i)); }
     } catch (e) { if(L.stopped) return; L.error=true; /* 復元は捨てない: 保存値を守り（復元中は保存しない）、再試行で続ける */ }
     L.loading=false; L.resolveFirst(); if(L.stopped) return;
     status.textContent=L.error ? t('listError') : L.ended ? (L.items.length ? L.endText() : '') : L.remainingText();
@@ -411,10 +422,11 @@ addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTim
 // 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
 addEventListener('pagehide',()=>{ if(listDirty || !(history.state && history.state.mise && activeList && history.state.mise.key===activeList.key)) saveListState(); });
 // 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
-// 縦フィードの入口(#feed-entry)の href を今の範囲・トップ階層カテゴリに合わせる。引き継ぐのはこの 2 つだけ（検索語・タグ・2 階層目以降は vertical-link.js の注記のとおり捨てる）。
-// URL を書き換える経路が多いので、画面の切替時に加え、押す直前（pointerdown / focus）にも作り直して href を必ず今の状態にする。
-function syncFeedEntry() { const a=$('#feed-entry'); if(a && globalThis.MiseFeedEntry) a.href=globalThis.MiseFeedEntry.feedEntryHref(currentScope,(currentSearch===null?currentPath:tagPath)[0]);
-  const n=$('#feed-note'); if(n && globalThis.MiseFeedEntry) n.hidden=!globalThis.MiseFeedEntry.feedEntryLossy(currentSearch!==null, currentSearch===null?currentPath.length:tagPath.length); // 引き継げない状態のときだけ案内を出す
+// フォルダの一覧から、同じ階層・範囲の縦ビューへ切り替える。
+function syncFeedEntry() {
+  const a=$('#feed-entry');
+  a.hidden=currentSearch!==null || !currentPath.length;
+  if(!a.hidden) a.href=globalThis.MiseFeedEntry.feedEntryHref(currentScope,currentPath,pageFromLocation());
 }
 function pushUrl(url,state=null) { saveListState(); history.pushState(state,'',url); }
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
@@ -469,12 +481,25 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
     path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
-  for(const c of children) { const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); const hd=document.createElement('div'); hd.className='site-head'; const bl=document.createElement('span'); bl.className='site-bullet'; bl.setAttribute('aria-hidden','true'); const ci=document.createElement('span'); ci.className='site-icon cat-icon'; ci.setAttribute('aria-hidden','true'); hd.append(bl,ci,h); div.append(hd); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
+  for(const c of children) { if(c===globalThis.MiseFeedEntry.recentFolder) { box.append(renderRecentFolder(c)); continue; } const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); const hd=document.createElement('div'); hd.className='site-head'; const bl=document.createElement('span'); bl.className='site-bullet'; bl.setAttribute('aria-hidden','true'); const ci=document.createElement('span'); ci.className='site-icon cat-icon'; ci.setAttribute('aria-hidden','true'); hd.append(bl,ci,h); div.append(hd); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
   $('#picks').hidden=false; renderPick();
   const pageNo=path.length ? pageFromLocation() : 1;
   startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
     onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
   if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
+}
+function renderRecentFolder(folder) {
+  const path=[folder.id], div=document.createElement('div'), head=document.createElement('div');
+  div.className='category category-recent'; head.className='site-head';
+  const bullet=document.createElement('span'), icon=document.createElement('span');
+  bullet.className='site-bullet'; bullet.setAttribute('aria-hidden','true');
+  icon.className='site-icon cat-icon'; icon.setAttribute('aria-hidden','true');
+  const heading=document.createElement('h2'), feed=document.createElement('a');
+  feed.className='recent-feed'; feed.href=globalThis.MiseFeedEntry.feedEntryHref(currentScope,path);
+  feed.rel='nofollow'; feed.textContent=name(folder); heading.append(feed);
+  const list=link(t('listView'),path,()=>showDirectory(path)); list.className='recent-list';
+  head.append(bullet,icon,heading,list); div.append(head);
+  return div;
 }
 function renderPick(dir=1) {
   const list=$('#pick-list');
@@ -611,7 +636,7 @@ $('#query').addEventListener('compositionstart',()=>{composing=true;});
 $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {if(!leaveSearchUrl()) showDirectory(currentPath,false);}});
-for(const ev of ['pointerdown','focus','contextmenu']) $('#feed-entry')?.addEventListener(ev,syncFeedEntry); // 押す直前・右クリック/フォーカスのときに href を今の状態へ
+for(const ev of ['pointerdown','focus','contextmenu']) $('#feed-entry').addEventListener(ev,syncFeedEntry); // 押す直前・右クリック/フォーカスのときに href を今の状態へ
 $('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
 $('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
 function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
@@ -702,7 +727,7 @@ function loadScopeData(scope) {
 async function switchData(scope) {
   const token=++scopeToken, data=await loadScopeData(scope);
   if(token!==scopeToken) return false;
-  currentScope=scope; categories=data.categories; pickedSites=data.picks; activityStats=data.stats; pickIndex=0; pickHistory=[];
+  currentScope=scope; categories=[globalThis.MiseFeedEntry.recentFolder,...data.categories]; pickedSites=data.picks; activityStats=data.stats; pickIndex=0; pickHistory=[];
   return true;
 }
 // 切替後も、カテゴリ階層と検索語は維持する（docs/design/ui.md）。
@@ -733,9 +758,14 @@ function restoreLocation() {
   if(q && q.trim()){ currentTags=[]; $('#query').value=q; showResults(q.trim()); return; }
   const first=!restoredOnce; restoredOnce=true;
   $('#query').value='';
-  const raw=new URLSearchParams(location.search).getAll('category'); let parent=null; const path=[];
+  const raw=sp.getAll('category'); let parent=null; const path=[];
   for(const part of raw) { const c=categories.find(x=>x.parent_id===parent && (x.id===part || x.name_ja===part)); if(!c){ history.replaceState(null,'',categoryUrl([]));showDirectory([],false);return; } path.push(c.id); parent=c.id; }
-  if(raw.some((part,i)=>part!==path[i])) history.replaceState(null,'',categoryUrl(path));
+  if(raw.some((part,i)=>part!==path[i])) {
+    const url=new URL(categoryUrl(path),location.origin);
+    for(const [key,value] of sp) if(key!=='category') url.searchParams.append(key,value);
+    url.hash=location.hash;
+    history.replaceState(history.state,'',url);
+  }
   showDirectory(path,false,first);
 }
 let restoredOnce=false;

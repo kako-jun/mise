@@ -1,5 +1,4 @@
-// 縦フィード（モックアップ・#52）。`?view=feed` のときだけ index.html が読み込む。既定表示には影響しない。
-// データは既存の /api/sites をそのまま使う（site × category の行なので id で束ねる）。
+// 新着とカテゴリ別の縦フィード。 `?view=feed` のときだけ index.html が読み込む。
 (() => {
   // ---- 調整できる定数（触って決める） -------------------------------------------------
   const FRESH_BOOST = 1.5;       // 更新が新しいサイトの出やすさの上乗せ。0=完全ランダム、大きいほど新しい順に近づく
@@ -8,7 +7,6 @@
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
   const MAX_SITES = 500;         // 1 回の範囲選択で読み込むサイト数の上限(100 件ずつ取得 = 最大 5 リクエスト)
-  const LOAD_DEBOUNCE_MS = 300;  // 範囲を続けて切り替えたとき、最後の 1 回だけ取り直す
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
   const SEEN_KEY = 'mise-seen-v1'; // 端末内保存(localStorage)。{v:1, sites:{サイトID: 初めて見た日時ISO}}
   // -------------------------------------------------------------------------------------
@@ -19,15 +17,15 @@
     sget(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }, sset(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} } };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
-    ja: { seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directory: '一覧表示', directoryTitle: '従来のディレクトリ表示へ', scopeLabel: '範囲', all: '全世界', japan: '日本', note: (n, total) => `先頭 ${n} 件を表示中(全 ${total} 件)`, noteFail: '一部の読み込みに失敗', proto: '試作', protoTitle: '試作ビュー(検索エンジンには載りません)', scopeAllLabel: '全世界', allOf: n => `${n}全域`, catLabel: 'カテゴリ', catAll: 'すべてのカテゴリ', sortLabel: '並び', mix: 'おまかせ', newest: '新しい順', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', theme: 'ダーク/ライト', lang: 'English', extOn: '外部リンクを別タブで開く: オン', extOff: '外部リンクを別タブで開く: オフ', end: n => `ここまでです。${n}件、見終わりました。`, endNote: 'ここで終わりにして大丈夫です。', top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '', itemOf: (i, n) => `${i} / ${n}` },
-    en: { seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directory: 'Directory', directoryTitle: 'Switch to the classic directory view', scopeLabel: 'Scope', all: 'World', japan: 'Japan', note: (n, total) => `Showing the first ${n} of ${total}`, noteFail: 'part of the data failed to load', proto: 'BETA', protoTitle: 'Prototype view (not indexed by search engines)', scopeAllLabel: 'World', allOf: n => `All of ${n}`, catLabel: 'Category', catAll: 'All categories', sortLabel: 'Order', mix: 'Shuffle', newest: 'Newest', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', theme: 'Dark / light', lang: '日本語', extOn: 'Open external links in new tabs: on', extOff: 'Open external links in new tabs: off', end: n => `That’s all. You have seen ${n} sites.`, endNote: 'It is fine to stop here.', top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)', itemOf: (i, n) => `${i} / ${n}` }
+    ja: { searchLabel: 'サイトを検索', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
+      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
+    en: { searchLabel: 'Search sites', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
+      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
-  let language = savedLang === 'ja' || savedLang === 'en' ? savedLang : (((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
-  let newTab = storage.get('mise-external-new-tab') === 'true';
+  const language = savedLang === 'ja' || savedLang === 'en' ? savedLang : (((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
+  const newTab = storage.get('mise-external-new-tab') === 'true';
   const t = k => words[language][k];
   // サイト名: 画面の言語の名前があればそれ、無ければ言語共通の name(#167)
   const siteName = s => (language === 'ja' ? s.name_ja : s.name_en) || s.name;
@@ -35,21 +33,18 @@
   const fmt = n => L.fmtCount(n, language);
 
   // ---- 決定論の乱数（シード = セッションごと。?seed= で再現） ----
-  const { hash32, rngOf, updatedOf } = L;
+  const { hash32, rngOf } = L;
 
   const params = new URLSearchParams(location.search);
   let seed = params.get('seed') || storage.sget('mise-feed-seed') || Math.random().toString(36).slice(2, 8);
   storage.sset('mise-feed-seed', seed);
-  let seedPinned = !!params.get('seed'); // URL に seed を載せるのは、?seed= で来たときと「並びを変える」を押したあと
-  // 範囲の初期値: ?scope= 、無ければパス(/jp/ → jp、/jp/13/ → jp-13)
-  const pathScope = (m => m ? (m[2] ? `${m[1]}-${m[2]}` : m[1]).toLowerCase() : null)(location.pathname.match(/^\/([a-z]{2})(?:\/([a-z0-9]{1,3}))?\/?$/i));
-  const state = { scope: /^(all|[a-z]{2}(-[a-z0-9]{1,3})?)$/i.test(params.get('scope') || '') ? params.get('scope').toLowerCase() : (pathScope || 'all'), cat: params.get('cat') || '', sort: params.get('sort') === 'new' ? 'new' : 'mix' };
+  const requestedPath = params.getAll('category');
+  const sort = params.get('sort') === 'new' ? 'new' : 'mix'; // 旧 ?cat= リンクの並び
+  let scope, startPage, path = [], categories = [], all = [], list = [], current = 0, cards = [], loadFailed = false, hasMore = false, loadedCount = 0;
 
-  let loadedScope = null, loadedComplete = false, loadFailed = false, loadAbort = null, loadTimer = 0, changeScope = () => {};
-  let categories = [], scopes = { countries: [], regions: [] }, all = [], list = [], current = 0, cards = [];
   // 「見た」の滞在タイマー。一覧を作り直すとき clearAll() で古いタイマーを止める(止めないと見ていないサイトを数える)
   const dwell = L.makeDwell(SEEN_DWELL_MS, site => { if (!document.hidden) markSeen(site); });
-  let root, scroller, bar, counter, noteEl, observer, globeTimer = 0, lastPlace = '';
+  let root, scroller, bar, observer, globeTimer = 0, lastPlace = '', seenTrigger;
 
   // ---- データ整形 ----
   function rootCat(id) { let n = categories.find(c => c.id === id); while (n && n.parent_id) n = categories.find(c => c.id === n.parent_id); return n || null; }
@@ -64,11 +59,21 @@
     }
     return [...map.values()];
   }
-  // 要求した範囲のデータがまだ揃っていない間は true。この間は古い範囲のデータを絞り込んで出さない
-  const pending = () => L.isPending(loadedScope, loadedComplete, state.scope);
+  function resolveCategoryPath() {
+    const parts = requestedPath.length ? requestedPath : (params.get('cat') ? [params.get('cat')] : []);
+    let parent = null;
+    const resolved = [];
+    for (const part of parts) {
+      const folder = categories.find(c => c.parent_id === parent && (c.id === part || c.name_ja === part));
+      if (!folder) return [];
+      parent = folder.id;
+      resolved.push(parent);
+    }
+    return resolved;
+  }
   function visible() {
-    // 並びは全件で一度決め、絞り込みは順序を保ったまま間引く（条件を戻すと同じ並びに戻る）
-    return L.order(all, { sort: state.sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => L.inScope(s, state.scope) && (!state.cat || s.roots.has(state.cat)));
+    if (requestedPath.length) return all; // フォルダでは箇条書きと同じ順序
+    return L.order(all, { sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => !path.length || s.roots.has(path[0]));
   }
 
   // ---- 代替ビジュアル（サイトIDから決まる三毛猫の模様 + 頭文字）。thumb_url があればそちらを使う ----
@@ -182,8 +187,9 @@
     let tags = []; try { tags = JSON.parse(s.tags_json || '[]'); } catch (_) {}
     if (tags.length) { const ul = document.createElement('ul'); ul.className = 'f-tags'; for (const tg of tags) { const li = document.createElement('li'); li.textContent = (language === 'en' && tg.en) ? tg.en : tg.ja; ul.append(li); } body.append(ul); }
     const foot = document.createElement('div'); foot.className = 'f-foot';
-    const when = (s.source_updated_at || s.registered_at || '').slice(0, 10);
-    if (when) { const time = document.createElement('time'); time.className = 'f-date'; time.dateTime = when; time.textContent = `${s.source_updated_at ? t('updated') : t('added')} ${when}`; foot.append(time); }
+    const sourceDate = path[0] !== globalThis.MiseFeedEntry.RECENT_CATEGORY && s.source_updated_at;
+    const when = (sourceDate || s.registered_at || '').slice(0, 10);
+    if (when) { const time = document.createElement('time'); time.className = 'f-date'; time.dateTime = when; time.textContent = `${sourceDate ? t('updated') : t('added')} ${when}`; foot.append(time); }
     // http(s) 以外(javascript: / data: / 相対 / 不正)の URL は『開く』リンクを出さない
     const href = L.safeHttpUrl(s.url);
     if (href) { const a = document.createElement('a'); a.className = 'f-open'; a.href = href; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${siteName(s)}`); configureLink(a); foot.append(a); }
@@ -196,12 +202,20 @@
     const sec = document.createElement('section'); sec.className = 'f-card f-end'; sec.tabIndex = -1; sec.dataset.index = 'end'; sec.setAttribute('aria-label', t('end')(fmt(n)));
     const body = document.createElement('div'); body.className = 'f-end-body';
     const h = document.createElement('h2'); h.textContent = t('end')(fmt(n));
-    const p = document.createElement('p'); p.textContent = t('endNote');
     const row = document.createElement('div'); row.className = 'f-end-actions';
     const top = document.createElement('button'); top.type = 'button'; top.textContent = t('top'); top.addEventListener('click', () => { navTarget = 0; clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(0); if (c) c.focus({ preventScroll: true }); });
     row.append(top);
-    if (state.sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); seedPinned = true; syncUrl(); renderList(); const c = go(0, true); if (c) c.focus({ preventScroll: true }); }); row.append(re); }
-    body.append(h, p, row); sec.append(body);
+    if (!requestedPath.length && sort === 'mix') { const re = document.createElement('button'); re.type = 'button'; re.className = 'f-quiet'; re.textContent = t('reshuffle'); re.addEventListener('click', () => { seed = Math.random().toString(36).slice(2, 8); storage.sset('mise-feed-seed', seed); const url = new URL(location.href); url.searchParams.set('seed', seed); history.replaceState(null, '', url); renderList(); const c = go(0, true); if (c) c.focus({ preventScroll: true }); }); row.append(re); }
+    body.append(h);
+    if (loadFailed) { const note = mk('p'); note.textContent = t('noteFail'); body.append(note); }
+    if (hasMore || loadFailed) {
+      const href = requestedPath.length
+        ? globalThis.MiseFeedEntry.continueListHref(scope, path, startPage, loadedCount)
+        : directoryHref();
+      const more = mk('a', 'f-continue', { href }); more.textContent = t('moreInList'); row.append(more);
+    }
+    row.append(seenButton());
+    body.append(row); sec.append(body);
     return sec;
   }
   function emptyCard() {
@@ -275,68 +289,37 @@
     acts.append(ex, im, file); const msg = mk('p', 'f-panel-msg', { role: 'status' }); const foot = mk('p', 'f-panel-note'); foot.textContent = t('seenNote');
     panel.append(acts, msg, foot);
   }
-  function openPanel() { const p = $('.f-panel'); p.hidden = false; $('.f-seen').setAttribute('aria-expanded', 'true'); renderPanel(); }
-  function closePanel() { const p = $('.f-panel'); if (p.hidden) return; p.hidden = true; $('.f-seen').setAttribute('aria-expanded', 'false'); $('.f-seen').focus(); }
+  function openPanel(button) { const p = $('.f-panel'); p.hidden = false; seenTrigger = button; button.setAttribute('aria-expanded', 'true'); renderPanel(); $('.f-panel-x').focus(); }
+  function closePanel() { const p = $('.f-panel'); if (p.hidden) return; p.hidden = true; seenTrigger.setAttribute('aria-expanded', 'false'); seenTrigger.focus(); }
 
   // ---- 骨格 ----
   function mk(tag, cls, attrs = {}) { const e = document.createElement(tag); if (cls) e.className = cls; for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
-  function segment(name, options, value, onPick) {
-    const g = mk('div', 'f-seg', { role: 'group', 'aria-label': t(name + 'Label') });
-    for (const [v, label] of options) { const b = mk('button', '', { type: 'button', 'aria-pressed': String(v === value) }); b.textContent = label; b.addEventListener('click', () => onPick(v)); g.append(b); }
-    return g;
+  function seenButton() {
+    const button = mk('button', 'f-seen', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
+    button.innerHTML = '<span class="f-seen-label"></span> <span class="f-seen-num"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span><span class="f-kittens" aria-hidden="true"></span>';
+    $('.f-seen-label', button).textContent = t('seen');
+    $('.f-kittens', button).innerHTML = kittensHtml();
+    button.addEventListener('click', () => ($('.f-panel').hidden ? openPanel(button) : closePanel()));
+    return button;
   }
-  const counter0 = () => (counter = mk('span', 'f-counter', { 'aria-hidden': 'true' }));
-  function renderBar() {
-    bar.replaceChildren();
-    const row1 = mk('div', 'f-row');
-    const logo = mk('a', 'f-logo', { href: location.pathname + '?view=feed', 'aria-label': 'MISE' }); logo.textContent = 'MISE';
-    const space = mk('span', 'f-grow');
-    const dir = mk('a', 'f-directory', { href: directoryHref(), title: t('directoryTitle'), 'aria-label': t('directoryTitle') }); dir.textContent = t('directory');
-    const ext = mk('button', 'f-icon', { type: 'button', 'aria-pressed': String(newTab), 'aria-label': t(newTab ? 'extOn' : 'extOff'), title: t(newTab ? 'extOn' : 'extOff') });
-    ext.innerHTML = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path fill="currentColor" d="M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z"/></svg>';
-    ext.addEventListener('click', () => { newTab = !newTab; storage.set('mise-external-new-tab', String(newTab)); ext.setAttribute('aria-pressed', String(newTab)); ext.title = ext.ariaLabel = t(newTab ? 'extOn' : 'extOff'); document.querySelectorAll('.f-open').forEach(configureLink); });
-    // テーマ切替で <meta name="theme-color"> は追従させない(通常ページ(app.js)の仕様に合わせる。試作では触らない)
-    const th = mk('button', 'f-icon', { type: 'button', 'aria-label': t('theme'), title: t('theme') }); th.innerHTML = '<svg aria-hidden="true" class="theme-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg>';
-    th.addEventListener('click', () => { const v = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = v; storage.set('mise-theme', v); });
-    const lg = mk('button', 'f-icon', { type: 'button', 'aria-label': t('lang'), title: t('lang') }); lg.textContent = '文';
-    lg.addEventListener('click', () => { language = language === 'ja' ? 'en' : 'ja'; storage.set('mise-language', language); document.documentElement.lang = language; const id = list[current] && list[current].id; renderBar(); if (!pending()) { renderList(id); updateCounter(); } });
-    const sb = mk('button', 'f-seen', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
-    sb.innerHTML = '<span class="f-seen-label" aria-hidden="true">SEEN</span> <span class="f-seen-num" aria-hidden="true"></span><span class="f-seen-bar" aria-hidden="true"><i></i></span>';
-    sb.addEventListener('click', () => ($('.f-panel').hidden ? openPanel() : closePanel()));
-    const kit = mk('span', 'f-kittens', { 'aria-hidden': 'true' }); kit.innerHTML = kittensHtml();
-    const row0 = mk('div', 'f-row f-row0'); const proto = mk('span', 'f-proto', { title: t('protoTitle') }); proto.textContent = t('proto');
-    noteEl = mk('span', 'f-note', { role: 'status' });
-    row0.append(counter0(), noteEl, mk('span', 'f-grow'), proto, sb); updateNote();
-    row1.append(logo, kit, space, dir, ext, th, lg);
 
-    const row2 = mk('div', 'f-row f-filters');
-    const scopeSel = mk('select', 'f-select f-scope', { 'aria-label': t('scopeLabel') });
-    scopeSel.append(new Option(t('scopeAllLabel'), 'all'));
-    const nameOf = (m, code) => (m && m[code] ? m[code][language] : null);
-    for (const c of scopes.countries) {
-      const cc = String(c.code).toUpperCase(), cn = nameOf(window.MISE_COUNTRIES, cc) || cc;
-      scopeSel.append(new Option(`${cn} (${fmt(c.count)})`, cc.toLowerCase()));
-      for (const r of scopes.regions.filter(r => String(r.code).toUpperCase().startsWith(cc + '-'))) scopeSel.append(new Option(`\u00a0\u00a0${nameOf(window.MISE_REGIONS, String(r.code).toUpperCase()) || r.code} (${fmt(r.count)})`, String(r.code).toLowerCase()));
-    }
-    if (![...scopeSel.options].some(o => o.value === state.scope)) state.scope = 'all';
-    scopeSel.value = state.scope; scopeSel.addEventListener('change', () => changeScope(scopeSel.value));
-    row2.append(scopeSel);
-    const sel = mk('select', 'f-select', { 'aria-label': t('catLabel') });
-    sel.append(new Option(t('catAll'), ''));
-    for (const c of categories.filter(c => !c.parent_id)) { const n = all.filter(s => L.inScope(s, state.scope) && s.roots.has(c.id)).length; if (n || c.id === state.cat) sel.append(new Option(`${c[language === 'ja' ? 'name_ja' : 'name_en']} (${fmt(n)})`, c.id)); }
-    sel.value = state.cat; sel.addEventListener('change', () => { state.cat = sel.value; refilter(); });
-    row2.append(sel, mk('span', 'f-grow'), segment('sort', [['mix', t('mix')], ['new', t('newest')]], state.sort, v => { state.sort = v; refilter(); }));
-    const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen') }); panel.hidden = true;
-    bar.append(row0, row1, row2, panel); updateSeenBadge();
+  const directoryHref = () => globalThis.MiseFeedEntry.directoryHref(scope, path, startPage);
+
+  function renderBar() {
+    const back = mk('a', 'f-directory', { href: directoryHref(), title: t('directoryTitle'), 'aria-label': t('directoryTitle') });
+    back.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22"><path d="m12 5-7 7 7 7M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    back.addEventListener('click', event => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      // 同じ一覧から来たときは履歴を戻り、読み込み件数とスクロール位置を復元する。
+      if (document.referrer === back.href && performance.getEntriesByType('navigation')[0]?.type === 'navigate' && history.length > 1) {
+        event.preventDefault(); history.back();
+      }
+    });
+    const search = mk('form', 'f-search', { role: 'search', method: 'get', action: globalThis.MiseFeedEntry.directoryHref(scope) });
+    const input = mk('input', '', { type: 'search', name: 'q', placeholder: t('searchLabel'), 'aria-label': t('searchLabel'), autocomplete: 'off', required: '' });
+    search.append(input);
+    bar.append(back, search);
   }
-  // 「一覧表示」の戻り先: いまの範囲(パス)とトップ階層のカテゴリ(?category=)を返す。フィードが持つ絞り込みはこの 2 つだけ（#178）
-  const directoryHref = () => `/${state.scope.replace('-', '/')}/` + (state.cat ? `?category=${encodeURIComponent(state.cat)}` : '');
-  function syncUrl() {
-    const u = new URL(location.href); u.search = ''; u.searchParams.set('view', 'feed');
-    if (state.scope !== 'all' || pathScope) u.searchParams.set('scope', state.scope); if (state.cat) u.searchParams.set('cat', state.cat); if (state.sort !== 'mix') u.searchParams.set('sort', state.sort); if (seedPinned) u.searchParams.set('seed', seed);
-    history.replaceState(null, '', u.pathname + u.search);
-  }
-  function refilter() { syncUrl(); renderBar(); if (pending()) return; renderList(); go(0, true); }
 
   // 描画は最初の FIRST_BATCH 枚だけ先に行い、残りは少しずつ足す(1,000 枚を一度に描かない)。終了カードは常に最後に置く
   const FIRST_BATCH = 100, BATCH = 100;
@@ -355,9 +338,9 @@
   }
   function showLoading() {
     resetList(); list = [];
-    const p = mk('p', 'f-loading', { role: 'status' }); p.textContent = t('loading') + '…'; scroller.className = 'f-scroll f-error'; scroller.append(p); updateCounter(); updateButtons();
+    const p = mk('p', 'f-loading', { role: 'status' }); p.textContent = t('loading') + '…'; scroller.className = 'f-scroll f-error'; scroller.append(p); updateButtons();
   }
-  function renderList(keepId) {
+  function renderList() {
     list = visible(); resetList(); scroller.className = 'f-scroll';
     if (!list.length) { const e = emptyCard(); scroller.append(e); cards = [e]; }
     else {
@@ -366,23 +349,9 @@
       const tick = () => { if (rendered >= list.length) return; renderMore(rendered + BATCH); chunkTimer = setTimeout(tick, 40); };
       chunkTimer = setTimeout(tick, 250);
     }
-    const at = keepId ? Math.max(0, list.findIndex(s => s.id === keepId)) : 0;
-    scroller.scrollTop = 0; if (at) { renderMore(at + 1); requestAnimationFrame(() => go(at, true)); }
-    updateCounter(); updateButtons();
+    scroller.scrollTop = 0;
+    updateSeenBadge(); updateButtons();
   }
-  // 範囲の全体件数(/api/scopes)。読み込んだ数がそれより少ないときは、画面に正直に出す
-  function scopeTotal() {
-    if (state.scope === 'all') return scopes.total;
-    const code = state.scope.toUpperCase(), row = (state.scope.includes('-') ? scopes.regions : scopes.countries).find(r => String(r.code).toUpperCase() === code);
-    return row ? row.count : undefined;
-  }
-  function updateNote() {
-    if (!noteEl) return;
-    const total = scopeTotal(), loaded = all.length;
-    noteEl.textContent = loadedScope !== null && !pending() && ((Number.isFinite(total) && loaded < total) || loadFailed) ? t('note')(fmt(loaded), fmt(Number.isFinite(total) ? total : loaded)) + (loadFailed ? ` / ${t('noteFail')}` : '') : '';
-  }
-  function updateCounter() { if (counter) counter.textContent = list.length ? t('itemOf')(fmt(Math.min(current + 1, list.length)), fmt(list.length)) : ''; }
-
   // ---- 移動 ----
   function go(i, instant) {
     if (!cards.length) return;
@@ -410,7 +379,11 @@
   }
 
   function start() {
-    if (!document.documentElement.classList.contains('feed-mode')) return; // フックが通常表示へ戻した後（読み込み失敗・遅延到着）は何も起動しない
+    if (!document.documentElement.classList.contains('feed-mode') || !globalThis.MiseFeedEntry) return; // フックが通常表示へ戻した後（読み込み失敗・遅延到着）は何も起動しない
+    const { PAGE_SIZE, parsePage, scopeFromPath, validScope } = globalThis.MiseFeedEntry;
+    const legacyScope = params.get('scope')?.toLowerCase();
+    scope = !requestedPath.length && validScope(legacyScope) ? legacyScope : scopeFromPath(location.pathname);
+    startPage = requestedPath.length ? parsePage(params.get('page')) ?? 1 : 1;
     document.documentElement.lang = language;
     root = mk('div', 'feed-root'); root.id = 'feed';
     bar = mk('header', 'f-bar'); bar.setAttribute('role', 'banner');
@@ -421,11 +394,13 @@
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
     nav.append(prev, next);
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
-    root.append(bar, scroller, nav, hint); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
+    const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
+    path = requestedPath;
+    root.append(bar, scroller, nav, hint, panel); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
     observer = new IntersectionObserver(entries => {
       for (const e of entries) if (e.isIntersecting) {
         const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null;
-        updateCounter(); updateButtons(); fly(idx === 'end' ? null : list[current]);
+        updateButtons(); fly(idx === 'end' ? null : list[current]);
       }
       for (const e of entries) {
         const idx = e.target.dataset.index; if (idx === 'end') continue;
@@ -436,6 +411,7 @@
       }
     }, { root: scroller, threshold: IN_VIEW_THRESHOLD });
     loadSeen();
+    showLoading();
     addEventListener('keydown', e => {
       if (e.key === 'Escape' && $('.f-panel') && !$('.f-panel').hidden) { closePanel(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
@@ -443,41 +419,41 @@
       else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); step(-1, true); }
     });
     addEventListener('pagehide', () => window.dispatchEvent(new CustomEvent('mise-fly-release')));
-    // サイトは範囲ごとにサーバーから 100 件ずつ cursor でたどって読む(上限 MAX_SITES。超えた分は出さず、画面に注記する)。
-    // 2 ページ目以降の失敗は、読めた分で続ける(注記つき)。1 ページ目の失敗はエラー
-    async function loadSites(scope, signal) {
-      const rows = []; let cursor = null, failed = false;
-      for (let i = 0; i < Math.ceil(MAX_SITES / 100); i++) {
-        let j;
+    // 選んだフォルダを API 側で絞り、他フォルダが上限の 500 件に混ざらないようにする。
+    async function loadSites() {
+      const rows = [], query = new URLSearchParams({ scope });
+      if (requestedPath.length && path.length) query.set('category', path.at(-1));
+      const pagedEntry = path.length && startPage > 1;
+      if (pagedEntry) query.set('page', String(startPage));
+      for (let i = 0; rows.length < MAX_SITES; i++) {
+        // page は API の limit を単位にする。最初は箇条書きの 40 件、以降はカーソルで最大 100 件ずつ読む。
+        query.set('limit', String(pagedEntry && i === 0 ? PAGE_SIZE : Math.min(100, MAX_SITES - rows.length)));
         try {
-          const r = await fetch('/api/sites?limit=100' + (scope !== 'all' ? '&scope=' + encodeURIComponent(scope) : '') + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { signal });
-          if (!r.ok) throw Error('API'); j = await r.json();
-        } catch (e) { if (signal.aborted || i === 0) throw e; failed = true; break; }
-        rows.push(...j.items); cursor = j.next_cursor; if (!cursor) break;
+          const response = await fetch('/api/sites?' + query);
+          if (!response.ok) throw Error('API');
+          const data = await response.json();
+          rows.push(...data.items);
+          hasMore = !!data.next_cursor;
+          if (!hasMore) break;
+          query.delete('page');
+          query.set('cursor', data.next_cursor);
+        } catch (e) {
+          if (i === 0) throw e;
+          loadFailed = true;
+          break;
+        }
       }
-      return { rows, failed, more: !!cursor };
+      loadedCount = rows.length;
+      return rows;
     }
-    async function reload(scope) {
-      loadAbort && loadAbort.abort(); const ctl = loadAbort = new AbortController();
-      showLoading();
-      try {
-        const res = await loadSites(scope, ctl.signal); if (ctl.signal.aborted) return;
-        all = build(res.rows); loadedScope = scope; loadedComplete = !res.more && !res.failed; loadFailed = res.failed;
-        if (!categories.some(c => c.id === state.cat && !c.parent_id)) state.cat = '';
-        renderBar(); renderList(); updateCounter();
-      } catch (e) { if (ctl.signal.aborted) return; scroller.className = 'f-scroll f-error'; scroller.textContent = t('error'); }
-    }
-    // 範囲の変更。読み込み済みの範囲に含まれる(全件読めている)なら絞り込むだけ。そうでなければ 300ms 待って取り直す(連続操作は 1 回に)
-    changeScope = v => {
-      state.scope = v; syncUrl(); clearTimeout(loadTimer);
-      if (L.covers(loadedScope, loadedComplete, v)) { loadAbort && loadAbort.abort(); if (loadedScope !== null) { renderBar(); renderList(); go(0, true); } return; }
-      showLoading(); loadTimer = setTimeout(() => reload(v), LOAD_DEBOUNCE_MS);
-    };
-    Promise.all([fetch('/api/categories'), fetch('/api/scopes').then(r => r.ok ? r.json() : null).catch(() => null)]).then(async ([a, sc]) => {
-      if (!a.ok) throw Error('API');
-      if (sc && Array.isArray(sc.countries)) scopes = { total: sc.total, countries: sc.countries, regions: Array.isArray(sc.regions) ? sc.regions : [] };
-      categories = await a.json();
-      renderBar(); await reload(state.scope); scroller.focus({ preventScroll: true });
+    fetch('/api/categories').then(async response => {
+      if (!response.ok) throw Error('API');
+      categories = [globalThis.MiseFeedEntry.recentFolder, ...await response.json()];
+      path = resolveCategoryPath();
+      $('.f-directory', bar).href = directoryHref();
+      all = build(await loadSites());
+      renderList();
+      if (document.activeElement === document.body) scroller.focus({ preventScroll: true });
       // globe.js は load 後に遅延読込されるため、最初のカードの向き移動を一度だけ遅れて再送する
       setTimeout(() => { if (list[current]) { lastPlace = ''; fly(list[current]); } }, 2600);
     }).catch(() => { scroller.className = 'f-scroll f-error'; scroller.textContent = t('error'); });

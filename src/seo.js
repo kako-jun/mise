@@ -8,6 +8,7 @@ import '../public/regions.js';
 import '../public/site-host.js';
 // 通常画面 → 縦フィードの入口リンクの href（ブラウザの app.js と共有。読み込むと globalThis.MiseFeedEntry が定義される）。
 import '../public/vertical-link.js';
+const { directoryHref, feedEntryHref, recentFolder, sitePositionId } = globalThis.MiseFeedEntry;
 // SEO 用ヘルパー: カテゴリパスの解決、canonical、sitemap、"/" へのメタ情報・本文の注入。
 export const ORIGIN = 'https://mise.llll-ll.com';
 // 既定言語は英語（app.js の初期言語と一致）。サイトの紹介文は日本語のみのため「(Japanese)」を添える。
@@ -17,7 +18,7 @@ const DEFAULT_DESC = 'For those tired of search results dominated by ads and maj
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
 // 範囲（scope）: 国コード（小文字 2 文字。jp, us…）、区画（国コード-区画。jp-13, us-ca…。URL は /jp/13/ /us/ca/）、または all。ルート `/` は既定範囲として扱う（docs/design/seo.md）。
-export const DEFAULT_SCOPE = 'jp';
+export const { DEFAULT_SCOPE } = globalThis.MiseFeedEntry;
 // API/URL の範囲指定を解釈する。省略・空・all は全世界（cc = null, region = null）、小文字 2 文字は国、小文字 2 文字 + ハイフン + 英数 1〜3 文字は区画
 // （region は sites.region_code と同じ大文字の形 JP-13。cc はその国）、それ以外は null（不正）。区画が実在するか（サイトがあるか）は呼び出し側が scopes で確かめる。
 export function parseScope(raw) {
@@ -29,10 +30,7 @@ export function parseScope(raw) {
 // 範囲名 -> URL のパス。jp -> /jp/、jp-13 -> /jp/13/、all -> /all/。
 export const scopePath = scope => `/${scope.replace('-', '/')}/`;
 // page >= 2 のときだけ `page=N` を付ける（1 ページ目の URL は付けない形に正規化）。
-export const categoryHref = (path, scope = DEFAULT_SCOPE, page = 1) => {
-  const qs = [...path.map(id => 'category=' + encodeURIComponent(id)), ...(page > 1 ? ['page=' + page] : [])];
-  return scopePath(scope) + (qs.length ? '?' + qs.join('&') : '');
-};
+export const categoryHref = (path, scope = DEFAULT_SCOPE, page = 1) => directoryHref(scope, path, page);
 // ページ番号リンク（JS なし・クローラ用）。先頭・末尾・現在地の前後 2 ページ + 前へ/次へ。
 function pagerHtml(path, scope, page, pages) {
   const a = (n, label, rel, cur) => `<a href="${esc(categoryHref(path, scope, n))}"${rel ? ` rel="${rel}"` : ''}${cur ? ' aria-current="page"' : ''}>${label}</a>`;
@@ -155,7 +153,7 @@ function regionRowHtml(scopes, scope) {
 export async function renderIndex(c, assetResponse, scope, scopes) {
   const url = new URL(c.req.url);
   const { cc, region } = parseScope(scope);
-  const categories = await loadCategories(c.env.DB, region ?? cc);
+  const categories = [recentFolder, ...await loadCategories(c.env.DB, region ?? cc)];
   const raw = url.searchParams.getAll('category');
   const path = resolvePath(categories, raw) ?? [];
   const current = categories.find(x => x.id === path.at(-1));
@@ -173,7 +171,10 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
   if (current) {
     const names = path.map(id => categories.find(x => x.id === id).name_en);
     title = `${names.join(' › ')}${place ? ` (${place})` : ''} — MISE`;
-    desc = `${names.join(' › ')} on MISE${place ? ` in ${inPlace}` : ''}: ${current.site_count} ${current.site_count === 1 ? 'site' : 'sites'}. Discover independent websites you have yet to find.`;
+    const scopeLabel = place ? ` in ${inPlace}` : '';
+    desc = current === recentFolder
+      ? `Recently registered websites on MISE${scopeLabel}.`
+      : `${names.join(' › ')} on MISE${scopeLabel}: ${current.site_count} ${current.site_count === 1 ? 'site' : 'sites'}. Discover independent websites you have yet to find.`;
   }
 
   // 本文（JS が起動すると置き換わる）
@@ -185,22 +186,30 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
       }).join('')
     : '';
   const cats = children.map(ch => {
+    if (ch === recentFolder) return `<div class="category category-recent"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a class="recent-feed" href="${esc(feedEntryHref(scope, [ch.id]))}" rel="nofollow">${esc(ch.name_en)}</a></h2><a class="recent-list" href="${esc(categoryHref([ch.id], scope))}">List view</a></div></div>`;
     const sub = path.length ? '' : `<p class="sub">${categories.filter(x => x.parent_id === ch.id).map(x => `<span>${esc(x.name_en)}</span>`).join(' / ')}</p>`;
     return `<div class="category${ch.site_count ? '' : ' is-empty'}"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2></div>${sub}</div>`;
   }).join('');
-  let siteItems = '', pagerBody = '', pages = 1;
+  let siteItems = '', pagerBody = '', pages = 1, totalCapped = false;
   if (path.length || tags.length) {
-    const { items, total } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset: (page - 1) * PAGE_SIZE });
-    pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const offset = (page - 1) * PAGE_SIZE;
+    const { items, total, total_capped, next_cursor } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset });
+    totalCapped = total_capped;
+    // 総件数が上限付きでも、カーソルの有無で次ページがあるかを確認できる。
+    pages = totalCapped ? page + Number(!!next_cursor) : Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     // 行の構造はブラウザ描画（app.js の renderSite）と同じ: 1 行目（.site-head = 中点・サイト名・国・ホスト名）、説明文は次の行の左端から。
-    siteItems = items.map(s => { const host = globalThis.MiseSiteHost(s.url), place = /^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : ''; return `<li><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-title"><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name_en || s.name)}</a>${place}${host ? ` <span class="site-host">${esc(host)}</span>` : ''}</span></div><p>${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</p></li>`; }).join('');
+    siteItems = items.map((s, i) => {
+      const host = globalThis.MiseSiteHost(s.url), place = /^[A-Z]{2}$/.test(s.country_code ?? '') ? ` [${/^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(s.region_code ?? '') && s.region_code.startsWith(s.country_code) ? s.region_code : s.country_code}]` : '';
+      const anchor = path.length && !isSearch ? ` id="${sitePositionId(offset + i + 1)}"` : '';
+      return `<li${anchor}><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-title"><a href="${esc(/^https?:\/\//i.test(s.url) ? s.url : '#')}">${esc(s.name_en || s.name)}</a>${place}${host ? ` <span class="site-host">${esc(host)}</span>` : ''}</span></div><p>${s.description_en ? esc(s.description_en) : esc(s.description_ja) + ' (Japanese)'}</p></li>`;
+    }).join('');
     if (isSearch) pages = 1; // 検索結果はページ番号なし（noindex。エンドレススクロールのみ）
     if (pages > 1) pagerBody = pagerHtml(path, scope, page, pages);
   }
   // ページ番号つきの URL は自己参照の canonical（2 ページ目以降を 1 ページ目に寄せない）。title に「Page N」を添えて区別する。
   const canonical = ORIGIN + categoryHref(isSearch ? [] : path, scope, page);
-  if (page > 1) { title = `${title.replace(/ — MISE$/, '')} — Page ${page} — MISE`; desc = `${desc} Page ${page} of ${pages}.`; }
+  if (page > 1) { title = `${title.replace(/ — MISE$/, '')} — Page ${page} — MISE`; desc = `${desc} Page ${page}${totalCapped ? '' : ` of ${pages}`}.`; }
 
   const setContent = v => ({ element: e => e.setAttribute('content', v) });
   const html = await assetResponse.clone().text();
@@ -216,8 +225,11 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('link[rel="canonical"]', { element: e => e.setAttribute('href', canonical) })
     .on('link[hreflang]', { element: e => e.setAttribute('href', canonical) })
     .on('#home-link', { element: e => e.setAttribute('href', categoryHref([], scope)) })
-    .on('#feed-entry', { element: e => e.setAttribute('href', globalThis.MiseFeedEntry.feedEntryHref(scope, path[0])) })
-    .on('#feed-note', { element: e => { if (globalThis.MiseFeedEntry.feedEntryLossy(isSearch, path.length)) e.removeAttribute('hidden'); } })
+    .on('#feed-entry', { element: e => {
+      if (!path.length || isSearch) return;
+      e.setAttribute('href', feedEntryHref(scope, path, page));
+      e.removeAttribute('hidden');
+    } })
     .on('#scope-nav', { element: e => e.setInnerContent(scopeNavHtml(scopes, scope), { html: true }) })
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })

@@ -3,7 +3,7 @@ import { renderAbout, loadCategories, loadScopes, parseScope, scopePath, renderI
 import { securityHeaders } from './security.js';
 import { receiveRequest } from './intake.js';
 import { serveMedia } from './media.js';
-import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags, scopeKeyOf } from './sites.js';
+import { querySites, randomSites, parseLimit, parsePage, decodeCursor, cleanQuery, cleanTags, scopeKeyOf, RECENT_CATEGORY } from './sites.js';
 import { usageMiddleware } from './usage.js';
 const app = new Hono();
 // 最初に登録する: 重い GET の共有キャッシュ（ヒットなら D1 を読まない）と、1 リクエストの D1 読み取り行数の観測（X-D1-Rows-Read・閾値超過だけ警告ログ）。#157 / src/usage.js
@@ -27,15 +27,16 @@ app.get('/api/categories', async c => { const sc = scopeOf(c); return sc ? c.jso
 // 絞り込みは `category`（そのカテゴリ直下。存在しない id は 404）・`q`（名前・紹介文・URL・タグ名（日英）の部分一致。NFKC + 小文字化で比較。100 文字まで）。
 // `page`（1〜999999。範囲外・数字以外は 400）は開始位置の指定（クロール用ページ番号URLと同じ区切り。カーソルが無いときだけ有効）。total は先頭の応答（cursor なし）だけに入る。q・tag・葉でないカテゴリの絞り込みでは TOTAL_CAP（1,000）までしか数えず、超えると total = 1000・total_capped = true（画面は「1,000+」。末尾まで届いたときは常に正確）。
 // `tag`（タグの日本語名か英語名。複数指定は AND。5 個まで・各 100 文字まで、超えると 400）は q・category・範囲と AND で絞る。
-// カテゴリ未所属のサイトも category 指定なしなら出る（category_ids が空配列。画面では「未分類」）。
+// category=recent は登録日時に基づく仮想フォルダ。カテゴリ未所属のサイトも条件を満たせば出る。
 app.get('/api/sites', async c => {
   const sc = scopeOf(c); if (!sc) return c.json({ error: 'invalid scope' }, 400);
-  const cursor = decodeCursor(c.req.query('cursor')); if (!cursor) return c.json({ error: 'invalid cursor' }, 400);
+  const category = c.req.query('category') || null;
+  const recent = category === RECENT_CATEGORY;
+  const cursor = decodeCursor(c.req.query('cursor'), recent); if (!cursor) return c.json({ error: 'invalid cursor' }, 400);
   const limit = parseLimit(c.req.query('limit')); if (limit === null) return c.json({ error: 'invalid limit' }, 400);
   const page = parsePage(c.req.query('page')); if (page === null) return c.json({ error: 'invalid page' }, 400);
   const tags = cleanTags(c.req.queries('tag')); if (!tags) return c.json({ error: 'invalid tag' }, 400);
-  const category = c.req.query('category') || null;
-  if (category && !(await c.env.DB.prepare('SELECT 1 AS ok FROM categories WHERE id = ?').bind(category).first())) return c.json({ error: 'unknown category' }, 404);
+  if (category && !recent && !(await c.env.DB.prepare('SELECT 1 AS ok FROM categories WHERE id = ?').bind(category).first())) return c.json({ error: 'unknown category' }, 404);
   return c.json(await querySites(c.env.DB, { cc: sc.cc, region: sc.region, category, q: cleanQuery(c.req.query('q')), tags, limit, cursor, offset: (page - 1) * limit }));
 });
 // ピックアップ用のランダム 3 件（範囲内）。
