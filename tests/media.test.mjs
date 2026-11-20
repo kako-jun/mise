@@ -13,14 +13,18 @@ test('mediaKey/faviconUrl: 32 桁 16 進 + .webp だけ許可', () => {
   for (const bad of [`${H}.png`, `${H}`, `${H}.WEBP`, `${H.toUpperCase()}.webp`, `${H}0.webp`, `${H.slice(1)}.webp`, '../x.webp', `${H}.webp.x`, 'g'.repeat(32) + '.webp', '']) assert.equal(mediaKey('icon', bad), null, bad);
   assert.equal(mediaKey('thumb', `${H}.webp`), `thumb/${H}.webp`);
   assert.equal(mediaKey('nope', `${H}.webp`), null);
-  assert.equal(faviconUrl(`${H}.webp`), `/icon/${H}.webp`);
+  assert.equal(faviconUrl(`${H}.webp`), `/icon/${H}.webp`);                       // 旧データ（favicon_v が NULL）: 従来どおり v なし
+  assert.equal(faviconUrl(`${H}.webp`, null), `/icon/${H}.webp`);
+  assert.equal(faviconUrl(`${H}.webp`, 'a1b2c3d4'), `/icon/${H}.webp?v=a1b2c3d4`);   // 新データ: ?v= 付き
+  assert.equal(faviconUrl(`${H}.webp`, 'BAD V'), `/icon/${H}.webp`);                // 不正な v は付けない
+  assert.equal(faviconUrl(null, 'a1b2c3d4'), null);
   assert.equal(faviconUrl(null), null);
   assert.equal(faviconUrl('/icons/x.png'), null);
 });
 
-test('/icon/<hash>.webp: 200 + immutable 1 年 + ETag + image/webp', async () => {
+test('/icon/<k>.webp?v=...: 200 + immutable 1 年（v 付き）+ ETag + image/webp', async () => {
   const env = { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'RIFFxxxx' }) };
-  const r = await get(`/icon/${H}.webp`, env);
+  const r = await get(`/icon/${H}.webp?v=a1b2c3d4`, env);
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('Content-Type'), 'image/webp');
   assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
@@ -30,9 +34,19 @@ test('/icon/<hash>.webp: 200 + immutable 1 年 + ETag + image/webp', async () =>
   assert.deepEqual(env.MEDIA.calls, [`icon/${H}.webp`]);
 });
 
+test('/icon/: v 無し（旧データの内容ハッシュ名）・不正な v でも 200（キャッシュは短い）。v は R2 に渡らない', async () => {
+  const env = { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) };
+  for (const q of ['', '?v=', '?v=ABC', '?v=a b', '?v=' + 'z'.repeat(40), '?x=1', '?v=%00']) {
+    const r = await get(`/icon/${H}.webp${q}`, env);
+    assert.equal(r.status, 200, q);
+    assert.equal(r.headers.get('Cache-Control'), 'public, max-age=3600', q);
+  }
+  assert.ok(env.MEDIA.calls.every(k => k === `icon/${H}.webp`));
+});
+
 test('/icon/: If-None-Match が一致すれば 304', async () => {
   const env = { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) };
-  const r = await get(`/icon/${H}.webp`, env, { 'If-None-Match': '"etag-1"' });
+  const r = await get(`/icon/${H}.webp?v=a1b2c3d4`, env, { 'If-None-Match': '"etag-1"' });
   assert.equal(r.status, 304);
   assert.equal(r.headers.get('ETag'), '"etag-1"');
 });
@@ -62,7 +76,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { querySites } from '../src/sites.js';
 test('querySites: favicon_url を足し、favicon_path の形は変えない', async () => {
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,name_ja TEXT,name_en TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,thumb_path TEXT,thumb_lqip TEXT,thumb_captured_at TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
+  db.exec(`CREATE TABLE sites(id TEXT PRIMARY KEY,url TEXT,name TEXT,name_ja TEXT,name_en TEXT,description_ja TEXT,description_en TEXT,favicon_path TEXT,favicon_v TEXT,thumb_path TEXT,thumb_lqip TEXT,thumb_captured_at TEXT,registered_at TEXT,source_updated_at TEXT,last_crawled_at TEXT,country_code TEXT,region_code TEXT,bulk_import INTEGER NOT NULL DEFAULT 0,search_text TEXT);
 CREATE TABLE site_tags(site_id TEXT, label_ja TEXT NOT NULL, label_en TEXT);
 CREATE TABLE site_categories(site_id TEXT, category_id TEXT);
 CREATE TABLE scope_counts(scope TEXT PRIMARY KEY, n INTEGER NOT NULL);
@@ -72,18 +86,23 @@ CREATE TABLE category_counts(category_id TEXT NOT NULL, scope TEXT NOT NULL, n I
   ins.run('a', 'https://a.example', 'a', 'd', `${H}.webp`, 'JP', '2026-01-01T00:00:00Z');
   ins.run('b', 'https://b.example', 'b', 'd', null, 'JP', '2026-01-02T00:00:00Z');
   ins.run('c', 'https://c.example', 'c', 'd', 'legacy.png', 'JP', '2026-01-03T00:00:00Z');
-  db.exec("INSERT INTO scope_counts VALUES ('all', 3)");
+  ins.run('e', 'https://e.example', 'e', 'd', `${H}.webp`, 'JP', '2026-01-04T00:00:00Z');   // 新データ（favicon_v あり）
+  db.prepare("UPDATE sites SET favicon_v='a1b2c3d4' WHERE id='e'").run();
+  db.exec("INSERT INTO scope_counts VALUES ('all', 4)");
   const d = { prepare: sql => ({ bind: (...a) => ({ all: async () => ({ results: db.prepare(sql).all(...a) }), first: async () => db.prepare(sql).get(...a) }) }) };
   const by = Object.fromEntries((await querySites(d, { cc: null, region: null, category: null, q: '', tags: [], limit: 10, cursor: null, offset: 0 })).items.map(i => [i.id, i]));
   assert.equal(by.a.favicon_path, `${H}.webp`); assert.equal(by.a.favicon_url, `/icon/${H}.webp`);
   assert.equal(by.b.favicon_path, null); assert.equal(by.b.favicon_url, null);
   assert.equal(by.c.favicon_path, 'legacy.png'); assert.equal(by.c.favicon_url, null);
+  // 過渡期: favicon_v が NULL のサイトは従来の形、あるサイトは ?v= 付き。favicon_v 自体は返さない
+  assert.equal(by.e.favicon_url, `/icon/${H}.webp?v=a1b2c3d4`);
+  assert.ok(!('favicon_v' in by.a) && !('favicon_v' in by.e));
 });
 
 test('/icon/: If-None-Match の W/ 付き・カンマ区切り・* で 304、304 にも Cache-Control と ETag', async () => {
   const mk = () => ({ MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) });
   for (const inm of ['W/"etag-1"', '"zzz", "etag-1"', '"zzz", W/"etag-1"', '*']) {
-    const r = await get(`/icon/${H}.webp`, mk(), { 'If-None-Match': inm });
+    const r = await get(`/icon/${H}.webp?v=a1b2c3d4`, mk(), { 'If-None-Match': inm });
     assert.equal(r.status, 304, inm);
     assert.equal(r.headers.get('ETag'), '"etag-1"');
     assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
@@ -92,7 +111,7 @@ test('/icon/: If-None-Match の W/ 付き・カンマ区切り・* で 304、304
 });
 
 test('/icon/: HEAD は 200 + ヘッダ（本文なし）', async () => {
-  const r = await app.request(`/icon/${H}.webp`, { method: 'HEAD' }, { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) });
+  const r = await app.request(`/icon/${H}.webp?v=a1b2c3d4`, { method: 'HEAD' }, { MEDIA: fakeBucket({ [`icon/${H}.webp`]: 'x' }) });
   assert.equal(r.status, 200);
   assert.equal(r.headers.get('Content-Type'), 'image/webp');
   assert.equal(r.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');

@@ -192,11 +192,11 @@ export function filters({ cc, region, category, q, tags }, plan = {}) {
 }
 
 // 画面に出す列。bulk_import は並びのほか NEW タグの抑止に画面が使うので含める。並びだけに使う列は SORT_KEYS で足りるのでここには要らない。
-const COLUMNS = `s.id, s.name, s.name_ja, s.name_en, s.url, s.description_ja, s.description_en, s.favicon_path, s.thumb_path, s.thumb_lqip, s.thumb_captured_at, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
-// favicon_path はハッシュ名のまま返し、配信 URL を favicon_url に足す（取れていなければ null）。
+const COLUMNS = `s.id, s.name, s.name_ja, s.name_en, s.url, s.description_ja, s.description_en, s.favicon_path, s.favicon_v, s.thumb_path, s.thumb_lqip, s.thumb_captured_at, s.registered_at, s.bulk_import, s.source_updated_at, s.last_crawled_at, s.country_code, s.region_code, (SELECT json_group_array(json_object('ja',t.label_ja,'en',t.label_en)) FROM site_tags t WHERE t.site_id=s.id) AS tags_json, (SELECT json_group_array(c.category_id) FROM site_categories c WHERE c.site_id=s.id) AS category_ids_json`;
+// favicon_path は列の値のまま返す（app.js が favicon_url の無いときに静的な /icons/… の値へ戻す経路で読むため。消さない）。配信 URL を favicon_url に足す（取れていなければ null）。favicon_v は favicon_url の ?v= になるので出さない。
 // thumb_path（サイト固定のキー名）・thumb_captured_at は返さず、配信 URL（`?v=` に撮影時刻由来のバージョン）を thumb_url、極小プレースホルダを thumb_lqip に出す（どちらも無ければ null。画像が無いのにプレースホルダだけは出さない）。
 const LQIP = /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]{1,400}$/;
-const shape = ({ category_ids_json, thumb_path, thumb_lqip, thumb_captured_at, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; const thumb_url = thumbUrl(thumb_path, thumb_captured_at); return { ...r, favicon_url: faviconUrl(r.favicon_path), thumb_url, thumb_lqip: thumb_url && typeof thumb_lqip === 'string' && LQIP.test(thumb_lqip) ? thumb_lqip : null, category_ids: JSON.parse(category_ids_json || '[]') }; };
+const shape = ({ category_ids_json, favicon_v, thumb_path, thumb_lqip, thumb_captured_at, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; const thumb_url = thumbUrl(thumb_path, thumb_captured_at); return { ...r, favicon_url: faviconUrl(r.favicon_path, favicon_v), thumb_url, thumb_lqip: thumb_url && typeof thumb_lqip === 'string' && LQIP.test(thumb_lqip) ? thumb_lqip : null, category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
 // total は先頭ページ（カーソルなし）のときだけ入れる。q は cleanQuery 済み、tags は cleanTags 済みであること。

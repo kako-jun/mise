@@ -31,7 +31,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | [collection/recrawl.md](collection/recrawl.md) | 登録済みサイトの再巡回（状態遷移・変更検出・要確認の候補リスト） |
 | [collection/public-bodies.md](collection/public-bodies.md) | 官公庁・自治体の名簿（公式サイト台帳） |
 | [collection/procedures.md](collection/procedures.md) | 恒常的な収集手順（スクリプトの再実行方法・書式） |
-| [collection/favicons.md](collection/favicons.md) | ファビコンの自前取得・32px 縮小・内容ハッシュ名で保存・月次更新（#125。R2 配信は未実装） |
+| [collection/favicons.md](collection/favicons.md) | ファビコンの自前取得・32px 縮小・サイト固定キーで保存（1 サイト 1 画像・上書き）・月次更新・R2 配信・取り下げ削除・内容ハッシュ名からの移行（#125・#163） |
 | [collection/thumbnails.md](collection/thumbnails.md) | サムネイルの撮影・配信（#130。台帳・キュー・作法・R2 の置き場・無料枠の見積もり・20 サイトの試行。量産ジョブ `scripts/thumbnail/` と `/thumb/` 配信は実装済み、本番投入は未実施。試験の結果も含む） |
 | [collection/trials.md](collection/trials.md) | 試行の記録（日付つきの観測。数字はここだけ） |
 | **operations/** 運用 | |

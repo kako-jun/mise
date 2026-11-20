@@ -74,7 +74,7 @@ test('0030: name_ja / name_en を入れる・直す・消すと search_text が�
   assert.deepEqual(fts('せおはや'), []); assert.deepEqual(fts('別名前'), ['s0']);
   db.prepare("UPDATE sites SET name_ja=NULL, name_en=NULL WHERE id='s0'").run();
   assert.deepEqual(fts('別名前'), []); assert.deepEqual(fts('theo hay'), []);
-  // INSERT（search_text 未指定）でも索引が壊れない（トリガの発火順: search_text のトリガ → FTS のトリガ）
+  // INSERT（search_text 未指定）でも索引が壊れない（発火順は FTS の ai → search_text の ai。後者が埋めた search_text を sites_fts_au が索引に反映する。0030 が FTS のトリガを作り直す理由）
   db.prepare('INSERT INTO sites (id,url,name,name_ja,description_ja) VALUES (?,?,?,?,?)').run('ins', 'https://ins.example/', 'Ins', '挿入した名前', 'd');
   assert.deepEqual(fts('挿入した'), ['ins']);
   db.exec("INSERT INTO sites_fts(sites_fts, rank) VALUES ('integrity-check', 1)");
@@ -85,7 +85,7 @@ test('0030: name_ja / name_en を入れる・直す・消すと search_text が�
   db.prepare("DELETE FROM site_tags WHERE label_ja='ブログ'").run();
   assert.match(db.prepare("SELECT search_text FROM sites WHERE id='s3'").get().search_text, /^plain 3 日本名 /);
   // 索引は search_text と一致（外部コンテンツ表の整合）
-  assert.equal(db.prepare("INSERT INTO sites_fts(sites_fts, rank) VALUES ('integrity-check', 1)").run().changes >= 0, true);
+  db.exec("INSERT INTO sites_fts(sites_fts, rank) VALUES ('integrity-check', 1)");   // 索引が search_text とずれていれば例外を投げる（これが検査）
 });
 
 test('0030: 検索の回帰 — 日本語名・英語名で見つかる。名前だけのサイトの結果と並びは変わらない（索引あり/なし両経路）', async () => {
@@ -140,4 +140,29 @@ test('0030: 本番の複合 SELECT の項数上限に触れない（UNION は使
   const sql = readFileSync(new URL(FILE, MIG), 'utf8').replace(/^--.*$/gm, '');
   assert.equal((sql.match(/\bUNION\b/gi) ?? []).length, 0);
   assert.ok(sql.includes('ADD COLUMN name_ja') && sql.includes('ADD COLUMN name_en'));
+});
+
+test('0030: name_ja / name_en が空文字なら NULL と同じ search_text（トリガも JS の searchText も余分な空白を足さない）', () => {
+  const db = mkDb(); seed(db);
+  db.prepare("UPDATE sites SET name_ja='', name_en='' WHERE id='s3'").run();
+  const empty = st(db).s3;
+  db.prepare("UPDATE sites SET name_ja=NULL, name_en=NULL WHERE id='s3'").run();
+  assert.equal(empty, st(db).s3);
+  assert.doesNotMatch(empty, /^plain 3  /);
+  const row = { ...db.prepare('SELECT * FROM sites WHERE id=?').get('s3'), tags: db.prepare('SELECT label_ja, label_en FROM site_tags WHERE site_id=? ORDER BY label_ja').all('s3') };
+  const base = searchText(row);
+  assert.equal(searchText({ ...row, name_ja: '', name_en: '' }), base);
+  assert.equal(searchText({ ...row, name_ja: null, name_en: null }), base);
+});
+
+test('0030: name_ja を持つサイトのタグを UPDATE / INSERT / DELETE しても search_text から name_ja・name_en が消えない', () => {
+  const db = mkDb(); seed(db);
+  db.prepare("UPDATE sites SET name_ja='日本名', name_en='English Name' WHERE id='s3'").run();
+  const has = () => assert.match(st(db).s3, /^plain 3 日本名 english name /);
+  db.prepare("UPDATE site_tags SET label_en='Game2' WHERE site_id='s3' AND label_ja='ゲーム'").run(); has();
+  assert.match(st(db).s3, /game2/);
+  db.prepare("UPDATE site_tags SET site_id='s4' WHERE site_id='s3' AND label_ja='アプリ'").run(); has();   // 付け替え（OLD 側の更新）
+  db.prepare("UPDATE sites SET name_ja='日本名' WHERE id='s4'").run();
+  db.prepare("UPDATE site_tags SET site_id='s3' WHERE site_id='s4'").run(); has();
+  db.prepare("DELETE FROM site_tags WHERE site_id='s3' AND label_ja='アプリ'").run(); has();
 });
