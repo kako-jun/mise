@@ -337,5 +337,42 @@ class Parking(unittest.TestCase):
         self.assertEqual(f['title'], 'あいう えお')
 
 
+class Seeds(unittest.TestCase):
+    """discover-links の起点ページ一覧(data/discover-seeds.csv、#181)。"""
+    def rows(self):
+        import csv
+        import discover
+        with open(discover.SEEDS_CSV, encoding='utf-8', newline='') as f:
+            return list(csv.DictReader(f))
+
+    def test_shipped_seeds_are_valid(self):
+        import discover
+        rows = self.rows()
+        self.assertGreater(len(rows), 0)
+        self.assertEqual(list(rows[0].keys()), ['url', 'kind', 'area', 'note'])
+        urls = [r['url'] for r in rows]
+        self.assertEqual(len(urls), len(set(urls)), '重複')
+        import urllib.parse
+        for r in rows:
+            self.assertIn(r['kind'], discover.SEED_KINDS, r['url'])
+            sp = urllib.parse.urlsplit(r['url'])
+            self.assertIn(sp.scheme, ('http', 'https'), r['url'])
+            self.assertTrue(sp.hostname, r['url'])
+            self.assertIsNone(hostnames.platform_page(r['url']), f'{r["url"]}: グルメ/SNS 等のプラットフォーム内ページを起点にしない')
+        self.assertTrue(set(urls) <= set(discover.seed_urls()))
+
+    def test_discover_links_fetches_seed_path(self):
+        import discover
+        from unittest import mock
+        calls = []
+        def fake(host, path='/', **kw):
+            calls.append((host, path))
+            return {'error': 'x', 'status': None}
+        db = frontier.connect(':memory:')
+        with mock.patch.object(fetcher, 'fetch_site', fake):
+            discover.discover_links(db, seeds=['https://a.example/members/?p=1', 'https://b.example/'])
+        self.assertEqual(calls, [('a.example', '/members/?p=1'), ('b.example', '/')])
+
+
 if __name__ == '__main__':
     unittest.main()

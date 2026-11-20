@@ -21,6 +21,7 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 | `scripts/pipeline/schema.sql` | frontier 台帳のスキーマ（正本はコミット済みのこの定義。LLM の判定結果の表 `llm_judgement` を含む） |
 | `scripts/pipeline/frontier.py` | SQLite ラッパー。台帳の実体は `var/frontier.sqlite`（`.gitignore`、再生成可能。旧い台帳は接続時に追従） |
 | `scripts/pipeline/discover.py` | 発見元 |
+| `data/discover-seeds.csv` | discover-links の起点ページ一覧（#181） |
 | `scripts/pipeline/discover_wikidata.py` | 発見元: Wikidata の公式サイト(P856)を葉ごとに取る（対応表 `data/wikidata-leaf-map.csv`） |
 | `scripts/pipeline/hostnames.py` | ホスト名の正規化と取得前フィルタ |
 | `scripts/pipeline/fetcher.py` | 行儀のよい取得（robots・UA・内部IP拒否・上限） |
@@ -44,6 +45,7 @@ Issue #39（#2 の層2）の実装。個人・小さな事業者・企業・協�
 
 - **`discover-cc`（実装済み）**: Common Crawl のホストレベルのウェブグラフ（`cc-main-2026-jul-aug-sep`）の vertices から `.jp` ホストを取り、ホスト名の CRC32 で 1/N を決定論的に抽出する（既定 N=1000）。パート（約27〜40MB）は一時ファイルに落として完了後に rename し、`--max-filesize` 100MB で打ち切る。`--limit` で打ち切ると、パート内で先に出るホストへ偏る（再現はできる）。**`.jp` が入っているパート番号**（`CC_JP_PART`）はリリースごとに違う: `…-host-vertices.paths.gz` の各パートの先頭 3KB を Range 取得して `zcat | head -1` し、`jp.` が現れる境界のパートを選ぶ（`.jp` はそのパートと直前パートの末尾にまたがる）。
 - **`discover-links`（実装済み）**: 既存掲載サイト（`data/collection-*.json`）のトップページから外部リンク先ホストを深さ1で発見する。`.jp` 以外も許し、日本語かは取得後に判定する（申請の推薦 `source='request'` も同様に `not_jp` を適用しない）。
+- **`discover-links` の起点ページ（#181）**: `data/discover-seeds.csv`（`url,kind,area,note`）の URL を、既掲載サイトに加えて起点にする。商店街・商工会・観光協会の会員一覧（`town-shop`）、個人サイトのリンク集（`personal-text`）、同人イベント・サークルの一覧（`doujin`）。起点はパス付きで取得する（robots はそのパスで確認）。`kind` は取得元の記録であり、判定（LLM）には渡さない。`platform_page`（食べログ等）を起点にしないことはテストが検査する。内訳は [listing-priority.md](../ideas/listing-priority.md#実装済みの取得元2026-11-20)。
 - **`discover-wikidata`（実装済み、#128）**: Wikidata の公式ウェブサイト(P856)を、項目の種類(P31、人物は職業 P106)ごとに SPARQL で取り、新しい木の**葉**に対応づける発見元。他の発見元が会社・団体に偏るのに対し、**足りない葉（神社・博物館・天文台・大学・図書館・鉄道会社・出版社・漫画家 等）を狙って集める**ためにある。
   - **対応表 `data/wikidata-leaf-map.csv` が正本**（1 つ）。列は `leaf_id`（`data/categories.csv` の assign=llm の葉）、`qid`（Wikidata のクラス。Wikidata のページで英語ラベルを確認したものだけ）、`rel`（`P31` か `P106`）、`country_prop`（日本との関係を見る property。組織は `P17|P495`、人物は `P27`。値は Japan = Q17）、`subclass`（1 なら `wdt:P31/wdt:P279*` で子クラスも含める。WDQS のタイムアウトを見て行ごとに選ぶ）、`label_en`（確認用）、`note`、`max_rows`（その行から取る SPARQL 行数の上限）。形式・葉の実在・assign=llm の葉であることはテストが検査する。日本語の主題で Wikidata に項目が少ないもの、合う葉が無いもの（学会・研究所など）は対応づけない。
   - 台帳には `source='wikidata'`、`hint_leaf`（対応表の葉 id）で入れる。ホスト単位（パスは捨てる）。既掲載（`data/collection-*.json`・`var/nightly/shipped.txt`）のホストは入れず、台帳に既にあるキーは触らない。**`.jp` 以外も通す**（日本の項目の公式サイトなので。日本語かどうかは取得後に判定）。官公庁（`.go.jp`/`.lg.jp`）・共有サービス配下は既存の取得前フィルタ（triage）が落とす。
