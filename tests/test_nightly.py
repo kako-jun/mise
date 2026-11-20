@@ -49,6 +49,8 @@ class Env(unittest.TestCase):
         self.integrity_rc = 0          # 投入後の本番整合チェック
         self.integrity_before_rc = 0   # 投入前の本番整合チェック
         self.llm_rc = 0
+        self.llm_seq = []              # 先頭から 1 回ずつ消費する llm 段の exit code(尽きたら llm_rc)
+        self.llm_fail_ids = None       # None: results は空(全件未解決) / 集合: その id 以外は出力ありとして results に書く
         self.exported = 2
         self.p_run = mock.patch.object(nightly, 'run_cmd', side_effect=self.fake)
         self.p_run.start()
@@ -85,8 +87,13 @@ class Env(unittest.TestCase):
         if 'pipeline.py' in s and '--dry-run' in cmd:
             return 0, f'TOTAL expected ${self.worst / 2:.4f}, worst case ${self.worst:.4f}'
         if 'llm/pipeline.py' in s:
-            Path(cmd[cmd.index('--out') + 1]).write_text('{"results": []}')
-            return self.llm_rc, ''
+            if self.llm_fail_ids is None:
+                results = []
+            else:
+                ids = [json.loads(l)['id'] for l in Path(cmd[2]).read_text().splitlines() if l.strip()]
+                results = [{'id': i, 'output': {'x': 1}} for i in ids if i not in self.llm_fail_ids]
+            Path(cmd[cmd.index('--out') + 1]).write_text(json.dumps({'results': results}))
+            return (self.llm_seq.pop(0) if self.llm_seq else self.llm_rc), ''
         if 'import_results' in s:
             return 0, 'imported=1'
         if 'approve_policy' in s:
@@ -129,6 +136,12 @@ class Plan(Env):
         self.assertIn('今夜の判定対象（未判定の candidate）: 2 件', text)
         self.assertIn('予算ガード: 発動しない見込み', text)
         self.assertIn('実行しない(--apply-prod なし)', text)
+
+    def test_dry_run_shows_llm_retries(self):
+        for extra, want in (((), '未解決の再試行 2 回'), (('--llm-retries', '0'), '未解決の再試行 0 回')):
+            with mock.patch('builtins.print') as pr:
+                nightly.main(['--dry-run', '--db', str(self.db_path), '--var-dir', str(self.var), '--ledger', str(self.ledger), *extra])
+            self.assertIn(want, pr.call_args[0][0])
 
     def test_dry_run_and_apply_prod_conflict(self):
         with self.assertRaises(SystemExit):
@@ -405,6 +418,78 @@ class Run(Env):
         names = {s['name']: s['status'] for s in st['stages']}
         self.assertEqual((names['llm'], names['prod']), ('ok', 'ok'))
         self.assertEqual(sum('import_results' in ' '.join(c) for c in self.calls), 2)   # 後段もやり直された
+
+    def llm_runs(self):
+        return sum('llm/pipeline.py' in ' '.join(c) and '--dry-run' not in c for c in self.calls)
+
+    def seed_many(self, n=30):
+        for i in range(n):
+            add_site(self.db, f'h{i:02d}.jp')
+
+    def frontier_row(self, key):
+        return self.db.execute('SELECT state, reject_reason FROM frontier WHERE key=?', (key,)).fetchone()
+
+    def test_llm_retry_resolves_in_same_run(self):
+        self.seed_many()
+        self.llm_seq = [2, 0]
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(self.llm_runs(), 2)
+        st = self.status()
+        llm = next(s for s in st['stages'] if s['name'] == 'llm')
+        self.assertEqual((llm['status'], llm['count']['llm_retries']), ('ok', 1))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='rejected'").fetchone()[0], 0)
+
+    def test_llm_unresolved_after_retries_is_cut_off_and_night_proceeds(self):
+        self.seed_many()
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h07_jp'}
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(self.llm_runs(), 3)    # 初回 + 再試行 2 回
+        self.assertEqual(tuple(self.frontier_row('h07.jp')), ('rejected', 'llm_unresolved'))
+        self.assertEqual(self.frontier_row('h08.jp')['state'], 'candidate')
+        st = self.status()
+        names = {s['name']: s['status'] for s in st['stages']}
+        self.assertEqual((names['llm'], names['import'], names['approve']), ('ok', 'ok', 'ok'))    # 先へ進む(承認 0 件なので SQL・prod は対象無しで skipped)
+        self.assertFalse(any(s['status'] == 'partial' for s in st['stages']))
+        llm = next(s for s in st['stages'] if s['name'] == 'llm')
+        self.assertIn('1 件', llm['note'])
+        self.assertTrue(any('LLM 未解決 1 件を打ち切り' in g and 'h07.jp' in g for g in st['guards']))
+
+    def test_cut_off_above_threshold_stays_partial(self):
+        self.seed_many()
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h01_jp', 'h02_jp'}     # 2/30 = 6.7% > 5%
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        names = {s['name']: s['status'] for s in st['stages']}
+        self.assertEqual((names['llm'], names['prod']), ('partial', 'skipped'))
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
+        self.assertTrue(any('打ち切らず止めた' in g for g in st['guards']))
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_cut_off_above_count_limit_stays_partial(self):
+        self.seed_many(500)
+        self.llm_rc = 2
+        self.llm_fail_ids = {f'h{i:02d}_jp' for i in range(21)}   # 21/500 = 4.2% だが 20 件超
+        with mock.patch.object(nightly, 'LLM_CUTOFF_MAX_COUNT', 20):
+            self.assertEqual(self.run_night('--judge-limit', '500'), 0)
+        names = {s['name']: s['status'] for s in self.status()['stages']}
+        self.assertEqual(names['llm'], 'partial')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
+
+    def test_llm_retries_zero_keeps_old_behaviour(self):
+        self.seed_many()
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h07_jp'}
+        self.assertEqual(self.run_night('--apply-prod', '--llm-retries', '0'), 0)
+        self.assertEqual(self.llm_runs(), 1)
+        names = {s['name']: s['status'] for s in self.status()['stages']}
+        self.assertEqual((names['llm'], names['prod']), ('partial', 'skipped'))
+        self.assertEqual(self.frontier_row('h07.jp')['state'], 'candidate')
+
+    def test_negative_llm_retries_rejected(self):
+        with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+            self.args('--llm-retries', '-1')
 
     def test_candidates_not_rebuilt_after_llm_ok(self):
         self.seed()
