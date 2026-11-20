@@ -23,7 +23,7 @@
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
-- 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は UTC の日付。
+- 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は夜の名前（UTC の日付 `YYYY-MM-DD`。同日の 2 回目以降のサイクルは `YYYY-MM-DD-N`、N は 2 以上）。
 - **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
@@ -38,7 +38,15 @@ uv run python3 scripts/nightly.py --dry-run                 # 計画と見積り
 uv run python3 scripts/nightly.py                           # SQL と報告を作る(本番には触れない)
 uv run python3 scripts/nightly.py --apply-prod              # 本番反映まで
 uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の再開
+uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回目のサイクル（新しい夜として別フォルダ）
 ```
+
+### `--date` の形式と同日の複数サイクル
+
+- `--date` は `YYYY-MM-DD`（既定は UTC の今日）か `YYYY-MM-DD-N`（N は 2 以上の整数、先頭ゼロ不可）。`2026-11-20-1` は不可（枝なしの `2026-11-20` が 1 回目）。名前はそのまま `var/nightly/<date>/` になる。
+- 同日に続けて回したいときは `2026-11-20`（1 回目）→ `2026-11-20-2` → `2026-11-20-3` と枝番を上げる。別の夜として扱うので、成功済み段のスキップと `prod_applied` 済みの再投入拒否は夜の名前ごとに効く（同じ名前での再実行の意味は従来どおり）。
+- 並び順は日付 → 枝番の数値順（枝なしが最初。`-10` は `-2` の後）。
+- **前日比の異常ガードは日単位で集計する**: 比較の基準は「今夜より前の日」について、その日のすべてのサイクルの追加数を合計した値の直近 7 日の平均。同日の複数サイクルが直近 7 夜を埋めて平均を歪めないため。今夜と同じ日の他のサイクルは基準に含めない。
 
 主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--discover-limit 200`（0 で discover-cc 無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 

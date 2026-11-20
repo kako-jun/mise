@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """夜間ジョブ（Issue #124）。発見 -> 取得 -> LLM 判定 -> 自動承認 -> 投入 SQL -> 整合チェック -> (任意で)本番反映。
 
-  uv run python3 scripts/nightly.py [--date YYYY-MM-DD] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
+  uv run python3 scripts/nightly.py [--date YYYY-MM-DD[-N]] [--max-add N(既定 0=上限なし)] [--dry-run] [--apply-prod]
 
 運用の正本は docs/operations/nightly.md。
 - 本番 D1 に触れるのは --apply-prod のときだけ（wrangler の呼び出しは prod 段の 1 か所に閉じている）。既定は SQL と報告を作るだけ。
@@ -117,20 +117,43 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 
+NIGHT_RE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:-(\d+))?")
+
+
+def parse_night(name):
+    """夜の名前 YYYY-MM-DD / YYYY-MM-DD-N(N>=2) -> (日付, 枝番)。枝なしは枝番 1。形式外は None。"""
+    m = NIGHT_RE.fullmatch(name or "")
+    if not m:
+        return None
+    seq = int(m.group(2)) if m.group(2) else 1
+    if m.group(2) and (seq < 2 or m.group(2) != str(seq)):   # -1 / -01 / -0 は不可(枝なしが 1 回目)
+        return None
+    return m.group(1), seq
+
+
+def night_sort_key(name):
+    """時系列順のキー: 日付 -> 枝番の数値順(枝なしが最初)。文字列順だと -10 が -2 より前に来る。"""
+    return parse_night(name)
+
+
 def history_added(nightly_dir, date, n=7):
-    """date より前の夜の追加数（新しい順に最大 n 夜）。"""
-    rows = []
+    """date の日より前の追加数を、日単位に合算して新しい日から最大 n 日分返す。
+    同日に複数サイクル回しても「直近 7 夜」が同日の分で埋まって平均を歪めないよう、日ごとに足してから数える。
+    date と同じ日の夜(枝番違い)は含めない。"""
     try:
-        names = sorted(d for d in os.listdir(nightly_dir) if re.fullmatch(r"\d{4}-\d{2}-\d{2}", d) and d < date)
+        names = sorted((d for d in os.listdir(nightly_dir) if parse_night(d)), key=night_sort_key)
     except OSError:
         return []
-    for d in reversed(names):
+    cur = parse_night(date)
+    per_day = {}
+    for d in names:
+        day = parse_night(d)[0]
+        if cur and day >= cur[0]:
+            continue
         st = read_json(os.path.join(nightly_dir, d, "status.json"))
         if isinstance(st, dict) and isinstance(st.get("added"), int):
-            rows.append(st["added"])
-        if len(rows) >= n:
-            break
-    return rows
+            per_day[day] = per_day.get(day, 0) + st["added"]
+    return [per_day[k] for k in sorted(per_day, reverse=True)[:n]]
 
 
 def is_anomalous(added, past):
@@ -646,7 +669,7 @@ def plan(a):
 
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前(既定: UTC の今日)。再開は同じ日付で")
+    ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前 YYYY-MM-DD か YYYY-MM-DD-N(N>=2、同日の追加サイクル)。既定: UTC の今日。再開は同じ名前で")
     ap.add_argument("--max-add", type=int, default=0, help="1 夜に出荷する追加サイト数の上限(0=上限なし。既定)")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
@@ -667,8 +690,8 @@ def parse_args(argv=None):
     ap.add_argument("--ledger", default=judge.DEFAULT_LEDGER)
     ap.add_argument("--d1-name", default="mise")
     a = ap.parse_args(argv)
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", a.date):
-        ap.error("--date は YYYY-MM-DD")
+    if not parse_night(a.date):
+        ap.error("--date は YYYY-MM-DD か YYYY-MM-DD-N(N は 2 以上。同日の 2 回目以降のサイクル)")
     if a.wikidata_leaves < 0:
         ap.error("--wikidata-leaves は 0 以上")
     if a.favicon_limit < 0:

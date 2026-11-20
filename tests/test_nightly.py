@@ -594,6 +594,36 @@ class Prod(Env):
         self.assertEqual(self.wrangler_calls(), [])
         self.assertTrue(any('前日比の異常' in g for g in self.status()['guards']))
 
+    def test_date_accepts_sequence_suffix_and_rejects_bad_forms(self):
+        for ok in ('2026-11-20', '2026-11-20-2', '2026-11-20-10'):
+            self.assertEqual(self.args(date=ok).date, ok)
+        for bad in ('2026-11-20-1', '2026-11-20-x', '2026-11-20-02', '2026-11-20-0', '2026-11-20-', '2026-11-2'):
+            with self.assertRaises(SystemExit, msg=bad), mock.patch('sys.stderr'):
+                self.args(date=bad)
+
+    def test_sequence_sort_is_chronological(self):
+        names = ['2026-11-20-10', '2026-11-20-2', '2026-11-21', '2026-11-20', '2026-11-19']
+        self.assertEqual(sorted(names, key=nightly.night_sort_key),
+                         ['2026-11-19', '2026-11-20', '2026-11-20-2', '2026-11-20-10', '2026-11-21'])
+
+    def test_history_sums_per_day_and_ignores_same_day(self):
+        nd = self.var / 'nightly'
+        for name, n in [('2026-11-10', 10), ('2026-11-11', 20), ('2026-11-11-2', 30), ('2026-11-11-3', 40),
+                        ('2026-11-12', 5), ('2026-11-12-2', 99), ('junk', 7)]:
+            (nd / name).mkdir(parents=True)
+            (nd / name / 'status.json').write_text(json.dumps({'added': n}))
+        # 11-12-2 の実行: 11-12 の分は含めず、日単位の合算(新しい日から)
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-12-2'), [90, 10])
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-13'), [104, 90, 10])
+        self.assertEqual(nightly.history_added(str(nd), '2026-11-13', n=2), [104, 90])
+        self.assertEqual(nightly.history_added(str(nd / 'none'), '2026-11-13'), [])
+
+    def test_second_cycle_runs_in_own_dir(self):
+        self.seed()
+        self.assertEqual(self.run_night(date='2026-11-18'), 0)
+        self.assertEqual(self.run_night(date='2026-11-18-2'), 0)
+        self.assertTrue((self.var / 'nightly' / '2026-11-18-2' / 'status.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()
