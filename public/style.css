@@ -361,3 +361,6 @@ html[data-theme="dark"] .site-host { color: #8fb0ba; }
 html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited { border-color: #4e8e9b; color: #82ddea; }
 @media (pointer: coarse) { .feed-entry { min-height: 44px; font-size: 14px; } }
 @media (max-width: 700px) { .feed-entry { min-height: 44px; font-size: 14px; } }
+.feed-note { margin: 4px 0 0; font-size: 11px; line-height: 1.4; color: #3b565c; }
+.feed-note[hidden] { display: none; }
+html[data-theme="dark"] .feed-note { color: #9cc4cc; }

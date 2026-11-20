@@ -217,6 +217,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('link[hreflang]', { element: e => e.setAttribute('href', canonical) })
     .on('#home-link', { element: e => e.setAttribute('href', categoryHref([], scope)) })
     .on('#feed-entry', { element: e => e.setAttribute('href', globalThis.MiseFeedEntry.feedEntryHref(scope, path[0])) })
+    .on('#feed-note', { element: e => { if (globalThis.MiseFeedEntry.feedEntryLossy(isSearch, path.length)) e.removeAttribute('hidden'); } })
     .on('#scope-nav', { element: e => e.setInnerContent(scopeNavHtml(scopes, scope), { html: true }) })
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })

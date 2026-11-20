@@ -29,26 +29,34 @@ const probe = () => {
   const range = document.createRange(); range.selectNodeContents(a); const t = range.getBoundingClientRect();
   return { display: cs.display, visibility: cs.visibility, text: a.textContent, href: a.getAttribute('href'), rel: a.getAttribute('rel'), w: r.width, h: r.height,
     dy: (t.top + t.height / 2) - (r.top + r.height / 2), dx: (t.left + t.width / 2) - (r.left + r.width / 2), overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    note: (n => n && { display: getComputedStyle(n).display, text: n.textContent.trim(), h: n.getBoundingClientRect().height, w: n.getBoundingClientRect().width, right: n.getBoundingClientRect().right })(document.querySelector('#feed-note')),
     searchTop: document.querySelector('#query').getBoundingClientRect().top, entryTop: r.top, searchH: document.querySelector('#query').getBoundingClientRect().height };
 };
 const SCENES = [
-  ['top', '/', '/jp/?view=feed'],
-  ['jp', '/jp/', '/jp/?view=feed'],
-  ['region', '/jp/13/', '/jp/13/?view=feed'],
-  ['category', '/jp/13/?category=computing', '/jp/13/?view=feed&cat=computing'],
-  ['search', '/jp/?q=blog', '/jp/?view=feed'],
-  ['tag', '/jp/?q=blog&category=computing&tag=' + encodeURIComponent('ブログ'), '/jp/?view=feed&cat=computing'],
-  ['all', '/all/', '/all/?view=feed'],
+  ['top', '/', '/jp/?view=feed', false],
+  ['jp', '/jp/', '/jp/?view=feed', false],
+  ['region', '/jp/13/', '/jp/13/?view=feed', false],
+  ['category', '/jp/13/?category=computing', '/jp/13/?view=feed&cat=computing', false],
+  ['search', '/jp/?q=blog', '/jp/?view=feed', true],
+  ['tag', '/jp/?q=blog&category=computing&tag=' + encodeURIComponent('ブログ'), '/jp/?view=feed&cat=computing', true],
+  ['tag-only', '/jp/?category=computing&tag=' + encodeURIComponent('ブログ'), '/jp/?view=feed&cat=computing', true],
+  ['subcategory', '/jp/?category=computing&category=programming', '/jp/?view=feed&cat=computing', true],
+  ['all', '/all/', '/all/?view=feed', false],
 ];
 for (const [vn, vw, dark, lang] of [['pc', 1280, false, 'en'], ['sp', 390, true, 'ja'], ['sp', 390, false, 'en']]) {
   const ctx = await browser.newContext({ viewport: { width: vw, height: 844 }, locale: lang === 'ja' ? 'ja-JP' : 'en-US', hasTouch: vn === 'sp', isMobile: vn === 'sp' });
   await ctx.addInitScript(([d, l]) => { try { localStorage.setItem('mise-theme', d ? 'dark' : 'light'); localStorage.setItem('mise-language', l); } catch (_) {} }, [dark, lang]);
   const errors = [];
-  for (const [name, url, want] of SCENES) {
+  for (const [name, url, want, note] of SCENES) {
     const page = await ctx.newPage(); page.on('console', (m) => { if (m.type() === 'error') errors.push(`${name}: ${m.text()}`); }); page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
     await page.goto(BASE + url); await page.waitForTimeout(1800);
     const p = await page.evaluate(probe), tag = `${vn}${dark ? '-dark' : ''}-${lang} ${name}`;
     check(`${tag} 表示`, () => { assert.ok(p, '入口が無い'); assert.notEqual(p.display, 'none'); assert.equal(p.visibility, 'visible'); assert.equal(p.text, lang === 'ja' ? '縦で見る' : 'Feed'); assert.match(p.rel, /nofollow/); });
+    check(`${tag} 案内（引き継げない状態のときだけ）`, () => {
+      assert.ok(p.note, '#feed-note が無い');
+      if (note) { assert.notEqual(p.note.display, 'none'); assert.equal(p.note.text, lang === 'ja' ? '範囲とトップのカテゴリだけ引き継ぎます' : 'Only scope and top category carry over'); assert.ok(p.note.h > 0 && p.note.right <= vw, `note h=${p.note.h} right=${p.note.right}`); }
+      else assert.equal(p.note.display, 'none');
+    });
     check(`${tag} href`, () => assert.equal(p.href, want));
     check(`${tag} 中央`, () => { assert.ok(Math.abs(p.dy) <= 1.5, `dy=${p.dy}`); assert.ok(Math.abs(p.dx) <= 1.5, `dx=${p.dx}`); });
     check(`${tag} 大きさ/横溢れ`, () => { assert.ok(p.h >= (vn === 'sp' ? 44 : 32), `h=${p.h}`); assert.ok(p.overflowX <= 0, `overflowX=${p.overflowX}`); });
