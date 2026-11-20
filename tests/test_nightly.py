@@ -743,3 +743,36 @@ class WikidataStage(Env):
         self.assertTrue(any('Wikidata が中断' in g and 'Retry-After' in g for g in n.status['guards']))
         self.assertFalse(any('失敗' in g for g in n.status['guards']))
         self.assertIn('中断', r['note'])
+
+
+class CcSampleEvery(Env):
+    def _cc(self):
+        return [c for c in self.calls if 'discover-cc' in c]
+
+    def test_default_is_1000_and_passed_to_discover_cc(self):
+        self.seed()
+        self.assertEqual(self.args().cc_sample_every, 1000)
+        nightly.Night(self.args()).s_discover()
+        cc = self._cc()
+        self.assertEqual(len(cc), 1)
+        self.assertEqual(cc[0][cc[0].index('--sample-every') + 1], '1000')
+
+    def test_custom_value_passed_to_discover_cc(self):
+        self.seed()
+        nightly.Night(self.args('--cc-sample-every', '10')).s_discover()
+        cc = self._cc()
+        self.assertEqual(cc[0][cc[0].index('--sample-every') + 1], '10')
+        self.assertEqual(cc[0][cc[0].index('--limit') + 1], '200')   # 1 夜の上限は従来どおり
+
+    def test_invalid_value_rejected(self):
+        for bad in ('0', '-5'):
+            with self.assertRaises(SystemExit), mock.patch('sys.stderr'):
+                self.args('--cc-sample-every', bad)
+
+    def test_disabled_when_discover_limit_zero(self):
+        nightly.Night(self.args('--discover-limit', '0', '--cc-sample-every', '10')).s_discover()
+        self.assertFalse(self._cc())
+
+    def test_dry_run_shows_sample_every(self):
+        self.assertIn('抽出率 1/100', nightly.plan(self.args('--cc-sample-every', '100')))
+        self.assertNotIn('抽出率', nightly.plan(self.args('--discover-limit', '0')))
