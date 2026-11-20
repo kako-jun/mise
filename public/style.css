@@ -364,3 +364,8 @@ html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited
 .feed-note { margin: 4px 0 8px; font-size: 11px; line-height: 1.4; color: #3b565c; }
 .feed-note[hidden] { display: none; }
 html[data-theme="dark"] .feed-note { color: #9cc4cc; }
+
+/* 間違いサラダと同じ、控えめな訪問数とビルド日。 */
+.footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 8px; font-size: 12px; opacity: .6; }
+.footer-meta #visit-counter { font-variant-numeric: tabular-nums; }
+.footer-meta #build-version { margin-left: auto; }

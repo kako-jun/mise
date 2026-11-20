@@ -157,3 +157,7 @@ SSR（JS 無効時の `noscript` 相当の一覧）も同じ構造（`.site-head
 - サイトのリンク右の「別タブで開く」ボタン（`a.site-newtab`、枠・背景なしの ↗ アイコン）は外部リンク設定がオフの間だけ出す（オンなら全リンクが別タブなので `hidden`）。トグル切替で即時に出し入れし、描画時にも現在値で初期化するのでページング・再検索後も一致する。`target=_blank rel="noopener noreferrer"`、`aria-label`/`title` はサイト名入りで「<サイト名> を新しいタブで開く / Open <site> in new tab」（Issue の固定文言にサイト名を前置。スクリーンリーダーで各ボタンを区別するため）。タップ領域は 32px（透明な余白。縦だけ負マージンで行高を増やさず、`position:relative; z-index:1` で後続の説明文より前面に出して実際に押せる範囲を 32px 確保。右は負マージンにせず旗 `.site-place` と重ねない）、hover/focus-visible は色の変化とアウトラインで示す。地球儀の hover は行全体が対象なのでボタン上でも通常のリンクと同じ扱い（タップでは行のタップ移動から除外）。
 - サイトの URL は `http:` / `https:` だけをリンクにする（それ以外はテキストのみ）。
 - 英語表示で日本語の紹介文を出すときは、その段落に `lang="ja"` を付ける。
+
+## 訪問カウンタ
+
+フッタ下段の左に Nostalgic Counter の累計を `views`、右に `vYYYY-MM-DD` を控えめに表示する。カウンタ ID は `mise-31f9ea08`。ページ読込ごとに API の increment を呼び、取得できない場合は表示しない。CSP の connect-src は API オリジンを許可する。バージョンは間違いサラダと同じ日本時間のビルド日で、`scripts/build-date.mjs` が Wrangler ビルド時に `public/build-date.json` を生成する。手動更新は不要で、同日の複数ビルドは同じ表記。
