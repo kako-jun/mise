@@ -7,7 +7,7 @@
 - Cloudflare Workers の Worker 名は `mise`。Custom Domain `mise.llll-ll.com`（`wrangler.jsonc` の `routes`）で公開している。workers.dev は無効化したと Issue #7 に記録されている（2026-11-13。本書では再確認していない）。
 - データベースは D1 `mise`（バインディング名 `DB`）。`wrangler.jsonc` の `database_id` は本番 DB の識別子で、秘密ではない。ローカル開発では同じバインディングがローカルの D1（`.wrangler/`、コミットしない）に向く。
 - 静的ファイルは `public/` を `ASSETS` バインディングで配信し、`/api/*`・`/`・範囲ページ・`/sitemap.xml` は Worker が先に処理（静的ファイルの拡張子は `run_worker_first` で除外）する（[architecture.md](../design/architecture.md)）。
-- 画像（ファビコン等）は R2 バケット `mise-media`（バインディング `MEDIA`、`/icon/<hash>.webp`・`/thumb/<k>.webp?v=…` で配信）。バケットは Cloudflare アカウントで R2 を有効化したうえで作る（次の節）。
+- 画像（ファビコン等）は R2 バケット `mise-media`（バインディング `MEDIA`、`/icon/<k>.webp?v=…`・`/thumb/<k>.webp?v=…` で配信。どちらもサイト固定のキー）。バケットは Cloudflare アカウントで R2 を有効化したうえで作る（次の節）。
 - 必須の secret は `INTAKE_SALT`（申請の IP ハッシュの塩。未設定だと申請の受付が 503 で止まる。[requests.md](requests.md)）。設定は [秘密情報](#秘密情報)。
 
 ## ローカル
@@ -62,7 +62,7 @@ npx wrangler r2 bucket create mise-media-preview   # プレビュー用（空の
 npx wrangler r2 bucket list
 ```
 
-- **ローカル検証**（Cloudflare には触れない。miniflare の R2 模擬、状態は `.wrangler/state`）: `uv run --with pillow python3 scripts/favicon/favicon.py run --apply --store r2`（既定で `--local`）か、`npx wrangler r2 object put mise-media/icon/<hash>.webp --file <f> --content-type image/webp --local` で置き、`npm run dev` で `/icon/<hash>.webp`（200・`immutable`・`ETag`）、存在しない名前で 404、一覧にファビコンが出ることを確かめる。`--remote` は本番バケットへ書くので、バケット作成後にだけ使う。
+- **ローカル検証**（Cloudflare には触れない。miniflare の R2 模擬、状態は `.wrangler/state`）: `uv run --with pillow python3 scripts/favicon/favicon.py run --apply --store r2`（既定で `--local`）か、`npx wrangler r2 object put mise-media/icon/<k>.webp --file <f> --content-type image/webp --local` で置き、`npm run dev` で `/icon/<k>.webp?v=…`（200・`immutable`・`ETag`。v 無しは短いキャッシュ）、存在しない名前で 404、一覧にファビコンが出ることを確かめる。`--remote` は本番バケットへ書くので、バケット作成後にだけ使う。
 - **無料枠の目安**（R2 の無料枠。数字は課金ページで要確認）: 保存 10 GB/月、書き込み系（Class A）100 万回/月、読み取り系（Class B）1,000 万回/月、egress（転送）無料。ファビコンは 1 件 約 1.5 KB なので、10 万件で約 150 MB・初回の書き込み 10 万回。サムネイルは 1 件 約 5〜14 KB（試行 20 件。画質を上げても 20〜40 KB 想定）で、**1 サイト 1 枚の上書き**なので 10 万件でも約 0.5〜4 GB（古い画像は残らない）・初回の書き込み 10 万回（ファビコンと合わせて月の枠 100 万回の 2 割）、1 日 約 3,300 枚（[thumbnails.md](../collection/thumbnails.md#量産の見積もり)）。月次更新は、台帳に置いた印が無いか画像のハッシュが変わったものだけ書く（印があれば同じ中身の 200 でも書かない）ので無料枠に収まる。404 も R2 の読み取りに数えるが、不正な名前（32 桁 16 進でないもの）は R2 を見ずに 404 を返す。
 - **サムネイル（#130。migration 0028）を本番へ流す順序**（この段では未実施。`--r2-remote`・`d1 execute --remote` の書き込みは人が承認してから）:
   1. **migration 0028 の適用 → マージ（デプロイ）。デプロイ前に必ず `node scripts/check-migrations-applied.mjs`**（読み取りのみ。本番 `mise` とプレビュー `mise-preview` の `d1_migrations` を SELECT で読み、`migrations/` に未適用があれば非 0 で終了する。プロキシ環境では `NODE_EXTRA_CA_CERTS` が要る）。新 Worker は `sites.thumb_path`・`thumb_lqip`・`thumb_captured_at` を読むので、**migration より先に新 Worker がデプロイされると、`COLUMNS` を使う API と SSR 全体が 500 になる**（旧 Worker は列を読まないので、先に適用しても壊れない。Worker 側で列が無くても落ちないフォールバックは入れない）。本番は `npx wrangler d1 migrations apply mise --remote`、プレビューは「プレビュー DB を本番に追従させる手順」の一時設定（`-c`）で。0028 は列を足すだけで、FTS・集計トリガ・並びの索引には触れない（`tests/thumb-migration.test.mjs`）。
@@ -72,7 +72,17 @@ npx wrangler r2 bucket list
   5. 戻し方: 反映を止めるだけなら `UPDATE sites SET thumb_path=NULL, thumb_lqip=NULL, thumb_captured_at=NULL`（画面は代替ビジュアルに戻る。R2 の画像は残してよい）。画像を消す（取り下げ・除外）ときは、**`import --exclude` → `sql`（thumb 列 NULL）を D1 へ適用 → `thumbnail.py delete --site <id> --apply --d1-done --r2-remote`（R2 の削除。サイトごとに 1 本。他サイトの参照確認は要らない）の順**（D1 が先、R2 が後。アップロード済みのサイトは除外だけでは R2 の画像が公開で取れたまま残るので `delete` が必須）。列ごと戻す場合は旧 Worker へ戻してから `ALTER TABLE sites DROP COLUMN ...`。
   ローカル検証: `npm run db:migrate` → `thumbnail.py upload --apply`（模擬 R2）→ `sql --store r2-local` を `wrangler d1 execute mise --local --file` で適用 → `npm run dev` で `/thumb/<k>.webp?v=…` と `?view=feed`。
 - プレビューのバケットは本番と別（`previews.r2_buckets` の `mise-media-preview`）。ブランチの未レビューのコードが本番の画像を触らないため。書き込みはしない運用で、空なら `/icon/` は 404。
-- ファビコンを本番へ流す順序は「`--r2-remote` で画像を置く → `sql`（既定の保存先 r2-remote の印があるものだけ）を D1 へ適用」。台帳は保存先ごとの印を持つ（[collection/favicons.md](../collection/favicons.md#r2-への保存と配信)）。取り下げ（#29）での削除経路は [collection/favicons.md](../collection/favicons.md) の設計（未実装）。
+- ファビコンを本番へ流す順序は「`--r2-remote` で画像を置く → `sql`（既定の保存先 r2-remote の印があるものだけ）を D1 へ適用」。台帳は保存先ごとの印を持つ（[collection/favicons.md](../collection/favicons.md#r2-への保存と配信)）。取り下げ・除外は `favicon.py exclude` → `sql`（D1 を NULL）→ D1 に適用 → `delete --apply --d1-done`（[同](../collection/favicons.md#取り下げ29除外での-r2-画像の削除)）。
+- **ファビコンのサイト固定キー化（#163。migration 0029）の本番への切替順序**（サムネイルと同じ規則。`--r2-remote`・`d1 execute --remote` の書き込みは人が承認してから。道具は `scripts/favicon/rekey.py`、[collection/favicons.md](../collection/favicons.md#内容ハッシュ名からサイト固定キーへの移行163一回きり)）:
+  1. **migration 0029 の適用 → 新 Worker のデプロイ**。デプロイ前に `node scripts/check-migrations-applied.mjs`（読み取りのみ）。0029 は `sites.favicon_v TEXT` を足すだけ（FTS・集計トリガ・索引に触れない。`tests/thumb-migration.test.mjs`）。新 Worker は `favicon_v` を読むので、**migration より先に新 Worker がデプロイされると API と SSR が 500**（0028 と同じ。旧 Worker は列を読まないので先に適用しても壊れない）。本番は `npx wrangler d1 migrations apply mise --remote`、プレビューは「プレビュー DB を本番に追従させる手順」の一時設定（`-c`）で。
+  2. **過渡期**: 新 Worker は `favicon_v` が NULL の旧データでは従来どおり `/icon/<内容ハッシュ名>.webp`（v なし）、`favicon_v` があるサイトでは `/icon/<k>.webp?v=<favicon_v>` を返す。この状態で旧画像はそのまま配信され続ける。
+  3. **D1 の Time Travel の bookmark を控える**（`npx wrangler d1 time-travel info mise`。適用前）。
+  4. **新キーで上げ直す**: `rekey.py --db <台帳> ... plan` → `upload`（dry-run）→ `upload --apply --r2-remote`（8 並列。失敗は集計されるので 0 になるまで同じコマンドを再実行）。**画像が先**。
+  5. **D1 を切り替える**: `rekey.py --db ... sql --out var/favicon-rekey.sql`（R2 に置いた印のあるサイトだけ。`(favicon_path IS NOT … OR favicon_v IS NOT …)` 条件付きで何度流しても安全）→ 内容を確認して `npx wrangler d1 execute mise --remote --file var/favicon-rekey.sql`。
+  6. **配信を確認**: 一覧のファビコンが出る・`/icon/<k>.webp?v=…` が 200 で `immutable`・旧データ（まだ切り替えていないサイト）も出る、を本番で目視。
+  7. **旧画像を消す（1 回だけ）**: まず D1 のスナップショットを取る: `npx wrangler d1 execute mise --remote --json --command "SELECT id,favicon_path,favicon_v FROM sites WHERE favicon_path IS NOT NULL" > var/d1-favicon.json`（古い・空・極端に少ないと `delete-old` は中止する。D1 の `favicon_path` が今も指す旧名は消さない）。`rekey.py --db ... list-old` と `delete-old --d1-json var/d1-favicon.json`（dry-run。`kept` が 0 か。残るものは終了コード 3 で内訳が出る）を確認 → `delete-old --d1-json var/d1-favicon.json --apply --r2-remote --d1-done`。
+  8. **戻し方**: 切替後に問題があれば、D1 を戻す（`rekey.py --db ... sql --revert --out var/favicon-revert.sql` が台帳の `icon_hash` から `UPDATE sites SET favicon_path=<旧ハッシュ名>, favicon_v=NULL …` を出すので `wrangler d1 execute mise --remote --file` で適用。または bookmark で Time Travel）。旧画像は手順 7 までは R2 に残っているので、7 の前なら完全に戻せる。7 の後はローカルの `var/favicons/<内容ハッシュ名>.webp` から再度上げ直せる。列ごと戻すなら旧 Worker へ戻してから `ALTER TABLE sites DROP COLUMN favicon_v`。
+
 
 ## 官公庁の名簿（0015・0019）を本番へ適用する手順（Issue #37、PR #71）
 

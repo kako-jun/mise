@@ -15,7 +15,8 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `name` | 表示名（言語共通） | 0001 |
 | `description_ja` | 日本語の一文紹介、必須 | 0001 |
 | `description_en` | 英語の一文紹介、NULL 可。日本語に書かれた事実だけを訳し、情報を足さない | 0010 |
-| `favicon_path` | 自前取得した 32px WebP の内容ハッシュ名（`<hash>.webp`）。取れていなければ NULL。取得・更新は [collection/favicons.md](../collection/favicons.md)。配信は Worker の `/icon/<hash>.webp`（R2 バケット `mise-media`。API は `favicon_path` をそのまま返し、配信 URL を `favicon_url` に足す。形が `<32桁16進>.webp` でない値は `favicon_url` を null にする） | 0002 |
+| `favicon_path` | 自前取得した 32px WebP の R2 キー名。**新: サイト固定のキー名 `<sha256(site_id) の先頭32桁>.webp`（1 サイト 1 画像・上書き。#163）**。旧データ（切替前）は内容ハッシュ名 `<hash>.webp`。取れていなければ NULL。取得・更新は [collection/favicons.md](../collection/favicons.md)。配信は Worker の `/icon/<名前>.webp`（R2 バケット `mise-media`。API は `favicon_path` をそのまま返し、配信 URL を `favicon_url` に足す。`favicon_v` があれば `?v=<favicon_v>` 付き。形が `<32桁16進>.webp` でない値は `favicon_url` を null にする） | 0002 |
+| `favicon_v` | ファビコンの**表示のバージョン**（内容ハッシュの先頭 8 桁。`favicon_url` の `?v=`。画像が変わると変わり、ブラウザが新しい画像を取る。`favicon.py sql` の UPDATE はこの値の変化で冪等判定する）。NULL は旧データ（内容ハッシュ名のまま・v なしで配信）か画像なし。API には出さない（`favicon_path` は API が出し続ける: 切替前の旧データの確認と、`public/app.js` が `favicon_url` の無いときに静的な `/icons/…` の値へ戻す経路が読むため） | 0029 |
 | `thumb_path` | 撮影したサムネイル（PC 画面の最初の画面を幅 320px の WebP にしたもの）の**サイト固定のキー名** `<sha256(site_id) の先頭32桁>.webp`（撮り直しでも値は変わらない。1 サイト 1 枚・上書き）。取れていなければ NULL。撮影・キュー・保存は [collection/thumbnails.md](../collection/thumbnails.md)。配信は Worker の `/thumb/<k>.webp?v=…`（R2 の `thumb/<k>.webp`）。API は `thumb_path` を返さず、配信 URL を `thumb_url`（`/thumb/<k>.webp?v=<thumb_captured_at のエポック秒の36進>`。形が `<32桁16進>.webp` でなければ null）に出す。**撮影の状態（成否・期限・失敗回数・obscured・除外）は D1 に持たず、手元の台帳 `var/thumbnails.sqlite` に持つ** | 0028 |
 | `thumb_lqip` | 極小プレースホルダ（`data:image/webp;base64,...`、約 130 文字）。API は `thumb_lqip`（画像が無い・形が違う値は null） | 0028 |
 | `thumb_captured_at` | サムネイルの撮影日時（ISO 8601 UTC）。**表示のバージョン**（`thumb_url` の `?v=`。撮り直すと変わり、ブラウザが新しい画像を取る）。`sql` の UPDATE はこの値の変化で冪等判定する | 0028 |

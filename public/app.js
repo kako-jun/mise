@@ -283,7 +283,7 @@ function renderSite(target, site, showCategories=false) {
   const icon=document.createElement('span'); icon.className='site-icon'; icon.setAttribute('aria-hidden','true'); icon.hidden=true;
   // 自サイト（R2 の /icon/<hash>.webp）に置いた画像だけを出す。第三者のサイトには表示時にアクセスしない。取れていないサイトは何も出さない（名前は左端から始まる）。
   // サイト名の左だけに出す。寸法は固定（18px）で、画像の読み込み前から出しておく（読み込み後に枠が現れて行がずれるのを避ける）。失敗したら枠ごと消す。
-  const iconSrc = typeof site.favicon_url==='string' && /^\/icon\/[0-9a-f]{32}\.webp$/.test(site.favicon_url) ? site.favicon_url
+  const iconSrc = typeof site.favicon_url==='string' && /^\/icon\/[0-9a-f]{32}\.webp(\?v=[0-9a-z]{1,12})?$/.test(site.favicon_url) ? site.favicon_url
     : (site.favicon_path && /^\/icons\/[a-zA-Z0-9._-]+$/.test(site.favicon_path) ? site.favicon_path : null);
   if(iconSrc) {
     const img=document.createElement('img'); img.alt=''; img.width=16; img.height=16; img.decoding='async'; img.src=iconSrc;
