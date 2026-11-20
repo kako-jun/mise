@@ -126,23 +126,20 @@ export function scopeNavHtml(scopes, scope) {
     const flag = flagUrl(r.code);
     items.push(item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : `<span class="scope-code" aria-hidden="true">${esc(r.code)}</span>`));
   }
-  return `<ul class="scope-list">${items.join('')}</ul>${regionSelectHtml(scopes, scope)}`;
+  return `<ul class="scope-list">${items.join('')}</ul>${regionRowHtml(scopes, scope)}`;
 }
 // JS なしでも・クローラも区画のページへ辿れるよう、同じ区画を通常のリンク（/jp/13/ 形式）で並べた折りたたみ。サイトのある区画だけ（無い区画は 404 なので出さない）。
-// JS が起動すると app.js が範囲ナビごと描き直し、select だけになる。
+// JS が起動すると app.js が範囲ナビごと描き直し、このリンクは消える（プルダウンは #177 で撤去）。
 function regionLinksHtml(cc, regions) {
   return `<details class="region-links"><summary>Regions of ${esc(countryName(cc))}</summary><ul>${regions.map(r => `<li><a href="${esc(scopePath(r.code.toLowerCase()))}">${esc(regionName(r.code))} (${r.count})</a></li>`).join('')}</ul></details>`;
 }
-// 国（または国の中の区画）が現在の範囲で、その国に区画があるときの区画選択（SSR。app.js が同じ内容に描き直す）。value は範囲名（jp / jp-13）。
-// 先頭は国全体（区画で絞らない）。区画が無い範囲（all・区画を持たない国）では出さない。
-export function regionSelectHtml(scopes, scope) {
+// 国（または国の中の区画）が現在の範囲で、その国に区画があるときだけ、区画リンクの折りたたみを返す（SSR のみ。区画が無い範囲では空）。
+function regionRowHtml(scopes, scope) {
   const sc = parseScope(scope);
   if (!sc?.cc) return '';
   const regions = (scopes.regions ?? []).filter(r => r.code.startsWith(sc.cc + '-'));
   if (!regions.length) return '';
-  const country = scopes.countries.find(r => r.code === sc.cc);
-  const opt = (value, label, count) => `<option value="${esc(value)}"${value === scope ? ' selected' : ''}>${esc(label)} (${count})</option>`;
-  return `<div class="region-row"><select class="region-select" aria-label="Region">${opt(sc.cc.toLowerCase(), 'All of ' + countryName(sc.cc), country?.count ?? 0)}${regions.map(r => opt(r.code.toLowerCase(), regionName(r.code), r.count)).join('')}</select>${regionLinksHtml(sc.cc, regions)}</div>`;
+  return `<div class="region-row">${regionLinksHtml(sc.cc, regions)}</div>`;
 }
 
 // 範囲ページ（/ , /jp/ , /us/ , /all/）の HTML を、URL（?category= / ?q=）に応じたメタ情報と JS なしで読める本文に書き換える。

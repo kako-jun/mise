@@ -124,7 +124,7 @@ test('SSR: 国・区画のページに、サイトのある区画へのリンク
     const hrefs = [...html.matchAll(/<a href="(\/jp\/\d\d\/)">/g)].map(m => m[1]);
     assert.deepEqual(hrefs, scopes.regions.filter(r => r.code.startsWith('JP-')).map(r => `/jp/${r.code.slice(3)}/`), scope + ': サイトのある区画だけ・コード順');
     assert.ok(hrefs.includes('/jp/13/') && !hrefs.includes('/jp/99/'));
-    assert.match(html, /<option value="jp-13"/); // select も従来どおり
+    assert.doesNotMatch(html, /<select|region-select/); // プルダウンは撤去（#177）
   }
   assert.doesNotMatch(scopeNavHtml(scopes, 'all'), /region-links|region-select/);
   assert.doesNotMatch(scopeNavHtml({ ...scopes, regions: [] }, 'jp'), /region-links/);
