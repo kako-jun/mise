@@ -254,7 +254,7 @@ class Night:
         out = self.run_py("discover-links", "scripts/pipeline/run.py", "discover-links", "--db", self.db, "--max-links", a.max_links)
         note = "links: " + out.strip()[-120:]
         if a.discover_limit > 0:  # discover-cc の失敗は続行できる（取得済みの台帳で後段が進む）
-            rc, o = run_cmd([PY, os.path.join(ROOT, "scripts/pipeline/run.py"), "discover-cc", "--sample-every", "1000",
+            rc, o = run_cmd([PY, os.path.join(ROOT, "scripts/pipeline/run.py"), "discover-cc", "--sample-every", str(a.cc_sample_every),
                              "--limit", str(a.discover_limit), "--db", self.db])
             note += " / cc: " + (o.strip()[-120:] if rc == 0 else f"失敗(exit {rc}、続行)")
             if rc != 0:
@@ -651,7 +651,7 @@ def plan(a):
     est = n * EST_USD_PER_CANDIDATE
     L = [f"[dry-run] 夜間ジョブ計画 {a.date}（外部アクセス・API・書き込みなし）", f"台帳: {a.db} ({'あり' if os.path.exists(a.db) else 'なし'})",
          f"台帳の状態: {json.dumps(snap['state'], ensure_ascii=False)}", f"LLM 審査状態: {json.dumps(snap['review'], ensure_ascii=False)}", "段:"]
-    L.append(f"  1 discover   discover-links 常に / discover-cc 上限 {a.discover_limit}" + ("(無効)" if a.discover_limit <= 0 else ""))
+    L.append(f"  1 discover   discover-links 常に / discover-cc 上限 {a.discover_limit}" + ("(無効)" if a.discover_limit <= 0 else f"(抽出率 1/{a.cc_sample_every})"))
     L.append(f"  1 discover   + discover-wikidata 1 夜 {a.wikidata_leaves} 葉(本番の site_count が {LEAF_TARGET} 未満の葉を優先)" if a.wikidata_leaves > 0 else "  1 discover   + discover-wikidata 無効")
     L += [f"  2 triage     台帳内の discovered を振り分け", f"  3 fetch      上限 {a.fetch_limit} ホスト（queued: {snap['state'].get('queued', 0)}）",
           f"  4 judge      取得後フィルタ（fetched: {snap['state'].get('fetched', 0)}）",
@@ -673,6 +673,7 @@ def parse_args(argv=None):
     ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前 YYYY-MM-DD か YYYY-MM-DD-N(N>=2、同日の追加サイクル)。既定: UTC の今日。再開は同じ名前で")
     ap.add_argument("--max-add", type=int, default=0, help="1 夜に出荷する追加サイト数の上限(0=上限なし。既定)")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
+    ap.add_argument("--cc-sample-every", type=int, default=1000, help="discover-cc の抽出率(crc32 %% N == 0 の .jp ホストだけ台帳に入れる。既定 1000。小さいほど供給が増える。--discover-limit が 0 のとき無効)")
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
     ap.add_argument("--max-links", type=int, default=300, help="discover-links の 1 シードあたりの発見上限")
     ap.add_argument("--fetch-limit", type=int, default=600)
@@ -696,6 +697,8 @@ def parse_args(argv=None):
         ap.error("--date は YYYY-MM-DD か YYYY-MM-DD-N(N は 2 以上。同日の 2 回目以降のサイクル)")
     if not a.anomaly_factor > 0:
         ap.error("--anomaly-factor は正の数")
+    if a.cc_sample_every < 1:
+        ap.error("--cc-sample-every は 1 以上")
     if a.wikidata_leaves < 0:
         ap.error("--wikidata-leaves は 0 以上")
     if a.favicon_limit < 0:
