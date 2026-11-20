@@ -117,7 +117,7 @@ body *{visibility:hidden!important;animation:none!important;transition:none!impo
 [data-ink-hide],[data-ink-hide] *{visibility:hidden!important}`;
   document.querySelectorAll('[data-ink-hide]').forEach((e) => e.removeAttribute('data-ink-hide'));
   const anchor = t.box || t.gfx;
-  if (!anchor.isConnected) return { stale: true }; // 描き直された（縦フィードのパネルなど）。呼び出し側が集め直す
+  if (!anchor.isConnected || !anchor.getClientRects().length) return { stale: true }; // 描き直された（縦フィードのパネルなど）。呼び出し側が集め直す
   { const r = anchor.getBoundingClientRect(); if (r.top < 4 || r.bottom > innerHeight - 4 || r.left < 4 || r.right > innerWidth - 4) anchor.scrollIntoView({ block: 'center', inline: 'center' }); } // 画面内なら動かさない（縦フィードのパネルはスクロールで閉じる）
   const vis = t.gfx ? [t.txt && (t.txt.nodeType === 3 ? t.txt.parentElement : t.txt), t.gfxInk ? t.gfx : null] : [t.ink || t.box];
   vis.filter(Boolean).forEach((e) => e.setAttribute('data-ink-vis', ''));
@@ -203,10 +203,11 @@ for (const scene of SCENES.filter(([s]) => !ONLY.length || ONLY.includes(s))) {
         for (let k = 0; p.stale && k < 3; k++) { // 対象が描き直されていたら、場面の準備をやり直して集め直す
           if (setup) await setup(page);
           const again = (await page.evaluate(collectAll, sceneName)).find((x) => x.group === d.group && x.label === d.label);
-          if (again) { d.i = again.i; p = await page.evaluate(prepare, d.i); }
+          if (again) { await page.waitForTimeout(400); d.i = again.i; p = await page.evaluate(prepare, d.i); }
         }
         if (p.stale) { rows.push({ scene: sceneName, vp, theme, lang, group: d.group, label: d.label, strict: d.strict, ok: false, err: '対象が描き直されて測れない' }); continue; }
         await page.waitForTimeout(30);
+        if (sceneName === 'feed-panel') await page.waitForTimeout(150); // 開いた直後のアニメーション・描き直しを待つ
         const clip = { x: p.clip.x, y: p.clip.y, width: Math.max(1, p.clip.w), height: Math.max(1, p.clip.h) };
         const png = await page.screenshot({ clip, animations: 'disabled' });
         const xr = {};
