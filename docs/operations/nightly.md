@@ -91,7 +91,17 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 - 未処理分は実行機の `var/nightly/media.sqlite` に残る。次の本番反映モードのサイクルは、追加が 0 件でも、処理可能になった時刻が古い順に処理する。取得に失敗した分は台帳の期限まで待ち、保存済みサムネイルの R2 への転送は翌日から再試行できる。手動の除外は待ち行列から外す。掲載と画像の成功分はそのまま反映され、保存先や段自体の失敗は `guards` と `var/nightly/<date>/media.log` に残る。
 - 元の実行機で同じサイクルをやり直すには、元の `--date` と `--apply-prod --from-stage media` に画像上限オプションを付ける。成功済みの prod 段は飛ばし、画像だけを処理する。用意が間に合わなかったサイクルにも、保存済みの `keys.txt` と `export.sqlite` があれば同じ手順を使える。
 
-### Windows の掲載結果を Linux の撮影機へ渡す
+### rog 一台で画像を継続取得する
+
+`scripts/media_worker.py` は掲載処理とは独立して動く。成功して本番反映済みの過去・今後のサイクルの `status.json`・`keys.txt`・`export.sqlite` を読み、同じ Windows 側 `var/nightly/media.sqlite` に一度だけ取り込む。掲載失敗・処理中のサイクルは対象にしない。過去に出荷記録を残さず手動投入したサイトは対象外。ファビコンと画像の取得はそれぞれ期限を尊重し、R2 に格納できた画像だけ D1 に付ける。Windows と WSL は同じホストで、撮影だけ WSL Arch に渡す。並行実行を避けるため worker の専用ロックと、既存 media 段と共有する `.media.lock` を使う。
+
+1. 実行中にコードが書き換わらない専用 clone `C:\Users\kako-jun\repos\mise-media` にこの変更を配置し、Windows 側で `npm ci` を実行する。`var` は作らず、`scripts/cron/mise-media.cmd` は `C:\Users\kako-jun\repos\mise\var` の台帳を使う。`mise-continuous` や既存 nightly の clone を reset しない。
+2. rog の同一ユーザーの WSL2 Arch で systemd user と cgroup のメモリ制限、bwrap、Node/npm、uv が使えることを確認し、`bash scripts/thumbnail/setup-wsl.sh` を実行する。Playwright は WSL 専用ディレクトリに固定バージョンで導入され、Chromium の実体へ安定した symlink を作る。ネットワークと必要な OS ライブラリは WSL 内で用意する。ブラウザのパスは実体へ解決してから隔離環境に渡す。
+3. WSL 上の専用 clone で、`PLAYWRIGHT_DIR=$(readlink -e ~/.local/share/mise-media/node_modules/playwright) CHROMIUM_PATH=$(readlink -e ~/.local/share/mise-media/chromium) uv run --no-project --with pillow python3 scripts/thumbnail/selftest.py` を実行し、**失敗 0 を確認するまで撮影を開始しない**。検査付きプロキシ・bwrap・systemd のリソース制限を無効にしない。
+4. Windows のタスクスケジューラで `scripts/cron/mise-media.cmd` を同一ユーザーのログオン時に起動し、実行時間制限なし・重複インスタンス無視に設定する。初回は手動起動し `var/nightly/media-worker.log`、`media.sqlite`、少数サイトの画像 URL と D1 の状態を確認する。既定はファビコン100件・サムネイル10件ずつ、300秒の待機。サムネイル試行は既存の1日上限3000件を守る。画像段の失敗は掲載ジョブを停止しない。
+5. WSL の途中停止やタイムアウトで `var/nightly/media-worker-stopped.txt` が残った場合、worker は停止する。Windows と WSL の残存撮影プロセス・SQLite の状態を調べて終了を確認し、状況を記録したうえでマーカーを削除してタスクを再開する。非ゼロ終了でも Linux 子孫が残り得るため同じ手順とする。取得済み・未処理はキューと撮影台帳から再開する。
+
+### 別の Linux 撮影機へ渡す従来の手順
 
 1. rog 上のサイクルの `status.json` を読み、`ok` と `prod_applied` が true、`prod` 段が `ok` であることを確認する。同じサイクルの `keys.txt` と `export.sqlite` を、撮影機の非公開作業ディレクトリへコピーする。出荷時の成人向け判定を使うため、別サイクルの台帳とは混ぜない。
 2. Linux の撮影機でサムネイル用の自己検査を通し、同じ本番 D1 と R2 にアクセスできる Wrangler を用意する。撮影機に永続の `var/nightly` を作る。以下では `var/nightly/2026-11-20-7` に上記2ファイルを置いた例。撮影機ではこのコマンドや他の撮影処理を同時に実行しない。
