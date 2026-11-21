@@ -1,5 +1,6 @@
 import json
 import contextlib
+import datetime
 import sqlite3
 import subprocess
 import sys
@@ -7,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import media_worker as worker
@@ -15,6 +16,24 @@ import nightly_media as media
 
 
 class MediaWorkerTest(unittest.TestCase):
+    def test_linux_thumbnail_retains_default_capture_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = SimpleNamespace(var=Path(tmp))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            capturer = MagicMock(playwright='/playwright', chromium='/chromium')
+            with patch.object(media, 'sys', SimpleNamespace(platform='linux')), \
+                 patch.object(media.shutil, 'which', return_value='/usr/bin/bwrap'), \
+                 patch.object(media.thumbnail, 'NodeCapturer', return_value=capturer) as ctor, \
+                 patch.object(media.thumbnail, 'due_sites', return_value=[{'site_id': 's1'}]), \
+                 patch.object(media.thumbnail, 'run'), \
+                 patch.object(media.thumbnail, 'upload'), \
+                 patch.object(media.thumbnail, 'sql_updates', return_value=''), \
+                 patch.object(media, 'retry_dates', return_value={}):
+                media.capture_thumbnails(args, [{'id': 's1', 'url': 'https://example.com/'}], ['s1'], now)
+                ctor.assert_called_once_with()
+                capturer.check_ready.assert_called_once()
+                capturer.check_upstream.assert_called_once()
+
     def test_windows_favicon_only_keeps_thumbnails_and_never_calls_wsl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
