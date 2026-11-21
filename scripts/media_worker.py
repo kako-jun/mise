@@ -1,7 +1,6 @@
 """Consume successful shipped cycles on the Windows host, including previous cycles."""
 import argparse
 import contextlib
-import datetime
 import json
 import sqlite3
 import subprocess
@@ -52,7 +51,6 @@ def main(argv=None):
         ap.error('Windows 専用。ファビコン上限は 1–100、サムネイルは 0–100、間隔は 60 秒以上')
     root = a.var / 'nightly'
     root.mkdir(parents=True, exist_ok=True)
-    stop = root / 'media-worker-stopped.txt'
     with (root / '.media-worker.lock').open('a+') as worker_lock:
         media.filelock.lock(worker_lock, blocking=False)
         while True:
@@ -69,8 +67,7 @@ def main(argv=None):
                 if rc:
                     print('画像処理に失敗。再試行期限を確認', flush=True)
             except subprocess.TimeoutExpired as e:
-                stop.write_text(f'{datetime.datetime.now(datetime.timezone.utc).isoformat()} WSL timeout: {e}\n', encoding='utf-8')
-                raise RuntimeError(f'WSL タイムアウト。{stop} を確認') from e
+                print('画像処理がタイムアウト。次の実行で再試行:', e, flush=True)
             except OSError as e:
                 print('画像処理を待って再試行:', e, flush=True)
             if a.once:

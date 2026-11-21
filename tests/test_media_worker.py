@@ -72,6 +72,14 @@ class MediaWorkerTest(unittest.TestCase):
                 media.main(['--var', '/unused', '--out', '/unused', '--d1-name', 'mise',
                             '--favicon-limit', '0', '--thumbnail-limit', '0', *args])
 
+    def test_windows_timeout_keeps_queue_and_can_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(worker, 'sys', SimpleNamespace(platform='win32')), \
+                 patch.object(media, 'main', side_effect=[subprocess.TimeoutExpired('wrangler', 1), 0]):
+                self.assertEqual(worker.main(['--var', tmp, '--once']), 1)
+                self.assertFalse((Path(tmp) / 'nightly' / 'media-worker-stopped.txt').exists())
+                self.assertEqual(worker.main(['--var', tmp, '--once']), 0)
+
     def test_only_successful_production_cycles_are_enqueued_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
