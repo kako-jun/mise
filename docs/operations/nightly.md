@@ -44,6 +44,18 @@ uv run python3 scripts/nightly.py --date 2026-11-18         # 失敗した夜の
 uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回目のサイクル（新しい夜として別フォルダ）
 ```
 
+## 発見済み URL の継続処理
+
+`scripts/continuous.py --apply-prod` は `nightly.py` を連続して起動する。最初と6時間ごとに通常の発見元を巡り、間のサイクルは `--skip-discovery` で発見を省き、`discovered` の振り分け・`queued` と再試行期限が来た `failed` の取得・未判定 `candidate` の Claude API バッチ判定・自動承認・本番反映を行う。**既に台帳に溜まった待ちも同じ処理に入る**。発見回数や 1 サイクルの上限は起動オプションで変更できる。既定の API 予算は月 $100 で、nightly の費用見積りと台帳ガードをそのまま使う。
+
+通常の夜間ジョブと台帳を共有し、既存の `.lock` が解放されるまで待つ。継続処理同士は別の `.continuous.lock` で重複起動を防ぐ。UTC 日付の枝番を原子的に確保するので、枝なしの cron と衝突しない。取得・判定対象が無くなったら30分待って再確認し、発見周期と取得失敗の再試行期限も守る。
+
+`var/nightly/continuous.json` は現在のサイクルと最後の発見時刻を記録する。終了済みサイクルの確認前に再起動しても結果を再利用し、途中終了は同じ名前で再開する。**投入段の実行中に落ちて成否不明のときは再投入せず停止**する。月予算ガード中は Claude API 判定と公開を待ち、発見と取得前フィルタだけの `--discover-only` を6時間ごとに続ける。UTC の月が変わったら通常処理に戻り予算を確認し直す。異常ガード、未解決、画像処理の警告、コマンド失敗では停止する。`continuous.json` の `stopped`、対象の `status.json`・`report.md`・本番データと bookmark を確認してから原因を直し、停止状態を退避した上で再開する。投入成否不明を未確認のまま状態を書き換えない。保留・robots 拒否・期限待ちを承認や強制再取得しない。
+
+Windows では `scripts/cron/mise-continuous.cmd` を専用クローン `C:\\Users\\kako-jun\\repos\\mise-continuous` から起動する。依存は専用クローンで `npm ci` して固定バージョンの Wrangler を用意し、データだけ既存の `C:\\Users\\kako-jun\\repos\\mise\\var` を共有する。従来の `mise-nightly.cmd` は起動時に元クローンを `git reset --hard` するため、**同じクローンで長時間動かさない**。専用クローンも実行中に更新せず、停止後に更新する。Windows のタスクスケジューラで該当ユーザーのログオン時または起動時にこの `.cmd` を起動し、既存インスタンスを多重起動しない設定にする。ジョブログは共有 `var/nightly/continuous.log`。認証用 env と Wrangler の本番認証は既存夜間ジョブと同じユーザーに用意する。停止したタスクは原因の確認前に無条件で再試行しない。
+
+ファビコンは `--media-favicon-limit` を指定したときだけ実行する。サムネイルには別途撮影経路の設定が必要で、この継続処理だけでは画像取得は完了しない。`--once` は 1 サイクルだけ動かす運用確認用で、本番反映を含む（`--apply-prod` が必要）。
+
 ### `--date` の形式と同日の複数サイクル
 
 - `--date` は `YYYY-MM-DD`（既定は UTC の今日）か `YYYY-MM-DD-N`（N は 2 以上の整数、先頭ゼロ不可）。`2026-11-20-1` は不可。名前はそのまま `var/nightly/<date>/` になる。
