@@ -46,6 +46,8 @@ def main(argv=None):
     ap.add_argument('--interval', type=int, default=300)
     ap.add_argument('--once', action='store_true')
     a = ap.parse_args(argv)
+    if any((a.wsl_distro, a.wsl_playwright, a.wsl_chromium)):
+        ap.error('WSL オプションは利用できません。Windows ネイティブで撮影します')
     if sys.platform != 'win32' or not 1 <= a.favicon_limit <= 100 or not 0 <= a.thumbnail_limit <= 100 or a.interval < 60:
         ap.error('Windows 専用。ファビコン上限は 1–100、サムネイルは 0–100、間隔は 60 秒以上')
     root = a.var / 'nightly'
@@ -53,8 +55,6 @@ def main(argv=None):
     stop = root / 'media-worker-stopped.txt'
     with (root / '.media-worker.lock').open('a+') as worker_lock:
         media.filelock.lock(worker_lock, blocking=False)
-        if a.wsl_distro and a.thumbnail_limit and stop.exists():
-            raise RuntimeError(f'{stop} を確認し、残存 WSL プロセスを停止してから再開')
         while True:
             rc = 1
             with (root / '.media.lock').open('a+') as lock:
@@ -65,9 +65,6 @@ def main(argv=None):
             try:
                 cmd = ['--var', str(a.var), '--out', str(root), '--d1-name', 'mise',
                        '--favicon-limit', str(a.favicon_limit), '--thumbnail-limit', str(a.thumbnail_limit)]
-                if a.thumbnail_limit and a.wsl_distro:
-                    cmd += ['--wsl-distro', a.wsl_distro, '--wsl-playwright', a.wsl_playwright,
-                            '--wsl-chromium', a.wsl_chromium]
                 rc = media.main(cmd)
                 if rc:
                     print('画像処理に失敗。再試行期限を確認', flush=True)
@@ -76,8 +73,6 @@ def main(argv=None):
                 raise RuntimeError(f'WSL タイムアウト。{stop} を確認') from e
             except OSError as e:
                 print('画像処理を待って再試行:', e, flush=True)
-            if a.wsl_distro and a.thumbnail_limit and stop.exists():
-                raise RuntimeError(f'WSL の残存処理を確認してから再開: {stop}')
             if a.once:
                 return rc
             time.sleep(a.interval)

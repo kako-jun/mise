@@ -64,6 +64,14 @@ class MediaWorkerTest(unittest.TestCase):
                 self.assertEqual(worker.main(['--var', tmp, '--once', '--thumbnail-limit', '1']), 0)
                 self.assertNotIn('--wsl-distro', run.call_args.args[0])
 
+    def test_wsl_options_are_rejected(self):
+        for args in (['--wsl-distro', 'Arch'], ['--wsl-playwright', '/x'], ['--wsl-chromium', '/x']):
+            with self.assertRaises(SystemExit):
+                worker.main(['--var', '/unused', '--once', *args])
+            with self.assertRaises(SystemExit):
+                media.main(['--var', '/unused', '--out', '/unused', '--d1-name', 'mise',
+                            '--favicon-limit', '0', '--thumbnail-limit', '0', *args])
+
     def test_only_successful_production_cycles_are_enqueued_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

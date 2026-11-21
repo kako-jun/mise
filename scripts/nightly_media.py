@@ -218,6 +218,8 @@ def main(argv=None):
     ap.add_argument('--wsl-playwright', help='WSL 内の playwright ディレクトリの絶対パス')
     ap.add_argument('--wsl-chromium', help='WSL 内の Chromium 実行ファイルの絶対パス')
     a = ap.parse_args(argv)
+    if any((a.wsl_distro, a.wsl_playwright, a.wsl_chromium)):
+        ap.error('WSL オプションは利用できません。Windows ネイティブで撮影します')
     if not all(0 <= n <= 100 for n in (a.favicon_limit, a.thumbnail_limit)):
         ap.error("各画像の上限は 0–100 件")
     if a.thumbnail_limit and sys.platform not in ('linux', 'win32'):

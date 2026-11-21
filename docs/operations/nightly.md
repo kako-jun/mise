@@ -100,7 +100,7 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 
 Windows では `npm ci` で Playwright Core を用意し、`%LOCALAPPDATA%\ms-playwright` の Chromium headless shell を自動検出する。別の場所を使うときは `PLAYWRIGHT_DIR` と `CHROMIUM_PATH` を設定する。Windows では bwrap/systemd は使わず、既存の robots 検査・公開 IP の検査・フィルタプロキシ・撮影時間と受信量の上限を使う。サムネイル試行は既存の1日上限3000件を守る。
 
-WSL の撮影を有効にして途中停止やタイムアウトが発生すると `var/nightly/media-worker-stopped.txt` が残り、撮影を含む worker は停止する。Windows と WSL の残存撮影プロセス・SQLite の状態を調べて終了を確認し、状況を記録したうえでマーカーを削除してタスクを再開する。ファビコンのみのモードはこのマーカーに影響されず動く。
+旧 WSL オプションは明示的に拒否する。Windows 撮影時は WSL を起動しない。
 
 ### 別の Linux 撮影機へ渡す従来の手順
 
