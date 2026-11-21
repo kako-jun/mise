@@ -1,5 +1,6 @@
 import json
 import contextlib
+import datetime
 import sqlite3
 import subprocess
 import sys
@@ -7,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import media_worker as worker
@@ -15,6 +16,24 @@ import nightly_media as media
 
 
 class MediaWorkerTest(unittest.TestCase):
+    def test_linux_thumbnail_retains_default_capture_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = SimpleNamespace(var=Path(tmp))
+            now = datetime.datetime.now(datetime.timezone.utc)
+            capturer = MagicMock(playwright='/playwright', chromium='/chromium')
+            with patch.object(media, 'sys', SimpleNamespace(platform='linux')), \
+                 patch.object(media.shutil, 'which', return_value='/usr/bin/bwrap'), \
+                 patch.object(media.thumbnail, 'NodeCapturer', return_value=capturer) as ctor, \
+                 patch.object(media.thumbnail, 'due_sites', return_value=[{'site_id': 's1'}]), \
+                 patch.object(media.thumbnail, 'run'), \
+                 patch.object(media.thumbnail, 'upload'), \
+                 patch.object(media.thumbnail, 'sql_updates', return_value=''), \
+                 patch.object(media, 'retry_dates', return_value={}):
+                media.capture_thumbnails(args, [{'id': 's1', 'url': 'https://example.com/'}], ['s1'], now)
+                ctor.assert_called_once_with()
+                capturer.check_ready.assert_called_once()
+                capturer.check_upstream.assert_called_once()
+
     def test_windows_favicon_only_keeps_thumbnails_and_never_calls_wsl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -34,14 +53,32 @@ class MediaWorkerTest(unittest.TestCase):
                     patch.object(media, 'enqueue', side_effect=enqueue), \
                     patch.object(media, 'main', side_effect=process), \
                     patch.object(media, 'capture_in_wsl', side_effect=AssertionError('WSL must not start')):
-                self.assertEqual(worker.main(['--var', str(root), '--once']), 0)
+                self.assertEqual(worker.main(['--var', str(root), '--once', '--thumbnail-limit', '0']), 0)
             with contextlib.closing(sqlite3.connect(nightly / 'media.sqlite')) as db:
                 self.assertEqual(db.execute("SELECT site_id FROM pending WHERE kind='thumbnail'").fetchall(), [('s1',)])
 
-    def test_thumbnail_mode_requires_wsl_settings(self):
-        with patch.object(worker, 'sys', SimpleNamespace(platform='win32')):
+    def test_windows_thumbnail_mode_needs_no_wsl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(worker, 'sys', SimpleNamespace(platform='win32')), \
+                 patch.object(media, 'main', return_value=0) as run:
+                self.assertEqual(worker.main(['--var', tmp, '--once', '--thumbnail-limit', '1']), 0)
+                self.assertNotIn('--wsl-distro', run.call_args.args[0])
+
+    def test_wsl_options_are_rejected(self):
+        for args in (['--wsl-distro', 'Arch'], ['--wsl-playwright', '/x'], ['--wsl-chromium', '/x']):
             with self.assertRaises(SystemExit):
-                worker.main(['--var', '/unused', '--once', '--thumbnail-limit', '1'])
+                worker.main(['--var', '/unused', '--once', *args])
+            with self.assertRaises(SystemExit):
+                media.main(['--var', '/unused', '--out', '/unused', '--d1-name', 'mise',
+                            '--favicon-limit', '0', '--thumbnail-limit', '0', *args])
+
+    def test_windows_timeout_keeps_queue_and_can_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(worker, 'sys', SimpleNamespace(platform='win32')), \
+                 patch.object(media, 'main', side_effect=[subprocess.TimeoutExpired('wrangler', 1), 0]):
+                self.assertEqual(worker.main(['--var', tmp, '--once']), 1)
+                self.assertFalse((Path(tmp) / 'nightly' / 'media-worker-stopped.txt').exists())
+                self.assertEqual(worker.main(['--var', tmp, '--once']), 0)
 
     def test_only_successful_production_cycles_are_enqueued_once(self):
         with tempfile.TemporaryDirectory() as tmp:

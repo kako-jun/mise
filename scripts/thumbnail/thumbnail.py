@@ -181,10 +181,12 @@ def chromium_path():
     env = os.environ.get('CHROMIUM_PATH')
     if env:
         return env
-    base = Path.home() / '.cache' / 'ms-playwright'
+    base = (Path(os.environ.get('LOCALAPPDATA', '')) / 'ms-playwright'
+            if sys.platform == 'win32' else Path.home() / '.cache' / 'ms-playwright')
     for d in sorted(base.glob('chromium_headless_shell-*'), reverse=True):
-        for c in sorted(d.glob('*/chrome-headless-shell')):
-            return str(c)
+        for name in ('chrome-headless-shell', 'headless_shell', 'headless_shell.exe', 'chrome-headless-shell.exe'):
+            for c in sorted(d.glob(f'*/{name}')):
+                return str(c)
     return None
 
 
@@ -192,8 +194,11 @@ def playwright_dir():
     d = os.environ.get('PLAYWRIGHT_DIR')
     if d:
         return d
-    c = ROOT / 'node_modules' / 'playwright'
-    return str(c) if c.exists() else None
+    for name in ('playwright', 'playwright-core'):
+        c = ROOT / 'node_modules' / name
+        if c.exists():
+            return str(c)
+    return None
 
 
 def _systemd_scope_ok(limit=512 * 1024 * 1024):
@@ -217,7 +222,7 @@ def job_tmp_base():
     """撮影用の一時ディレクトリの置き場。Unix ソケットのパス(108 字まで)に収まる短さにする(TMPDIR が長い環境で AF_UNIX path too long にならないように)。"""
     import tempfile
     base = tempfile.gettempdir()
-    return base if len(base) <= 60 else '/tmp'
+    return base if sys.platform == 'win32' or len(base) <= 60 else '/tmp'
 
 
 class NodeCapturer:
@@ -312,8 +317,11 @@ class NodeCapturer:
 
             def kill():
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)   # 自分が起動したプロセスグループだけ
-                except ProcessLookupError:
+                    if sys.platform == 'win32':
+                        subprocess.run(['taskkill', '/PID', str(p.pid), '/T', '/F'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+                    else:
+                        os.killpg(p.pid, signal.SIGKILL)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
                     pass
             try:
                 waiter = threading.Thread(target=lambda: None)

@@ -134,9 +134,12 @@ def capture_thumbnails(args, sites, ids, now):
         budget = min(len(ids), thumbnail.remaining_today(db, now, thumbnail.DEFAULT_PER_DAY))
         due = thumbnail.due_sites(db, now, budget, ids)
     if due and sys.platform == 'win32':
-        if not args.wsl_distro:
-            raise RuntimeError('Windows のサムネイル撮影には --wsl-distro が必要')
-        capture_in_wsl(args, db_path, store_dir, sites, ids)
+        capturer = thumbnail.NodeCapturer(sandbox=False, limits=False)
+        capturer.check_upstream()
+        if not capturer.playwright or not capturer.chromium:
+            raise RuntimeError('サムネイル取得には Playwright と Chromium が必要')
+        with contextlib.closing(thumbnail.connect(db_path)) as db:
+            thumbnail.run(db, thumbnail.LocalDirStore(store_dir), capturer, now=now, limit=len(ids), site_ids=ids)
     elif due:
         if not shutil.which("bwrap"):
             raise RuntimeError("サムネイル取得には bwrap が必要")
@@ -215,12 +218,12 @@ def main(argv=None):
     ap.add_argument('--wsl-playwright', help='WSL 内の playwright ディレクトリの絶対パス')
     ap.add_argument('--wsl-chromium', help='WSL 内の Chromium 実行ファイルの絶対パス')
     a = ap.parse_args(argv)
+    if any((a.wsl_distro, a.wsl_playwright, a.wsl_chromium)):
+        ap.error('WSL オプションは利用できません。Windows ネイティブで撮影します')
     if not all(0 <= n <= 100 for n in (a.favicon_limit, a.thumbnail_limit)):
         ap.error("各画像の上限は 0–100 件")
-    if a.thumbnail_limit and sys.platform != 'linux' and not (sys.platform == 'win32' and a.wsl_distro):
-        ap.error('サムネイル撮影は Linux または Windows の --wsl-distro が必要')
-    if sys.platform == 'win32' and a.thumbnail_limit and not all((a.wsl_playwright, a.wsl_chromium)):
-        ap.error('WSL の Playwright と Chromium のパスが必要')
+    if a.thumbnail_limit and sys.platform not in ('linux', 'win32'):
+        ap.error('サムネイル撮影は Linux または Windows が必要')
     import PIL  # noqa: F401  (依存が無ければ取得・書き込み前に停止)
 
     failed = False

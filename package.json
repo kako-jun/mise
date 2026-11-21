@@ -32,6 +32,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.28.2",
+    "playwright-core": "^1.56.1",
     "wrangler": "^4.160.1"
   },
   "private": true
