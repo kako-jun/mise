@@ -253,6 +253,8 @@ class Night:
     # -- 各段
     def s_discover(self):
         a = self.a
+        if a.skip_discovery:
+            return {"status": "skipped", "note": "--skip-discovery: 既存の台帳を処理"}
         out = self.run_py("discover-links", "scripts/pipeline/run.py", "discover-links", "--db", self.db, "--max-links", a.max_links)
         note = "links: " + out.strip()[-120:]
         if a.discover_limit > 0:  # discover-cc の失敗は続行できる（取得済みの台帳で後段が進む）
@@ -616,6 +618,8 @@ class Night:
                  ("candidates", self.s_candidates), ("llm", self.s_llm), ("import", self.s_import), ("approve", self.s_approve),
                  ("sql", self.s_sql), ("gate", self.s_gate), ("prod", self.s_prod), ("favicon", self.s_favicon),
                  ("media", self.s_media), ("usage", self.s_usage)]
+        if self.a.discover_only:
+            table = table[:2]  # API 課金・掲載はせず、発見と取得前フィルタだけを行う
         llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
@@ -737,8 +741,11 @@ def plan(a):
     est = n * EST_USD_PER_CANDIDATE
     L = [f"[dry-run] 夜間ジョブ計画 {a.date}（外部アクセス・API・書き込みなし）", f"台帳: {a.db} ({'あり' if os.path.exists(a.db) else 'なし'})",
          f"台帳の状態: {json.dumps(snap['state'], ensure_ascii=False)}", f"LLM 審査状態: {json.dumps(snap['review'], ensure_ascii=False)}", "段:"]
-    L.append(f"  1 discover   discover-links 常に / discover-cc 上限 {a.discover_limit}" + ("(無効)" if a.discover_limit <= 0 else f"(抽出率 1/{a.cc_sample_every})"))
-    L.append(f"  1 discover   + discover-wikidata 1 夜 {a.wikidata_leaves} 葉(本番の site_count が {LEAF_TARGET} 未満の葉を優先)" if a.wikidata_leaves > 0 else "  1 discover   + discover-wikidata 無効")
+    L.append("  1 discover   無効（既存の台帳を処理）" if a.skip_discovery else f"  1 discover   discover-links 常に / discover-cc 上限 {a.discover_limit}" + ("(無効)" if a.discover_limit <= 0 else f"(抽出率 1/{a.cc_sample_every})"))
+    if not a.skip_discovery:
+        L.append(f"  1 discover   + discover-wikidata 1 夜 {a.wikidata_leaves} 葉(本番の site_count が {LEAF_TARGET} 未満の葉を優先)" if a.wikidata_leaves > 0 else "  1 discover   + discover-wikidata 無効")
+    if a.discover_only:
+        return '\n'.join(L + ['  2 triage     台帳内の discovered を振り分け', '取得・LLM・本番反映は実行しない'])
     L += [f"  2 triage     台帳内の discovered を振り分け", f"  3 fetch      上限 {a.fetch_limit} ホスト（queued: {snap['state'].get('queued', 0)}）",
           f"  4 judge      取得後フィルタ（fetched: {snap['state'].get('fetched', 0)}）",
           f"  5 candidates 今夜の判定対象（未判定の candidate）: {n} 件（candidate 全体 {snap['state'].get('candidate', 0)}、判定上限 {a.judge_limit}）",
@@ -759,6 +766,8 @@ def parse_args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--date", default=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), help="夜の名前 YYYY-MM-DD か YYYY-MM-DD-N(N>=2、同日の追加サイクル)。既定: UTC の今日。再開は同じ名前で")
     ap.add_argument("--max-add", type=int, default=0, help="1 夜に出荷する追加サイト数の上限(0=上限なし。既定)")
+    ap.add_argument("--skip-discovery", action="store_true", help="発見元にアクセスせず、既存の台帳の処理待ちを進める")
+    ap.add_argument("--discover-only", action="store_true", help="発見と取得前フィルタのみ行う。LLM や本番反映は行わない")
     ap.add_argument("--discover-limit", type=int, default=200, help="discover-cc の 1 夜の上限(0 で無効)")
     ap.add_argument("--cc-sample-every", type=int, default=1000, help="discover-cc の抽出率(crc32 %% N == 0 の .jp ホストだけ台帳に入れる。既定 1000。小さいほど供給が増える。--discover-limit が 0 のとき無効)")
     ap.add_argument("--wikidata-leaves", type=int, default=3, help="discover-wikidata で 1 夜に取る葉の数(0 で無効)。本番の site_count が 100 未満の葉を優先")
@@ -805,6 +814,8 @@ def parse_args(argv=None):
         ap.error("上限は 1 以上(--max-add のみ 0=上限なし)")
     if a.dry_run and a.apply_prod:
         ap.error("--dry-run と --apply-prod は同時に使えない")
+    if a.discover_only and (a.apply_prod or a.skip_discovery or a.from_stage):
+        ap.error("--discover-only は --apply-prod / --skip-discovery / --from-stage と併用できない")
     return a
 
 
