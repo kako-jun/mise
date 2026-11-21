@@ -17,6 +17,7 @@ import { readdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
+import { pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -152,7 +153,7 @@ async function capture(url, out, allowUrls, proxyUrl) {
   } finally { await browser.close().catch(() => {}); }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const url = opt('--url'), out = opt('--out'), allow = (opt('--allow-urls') || '').split(',').filter(Boolean);
   const unix = opt('--proxy-unix'), direct = opt('--proxy');
   if (!url || !out || !allow.length || !(unix || direct)) { console.error('usage: capture.mjs --url U --out PNG --allow-urls u1,u2 (--proxy URL | --proxy-unix SOCK)'); process.exit(2); }

@@ -808,8 +808,8 @@ def parse_args(argv=None):
         ap.error("--media-favicon-limit / --thumbnail-limit は 0–100 件")
     if (a.media_favicon_limit or a.thumbnail_limit) and a.d1_name != "mise":
         ap.error("media 段は本番 D1 mise / R2 mise-media 専用")
-    if sys.platform != "linux" and a.thumbnail_limit:
-        ap.error("サムネイル撮影は bwrap を使える Linux が必要。Windows では --thumbnail-limit 0")
+    if sys.platform not in ("linux", "win32") and a.thumbnail_limit:
+        ap.error("サムネイル撮影は Linux または Windows が必要")
     if a.max_add < 0 or a.fetch_limit < 1 or a.judge_limit < 1 or a.max_links < 1:
         ap.error("上限は 1 以上(--max-add のみ 0=上限なし)")
     if a.dry_run and a.apply_prod:
