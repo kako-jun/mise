@@ -96,9 +96,9 @@ pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊
 `scripts/media_worker.py` は掲載処理とは独立して動く。成功して本番反映済みの過去・今後のサイクルの `status.json`・`keys.txt`・`export.sqlite` を読み、同じ Windows 側 `var/nightly/media.sqlite` に一度だけ取り込む。掲載失敗・処理中のサイクルは対象にしない。過去に出荷記録を残さず手動投入したサイトは対象外。ファビコンは期限を尊重し、R2 に格納できた画像だけ D1 に付ける。**既定は Windows ネイティブのファビコンのみ**で WSL を起動せず、サムネイルの候補はキューに保持する。並行実行を避けるため worker の専用ロックと、既存 media 段と共有する `.media.lock` を使う。
 
 1. 実行中にコードが書き換わらない専用 clone `C:\Users\kako-jun\repos\mise-media` にこの変更を配置し、Windows 側で `npm ci` を実行する。`var` は作らず、`scripts/cron/mise-media.cmd` は `C:\Users\kako-jun\repos\mise\var` の台帳を使う。`mise-continuous` や既存 nightly の clone を reset しない。
-2. Windows のタスクスケジューラで `scripts/cron/mise-media.cmd` を同一ユーザーのログオン時に起動し、実行時間制限なし・重複インスタンス無視に設定する。初回は手動起動し `var/nightly/media-worker.log`、`media.sqlite`、少数サイトのファビコン URL と D1 の状態を確認する。既定はファビコン100件ずつ、300秒の待機。画像段の失敗は掲載ジョブを停止しない。
+2. Windows のタスクスケジューラで `scripts/cron/mise-media.cmd` を同一ユーザーのログオン時に起動し、実行時間制限なし・重複インスタンス無視に設定する。初回は手動起動し `var/nightly/media-worker.log`、`media.sqlite`、少数サイトの画像 URL と D1 の状態を確認する。既定はファビコン100件、サムネイル10件ずつ、300秒の待機。画像段の失敗は掲載ジョブを停止しない。
 
-サムネイルは後で撮影環境が決まれば、キューを再利用できる。WSL2 Arch を使う場合に限り、systemd user と cgroup のメモリ制限、bwrap、Node/npm、uv を用意し、`bash scripts/thumbnail/setup-wsl.sh` の後、専用 clone で `PLAYWRIGHT_DIR=$(readlink -e ~/.local/share/mise-media/node_modules/playwright) CHROMIUM_PATH=$(readlink -e ~/.local/share/mise-media/chromium) uv run --no-project --with pillow python3 scripts/thumbnail/selftest.py` の失敗 0 を確認する。明示的に `--thumbnail-limit` と `--wsl-distro`・`--wsl-playwright`・`--wsl-chromium` を指定した場合だけ WSL 撮影が走る。検査付きプロキシ・bwrap・systemd のリソース制限を無効にしない。サムネイル試行は既存の1日上限3000件を守る。
+Windows では `npm ci` で Playwright Core を用意し、`%LOCALAPPDATA%\ms-playwright` の Chromium headless shell を自動検出する。別の場所を使うときは `PLAYWRIGHT_DIR` と `CHROMIUM_PATH` を設定する。Windows では bwrap/systemd は使わず、既存の robots 検査・公開 IP の検査・フィルタプロキシ・撮影時間と受信量の上限を使う。サムネイル試行は既存の1日上限3000件を守る。
 
 WSL の撮影を有効にして途中停止やタイムアウトが発生すると `var/nightly/media-worker-stopped.txt` が残り、撮影を含む worker は停止する。Windows と WSL の残存撮影プロセス・SQLite の状態を調べて終了を確認し、状況を記録したうえでマーカーを削除してタスクを再開する。ファビコンのみのモードはこのマーカーに影響されず動く。
 

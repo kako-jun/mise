@@ -34,14 +34,16 @@ class MediaWorkerTest(unittest.TestCase):
                     patch.object(media, 'enqueue', side_effect=enqueue), \
                     patch.object(media, 'main', side_effect=process), \
                     patch.object(media, 'capture_in_wsl', side_effect=AssertionError('WSL must not start')):
-                self.assertEqual(worker.main(['--var', str(root), '--once']), 0)
+                self.assertEqual(worker.main(['--var', str(root), '--once', '--thumbnail-limit', '0']), 0)
             with contextlib.closing(sqlite3.connect(nightly / 'media.sqlite')) as db:
                 self.assertEqual(db.execute("SELECT site_id FROM pending WHERE kind='thumbnail'").fetchall(), [('s1',)])
 
-    def test_thumbnail_mode_requires_wsl_settings(self):
-        with patch.object(worker, 'sys', SimpleNamespace(platform='win32')):
-            with self.assertRaises(SystemExit):
-                worker.main(['--var', '/unused', '--once', '--thumbnail-limit', '1'])
+    def test_windows_thumbnail_mode_needs_no_wsl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(worker, 'sys', SimpleNamespace(platform='win32')), \
+                 patch.object(media, 'main', return_value=0) as run:
+                self.assertEqual(worker.main(['--var', tmp, '--once', '--thumbnail-limit', '1']), 0)
+                self.assertNotIn('--wsl-distro', run.call_args.args[0])
 
     def test_only_successful_production_cycles_are_enqueued_once(self):
         with tempfile.TemporaryDirectory() as tmp:
