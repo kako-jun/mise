@@ -16,6 +16,7 @@ for folder in ("llm", "favicon", "thumbnail"):
 import export_approved_sql  # noqa: E402
 import favicon  # noqa: E402
 import thumbnail  # noqa: E402
+import filelock  # noqa: E402
 
 
 def enqueue(queue, keys, snapshot):
@@ -79,6 +80,52 @@ def retry_dates(db, table, ids, now, upload_failures=()):
     return retry
 
 
+def wsl_path(distro, path):
+    p = subprocess.run(['wsl.exe', '-d', distro, '--exec', 'wslpath', '-a', '-u', str(Path(path).resolve())],
+                       capture_output=True, check=True, timeout=60)
+    return p.stdout.decode('utf-8').strip()
+
+
+def capture_in_wsl(args, db_path, store_dir, sites, ids):
+    """Run only the existing sandboxed capture in WSL; upload remains on Windows."""
+    path = args.out / 'thumbnail-sites.json'
+    path.write_text(json.dumps(sites, ensure_ascii=False), encoding='utf-8')
+    distro = args.wsl_distro
+    cwd, db, store, selected = [wsl_path(distro, p) for p in (ROOT, db_path, store_dir, path)]
+    cmd = ['wsl.exe', '-d', distro, '--cd', cwd, '--exec', 'bash', '-lc',
+           'set -e; p="$1"; c="$2"; case "$p" in /*) ;; *) p="$HOME/$p";; esac; '
+           'case "$c" in /*) ;; *) c="$HOME/$c";; esac; '
+           'PLAYWRIGHT_DIR=$(readlink -e -- "$p"); CHROMIUM_PATH=$(readlink -e -- "$c"); '
+           'export PLAYWRIGHT_DIR CHROMIUM_PATH; shift 2; '
+           'exec uv run --no-project --with pillow python3 scripts/thumbnail/thumbnail.py "$@"',
+           'mise-thumbnail', args.wsl_playwright, args.wsl_chromium,
+           '--db', db, 'run', '--apply', '--store-dir', store, '--only-sites', selected, '--limit', str(len(ids))]
+    # Record before spawn: a killed Windows parent can leave its Linux child alive.
+    # Keep the marker after timeout or abrupt termination; never guess the child is gone.
+    marker = args.var / 'nightly' / 'media-worker-stopped.txt'
+    try:
+        with marker.open('x', encoding='utf-8') as flag:
+            flag.write('WSL capture may still be running. Inspect and stop it before clearing this file.\n')
+    except FileExistsError as e:
+        raise RuntimeError(f'撮影の中断状態を確認: {marker}') from e
+    try:
+        # Allow every requested site all redirect checks, each full capture and robots request,
+        # even if they serialize on one host. DNS is not bounded by these per-request limits.
+        timeout = 600 + len(ids) * (thumbnail.MAX_URL_CHECKS + 1) * (
+            thumbnail.CAPTURE_TIMEOUT + thumbnail.fetcher.TIMEOUT + thumbnail.fetcher.MAX_CRAWL_DELAY)
+        result = subprocess.run(cmd, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise
+    except Exception:
+        # Spawn failure cannot safely prove that no child survived.
+        raise
+    else:
+        if result.returncode:
+            # A failed Python child can leave detached Linux grandchildren; inspect first.
+            raise subprocess.CalledProcessError(result.returncode, cmd)
+        marker.unlink()
+
+
 def capture_thumbnails(args, sites, ids, now):
     db_path = args.var / "thumbnails.sqlite"
     store_dir = args.var / "thumbnails"
@@ -86,7 +133,11 @@ def capture_thumbnails(args, sites, ids, now):
         thumbnail.import_sites(db, [(s["id"], s["url"]) for s in sites])
         budget = min(len(ids), thumbnail.remaining_today(db, now, thumbnail.DEFAULT_PER_DAY))
         due = thumbnail.due_sites(db, now, budget, ids)
-    if due:
+    if due and sys.platform == 'win32':
+        if not args.wsl_distro:
+            raise RuntimeError('Windows のサムネイル撮影には --wsl-distro が必要')
+        capture_in_wsl(args, db_path, store_dir, sites, ids)
+    elif due:
         if not shutil.which("bwrap"):
             raise RuntimeError("サムネイル取得には bwrap が必要")
         capturer = thumbnail.NodeCapturer()
@@ -160,15 +211,21 @@ def main(argv=None):
     ap.add_argument("--enqueue", action="store_true")
     ap.add_argument("--favicon-limit", type=int, required=True)
     ap.add_argument("--thumbnail-limit", type=int, required=True)
+    ap.add_argument('--wsl-distro', help='Windows 上の隔離撮影に使う WSL2 ディストリビューション')
+    ap.add_argument('--wsl-playwright', help='WSL 内の playwright ディレクトリの絶対パス')
+    ap.add_argument('--wsl-chromium', help='WSL 内の Chromium 実行ファイルの絶対パス')
     a = ap.parse_args(argv)
     if not all(0 <= n <= 100 for n in (a.favicon_limit, a.thumbnail_limit)):
         ap.error("各画像の上限は 0–100 件")
-    if sys.platform != "linux" and a.thumbnail_limit:
-        ap.error("サムネイル撮影は bwrap を使える Linux が必要。Windows では --thumbnail-limit 0")
+    if a.thumbnail_limit and sys.platform != 'linux' and not (sys.platform == 'win32' and a.wsl_distro):
+        ap.error('サムネイル撮影は Linux または Windows の --wsl-distro が必要')
+    if sys.platform == 'win32' and a.thumbnail_limit and not all((a.wsl_playwright, a.wsl_chromium)):
+        ap.error('WSL の Playwright と Chromium のパスが必要')
     import PIL  # noqa: F401  (依存が無ければ取得・書き込み前に停止)
 
     failed = False
-    with contextlib.closing(sqlite3.connect(a.var / "nightly" / "media.sqlite")) as queue:
+    with (a.var / 'nightly' / '.media.lock').open('a+') as lock, contextlib.closing(sqlite3.connect(a.var / "nightly" / "media.sqlite")) as queue:
+        filelock.lock(lock, blocking=False)
         queue.execute("CREATE TABLE IF NOT EXISTS pending ("
                       "kind TEXT, site_id TEXT, retry_at TEXT NOT NULL, PRIMARY KEY(kind,site_id))")
         if a.enqueue:
@@ -177,6 +234,8 @@ def main(argv=None):
                                      ("thumbnail", a.thumbnail_limit, capture_thumbnails)):
             try:
                 process_queue(queue, a, kind, limit, capture)
+            except subprocess.TimeoutExpired:
+                raise
             except (OSError, ValueError, RuntimeError, sqlite3.Error, subprocess.SubprocessError) as e:
                 print(f"{kind}: {e}", file=sys.stderr)
                 failed = True
