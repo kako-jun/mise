@@ -190,6 +190,10 @@ class Night:
             if k in prev:
                 self.status[k] = prev[k]
         old_candidates = self.prev.get("candidates", {})
+        checkpoint = prev.get("candidate_checkpoint")
+        if checkpoint is None and old_candidates.get("status") == "ok":
+            checkpoint = {"count": old_candidates.get("count", {}).get("candidates")}
+        self.status["candidate_checkpoint"] = checkpoint
         self.status["candidate_rebuild_required"] = bool(prev.get("candidate_rebuild_required")) or (
             old_candidates.get("status") == "failed" and str(old_candidates.get("note", "")).startswith("候補ファイルを再開できない:")
         )
@@ -218,6 +222,15 @@ class Night:
             self.status["stages"].append(rec)
             return
         old = self.prev.get(name)
+        # 先行段のやり直しで candidates が force になっても、既存入力を黙って差し替えない。
+        # 直前の実行で先行段が失敗し candidates が skipped になっていても checkpoint を使う。
+        if name == "candidates" and self.a.from_stage != "candidates" and self.status.get("candidate_checkpoint") is not None:
+            resumable = True
+            cp = self.status["candidate_checkpoint"]
+            count = cp.get("count") if isinstance(cp, dict) else None
+            if old and old.get("status") == "ok" and old.get("count", {}).get("candidates") != count:
+                count = None
+            old = {"name": "candidates", "status": "ok", "seconds": 0.0, "count": {"candidates": count}, "note": ""}
         # 先行段の失敗を挟んでも、明示的に candidates を指定するまで停止を維持。
         if name == "candidates" and self.status["candidate_rebuild_required"] and self.a.from_stage != "candidates":
             rec.update(status="failed", note="候補ファイルを再開できない: 明示的な --from-stage candidates が必要")
@@ -250,8 +263,10 @@ class Night:
         try:
             res = fn() or {}
             rec.update(res)
-            if name == "candidates" and self.a.from_stage == "candidates" and rec["status"] == "ok":
-                self.status["candidate_rebuild_required"] = False
+            if name == "candidates" and rec["status"] == "ok":
+                self.status["candidate_checkpoint"] = {"count": rec.get("count", {}).get("candidates")}
+                if self.a.from_stage == "candidates":
+                    self.status["candidate_rebuild_required"] = False
         except StageFailed as e:
             rec.update(status="failed", note=str(e)[:600])
             self.failed = True

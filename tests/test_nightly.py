@@ -492,6 +492,32 @@ class Run(Env):
                 self.assertEqual(self.run_night('--apply-prod', date=date), 1)
                 self.assertEqual(next(s['status'] for s in self.status(date)['stages'] if s['name'] == 'candidates'), 'failed')
 
+    def test_force_fetch_checks_existing_candidate_input_before_rebuild(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        path.unlink()
+        llm_calls = self.llm_runs()
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'fetch'), 1)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.llm_runs(), llm_calls)
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_candidate_checkpoint_survives_prior_stage_failure_before_validation(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        path.unlink()
+        with mock.patch.object(nightly.Night, 's_discover', side_effect=nightly.StageFailed('discover failure')):
+            self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'discover'), 1)
+        self.assertIsNotNone(self.status()['candidate_checkpoint'])
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+
     def seed_many(self, n=30):
         for i in range(n):
             add_site(self.db, f'h{i:02d}.jp')
