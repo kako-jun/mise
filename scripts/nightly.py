@@ -189,6 +189,10 @@ class Night:
         for k in ("candidates_tonight", "cost_usd", "added", "approved", "prod_applied", "bookmark"):  # 再開時は成功済みの段の結果を引き継ぐ
             if k in prev:
                 self.status[k] = prev[k]
+        old_candidates = self.prev.get("candidates", {})
+        self.status["candidate_rebuild_required"] = bool(prev.get("candidate_rebuild_required")) or (
+            old_candidates.get("status") == "failed" and str(old_candidates.get("note", "")).startswith("候補ファイルを再開できない:")
+        )
         self.failed = False
         self.stop = False          # 以降の段は進めない（整合違反・失敗）
         self.exported_keys = []
@@ -214,9 +218,9 @@ class Night:
             self.status["stages"].append(rec)
             return
         old = self.prev.get(name)
-        # 候補を破損で止めた後も、明示的に candidates からやり直すまでは再生成しない。
-        if name == "candidates" and resumable and old and old.get("status") == "failed" and str(old.get("note", "")).startswith("候補ファイルを再開できない:"):
-            rec.update(status="failed", note=old["note"])
+        # 先行段の失敗を挟んでも、明示的に candidates を指定するまで停止を維持。
+        if name == "candidates" and self.status["candidate_rebuild_required"] and self.a.from_stage != "candidates":
+            rec.update(status="failed", note="候補ファイルを再開できない: 明示的な --from-stage candidates が必要")
             self.failed = self.stop = True
             self.status["stages"].append(rec)
             self.save()
@@ -234,6 +238,7 @@ class Night:
                         raise ValueError("候補の件数または形式が一致しない")
                 except (OSError, ValueError, TypeError) as e:
                     rec.update(status="failed", note=f"候補ファイルを再開できない: {e}")
+                    self.status["candidate_rebuild_required"] = True
                     self.failed = self.stop = True
                     self.status["stages"].append(rec)
                     self.save()
@@ -245,6 +250,8 @@ class Night:
         try:
             res = fn() or {}
             rec.update(res)
+            if name == "candidates" and self.a.from_stage == "candidates" and rec["status"] == "ok":
+                self.status["candidate_rebuild_required"] = False
         except StageFailed as e:
             rec.update(status="failed", note=str(e)[:600])
             self.failed = True

@@ -458,9 +458,20 @@ class Run(Env):
         self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'candidates'), 'failed')
         self.assertFalse((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
         self.assertEqual(self.llm_runs(), n_llm)
+        # 先行段が失敗して candidates 段が skipped になっても、停止状態は消えない。
+        with mock.patch.object(nightly.Night, 's_discover', side_effect=nightly.StageFailed('discover failure')):
+            self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'discover'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'candidates'), 'skipped')
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'fetch'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertFalse((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
         # 明示的な再生成のみ許可。
         self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'candidates'), 0)
         self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+        self.assertFalse(self.status()['candidate_rebuild_required'])
 
     def test_missing_or_inconsistent_candidate_counts_stop_on_resume(self):
         for changed in ('missing_top', 'missing_stage', 'mismatch'):
