@@ -34,7 +34,7 @@ def triage(db, redo=False):
     if redo:  # 取得前に除外されたもの(未取得)を、ルール変更後に引き直す
         db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='rejected' AND last_fetched_at IS NULL")
     if redo:
-        db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred'")
+        db.execute("UPDATE frontier SET state='discovered', reject_reason=NULL WHERE state='deferred' AND reject_reason='shared_service_user'")
     # 共有サービスの推定: 台帳に apex も www も無く(= 本体がリンクされていない)、配下のホストだけが多数ある登録ドメイン。
     # apex/www がある登録ドメイン、または links（既掲載サイトからのリンク）由来のホストを含む登録ドメインは、独立サイトの機能サブドメイン群とみなして対象外。
     keys = [k.split('/')[0] for (k,) in db.execute('SELECT key FROM frontier')]   # パス付きキー(request 由来のユーザー領域)はホスト部だけで数える

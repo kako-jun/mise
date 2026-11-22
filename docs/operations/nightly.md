@@ -28,8 +28,8 @@
 - **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
 - 成功済み `candidates` の入力ファイルは partial・失敗からの再開時も保持する。これにより判定対象の元の件数と結果照合が揃う。ファイルの欠落・不正・保存済み件数や SHA-256 の不一致は停止し、通常再実行を重ねても停止を維持する。旧状態で digest が無い場合は件数を確認した最初の再開時に記録する（記録前の同数改変は検出できない）。明示的な `--from-stage candidates` は入力を作り直すため、未精算バッチと旧結果を確認してから使う。
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
-- **LLM 未解決の自動再試行と打ち切り（#124）**: llm 段が exit 2 のとき、同じ実行内で最大 `--llm-retries N` 回（既定 2）再試行する。キャッシュ済みは課金されず、費用も毎回予算ガードを通る。それでも未解決が残れば、該当 host を `rejected` / `llm_unresolved` とし、guards に記録して残りを処理する。**安全弁**: 未解決が20件超、または対象の5%超なら停止。ただし判定対象が10件以下で、未解決が2件以下かつ半数未満なら打ち切って続行する。未解決を特定できない場合も停止する。
-  - **戻し方**: 打ち切った host は台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_unresolved' AND key='<key>'`（全件なら key 条件を外す）に戻せば、次の夜に再判定される。
+- **LLM 未解決の再試行と保留（#124）**: llm 段が exit 2 のとき、最大 `--llm-retries N` 回（既定 2）再試行する。再試行後も残る全件がサイト固有の根拠引用不一致と確認できれば、件数に関係なく `deferred` / `llm_validation` に保留し、guards に記録して続行する。API の共通障害、未精算バッチ、未分類の失敗、対象を照合できない場合は停止する。`--llm-retries 0` は保留せず停止する。
+  - **戻し方**: 内容を確認後、台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_validation' AND key='<key>'` とする。`triage --redo` ではこの保留は解除されない。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
 - 本番 D1 に触れるのは prod 段と、明示的に有効にした media 段。`--apply-prod` が無ければ `wrangler` は呼ばない。`--dry-run` と `--apply-prod` は併用できない。

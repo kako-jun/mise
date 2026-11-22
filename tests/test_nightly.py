@@ -51,6 +51,7 @@ class Env(unittest.TestCase):
         self.llm_rc = 0
         self.llm_seq = []              # 先頭から 1 回ずつ消費する llm 段の exit code(尽きたら llm_rc)
         self.llm_fail_ids = None       # None: results は空(全件未解決) / 集合: その id 以外は出力ありとして results に書く
+        self.llm_failure_reason = None
         self.exported = 2
         self.p_run = mock.patch.object(nightly, 'run_cmd', side_effect=self.fake)
         self.p_run.start()
@@ -92,7 +93,8 @@ class Env(unittest.TestCase):
             else:
                 ids = [json.loads(l)['id'] for l in Path(cmd[2]).read_text().splitlines() if l.strip()]
                 results = [{'id': i, 'output': {'x': 1}} for i in ids if i not in self.llm_fail_ids]
-            Path(cmd[cmd.index('--out') + 1]).write_text(json.dumps({'results': results}))
+            failures = {i: self.llm_failure_reason for i in (self.llm_fail_ids or ())} if self.llm_failure_reason else {}
+            Path(cmd[cmd.index('--out') + 1]).write_text(json.dumps({'results': results, 'failures': failures}))
             return (self.llm_seq.pop(0) if self.llm_seq else self.llm_rc), ''
         if 'import_results' in s:
             return 0, 'imported=1'
@@ -435,12 +437,13 @@ class Run(Env):
                 (f'h{i:02d}.jp', 'h', 'pipeline', 'm', 'x', 'x', 'pass', 'none', '', '["astronomy"]', '[]', 'no', 'individual', '', 'standalone', 'high', 'approved'))
         self.db.commit()
         self.llm_fail_ids = {'h00_jp', 'h01_jp'}
+        self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
         self.assertEqual(self.run_night('--apply-prod'), 0)
         st = self.status()
         self.assertEqual(path.read_bytes(), original)
         self.assertEqual(st['candidates_tonight'], 9)
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
-        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 2)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='deferred' AND reject_reason='llm_validation'").fetchone()[0], 2)
 
     def test_missing_candidates_on_resume_stops_before_llm_or_prod(self):
         self.seed()
@@ -560,13 +563,14 @@ class Run(Env):
         self.assertEqual((llm['status'], llm['count']['llm_retries']), ('ok', 1))
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='rejected'").fetchone()[0], 0)
 
-    def test_llm_unresolved_after_retries_is_cut_off_and_night_proceeds(self):
+    def test_llm_site_validation_after_retries_is_deferred_and_night_proceeds(self):
         self.seed_many()
         self.llm_rc = 2
         self.llm_fail_ids = {'h07_jp'}
+        self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
         self.assertEqual(self.run_night('--apply-prod'), 0)
         self.assertEqual(self.llm_runs(), 3)    # 初回 + 再試行 2 回
-        self.assertEqual(tuple(self.frontier_row('h07.jp')), ('rejected', 'llm_unresolved'))
+        self.assertEqual(tuple(self.frontier_row('h07.jp')), ('deferred', 'llm_validation'))
         self.assertEqual(self.frontier_row('h08.jp')['state'], 'candidate')
         st = self.status()
         names = {s['name']: s['status'] for s in st['stages']}
@@ -574,7 +578,7 @@ class Run(Env):
         self.assertFalse(any(s['status'] == 'partial' for s in st['stages']))
         llm = next(s for s in st['stages'] if s['name'] == 'llm')
         self.assertIn('1 件', llm['note'])
-        self.assertTrue(any('LLM 未解決 1 件を打ち切り' in g and 'h07.jp' in g for g in st['guards']))
+        self.assertTrue(any('LLM 検証失敗 1 件を保留' in g and 'h07.jp' in g for g in st['guards']))
 
     def test_cut_off_above_threshold_stays_partial(self):
         self.seed_many()
@@ -585,17 +589,18 @@ class Run(Env):
         names = {s['name']: s['status'] for s in st['stages']}
         self.assertEqual((names['llm'], names['prod']), ('partial', 'skipped'))
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
-        self.assertTrue(any('打ち切らず止めた' in g for g in st['guards']))
+        self.assertTrue(any('分類不能' in g for g in st['guards']))
         self.assertEqual(self.wrangler_calls(), [])
 
     def test_small_batch_two_unresolved_can_continue(self):
         self.seed_many(9)
         self.llm_rc = 2
         self.llm_fail_ids = {'h01_jp', 'h02_jp'}
+        self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
         self.assertEqual(self.run_night('--apply-prod'), 0)
         st = self.status()
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
-        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 2)
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='deferred' AND reject_reason='llm_validation'").fetchone()[0], 2)
 
     def test_small_batch_systemic_failure_stays_partial(self):
         self.seed_many(4)
@@ -606,12 +611,41 @@ class Run(Env):
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'partial')
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
 
+    def test_all_sites_with_specific_quote_validation_are_deferred(self):
+        self.seed_many(3)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h00_jp', 'h01_jp', 'h02_jp'}
+        self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='deferred' AND reject_reason='llm_validation'").fetchone()[0], 3)
+
+    def test_batch_service_failure_even_one_site_stops(self):
+        self.seed_many(100)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h00_jp'}
+        self.llm_failure_reason = 'describe: batch errored'
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'llm'), 'partial')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_validation'").fetchone()[0], 0)
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_unsettled_batch_prevents_deferral(self):
+        self.seed_many(3)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h00_jp', 'h01_jp', 'h02_jp'}
+        self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
+        with mock.patch.object(nightly.Night, 'pending_batch', return_value=True):
+            self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'llm'), 'partial')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_validation'").fetchone()[0], 0)
+
     def test_cut_off_above_count_limit_stays_partial(self):
         self.seed_many(500)
         self.llm_rc = 2
         self.llm_fail_ids = {f'h{i:02d}_jp' for i in range(21)}   # 21/500 = 4.2% だが 20 件超
-        with mock.patch.object(nightly, 'LLM_CUTOFF_MAX_COUNT', 20):
-            self.assertEqual(self.run_night('--judge-limit', '500'), 0)
+        self.assertEqual(self.run_night('--judge-limit', '500'), 0)
         names = {s['name']: s['status'] for s in self.status()['stages']}
         self.assertEqual(names['llm'], 'partial')
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
