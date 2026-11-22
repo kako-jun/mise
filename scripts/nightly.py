@@ -38,10 +38,6 @@ ANOMALY_FACTOR = 5                # 1 サイクルの追加数が直近 7 日(�
 ANOMALY_MIN_DAYS = 3              # 履歴がこの日数未満なら比較しない
 ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見なさない
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
-LLM_CUTOFF_MAX_RATIO = 0.05   # 打ち切る未解決が今夜の判定対象のこの割合を超える、または
-LLM_CUTOFF_MAX_COUNT = 20     # この件数を超えたら打ち切らず partial で止める(安全弁。ここ 1 か所)
-LLM_CUTOFF_SMALL_BATCH = 10   # 少数回は 5% が 1 件未満になるため別枠
-LLM_CUTOFF_SMALL_MAX = 2      # 少数回の未解決は最大 2 件、かつ判定対象の半数未満
 STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "media", "usage"]
 
 
@@ -190,6 +186,8 @@ class Night:
         for k in ("candidates_tonight", "cost_usd", "added", "approved", "prod_applied", "bookmark"):  # 再開時は成功済みの段の結果を引き継ぐ
             if k in prev:
                 self.status[k] = prev[k]
+        if "llm_validation_warning" in prev:
+            self.status["llm_validation_warning"] = prev["llm_validation_warning"]
         old_candidates = self.prev.get("candidates", {})
         checkpoint = prev.get("candidate_checkpoint")
         if checkpoint is None and old_candidates.get("status") == "ok":
@@ -408,16 +406,17 @@ class Night:
         if rc not in (0, 2):
             raise StageFailed(f"llm: exit {rc}\n" + "\n".join(out.strip().splitlines()[-5:]))
         cost = month_spent(a.ledger, self.month) - spent
+        self.status.pop("llm_validation_warning", None)
         self.status["cost_usd"] = round(cost, 4)
         res = {"count": {"cost_usd": round(cost, 4), "unresolved": 1 if rc == 2 else 0}}
         if retried:
             res["count"]["llm_retries"] = retried
         if rc == 2:
             if a.llm_retries > 0:
-                cut = self.cut_off_unresolved(n)
-                if cut is not None:
-                    res["count"].update(unresolved=0, cut_off=cut)
-                    res["note"] = f"未解決 {cut} 件を打ち切り(llm_unresolved)"
+                deferred = self.defer_site_validation_failures()
+                if deferred is not None:
+                    res["count"].update(unresolved=0, deferred=deferred)
+                    res["note"] = f"サイト固有の検証失敗 {deferred} 件を保留(llm_validation)"
                     return res
             res.update(status="partial", note="未解決あり(同じ --date で再実行すると続きから)")   # 同じ --date で再実行すると、この段から続きを再開する
         return res
@@ -442,24 +441,55 @@ class Night:
             con.close()
         return [(k, h) for k, h in rows if k not in judged and export_candidates.cand_id(k) in want]
 
-    def cut_off_unresolved(self, n):
-        """再試行しても未解決が残る host を台帳で rejected/llm_unresolved にして先へ進める。打ち切った件数を返す。
-        打ち切らない(安全弁・特定不能)なら guards に理由を残して None。"""
+    def defer_site_validation_failures(self):
+        """逐語引用の検証失敗と確認できたサイトだけ保留。API・不明な失敗は全体を止める。"""
         keys = self.unresolved_keys()
         if not keys:
-            self.status["guards"].append("LLM 未解決の host を特定できないため打ち切らず止めた")
+            self.status["guards"].append("LLM 未解決の host を特定できないため停止")
             return None
-        small_ok = n <= LLM_CUTOFF_SMALL_BATCH and len(keys) <= LLM_CUTOFF_SMALL_MAX and len(keys) * 2 < n
-        if len(keys) > LLM_CUTOFF_MAX_COUNT or (len(keys) > LLM_CUTOFF_MAX_RATIO * n and not small_ok):
-            self.status["guards"].append(f"LLM 未解決 {len(keys)} 件は打ち切りの上限(判定対象 {n} 件の {LLM_CUTOFF_MAX_RATIO:.0%} か {LLM_CUTOFF_MAX_COUNT} 件)を超えるため打ち切らず止めた")
+        if self.pending_batch():
+            self.status["guards"].append("未精算バッチがあるため LLM 未解決を保留せず停止")
+            return None
+        data = read_json(self.p("results.json"), {}) or {}
+        failures = data.get("failures")
+        # すべての未解決が固有の候補 ID と検証エラーに一対一で対応する場合だけ。
+        ids = [export_candidates.cand_id(k) for k, _ in keys]
+        allowed = re.compile(r"(?:[1-8] long_description_evidence quote\(s\) are not verbatim substrings of the candidate text|evidence_quote is not a verbatim substring of the candidate text)")
+        def site_error(value):
+            return isinstance(value, str) and value.startswith("describe: ") and all(allowed.fullmatch(x) for x in value[len("describe: "):].split("; "))
+        if not isinstance(failures, dict) or len(set(ids)) != len(ids) or set(failures) != set(ids) or not all(site_error(failures[i]) for i in ids):
+            self.status["guards"].append("LLM 未解決に共通障害または分類不能な失敗があるため停止")
             return None
         con = sqlite3.connect(self.db)
         try:
-            con.executemany("UPDATE frontier SET state='rejected', reject_reason='llm_unresolved' WHERE key=? AND state='candidate'", [(k,) for k, _ in keys])
-            con.commit()
+            with con:
+                for k, _ in keys:
+                    row = con.execute("UPDATE frontier SET state='deferred', reject_reason='llm_validation' WHERE key=? AND state='candidate' AND NOT EXISTS (SELECT 1 FROM llm_judgement WHERE key=?)", (k, k))
+                    if row.rowcount != 1:
+                        raise StageFailed(f"保留対象が変化した: {k}")
         finally:
             con.close()
-        self.status["guards"].append(f"LLM 未解決 {len(keys)} 件を打ち切り（{', '.join(h or k for k, h in keys[:20])}）")
+        self.status["guards"].append(f"LLM 検証失敗 {len(keys)} 件を保留（{', '.join(h or k for k, h in keys[:20])}）")
+        total = self.status["candidates_tonight"]
+        current = parse_night(self.a.date)
+        streak = 1
+        try:
+            previous = sorted((parse_night(name), name) for name in os.listdir(self.nightly)
+                              if parse_night(name) and parse_night(name) < current)
+        except OSError:
+            previous = []
+        for _, name in reversed(previous):
+            status = read_json(os.path.join(self.nightly, name, "status.json"), {}) or {}
+            if not isinstance(status, dict) or not isinstance(status.get("llm_validation_warning"), dict):
+                break
+            streak += 1
+        warning = {"deferred": len(keys), "candidates": total,
+                   "failure_rate": round(len(keys) / total, 4) if total else None,
+                   "consecutive_cycles": streak}
+        self.status["llm_validation_warning"] = warning
+        message = f"警告: LLM 引用検証失敗 {len(keys)}/{total} 件、連続 {streak} サイクル。共通原因がないか確認"
+        self.status["guards"].append(message)
+        print(message, file=sys.stderr, flush=True)
         return len(keys)
 
     def pending_batch(self):
@@ -808,7 +838,7 @@ def plan(a):
     L += [f"  2 triage     台帳内の discovered を振り分け", f"  3 fetch      上限 {a.fetch_limit} ホスト（queued: {snap['state'].get('queued', 0)}）",
           f"  4 judge      取得後フィルタ（fetched: {snap['state'].get('fetched', 0)}）",
           f"  5 candidates 今夜の判定対象（未判定の candidate）: {n} 件（candidate 全体 {snap['state'].get('candidate', 0)}、判定上限 {a.judge_limit}）",
-          f"  6 llm        haiku -> sonnet / mode={a.judge_mode} / 未解決の再試行 {a.llm_retries} 回" + ("(残れば台帳で rejected/llm_unresolved に打ち切って先へ進む。多すぎれば止める)" if a.llm_retries > 0 else "(0: 未解決が残れば partial で止める)"), "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
+          f"  6 llm        haiku -> sonnet / mode={a.judge_mode} / 未解決の再試行 {a.llm_retries} 回" + ("(サイト固有の引用検証失敗は保留し、それ以外は停止)" if a.llm_retries > 0 else "(0: 未解決が残れば partial で止める)"), "  7 import     結果を台帳へ", "  8 approve    自動承認ポリシーを適用",
           f"  9 sql        承認済み未出荷を{('最大 %d 件' % a.max_add) if a.max_add else 'すべて'} -> var/nightly/{a.date}/approved-sites.sql", " 10 gate       生成 SQL をメモリ DB に流して整合チェック",
           " 11 prod       " + ("--apply-prod: bookmark 取得 -> 本番投入 -> 整合チェック" if a.apply_prod else "実行しない(--apply-prod なし)"),
           " 12 favicon    " + (f"期限が来たサイトを最大 {a.favicon_limit} 件取得だけ(ローカルの var/favicons/ に置く。SQL は作らない。本番には触れない)" if a.favicon_limit > 0 else "無効(--favicon-limit 0。既定)"),
@@ -840,7 +870,7 @@ def parse_args(argv=None):
     ap.add_argument("--from-stage", choices=STAGE_NAMES, help="この段から先は成功済みでもやり直す(status.json を消さずに途中から再開)")
     ap.add_argument("--current-db", help="gate 段が土台にする本番再現の sqlite(ローカル D1)。無ければ空 DB(マイグレーションのみ)")
     ap.add_argument("--judge-limit", type=int, default=600, help="1 夜に LLM へ渡す候補数の上限")
-    ap.add_argument("--llm-retries", type=int, default=2, help="llm 段が未解決(exit 2)のとき同じ実行内で再試行する最大回数(既定 2。0 で従来動作＝即 partial)。再試行しても残った未解決は台帳で state=rejected/reject_reason=llm_unresolved に打ち切って先へ進む(多すぎれば打ち切らず partial)")
+    ap.add_argument("--llm-retries", type=int, default=2, help="llm 段が未解決(exit 2)のとき同じ実行内で再試行する最大回数(既定 2。0 で即 partial)。再試行後のサイト固有の引用検証失敗は保留し、それ以外は停止")
     ap.add_argument("--judge-mode", choices=["batch", "sync"], default="batch")
     ap.add_argument("--budget-month", type=float, default=100.0, help="月(UTC)の LLM 予算 USD")
     ap.add_argument("--anomaly-factor", type=float, default=ANOMALY_FACTOR, help="前日比の異常ガードの倍率(既定 5。1 サイクルの追加数が直近 7 日の日平均のこの倍を超えたら本番反映を止める)。意図的な増量運転用")

@@ -205,6 +205,13 @@ class Ledger(unittest.TestCase):
     def tearDown(self):
         self.db.close(); self.dir.cleanup()
 
+    def test_triage_redo_keeps_llm_validation_deferred(self):
+        frontier.add(self.db, 'valid.jp', 'valid.jp', 'https://valid.jp/', 'links')
+        self.db.execute("UPDATE frontier SET state='deferred', reject_reason='llm_validation' WHERE key='valid.jp'")
+        self.db.commit()
+        run.triage(self.db, redo=True)
+        self.assertEqual(tuple(self.db.execute("SELECT state,reject_reason FROM frontier WHERE key='valid.jp'").fetchone()), ('deferred', 'llm_validation'))
+
     def test_add_is_idempotent_and_www_folded(self):
         self.assertTrue(frontier.add(self.db, hostnames.host_key('www.a.jp'), 'www.a.jp', 'https://www.a.jp/', 's'))
         self.assertFalse(frontier.add(self.db, hostnames.host_key('a.jp'), 'a.jp', 'https://a.jp/', 's'))
