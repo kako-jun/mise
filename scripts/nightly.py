@@ -216,6 +216,19 @@ class Night:
         if name in AFTER_LLM and self.llm_ran:
             resumable = False
         if resumable and old and old.get("status") == "ok":
+            if name == "candidates":
+                try:
+                    with open(self.p("candidates.jsonl"), encoding="utf-8") as f:
+                        items = [json.loads(line) for line in f if line.strip()]
+                    expected = old.get("count", {}).get("candidates")
+                    if not isinstance(expected, int) or len(items) != expected or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"] for c in items):
+                        raise ValueError("候補の件数または形式が一致しない")
+                except (OSError, ValueError, TypeError) as e:
+                    rec.update(status="failed", note=f"候補ファイルを再開できない: {e}")
+                    self.failed = self.stop = True
+                    self.status["stages"].append(rec)
+                    self.save()
+                    return
             old = dict(old, note=("再実行: 成功済みのため飛ばした " + (old.get("note") or "")).strip())
             self.status["stages"].append(old)
             return
@@ -623,12 +636,11 @@ class Night:
                  ("media", self.s_media), ("usage", self.s_usage)]
         if self.a.discover_only:
             table = table[:2]  # API 課金・掲載はせず、発見と取得前フィルタだけを行う
-        llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
-            # candidates は llm 段が済むまでだけ作り直す(済んだ後に作り直すと import の入力 candidates.jsonl が縮む)
+            # candidates は一度作成したら再開時も維持する（LLM結果の照合と打切りの分母を同じ入力にする）。
             # usage は毎回動かす(再実行でも最新の使用量を見る)・前の段が失敗していても動かす
-            self.stage(name, fn, resumable=not force and name != "usage" and (name != "candidates" or llm_prev_ok), always=(name == "usage"))
+            self.stage(name, fn, resumable=not force and name != "usage", always=(name == "usage"))
         after = snapshot(self.db)
         self.status["rejected_by_reason"] = {k: v - before["rejected"].get(k, 0) for k, v in after["rejected"].items() if v > before["rejected"].get(k, 0)}
         self.status["held"] = after["review"].get("pending", 0)
