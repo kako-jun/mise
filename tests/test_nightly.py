@@ -467,6 +467,24 @@ class Run(Env):
         self.assertTrue(any('打ち切らず止めた' in g for g in st['guards']))
         self.assertEqual(self.wrangler_calls(), [])
 
+    def test_small_batch_two_unresolved_can_continue(self):
+        self.seed_many(9)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h01_jp', 'h02_jp'}
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 2)
+
+    def test_small_batch_systemic_failure_stays_partial(self):
+        self.seed_many(4)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h01_jp', 'h02_jp'}
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'partial')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 0)
+
     def test_cut_off_above_count_limit_stays_partial(self):
         self.seed_many(500)
         self.llm_rc = 2
