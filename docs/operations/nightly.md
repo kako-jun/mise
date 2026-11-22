@@ -27,7 +27,7 @@
 - 各段は冪等。状態の正本は frontier 台帳（`var/frontier.sqlite`）と `var/nightly/<date>/`。`<date>` は夜の名前（UTC の日付 `YYYY-MM-DD`。同日の 2 回目以降のサイクルは `YYYY-MM-DD-N`、N は 2 以上）。
 - **同じ `--date` で再実行すると、成功済みの段は飛ばして失敗した段から続ける**。LLM バッチの未精算も再開される（`var/llm-batches/` の未精算の `pipeline-<段>-*` 状態ファイルは**日付に関係なく**拾われるので、翌夜の通常実行でも続きから進む。未精算バッチの候補は今夜の `candidates.jsonl` に上限の外でも必ず含める）。
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
-- **LLM 未解決の自動再試行と打ち切り（#124）**: llm 段が exit 2 のとき、同じ実行内で最大 `--llm-retries N` 回（既定 2。0 で従来動作＝即 `partial`）再試行する。再試行は再実行と同じ仕組みで、キャッシュ済みは課金されず、費用も毎回台帳の予約と予算ガードを通る。それでも未解決が残ったら、その host（今夜の入力のうち結果に出力が無く `llm_judgement` に行が無い `state='candidate'`）を台帳で `state='rejected', reject_reason='llm_unresolved'` にし、guards に「LLM 未解決 N 件を打ち切り（ホスト名一覧）」を記録して、llm 段は `ok`（note に件数）で import 以降・本番反映へ進む。**安全弁**: 打ち切る件数が今夜の判定対象の 5% を超える、または 20 件を超えるときは打ち切らず、従来どおり `partial` で止めて guards に理由を残す（定数 `LLM_CUTOFF_MAX_RATIO` / `LLM_CUTOFF_MAX_COUNT`、`scripts/nightly.py` の 1 か所）。
+- **LLM 未解決の自動再試行と打ち切り（#124）**: llm 段が exit 2 のとき、同じ実行内で最大 `--llm-retries N` 回（既定 2）再試行する。キャッシュ済みは課金されず、費用も毎回予算ガードを通る。それでも未解決が残れば、該当 host を `rejected` / `llm_unresolved` とし、guards に記録して残りを処理する。**安全弁**: 未解決が20件超、または対象の5%超なら停止。ただし判定対象が10件以下で、未解決が2件以下かつ半数未満なら打ち切って続行する。未解決を特定できない場合も停止する。
   - **戻し方**: 打ち切った host は台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_unresolved' AND key='<key>'`（全件なら key 条件を外す）に戻せば、次の夜に再判定される。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
@@ -153,7 +153,7 @@ prod 段は次の順に動く。どれかが失敗した時点で止まる。
 | exit 75 | 別の夜間ジョブが動いている。`ps` で確認。残骸なら待つ（flock はプロセス終了で自動解除）。cron に外側の `flock` を付けていると毎夜これになる |
 | llm 段が `ANTHROPIC_API_KEY が無い` | cron のラッパーで `anthropic.env` を読み込めていない |
 | llm 段が skipped「予算ガード」 | 当月の台帳合計 + 最悪費用が `--budget-month` を超える。台帳は `~/.config/mise/llm-ledger.jsonl`。月が変われば自動で再開 |
-| llm 段が `partial`「未解決あり」 | 自動再試行（`--llm-retries`、既定 2）後も未解決が多い（判定対象の 5% 超か 20 件超）か、`--llm-retries 0`。少数なら自動で `llm_unresolved` に打ち切られ先へ進むので `partial` にならない。同じ `--date` で再実行すると続きから（キャッシュ済みは課金されない）。それまで prod 段は止まる。打ち切りの戻し方は上の「LLM 未解決の自動再試行と打ち切り」 |
+| llm 段が `partial`「未解決あり」 | 自動再試行後も未解決が上記の安全弁を超えたか、`--llm-retries 0`。同じ `--date` で再実行すると続きから。prod 段はそれまで止まる。打ち切りの戻し方は上記参照 |
 | 開いたままの予約（台帳） | `scripts/llm/ledger_release.py --list` で確認してから解放 |
 | sql 段 / gate 段が整合チェック違反 | `report.md` の違反行を見る。ほとんどは台帳側の判定データ。該当 key を却下して再実行 |
 | discover-cc が失敗 | 続行される（`guards` に記録）。ネットワークか Common Crawl 側 |

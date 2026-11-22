@@ -39,6 +39,8 @@ ANOMALY_MIN_ADDED = 50            # 小さい数どうしの比は異常と見�
 AFTER_LLM = ("import", "approve", "sql", "gate")   # llm 段をやり直した夜は、これらも成功済みでもやり直す
 LLM_CUTOFF_MAX_RATIO = 0.05   # 打ち切る未解決が今夜の判定対象のこの割合を超える、または
 LLM_CUTOFF_MAX_COUNT = 20     # この件数を超えたら打ち切らず partial で止める(安全弁。ここ 1 か所)
+LLM_CUTOFF_SMALL_BATCH = 10   # 少数回は 5% が 1 件未満になるため別枠
+LLM_CUTOFF_SMALL_MAX = 2      # 少数回の未解決は最大 2 件、かつ判定対象の半数未満
 STAGE_NAMES = ["discover", "triage", "fetch", "judge", "candidates", "llm", "import", "approve", "sql", "gate", "prod", "favicon", "media", "usage"]
 
 
@@ -390,7 +392,8 @@ class Night:
         if not keys:
             self.status["guards"].append("LLM 未解決の host を特定できないため打ち切らず止めた")
             return None
-        if len(keys) > LLM_CUTOFF_MAX_COUNT or len(keys) > LLM_CUTOFF_MAX_RATIO * n:
+        small_ok = n <= LLM_CUTOFF_SMALL_BATCH and len(keys) <= LLM_CUTOFF_SMALL_MAX and len(keys) * 2 < n
+        if len(keys) > LLM_CUTOFF_MAX_COUNT or (len(keys) > LLM_CUTOFF_MAX_RATIO * n and not small_ok):
             self.status["guards"].append(f"LLM 未解決 {len(keys)} 件は打ち切りの上限(判定対象 {n} 件の {LLM_CUTOFF_MAX_RATIO:.0%} か {LLM_CUTOFF_MAX_COUNT} 件)を超えるため打ち切らず止めた")
             return None
         con = sqlite3.connect(self.db)
