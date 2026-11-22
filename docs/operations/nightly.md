@@ -76,13 +76,17 @@ Windows では `scripts/cron/mise-continuous.cmd` を専用クローン `C:\\Use
 - 本番反映（`--apply-prod`）に進む前に、rog の `npx wrangler whoami` が通ること（Cloudflare 認証）を確認する。
 - ロックは `scripts/llm/filelock.py`（POSIX は `fcntl.flock`、Windows は `msvcrt.locking`）。`npx` は `shutil.which` で解決する。
 
-pi-3b の crontab 例（登録は kako-jun が行う。`%` は crontab で特殊文字、Windows パスは絶対パス）:
+pi-3b の 00:37 cron は、単発 `mise-nightly.cmd` ではなく、Windows の URL 継続タスク `MiseContinuous` と画像タスク `MiseMedia` を確認する。両タスクは事前に同じログオンユーザーで登録し、専用 clone・認証・重複実行無視・時間制限なしを設定する。`scripts/cron/mise-start-tasks.ps1` を rog の `C:\Users\kako-jun\mise-start-tasks.ps1` に配置し、まず `-CheckOnly` で両タスクが存在し実行中または待機中と確認する。
+
+スクリプトは実行中のタスクには触れず、`Ready` のものだけ開始し、起動後に `Running` であることを確認する。異常・無効・不在・起動直後の終了は非ゼロとし、pi のログに出す。既存の `.continuous.lock`・`.media-worker.lock`、停止フラグと各ジョブのガードはそのまま維持する。タスクは現状 `Interactive` ログオン型のため、rog に対象ユーザーがログオンしていないと実行できない。ログオン後は Windows タスク自体のログオントリガーでも起動する。
+
+pi-3b の crontab（`%` は crontab で特殊文字、Windows パスは絶対パス）:
 
 ```cron
-37 0 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd"' >> /tmp/mise-nightly.log 2>&1
+37 0 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\kako-jun\mise-start-tasks.ps1' >> /tmp/mise-nightly.log 2>&1
 ```
 
-手動の確認は `ssh kako-rog 'cmd /c "C:\Users\kako-jun\mise-nightly.cmd --dry-run"'`（`--dry-run` はラッパーの先頭の `git reset` は走るが、何も書かず API も呼ばない）。
+手動確認は `ssh kako-rog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\kako-jun\mise-start-tasks.ps1 -CheckOnly'`。この確認はタスクを起動しない。`-ExecutionPolicy Bypass` はこの起動プロセスに限る（システムの設定は変更しない）。単発ジョブの dry-run が必要な場合は既存の `mise-nightly.cmd --dry-run` を使うが、そのラッパーは元の clone を reset する。
 
 ## 新規掲載の画像取得
 
