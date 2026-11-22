@@ -600,6 +600,8 @@ class Run(Env):
         self.assertEqual(self.run_night('--apply-prod'), 0)
         st = self.status()
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
+        self.assertEqual(st['llm_validation_warning'], {'deferred': 2, 'candidates': 9, 'failure_rate': 0.2222, 'consecutive_cycles': 1})
+        self.assertTrue(any('警告: LLM 引用検証失敗' in g for g in st['guards']))
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='deferred' AND reject_reason='llm_validation'").fetchone()[0], 2)
 
     def test_small_batch_systemic_failure_stays_partial(self):
@@ -618,6 +620,7 @@ class Run(Env):
         self.llm_failure_reason = 'describe: 1 long_description_evidence quote(s) are not verbatim substrings of the candidate text'
         self.assertEqual(self.run_night('--apply-prod'), 0)
         st = self.status()
+        self.assertEqual(st['llm_validation_warning'], {'deferred': 3, 'candidates': 3, 'failure_rate': 1.0, 'consecutive_cycles': 1})
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
         self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE state='deferred' AND reject_reason='llm_validation'").fetchone()[0], 3)
 

@@ -30,6 +30,7 @@
 - **LLM 段が未解決を残した夜（pipeline.py が exit 2）は段の状態が `partial`**（失敗ではない。exit 0）。同じ `--date` で再実行すると llm 段から続きを再開し、import 以降もやり直す。`partial` の夜は本番反映（prod 段）を止める。
 - **LLM 未解決の再試行と保留（#124）**: llm 段が exit 2 のとき、最大 `--llm-retries N` 回（既定 2）再試行する。再試行後も残る全件がサイト固有の根拠引用不一致と確認できれば、件数に関係なく `deferred` / `llm_validation` に保留し、guards に記録して続行する。API の共通障害、未精算バッチ、未分類の失敗、対象を照合できない場合は停止する。`--llm-retries 0` は保留せず停止する。
   - **戻し方**: 内容を確認後、台帳で `UPDATE frontier SET state='candidate', reject_reason=NULL WHERE reject_reason='llm_validation' AND key='<key>'` とする。`triage --redo` ではこの保留は解除されない。
+  - 引用不一致が共通原因の兆候である可能性もあるため、件数・対象数・失敗率・連続サイクル数を `status.json` の `llm_validation_warning` とログに警告として残す。警告だけでは周回を止めない。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
 - 本番 D1 に触れるのは prod 段と、明示的に有効にした media 段。`--apply-prod` が無ければ `wrangler` は呼ばない。`--dry-run` と `--apply-prod` は併用できない。

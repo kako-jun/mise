@@ -186,6 +186,8 @@ class Night:
         for k in ("candidates_tonight", "cost_usd", "added", "approved", "prod_applied", "bookmark"):  # 再開時は成功済みの段の結果を引き継ぐ
             if k in prev:
                 self.status[k] = prev[k]
+        if "llm_validation_warning" in prev:
+            self.status["llm_validation_warning"] = prev["llm_validation_warning"]
         old_candidates = self.prev.get("candidates", {})
         checkpoint = prev.get("candidate_checkpoint")
         if checkpoint is None and old_candidates.get("status") == "ok":
@@ -404,6 +406,7 @@ class Night:
         if rc not in (0, 2):
             raise StageFailed(f"llm: exit {rc}\n" + "\n".join(out.strip().splitlines()[-5:]))
         cost = month_spent(a.ledger, self.month) - spent
+        self.status.pop("llm_validation_warning", None)
         self.status["cost_usd"] = round(cost, 4)
         res = {"count": {"cost_usd": round(cost, 4), "unresolved": 1 if rc == 2 else 0}}
         if retried:
@@ -467,6 +470,26 @@ class Night:
         finally:
             con.close()
         self.status["guards"].append(f"LLM 検証失敗 {len(keys)} 件を保留（{', '.join(h or k for k, h in keys[:20])}）")
+        total = self.status["candidates_tonight"]
+        current = parse_night(self.a.date)
+        streak = 1
+        try:
+            previous = sorted((parse_night(name), name) for name in os.listdir(self.nightly)
+                              if parse_night(name) and parse_night(name) < current)
+        except OSError:
+            previous = []
+        for _, name in reversed(previous):
+            status = read_json(os.path.join(self.nightly, name, "status.json"), {}) or {}
+            if not isinstance(status, dict) or not isinstance(status.get("llm_validation_warning"), dict):
+                break
+            streak += 1
+        warning = {"deferred": len(keys), "candidates": total,
+                   "failure_rate": round(len(keys) / total, 4) if total else None,
+                   "consecutive_cycles": streak}
+        self.status["llm_validation_warning"] = warning
+        message = f"警告: LLM 引用検証失敗 {len(keys)}/{total} 件、連続 {streak} サイクル。共通原因がないか確認"
+        self.status["guards"].append(message)
+        print(message, file=sys.stderr, flush=True)
         return len(keys)
 
     def pending_batch(self):
