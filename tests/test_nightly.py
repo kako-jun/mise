@@ -422,6 +422,127 @@ class Run(Env):
     def llm_runs(self):
         return sum('llm/pipeline.py' in ' '.join(c) and '--dry-run' not in c for c in self.calls)
 
+    def test_partial_resume_keeps_original_candidate_set_and_denominator(self):
+        self.seed_many(9)
+        self.llm_rc = 2
+        self.llm_fail_ids = {'h00_jp', 'h01_jp', 'h02_jp'}
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'llm'), 'partial')
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        original = path.read_bytes()
+        for i in range(3, 9):
+            self.db.execute(f"INSERT INTO llm_judgement ({JCOLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (f'h{i:02d}.jp', 'h', 'pipeline', 'm', 'x', 'x', 'pass', 'none', '', '["astronomy"]', '[]', 'no', 'individual', '', 'standalone', 'high', 'approved'))
+        self.db.commit()
+        self.llm_fail_ids = {'h00_jp', 'h01_jp'}
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        st = self.status()
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(st['candidates_tonight'], 9)
+        self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'llm'), 'ok')
+        self.assertEqual(self.db.execute("SELECT count(*) FROM frontier WHERE reject_reason='llm_unresolved'").fetchone()[0], 2)
+
+    def test_missing_candidates_on_resume_stops_before_llm_or_prod(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        (self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').unlink()
+        n_llm = self.llm_runs()
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        st = self.status()
+        self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'candidates'), 'failed')
+        self.assertEqual(self.llm_runs(), n_llm)
+        self.assertEqual(self.wrangler_calls(), [])
+        # 通常再実行を繰り返しても元の入力を勝手に作り直さない。
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'candidates'), 'failed')
+        self.assertFalse((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+        self.assertEqual(self.llm_runs(), n_llm)
+        # 先行段が失敗して candidates 段が skipped になっても、停止状態は消えない。
+        with mock.patch.object(nightly.Night, 's_discover', side_effect=nightly.StageFailed('discover failure')):
+            self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'discover'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'candidates'), 'skipped')
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'fetch'), 1)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertFalse((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+        # 明示的な再生成のみ許可。
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'candidates'), 0)
+        self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+        self.assertFalse(self.status()['candidate_rebuild_required'])
+
+    def test_missing_or_inconsistent_candidate_counts_stop_on_resume(self):
+        for changed in ('missing_top', 'missing_stage', 'mismatch'):
+            with self.subTest(changed=changed):
+                date = {'missing_top': '2026-11-18', 'missing_stage': '2026-11-19', 'mismatch': '2026-11-20'}[changed]
+                self.llm_rc = 2
+                self.assertEqual(self.run_night('--apply-prod', date=date), 0)
+                path = self.var / 'nightly' / date / 'status.json'
+                st = json.loads(path.read_text())
+                candidates = next(s for s in st['stages'] if s['name'] == 'candidates')
+                if changed == 'missing_top':
+                    st.pop('candidates_tonight')
+                elif changed == 'missing_stage':
+                    candidates['count'].pop('candidates')
+                else:
+                    st['candidates_tonight'] += 1
+                path.write_text(json.dumps(st))
+                self.assertEqual(self.run_night('--apply-prod', date=date), 1)
+                self.assertEqual(next(s['status'] for s in self.status(date)['stages'] if s['name'] == 'candidates'), 'failed')
+
+    def test_force_fetch_checks_existing_candidate_input_before_rebuild(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        path.unlink()
+        llm_calls = self.llm_runs()
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'fetch'), 1)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.llm_runs(), llm_calls)
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_same_count_changed_candidate_input_stops_before_llm(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]['id'] = 'different_id'
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        n_llm = self.llm_runs()
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertEqual(self.llm_runs(), n_llm)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_legacy_checkpoint_without_digest_is_upgraded_after_validation(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'status.json'
+        st = json.loads(path.read_text())
+        st.pop('candidate_checkpoint')
+        path.write_text(json.dumps(st))
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(len(self.status()['candidate_checkpoint']['sha256']), 64)
+
+    def test_candidate_checkpoint_survives_prior_stage_failure_before_validation(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        path.unlink()
+        with mock.patch.object(nightly.Night, 's_discover', side_effect=nightly.StageFailed('discover failure')):
+            self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'discover'), 1)
+        self.assertIsNotNone(self.status()['candidate_checkpoint'])
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertFalse(path.exists())
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+
     def seed_many(self, n=30):
         for i in range(n):
             add_site(self.db, f'h{i:02d}.jp')

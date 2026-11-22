@@ -12,6 +12,7 @@ Exit code: 0 正常（LLM 未解決が残る partial を含む） / 1 段の失�
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -179,6 +180,7 @@ class Night:
         self.db = os.path.abspath(a.db)
         self.status_path = os.path.join(self.dir, "status.json")
         prev = read_json(self.status_path, {}) if not a.dry_run else {}
+        self.previous_status = prev
         self.prev = {s["name"]: s for s in prev.get("stages", []) if isinstance(s, dict)}
         self.status = {"schema": SCHEMA, "date": a.date, "started_at": utcnow(), "finished_at": None,
                        "mode": {"dry_run": a.dry_run, "apply_prod": a.apply_prod, "judge_mode": a.judge_mode},
@@ -188,6 +190,14 @@ class Night:
         for k in ("candidates_tonight", "cost_usd", "added", "approved", "prod_applied", "bookmark"):  # 再開時は成功済みの段の結果を引き継ぐ
             if k in prev:
                 self.status[k] = prev[k]
+        old_candidates = self.prev.get("candidates", {})
+        checkpoint = prev.get("candidate_checkpoint")
+        if checkpoint is None and old_candidates.get("status") == "ok":
+            checkpoint = {"count": old_candidates.get("count", {}).get("candidates")}
+        self.status["candidate_checkpoint"] = checkpoint
+        self.status["candidate_rebuild_required"] = bool(prev.get("candidate_rebuild_required")) or (
+            old_candidates.get("status") == "failed" and str(old_candidates.get("note", "")).startswith("候補ファイルを再開できない:")
+        )
         self.failed = False
         self.stop = False          # 以降の段は進めない（整合違反・失敗）
         self.exported_keys = []
@@ -213,16 +223,63 @@ class Night:
             self.status["stages"].append(rec)
             return
         old = self.prev.get(name)
+        # 先行段のやり直しで candidates が force になっても、既存入力を黙って差し替えない。
+        # 直前の実行で先行段が失敗し candidates が skipped になっていても checkpoint を使う。
+        if name == "candidates" and self.a.from_stage != "candidates" and self.status.get("candidate_checkpoint") is not None:
+            resumable = True
+            cp = self.status["candidate_checkpoint"]
+            count = cp.get("count") if isinstance(cp, dict) else None
+            if old and old.get("status") == "ok" and old.get("count", {}).get("candidates") != count:
+                count = None
+            old = {"name": "candidates", "status": "ok", "seconds": 0.0, "count": {"candidates": count}, "note": ""}
+        # 先行段の失敗を挟んでも、明示的に candidates を指定するまで停止を維持。
+        if name == "candidates" and self.status["candidate_rebuild_required"] and self.a.from_stage != "candidates":
+            rec.update(status="failed", note="候補ファイルを再開できない: 明示的な --from-stage candidates が必要")
+            self.failed = self.stop = True
+            self.status["stages"].append(rec)
+            self.save()
+            return
         if name in AFTER_LLM and self.llm_ran:
             resumable = False
         if resumable and old and old.get("status") == "ok":
+            if name == "candidates":
+                try:
+                    with open(self.p("candidates.jsonl"), "rb") as f:
+                        raw = f.read()
+                    items = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
+                    expected = old.get("count", {}).get("candidates")
+                    original_count = self.previous_status.get("candidates_tonight")
+                    if not isinstance(expected, int) or not isinstance(original_count, int) or original_count != expected or len(items) != expected or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"] for c in items):
+                        raise ValueError("候補の件数または形式が一致しない")
+                    digest = hashlib.sha256(raw).hexdigest()
+                    checkpoint = self.status.get("candidate_checkpoint") or {}
+                    saved_digest = checkpoint.get("sha256")
+                    if saved_digest is not None and saved_digest != digest:
+                        raise ValueError("候補ファイルの内容が一致しない")
+                    # 旧状態（digest 未保存）は件数を検証した時点の内容を基準として採用する。
+                    self.status["candidate_checkpoint"] = {"count": expected, "sha256": digest}
+                except (OSError, ValueError, TypeError) as e:
+                    rec.update(status="failed", note=f"候補ファイルを再開できない: {e}")
+                    self.status["candidate_rebuild_required"] = True
+                    self.failed = self.stop = True
+                    self.status["stages"].append(rec)
+                    self.save()
+                    return
             old = dict(old, note=("再実行: 成功済みのため飛ばした " + (old.get("note") or "")).strip())
             self.status["stages"].append(old)
+            if name == "candidates":
+                self.save()
             return
         t0 = time.monotonic()
         try:
             res = fn() or {}
             rec.update(res)
+            if name == "candidates" and rec["status"] == "ok":
+                with open(self.p("candidates.jsonl"), "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                self.status["candidate_checkpoint"] = {"count": rec.get("count", {}).get("candidates"), "sha256": digest}
+                if self.a.from_stage == "candidates":
+                    self.status["candidate_rebuild_required"] = False
         except StageFailed as e:
             rec.update(status="failed", note=str(e)[:600])
             self.failed = True
@@ -623,12 +680,11 @@ class Night:
                  ("media", self.s_media), ("usage", self.s_usage)]
         if self.a.discover_only:
             table = table[:2]  # API 課金・掲載はせず、発見と取得前フィルタだけを行う
-        llm_prev_ok = (self.prev.get("llm") or {}).get("status") == "ok"
         for i, (name, fn) in enumerate(table):
             force = self.from_idx is not None and i >= self.from_idx      # --from-stage: ここから先は成功済みでもやり直す
-            # candidates は llm 段が済むまでだけ作り直す(済んだ後に作り直すと import の入力 candidates.jsonl が縮む)
+            # candidates は一度作成したら再開時も維持する（LLM結果の照合と打切りの分母を同じ入力にする）。
             # usage は毎回動かす(再実行でも最新の使用量を見る)・前の段が失敗していても動かす
-            self.stage(name, fn, resumable=not force and name != "usage" and (name != "candidates" or llm_prev_ok), always=(name == "usage"))
+            self.stage(name, fn, resumable=not force and name != "usage", always=(name == "usage"))
         after = snapshot(self.db)
         self.status["rejected_by_reason"] = {k: v - before["rejected"].get(k, 0) for k, v in after["rejected"].items() if v > before["rejected"].get(k, 0)}
         self.status["held"] = after["review"].get("pending", 0)
