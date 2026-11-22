@@ -453,6 +453,33 @@ class Run(Env):
         self.assertEqual(next(s['status'] for s in st['stages'] if s['name'] == 'candidates'), 'failed')
         self.assertEqual(self.llm_runs(), n_llm)
         self.assertEqual(self.wrangler_calls(), [])
+        # 通常再実行を繰り返しても元の入力を勝手に作り直さない。
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertEqual(next(s['status'] for s in self.status()['stages'] if s['name'] == 'candidates'), 'failed')
+        self.assertFalse((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+        self.assertEqual(self.llm_runs(), n_llm)
+        # 明示的な再生成のみ許可。
+        self.assertEqual(self.run_night('--apply-prod', '--from-stage', 'candidates'), 0)
+        self.assertTrue((self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl').exists())
+
+    def test_missing_or_inconsistent_candidate_counts_stop_on_resume(self):
+        for changed in ('missing_top', 'missing_stage', 'mismatch'):
+            with self.subTest(changed=changed):
+                date = {'missing_top': '2026-11-18', 'missing_stage': '2026-11-19', 'mismatch': '2026-11-20'}[changed]
+                self.llm_rc = 2
+                self.assertEqual(self.run_night('--apply-prod', date=date), 0)
+                path = self.var / 'nightly' / date / 'status.json'
+                st = json.loads(path.read_text())
+                candidates = next(s for s in st['stages'] if s['name'] == 'candidates')
+                if changed == 'missing_top':
+                    st.pop('candidates_tonight')
+                elif changed == 'missing_stage':
+                    candidates['count'].pop('candidates')
+                else:
+                    st['candidates_tonight'] += 1
+                path.write_text(json.dumps(st))
+                self.assertEqual(self.run_night('--apply-prod', date=date), 1)
+                self.assertEqual(next(s['status'] for s in self.status(date)['stages'] if s['name'] == 'candidates'), 'failed')
 
     def seed_many(self, n=30):
         for i in range(n):

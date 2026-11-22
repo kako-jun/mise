@@ -179,6 +179,7 @@ class Night:
         self.db = os.path.abspath(a.db)
         self.status_path = os.path.join(self.dir, "status.json")
         prev = read_json(self.status_path, {}) if not a.dry_run else {}
+        self.previous_status = prev
         self.prev = {s["name"]: s for s in prev.get("stages", []) if isinstance(s, dict)}
         self.status = {"schema": SCHEMA, "date": a.date, "started_at": utcnow(), "finished_at": None,
                        "mode": {"dry_run": a.dry_run, "apply_prod": a.apply_prod, "judge_mode": a.judge_mode},
@@ -213,6 +214,13 @@ class Night:
             self.status["stages"].append(rec)
             return
         old = self.prev.get(name)
+        # 候補を破損で止めた後も、明示的に candidates からやり直すまでは再生成しない。
+        if name == "candidates" and resumable and old and old.get("status") == "failed" and str(old.get("note", "")).startswith("候補ファイルを再開できない:"):
+            rec.update(status="failed", note=old["note"])
+            self.failed = self.stop = True
+            self.status["stages"].append(rec)
+            self.save()
+            return
         if name in AFTER_LLM and self.llm_ran:
             resumable = False
         if resumable and old and old.get("status") == "ok":
@@ -221,7 +229,8 @@ class Night:
                     with open(self.p("candidates.jsonl"), encoding="utf-8") as f:
                         items = [json.loads(line) for line in f if line.strip()]
                     expected = old.get("count", {}).get("candidates")
-                    if not isinstance(expected, int) or len(items) != expected or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"] for c in items):
+                    original_count = self.previous_status.get("candidates_tonight")
+                    if not isinstance(expected, int) or not isinstance(original_count, int) or original_count != expected or len(items) != expected or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"] for c in items):
                         raise ValueError("候補の件数または形式が一致しない")
                 except (OSError, ValueError, TypeError) as e:
                     rec.update(status="failed", note=f"候補ファイルを再開できない: {e}")
