@@ -505,6 +505,31 @@ class Run(Env):
         self.assertEqual(self.llm_runs(), llm_calls)
         self.assertEqual(self.wrangler_calls(), [])
 
+    def test_same_count_changed_candidate_input_stops_before_llm(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'candidates.jsonl'
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        rows[0]['id'] = 'different_id'
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        n_llm = self.llm_runs()
+        self.assertEqual(self.run_night('--apply-prod'), 1)
+        self.assertEqual(self.llm_runs(), n_llm)
+        self.assertTrue(self.status()['candidate_rebuild_required'])
+        self.assertEqual(self.wrangler_calls(), [])
+
+    def test_legacy_checkpoint_without_digest_is_upgraded_after_validation(self):
+        self.seed()
+        self.llm_rc = 2
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        path = self.var / 'nightly' / '2026-11-18' / 'status.json'
+        st = json.loads(path.read_text())
+        st.pop('candidate_checkpoint')
+        path.write_text(json.dumps(st))
+        self.assertEqual(self.run_night('--apply-prod'), 0)
+        self.assertEqual(len(self.status()['candidate_checkpoint']['sha256']), 64)
+
     def test_candidate_checkpoint_survives_prior_stage_failure_before_validation(self):
         self.seed()
         self.llm_rc = 2

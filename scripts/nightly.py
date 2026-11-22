@@ -12,6 +12,7 @@ Exit code: 0 正常（LLM 未解決が残る partial を含む） / 1 段の失�
 """
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -243,12 +244,20 @@ class Night:
         if resumable and old and old.get("status") == "ok":
             if name == "candidates":
                 try:
-                    with open(self.p("candidates.jsonl"), encoding="utf-8") as f:
-                        items = [json.loads(line) for line in f if line.strip()]
+                    with open(self.p("candidates.jsonl"), "rb") as f:
+                        raw = f.read()
+                    items = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
                     expected = old.get("count", {}).get("candidates")
                     original_count = self.previous_status.get("candidates_tonight")
                     if not isinstance(expected, int) or not isinstance(original_count, int) or original_count != expected or len(items) != expected or any(not isinstance(c, dict) or not isinstance(c.get("id"), str) or not c["id"] for c in items):
                         raise ValueError("候補の件数または形式が一致しない")
+                    digest = hashlib.sha256(raw).hexdigest()
+                    checkpoint = self.status.get("candidate_checkpoint") or {}
+                    saved_digest = checkpoint.get("sha256")
+                    if saved_digest is not None and saved_digest != digest:
+                        raise ValueError("候補ファイルの内容が一致しない")
+                    # 旧状態（digest 未保存）は件数を検証した時点の内容を基準として採用する。
+                    self.status["candidate_checkpoint"] = {"count": expected, "sha256": digest}
                 except (OSError, ValueError, TypeError) as e:
                     rec.update(status="failed", note=f"候補ファイルを再開できない: {e}")
                     self.status["candidate_rebuild_required"] = True
@@ -258,13 +267,17 @@ class Night:
                     return
             old = dict(old, note=("再実行: 成功済みのため飛ばした " + (old.get("note") or "")).strip())
             self.status["stages"].append(old)
+            if name == "candidates":
+                self.save()
             return
         t0 = time.monotonic()
         try:
             res = fn() or {}
             rec.update(res)
             if name == "candidates" and rec["status"] == "ok":
-                self.status["candidate_checkpoint"] = {"count": rec.get("count", {}).get("candidates")}
+                with open(self.p("candidates.jsonl"), "rb") as f:
+                    digest = hashlib.sha256(f.read()).hexdigest()
+                self.status["candidate_checkpoint"] = {"count": rec.get("count", {}).get("candidates"), "sha256": digest}
                 if self.a.from_stage == "candidates":
                     self.status["candidate_rebuild_required"] = False
         except StageFailed as e:
