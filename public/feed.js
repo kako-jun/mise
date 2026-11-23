@@ -18,9 +18,9 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { searchLabel: 'サイトを検索', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
+      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
     en: { searchLabel: 'Search sites', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
+      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
@@ -174,7 +174,18 @@
     if (when) { const time = document.createElement('time'); time.className = 'f-date'; time.dateTime = when; time.textContent = `${sourceDate ? t('updated') : t('added')} ${when}`; foot.append(time); }
     // http(s) 以外(javascript: / data: / 相対 / 不正)の URL は『開く』リンクを出さない
     const href = L.safeHttpUrl(s.url);
-    if (href) { const a = document.createElement('a'); a.className = 'f-open'; a.href = href; a.textContent = t('open'); a.setAttribute('aria-label', `${t('open')}: ${siteName(s)}`); configureLink(a); foot.append(a); }
+    if (href) {
+      const actions = document.createElement('div'); actions.className = 'f-open-actions';
+      const a = document.createElement('a'); a.className = 'f-open'; a.href = href;
+      const icon = document.createElement('span'); icon.className = 'f-open-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '→';
+      const text = document.createElement('span'); text.textContent = t('open'); a.append(icon, text);
+      a.setAttribute('aria-label', `${t('open')}: ${siteName(s)}`); configureLink(a);
+      const external = document.createElement('a'); external.className = 'f-open-new'; external.href = href;
+      external.target = '_blank'; external.rel = 'noopener noreferrer';
+      const label = `${t('openNew')}: ${siteName(s)}`; external.setAttribute('aria-label', label); external.title = label;
+      const arrow = document.createElement('span'); arrow.setAttribute('aria-hidden', 'true'); arrow.textContent = '↗'; external.append(arrow);
+      actions.append(a, external); foot.append(actions);
+    }
     body.append(foot);
     const scrim = document.createElement('div'); scrim.className = 'f-scrim'; scrim.setAttribute('aria-hidden', 'true');
     art.append(pic, scrim, body);
