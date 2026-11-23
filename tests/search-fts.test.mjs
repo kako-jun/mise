@@ -81,6 +81,31 @@ const combos = [
   ['q + 国 + カテゴリ 大', { cc: 'JP', category: BIG }],
 ];
 
+test('複数語 AND: 短語の混在・全語短語・件数境界・記号', async () => {
+  // garden は 1400 件、写真は 280 件。FTS 候補だけでは 1000 件を超えるが、
+  // 短語との AND 結果は上限未満であり、正確な件数を返す必要がある。
+  for (const [raw, count] of [
+    ['garden　写真', 280],
+    ['写真　紹介', 280],
+    ['写真　みかん', 140],
+    ['garden　みかん', 700],
+    ['quote"mark　garden', 23],
+    ['(りんご)　garden', 0],
+  ]) {
+    const q = cleanQuery(raw), expected = ref({ q });
+    assert.equal(expected.length, count, raw);
+    for (const ready of [0, 1]) {
+      setReady(db, ready);
+      const actual = await pagesOf({ q });
+      assert.deepEqual(actual.ids, expected, `${raw}: ready=${ready}`);
+      assert.equal(actual.first.total, count, `${raw}: total ready=${ready}`);
+      assert.equal(actual.first.total_capped, false, `${raw}: capped ready=${ready}`);
+    }
+  }
+  setReady(db, 1);
+  assert.equal(cleanQuery('　 \t　'), null, '空白のみは検索語なし');
+});
+
 for (const [tl, q] of terms) for (const [cl, extra] of combos) {
   test(`索引の経路 = instr の経路 = 参照実装（並び・total・total_capped・全ページ）: ${tl} / ${cl}`, async () => {
     const o = { ...extra, q }, want = ref(o);
