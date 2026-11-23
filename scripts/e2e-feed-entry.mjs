@@ -47,7 +47,7 @@ try {
     assert.equal(await shown(page, '#feed-entry'), false);
     assert.equal(await page.locator('#categories > :first-child .recent-feed').textContent(), lang === 'ja' ? '新着' : 'New arrivals');
     assert.equal(await page.locator('.recent-feed').getAttribute('href'), feedUrl(recent));
-    assert.equal(await page.locator('.recent-list').getAttribute('href'), recent);
+    assert.equal(await page.locator('.recent-list').count(), 0);
 
     await page.locator('.recent-feed').click();
     await page.waitForURL(BASE + feedUrl(recent));
@@ -88,8 +88,14 @@ try {
     await input.press('Enter');
     await page.waitForURL(BASE + '/jp/13/?q=blog');
     await page.waitForSelector('#results');
-    assert.equal(await shown(page, '#feed-entry'), false);
+    assert.equal(await shown(page, '#feed-entry'), true);
     assert.equal(await page.locator('#query').inputValue(), 'blog');
+    await page.locator('#feed-entry').click();
+    await page.waitForURL(BASE + '/jp/13/?q=blog&view=feed');
+    await page.waitForSelector('#feed .f-card');
+    assert.equal(await page.locator('.f-directory').getAttribute('href'), '/jp/13/?q=blog');
+    await page.locator('.f-directory').click();
+    await page.waitForURL(BASE + '/jp/13/?q=blog');
     assert.deepEqual(errors, []);
     await context.close();
     console.log(label + ' OK');

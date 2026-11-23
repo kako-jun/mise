@@ -39,6 +39,9 @@
   let seed = params.get('seed') || storage.sget('mise-feed-seed') || Math.random().toString(36).slice(2, 8);
   storage.sset('mise-feed-seed', seed);
   const requestedPath = params.getAll('category');
+  const filterQuery = params.get('q') || '';
+  const filterTags = params.getAll('tag');
+  const filtered = !!filterQuery.trim() || filterTags.length > 0;
   const sort = params.get('sort') === 'new' ? 'new' : 'mix'; // 旧 ?cat= リンクの並び
   let scope, startPage, path = [], categories = [], all = [], list = [], current = 0, cards = [], loadFailed = false, hasMore = false, loadedCount = 0;
 
@@ -72,7 +75,7 @@
     return resolved;
   }
   function visible() {
-    if (requestedPath.length) return all; // フォルダでは箇条書きと同じ順序
+    if (requestedPath.length || filtered) return all; // 絞り込み時は箇条書きと同じ順序
     return L.order(all, { sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => !path.length || s.roots.has(path[0]));
   }
 
@@ -202,9 +205,9 @@
     body.append(h);
     if (loadFailed) { const note = mk('p'); note.textContent = t('noteFail'); body.append(note); }
     if (hasMore || loadFailed) {
-      const href = requestedPath.length
+      const href = requestedPath.length && !filtered
         ? globalThis.MiseFeedEntry.continueListHref(scope, path, startPage, loadedCount)
-        : directoryHref();
+        : filtered ? filteredContinueHref() : directoryHref();
       const more = mk('a', 'f-continue', { href }); more.textContent = t('moreInList'); row.append(more);
     }
     row.append(seenButton());
@@ -296,7 +299,19 @@
     return button;
   }
 
-  const directoryHref = () => globalThis.MiseFeedEntry.directoryHref(scope, path, startPage);
+  const directoryHref = () => {
+    const url = new URL(globalThis.MiseFeedEntry.directoryHref(scope, path, startPage), location.origin);
+    if (filterQuery) url.searchParams.set('q', filterQuery);
+    filterTags.forEach(tag => url.searchParams.append('tag', tag));
+    if (filtered && startPage > 1) url.searchParams.set('page', String(startPage));
+    return url.pathname + url.search;
+  };
+  function filteredContinueHref() {
+    const offset = (startPage - 1) * globalThis.MiseFeedEntry.PAGE_SIZE + loadedCount;
+    const url = new URL(directoryHref(), location.origin);
+    url.searchParams.set('page', String(Math.floor(offset / globalThis.MiseFeedEntry.PAGE_SIZE) + 1));
+    return url.pathname + url.search + '#site-row-' + (offset + 1);
+  }
 
   function renderBar() {
     const back = mk('a', 'f-directory', { href: directoryHref(), title: t('directoryTitle'), 'aria-label': t('directoryTitle') });
@@ -376,7 +391,7 @@
     const { PAGE_SIZE, parsePage, scopeFromPath, validScope } = globalThis.MiseFeedEntry;
     const legacyScope = params.get('scope')?.toLowerCase();
     scope = !requestedPath.length && validScope(legacyScope) ? legacyScope : scopeFromPath(location.pathname);
-    startPage = requestedPath.length ? parsePage(params.get('page')) ?? 1 : 1;
+    startPage = requestedPath.length || filtered ? parsePage(params.get('page')) ?? 1 : 1;
     document.documentElement.lang = language;
     root = mk('div', 'feed-root'); root.id = 'feed';
     bar = mk('header', 'f-bar'); bar.setAttribute('role', 'banner');
@@ -416,7 +431,9 @@
     async function loadSites() {
       const rows = [], query = new URLSearchParams({ scope });
       if (requestedPath.length && path.length) query.set('category', path.at(-1));
-      const pagedEntry = path.length && startPage > 1;
+      if (filterQuery) query.set('q', filterQuery);
+      filterTags.forEach(tag => query.append('tag', tag));
+      const pagedEntry = (path.length || filtered) && startPage > 1;
       if (pagedEntry) query.set('page', String(startPage));
       for (let i = 0; rows.length < MAX_SITES; i++) {
         // page は API の limit を単位にする。最初は箇条書きの 40 件、以降はカーソルで最大 100 件ずつ読む。

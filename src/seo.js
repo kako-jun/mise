@@ -186,7 +186,7 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
       }).join('')
     : '';
   const cats = children.map(ch => {
-    if (ch === recentFolder) return `<div class="category category-recent"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a class="recent-feed" href="${esc(feedEntryHref(scope, [ch.id]))}" rel="nofollow">${esc(ch.name_en)}</a></h2><a class="recent-list" href="${esc(categoryHref([ch.id], scope))}">List view</a></div></div>`;
+    if (ch === recentFolder) return `<div class="category category-recent"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a class="recent-feed" href="${esc(feedEntryHref(scope, [ch.id]))}" rel="nofollow">${esc(ch.name_en)}</a></h2></div></div>`;
     const sub = path.length ? '' : `<p class="sub">${categories.filter(x => x.parent_id === ch.id).map(x => `<span>${esc(x.name_en)}</span>`).join(' / ')}</p>`;
     return `<div class="category${ch.site_count ? '' : ' is-empty'}"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2></div>${sub}</div>`;
   }).join('');
@@ -227,8 +227,10 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('link[hreflang]', { element: e => e.setAttribute('href', canonical) })
     .on('#home-link', { element: e => e.setAttribute('href', categoryHref([], scope)) })
     .on('#feed-entry', { element: e => {
-      if (!path.length || isSearch) return;
-      e.setAttribute('href', feedEntryHref(scope, path, page));
+      if (!path.length && !isSearch) return;
+      const feedUrl = new URL(url.pathname + url.search, ORIGIN);
+      feedUrl.searchParams.set('view', 'feed');
+      e.setAttribute('href', feedUrl.pathname + feedUrl.search);
       e.removeAttribute('hidden');
     } })
     .on('#scope-nav', { element: e => e.setInnerContent(scopeNavHtml(scopes, scope), { html: true }) })

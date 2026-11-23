@@ -162,7 +162,7 @@ test('fmtCount: 表示言語に合わせた桁区切り。数でない値は NaN
 
 test('フォルダのフィードは API でカテゴリを絞り、一覧の並びを使う', () => {
   assert.match(appJs, /query\.set\('category', path\.at\(-1\)\)/);
-  assert.match(appJs, /if \(requestedPath\.length\) return all;/);
+  assert.match(appJs, /if \(requestedPath\.length \|\| filtered\) return all;/);
 });
 
 test('「最初に戻る」「並びを変えてもう一度」は先頭カードへフォーカスを移し、連続操作の基準も 0 にする', () => {

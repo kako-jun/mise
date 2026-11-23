@@ -55,19 +55,19 @@ const hrefOf = e => e.match(/href="([^"]*)"/)[1].replace(/&amp;/g, '&');
 const top = db.prepare("SELECT p.id pid, c.id cid FROM categories p JOIN categories c ON c.parent_id = p.id WHERE p.parent_id IS NULL LIMIT 1").get();
 const folder = '/jp/?category=' + top.pid + '&category=' + top.cid;
 
-test('SSR: 新着が最初で縦ビューへ入る。箇条書きへのリンクもある', async () => {
+test('SSR: 新着が最初で縦ビューへ入り、隣に別リンクはない', async () => {
   const html = await ssr('/jp/');
-  const first = html.match(/<div id="categories"[^>]*>(<div[^>]+>.*?)<h2>.*?<\/h2><a[^>]*>/)?.[0];
+  const first = html.match(/<div class="category category-recent">.*?<\/h2>/)?.[0];
   assert.match(first, /<div class="category category-recent">/);
   assert.equal(hrefOf(first.match(/<a class="recent-feed"[^>]*>/)[0]), '/jp/?category=recent&view=feed');
-  assert.equal(hrefOf(first.match(/<a class="recent-list"[^>]*>/)[0]), '/jp/?category=recent');
+  assert.doesNotMatch(html, /class="recent-list"/);
 });
 
 test('SSR: 縦ビューの切り替えはフォルダを開いたときだけ表示する', async () => {
   for (const [url, link] of [
     ['/jp/', null],
-    ['/all/?q=blog', null],
-    [folder + '&tag=blog', null],
+    ['/all/?q=blog', '/all/?q=blog&view=feed'],
+    [folder + '&tag=blog', folder + '&tag=blog&view=feed'],
     [folder, folder + '&view=feed'],
     ['/jp/?category=recent', '/jp/?category=recent&view=feed'],
   ]) {
