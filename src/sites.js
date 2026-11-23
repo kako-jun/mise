@@ -64,6 +64,7 @@ export const normalizeSearch = s => String(s ?? '').normalize('NFKC').toLowerCas
 export const searchText = s => normalizeSearch(`${s.name}${s.name_ja ? ` ${s.name_ja}` : ''}${s.name_en ? ` ${s.name_en}` : ''} ${s.description_ja} ${s.description_en ?? ''} ${s.url}${(s.tags ?? []).map(t => ` ${t.label_ja} ${t.label_en ?? ''}`).join('')}`);
 // instr で比較するので、LIKE のメタ文字のエスケープも長さの制限（D1 は LIKE のパターンが約50バイトを超えると too complex）も要らない。
 export const cleanQuery = raw => { const q = [...normalizeSearch(raw).trim()].slice(0, 100).join(''); return q || null; }; // コードポイント単位で切る
+const queryTerms = q => q.trim().split(/\s+/u).filter(Boolean);
 
 // タグ絞り込み（?tag=、複数は AND）。値はタグの日本語名か英語名（sites の site_tags.label_ja / label_en。画面は日本語名を URL に載せる）。
 // 空文字は無視、重複は 1 つにまとめる。MAX_TAGS 個を超える・1 つが 100 文字を超える場合は null（呼び出し側が 400）。
@@ -116,6 +117,7 @@ export const FTS_MIN_CHARS = 3;
 export const FTS_EXTRA_PROBE = 3000;
 // MATCH の引数は FTS5 の文字列リテラル（" で囲み、中の " は二重にする）。trigram では空白も含めて部分文字列の一致になる。
 export const ftsQuery = q => '"' + q.replace(/"/g, '""') + '"';
+const ftsTerms = q => queryTerms(q).filter(t => [...t].length >= FTS_MIN_CHARS).map(ftsQuery).join(' AND ');
 
 // ---- 検索計画（#126 第2段）----
 // SQLite の計画器は件数を知らないので、重い経路は件数に応じてアプリが形を選ぶ。結果と並びはどの形でも同じ（読み取り行数だけが変わる）。
@@ -165,13 +167,13 @@ export async function planQuery(db, { cc = null, region = null, category = null,
   await Promise.all(jobs);
   // 全文索引を使うか。稀なタグで引ける（タグの索引から ≤TAG_DRIVE_MAX 件）・小さいカテゴリ（IN 形で ≤TOTAL_CAP 件）のときは、そちらが既に該当数に比例して小さいので索引の該当数を数える分だけ損になる。使わない。
   const small = !!plan.driveTag || (category && plan.categoryMode === 'in' && plan.categoryAll <= TOTAL_CAP);
-  if (q && [...q].length >= FTS_MIN_CHARS && !small) {
+  if (q && ftsTerms(q) && !small) {
     const extras = !!(cc || region || category || tags.length), cap = extras ? FTS_EXTRA_PROBE : TOTAL_CAP;
     try { // 表が無い（ロールバック後）・未構築のときは instr に落ちる
-      const r = await db.prepare(`SELECT (SELECT ready FROM fts_state WHERE name = 'sites_fts') AS ready, (SELECT COUNT(*) FROM (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?1 LIMIT ?2)) AS n`).bind(ftsQuery(q), cap + 1).first();
+      const r = await db.prepare(`SELECT (SELECT ready FROM fts_state WHERE name = 'sites_fts') AS ready, (SELECT COUNT(*) FROM (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?1 LIMIT ?2)) AS n`).bind(ftsTerms(q), cap + 1).first();
       if (r?.ready === 1) {
         if (r.n <= TOTAL_CAP) plan.qMode = 'fts';
-        else { plan.qOver = true; plan.qCountViaFts = extras && r.n <= cap; }
+        else if (queryTerms(q).length === 1) { plan.qOver = true; plan.qCountViaFts = extras && r.n <= cap; }
       }
     } catch (e) { if (!FTS_ERR.test(String(e?.message))) throw e; /* 表なし・未構築 → instr */ }
   }
@@ -189,8 +191,8 @@ export function filters({ cc, region, category, q, tags, recent }, plan = {}) {
     else where.push('s.id IN (SELECT site_id FROM site_categories WHERE category_id = ?)');
     args.push(category);
   }
-  if (q && plan.qMode === 'fts') { where.push('s.rowid IN (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?)', 'instr(s.search_text, ?) > 0'); args.push(ftsQuery(q), q); } // 索引で絞り、instr で確かめる（畳み込みの差を消す）
-  else if (q) { where.push('instr(s.search_text, ?) > 0'); args.push(q); } // q は cleanQuery 済み（search_text も正規化済みなので大小・全角半角はそろっている）
+  if (q && plan.qMode === 'fts') { where.push('s.rowid IN (SELECT rowid FROM sites_fts WHERE sites_fts MATCH ?)'); args.push(ftsTerms(q)); }
+  if (q) for (const term of queryTerms(q)) { where.push('instr(s.search_text, ?) > 0'); args.push(term); }
   for (const t of tags ?? []) { // 複数タグは AND（タグごとに 1 条件）
     if (t === plan.driveTag) { where.push('s.id IN (SELECT site_id FROM site_tags WHERE label_ja = ? UNION SELECT site_id FROM site_tags WHERE label_en = ?)'); args.push(t, t); }
     else { where.push('EXISTS (SELECT 1 FROM site_tags t WHERE t.site_id = s.id AND (t.label_ja = ? OR t.label_en = ?))'); args.push(t, t); }
