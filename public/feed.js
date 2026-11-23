@@ -33,7 +33,7 @@
   const fmt = n => L.fmtCount(n, language);
 
   // ---- 決定論の乱数（シード = セッションごと。?seed= で再現） ----
-  const { hash32, rngOf } = L;
+  const { hash32 } = L;
 
   const params = new URLSearchParams(location.search);
   let seed = params.get('seed') || storage.sget('mise-feed-seed') || Math.random().toString(36).slice(2, 8);
@@ -76,24 +76,6 @@
     return L.order(all, { sort, seed, now: Date.now(), boost: FRESH_BOOST, halfLifeDays: FRESH_HALF_LIFE_DAYS }).filter(s => !path.length || s.roots.has(path[0]));
   }
 
-  // ---- 代替ビジュアル（サイトIDから決まる三毛猫の模様 + 頭文字）。thumb_url があればそちらを使う ----
-  const SVGNS = 'http://www.w3.org/2000/svg';
-  function svgEl(name, attrs) { const e = document.createElementNS(SVGNS, name); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
-  function calico(site, withLetter = true) {
-    const rnd = rngOf('calico:' + site.id), svg = svgEl('svg', { viewBox: '0 0 400 240', preserveAspectRatio: 'xMidYMid slice', class: 'calico', 'aria-hidden': 'true', focusable: 'false' });
-    svg.append(svgEl('rect', { width: 400, height: 240, class: 'c-base' }));
-    const n = 5 + Math.floor(rnd() * 3);
-    for (let i = 0; i < n; i++) {
-      const dark = i % 3 === 2 || rnd() < .28;
-      svg.append(svgEl('ellipse', { cx: (rnd() * 440 - 20).toFixed(1), cy: (rnd() * 280 - 20).toFixed(1), rx: (34 + rnd() * 80).toFixed(1), ry: (24 + rnd() * 56).toFixed(1), transform: `rotate(${(rnd() * 180).toFixed(0)} 200 120)`, class: dark ? 'c-dark' : 'c-orange' }));
-    }
-    if (!withLetter) return svg;
-    svg.append(svgEl('circle', { cx: 200, cy: 120, r: 58, class: 'c-plate' }));
-    const txt = svgEl('text', { x: 200, y: 120, class: 'c-letter', 'text-anchor': 'middle', 'dominant-baseline': 'central' });
-    txt.textContent = [...(siteName(site).trim() || '?')][0].toUpperCase();
-    svg.append(txt);
-    return svg;
-  }
   // 第三者へアクセスしないよう、同一オリジンの絶対パスだけ許す(//host と /\host は不可。feed-lib.js)
   const thumbOf = s => L.thumbOf(s.thumb_url, location.origin);
 
@@ -162,8 +144,8 @@
       if (thumb) {
         if (lqip) { const l = document.createElement('img'); l.className = 'f-lqip'; l.alt = ''; l.src = lqip; layer.append(l); }
         const img = document.createElement('img'); img.className = 'f-img'; img.alt = ''; img.decoding = 'async'; img.loading = i < 2 ? 'eager' : 'lazy';
-        img.addEventListener('load', () => { img.classList.add('is-in'); if (layer === hero && art.classList.contains('is-active')) panFit([hero]); }); img.addEventListener('error', () => { layer.replaceChildren(calico(s, layer === hero)); if (layer === hero) { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }); img.src = thumb; layer.append(img);
-      } else layer.append(calico(s, layer === hero));
+        img.addEventListener('load', () => { img.classList.add('is-in'); if (layer === hero && art.classList.contains('is-active')) panFit([hero]); }); img.addEventListener('error', () => { layer.replaceChildren(); if (layer === hero) { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }); img.src = thumb; layer.append(img);
+      }
     }
     const body = document.createElement('div'); body.className = 'f-body';
     const h = document.createElement('h2'); h.id = `f-name-${i}`; h.className = 'f-name'; h.textContent = siteName(s);
