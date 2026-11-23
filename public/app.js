@@ -27,6 +27,8 @@ Object.assign(words.ja, { installText:'MISE をホーム画面に追加できま
 Object.assign(words.en, { installText:'Add MISE to your home screen.', installAdd:'Install', installLater:'Not now' });
 Object.assign(words.ja, { clearSearch: '検索語を消去' });
 Object.assign(words.en, { clearSearch: 'Clear search' });
+Object.assign(words.ja, { backToTop: 'ページ先頭へ戻る' });
+Object.assign(words.en, { backToTop: 'Back to top' });
 const t = key => words[language][key];
 // サイト名: 画面の言語の名前（name_ja / name_en）があればそれ、無ければ言語共通の name（#167。どの言語でも名前は消えない）
 const siteName = site => (language === 'ja' ? site.name_ja : site.name_en) || site.name;
@@ -359,7 +361,7 @@ function createList(opts) {
   L.firstLoad=new Promise(r=>{ L.resolveFirst=r; });
   const foot=opts.foot, ul=opts.ul;
   const isDirectory=ul.id==='directory-sites';
-  const renderRow=(site,index)=>renderSite(ul,site,!!opts.showCategories,isDirectory ? L.offset+index+1 : null);
+  const renderRow=(site,index)=>renderSite(ul,site,!!opts.showCategories,L.offset+index+1);
   const saved=history.state && history.state.mise; const onMove=e=>{ if(e.type==='keydown' && (!SCROLL_KEYS.has(e.key) || isEditable(e.target))) return; L.userMoved=true; };
   // 復元中にユーザーが操作したら引き戻さない。監視は復元が終わる/失敗する/一覧を離れるときに外す。
   L.endRestore=()=>{ L.restore=null; for(const ev of USER_MOVE) removeEventListener(ev,onMove); };
@@ -379,7 +381,7 @@ function createList(opts) {
     if(empty) foot.replaceChildren(); else foot.replaceChildren(status,btn,live);
     if(hold) return;
     if(ps) { ps.hidden=true; ps.replaceChildren(); }
-    prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); a.href=categoryUrl(currentPath,currentScope)+(opts.startPage>2?`&page=${opts.startPage-1}`:''); a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
+    prev.replaceChildren(); if(opts.startPage>1) { const a=document.createElement('a'); const u=new URL(location.href); u.searchParams.delete('page'); if(opts.startPage>2) u.searchParams.set('page',String(opts.startPage-1)); u.hash=''; a.href=u.pathname+u.search; a.textContent=t('prevPage'); a.rel='prev'; prev.append(a); ul.before(prev); } else prev.remove();
   };
   L.rerender=()=>{ L.render(); };
   L.stop=()=>{ L.stopped=true; L.resolveFirst(); L.endRestore(); L.ctl&&L.ctl.abort(); listIo&&listIo.unobserve(foot); };
@@ -398,7 +400,7 @@ function createList(opts) {
         L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total,L.totalCapped);
         // SSR の行から API の行に描き直すと高さが変わるので、縦ビューの続きの行へ合わせ直す。
         const hash=location.hash;
-        if(isDirectory && !L.restore && /^#site-row-\d+$/.test(hash)) requestAnimationFrame(()=>{
+        if(!L.restore && /^#site-row-\d+$/.test(hash)) requestAnimationFrame(()=>{
           if(!L.stopped && location.hash===hash) document.getElementById(hash.slice(1))?.scrollIntoView({block:'start'});
         });
       } else { d.items.forEach((s,i)=>renderRow(s,prevLength+i)); }
@@ -421,14 +423,28 @@ function createList(opts) {
 }
 let saveTimer=0, listDirty=false; // listDirty: 最後の保存より後にスクロールした（未保存の位置がある）。件数だけ増えた場合は保存済みの位置が旧件数の範囲内なので対象外
 addEventListener('scroll',()=>{ listDirty=true; clearTimeout(saveTimer); saveTimer=setTimeout(saveListState,150); },{passive:true});
+// 結果を長く読んだあと、検索欄まで戻る。ページの状態・履歴は変えない。
+const backToTop = $('#back-to-top');
+const updateBackToTop = () => { backToTop.hidden = scrollY < innerHeight; };
+addEventListener('scroll', updateBackToTop, {passive:true});
+addEventListener('resize', updateBackToTop);
+backToTop.addEventListener('click', () => {
+  window.scrollTo({top:0, behavior:'instant'});
+  $('#query').focus({preventScroll:true});
+});
+updateBackToTop();
 // 離れる瞬間の再保存は、未保存の変化があるときだけ。離脱時にレイアウトが変わる環境（Playwright の hasTouch で (pointer: coarse) が外れ、行が縮んで scrollY が約 2000px 小さくなる）で、直前の正しい位置を縮んだ値で上書きしない。
 addEventListener('pagehide',()=>{ if(listDirty || !(history.state && history.state.mise && activeList && history.state.mise.key===activeList.key)) saveListState(); });
 // 画面を移る前（pushState の直前）に今の件数とスクロール位置を同期で保存する（scroll の遅延保存は遷移に間に合わないことがある）。
 // フォルダの一覧から、同じ階層・範囲の縦ビューへ切り替える。
 function syncFeedEntry() {
   const a=$('#feed-entry');
-  a.hidden=currentSearch!==null || !currentPath.length;
-  if(!a.hidden) a.href=globalThis.MiseFeedEntry.feedEntryHref(currentScope,currentPath,pageFromLocation());
+  a.hidden=currentSearch===null && !currentPath.length;
+  if(a.hidden) return;
+  const url = new URL(currentSearch!==null ? stateUrl() : categoryUrl(currentPath), location.origin);
+  if(pageFromLocation()>1) url.searchParams.set('page',String(pageFromLocation()));
+  url.searchParams.set('view','feed');
+  a.href=url.pathname+url.search;
 }
 function pushUrl(url,state=null) { saveListState(); history.pushState(state,'',url); }
 function saveListState() { const L=activeList; if(!L || L.restore || L.locKey!==location.pathname+location.search) return; try { history.replaceState({...(history.state||{}),mise:{key:L.key,loaded:L.items.length,y:scrollY}},''); listDirty=false; } catch (_) { /* state is best-effort */ } }
@@ -502,8 +518,7 @@ function renderRecentFolder(folder) {
   const heading=document.createElement('h2'), feed=document.createElement('a');
   feed.className='recent-feed'; feed.href=globalThis.MiseFeedEntry.feedEntryHref(currentScope,path);
   feed.rel='nofollow'; feed.textContent=name(folder); heading.append(feed);
-  const list=link(t('listView'),path,()=>showDirectory(path)); list.className='recent-list';
-  head.append(bullet,icon,heading,list); div.append(head);
+  head.append(bullet,icon,heading); div.append(head);
   return div;
 }
 function renderPick(dir=1) {
@@ -603,7 +618,8 @@ function showResultsNow(query) {
   // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
   const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
   setResultTitle(query); $('#empty').hidden=true;
-  startList({ key:`${currentScope}|?q|${query}|${tagKeys.join('\n')}|${cat??''}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query,...(tagKeys.length?{tag:tagKeys}:{}),...(cat?{category:cat}:{})}, startPage:1, showCategories:true,
+  const resultPage=pageFromLocation();
+  startList({ key:`${currentScope}|?q|${query}|${tagKeys.join('\n')}|${cat??''}|${resultPage}`, ul:$('#result-list'), foot:$('#result-foot'), params:{q:query,...(tagKeys.length?{tag:tagKeys}:{}),...(cat?{category:cat}:{})}, startPage:resultPage, showCategories:true,
     onTotal:total=>{ $('#empty').hidden=!!total; if(activeList) resolveTagLabels(activeList.items); } });
 }
 function updateSearch() {
