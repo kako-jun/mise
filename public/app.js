@@ -395,7 +395,7 @@ function createList(opts) {
       const prevLength=L.items.length;
       L.items.push(...d.items); L.next=d.next_cursor; L.ended=!d.next_cursor; if(d.total!=null) { L.total=d.total; L.totalCapped=!!d.total_capped; }
       if(first) {
-        L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total);
+        L.render(); if(!opts.preserve) fadeIn(ul); opts.onTotal&&opts.onTotal(L.total,L.totalCapped);
         // SSR の行から API の行に描き直すと高さが変わるので、縦ビューの続きの行へ合わせ直す。
         const hash=location.hash;
         if(isDirectory && !L.restore && /^#site-row-\d+$/.test(hash)) requestAnimationFrame(()=>{
@@ -487,7 +487,7 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
   $('#picks').hidden=false; renderPick();
   const pageNo=path.length ? pageFromLocation() : 1;
   startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
-    onTotal:total=>{ $('#sample-label').hidden=!total; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
+    onTotal:(total,capped)=>{ $('#sample-label').hidden=!path.length; $('#sample-count').textContent=`(${capped ? formatCap(total) : total.toLocaleString('en-US')})`; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
   if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }
 function renderRecentFolder(folder) {

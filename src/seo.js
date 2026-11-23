@@ -190,11 +190,12 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     const sub = path.length ? '' : `<p class="sub">${categories.filter(x => x.parent_id === ch.id).map(x => `<span>${esc(x.name_en)}</span>`).join(' / ')}</p>`;
     return `<div class="category${ch.site_count ? '' : ' is-empty'}"><div class="site-head"><span class="site-bullet" aria-hidden="true"></span><span class="site-icon cat-icon" aria-hidden="true"></span><h2><a href="${esc(categoryHref([...path, ch.id], scope))}">${esc(ch.name_en)} (${ch.site_count})</a></h2></div>${sub}</div>`;
   }).join('');
-  let siteItems = '', pagerBody = '', pages = 1, totalCapped = false;
+  let siteItems = '', pagerBody = '', pages = 1, totalCapped = false, siteTotal = null;
   if (path.length || tags.length) {
     const offset = (page - 1) * PAGE_SIZE;
     const { items, total, total_capped, next_cursor } = await querySites(c.env.DB, { cc, region, category: path.at(-1) ?? null, tags, limit: PAGE_SIZE, offset });
     totalCapped = total_capped;
+    siteTotal = total;
     // 総件数が上限付きでも、カーソルの有無で次ページがあるかを確認できる。
     pages = totalCapped ? page + Number(!!next_cursor) : Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (page > 1 && !items.length) return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
@@ -233,7 +234,8 @@ export async function renderIndex(c, assetResponse, scope, scopes) {
     .on('#scope-nav', { element: e => e.setInnerContent(scopeNavHtml(scopes, scope), { html: true }) })
     .on('#breadcrumbs', { element: e => e.setInnerContent(crumbs, { html: true }) })
     .on('#categories', { element: e => e.setInnerContent(cats, { html: true }) })
-    .on('#sample-label', { element: e => { if (siteItems) e.removeAttribute('hidden'); } })
+    .on('#sample-label', { element: e => { if (path.length && !isSearch && siteTotal !== null) e.removeAttribute('hidden'); } })
+    .on('#sample-count', { element: e => { if (siteTotal !== null) e.setInnerContent(`(${siteTotal.toLocaleString('en-US')}${totalCapped ? '+' : ''})`); } })
     .on('#directory-sites', { element: e => e.setInnerContent(siteItems, { html: true }) })
     .on('#site-pager', { element: e => { if (pagerBody) { e.setInnerContent(pagerBody, { html: true }); e.removeAttribute('hidden'); } } });
   // 前後ページの関係（クローラ向け。Google は rel=next/prev を使わないが、他の検索エンジンと意味づけのために出す）
