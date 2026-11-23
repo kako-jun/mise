@@ -146,6 +146,12 @@ test('SSR: 範囲ナビは app.js と同じ構造（先頭 MISE_INLINE_SCOPES �
   assert.doesNotMatch(scopeNavHtml(mk(n), 'jp'), /scope-more|<li hidden>/); // 残りが無ければボタンも無い
 });
 
+test('台湾は国コードの代わりに旗画像を表示する', () => {
+  const html = scopeNavHtml({ total: 1, regions: [], countries: [{ code: 'TW', count: 1 }] }, 'tw');
+  assert.match(html, /src="\/flags\/tw\.svg"/);
+  assert.doesNotMatch(html, /class="scope-code"[^>]*>TW/);
+});
+
 test('SSR: 国・区画のページに、サイトのある区画へのリンク（/jp/13/ 形式）が JS なしで出る。サイトの無い区画・区画の無い範囲では出ない', async () => {
   const db = fresh();
   const scopes = await loadScopes(d(db));

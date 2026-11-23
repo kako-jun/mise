@@ -59,7 +59,7 @@ const ref = ({ cc, region, category, q, tags = [] }) => {
   const w = [], a = [];
   if (region) { w.push('s.region_code = ?'); a.push(region); } else if (cc) { w.push('s.country_code = ?'); a.push(cc); }
   if (category) { w.push('(SELECT COUNT(*) FROM site_categories x WHERE x.site_id = s.id AND x.category_id = ?) > 0'); a.push(category); }
-  if (q) { w.push('instr(s.search_text, ?) > 0'); a.push(q); }
+  if (q) for (const term of q.split(/\s+/u).filter(Boolean)) { w.push('instr(s.search_text, ?) > 0'); a.push(term); }
   for (const t of tags) { w.push('(SELECT COUNT(*) FROM site_tags x WHERE x.site_id = s.id AND (x.label_ja = ? OR x.label_en = ?)) > 0'); a.push(t, t); }
   return db.prepare(`SELECT s.id FROM sites s ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ${siteOrder()}`).all(...a).map(r => r.id);
 };
@@ -71,7 +71,7 @@ const pagesOf = async (o, limit = PAGE_SIZE) => {
 
 const terms = [
   ['日本語 3 文字以上・ヒット多数（上限超え）', 'サイト'], ['日本語 3 文字以上・中ヒット', 'りんご'], ['日本語 3 文字以上・少ヒット', 'ラーメン屋'],
-  ['英語・ヒット多数', 'garden'], ['英語・大小無視', 'apple'], ['英語の部分一致', 'ardе'], ['複数語（空白入り）', 'tokyo cafe'], ['複数語（日英の間）', 'りんご site'],
+  ['英語・ヒット多数', 'garden'], ['英語・大小無視', 'apple'], ['英語の部分一致', 'ardе'], ['複数語（全角・連続空白・逆順）', 'cafe　 tokyo'], ['複数語（日英の間）', 'りんご site'],
   ['全角英字（NFKC）', 'ＰＲＯＧＲＡＭ'], ['引用符入り', 'quote"mark'], ['0 件', 'zzqqxx'], ['1 件', 'zzrare'],
   ['2 文字（instr に分岐）', '写真'], ['1 文字（instr に分岐）', 'み'],
 ].map(([l, t]) => [l, cleanQuery(t)]);
@@ -80,6 +80,31 @@ const combos = [
   ['q + カテゴリ 大', { category: BIG }], ['q + カテゴリ 小', { category: SMALL }], ['q + タグ 多', { tags: ['common'] }], ['q + タグ 稀', { tags: ['rare'] }],
   ['q + 国 + カテゴリ 大', { cc: 'JP', category: BIG }],
 ];
+
+test('複数語 AND: 短語の混在・全語短語・件数境界・記号', async () => {
+  // garden は 1400 件、写真は 280 件。FTS 候補だけでは 1000 件を超えるが、
+  // 短語との AND 結果は上限未満であり、正確な件数を返す必要がある。
+  for (const [raw, count] of [
+    ['garden　写真', 280],
+    ['写真　紹介', 280],
+    ['写真　みかん', 140],
+    ['garden　みかん', 700],
+    ['quote"mark　garden', 23],
+    ['(りんご)　garden', 0],
+  ]) {
+    const q = cleanQuery(raw), expected = ref({ q });
+    assert.equal(expected.length, count, raw);
+    for (const ready of [0, 1]) {
+      setReady(db, ready);
+      const actual = await pagesOf({ q });
+      assert.deepEqual(actual.ids, expected, `${raw}: ready=${ready}`);
+      assert.equal(actual.first.total, count, `${raw}: total ready=${ready}`);
+      assert.equal(actual.first.total_capped, false, `${raw}: capped ready=${ready}`);
+    }
+  }
+  setReady(db, 1);
+  assert.equal(cleanQuery('　 \t　'), null, '空白のみは検索語なし');
+});
 
 for (const [tl, q] of terms) for (const [cl, extra] of combos) {
   test(`索引の経路 = instr の経路 = 参照実装（並び・total・total_capped・全ページ）: ${tl} / ${cl}`, async () => {
