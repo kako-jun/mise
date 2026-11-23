@@ -56,7 +56,7 @@ test('safeHttpUrl: http(s) だけ。javascript: / data: / vbscript: / 相対 / �
   assert.equal(lib.safeHttpUrl('https://example.jp/a'), 'https://example.jp/a');
   assert.equal(lib.safeHttpUrl('http://example.jp'), 'http://example.jp/');
   for (const bad of ['javascript:alert(1)', 'JavaScript:alert(1)', ' javascript:alert(1)', 'data:text/html,x', 'vbscript:msgbox(1)', '/relative/path', 'example.jp', '//example.jp', 'not a url', '', null, undefined]) assert.equal(lib.safeHttpUrl(bad), null, String(bad));
-  assert.match(appJs, /const href = L\.safeHttpUrl\(s\.url\);\s*if \(href\) \{ const a = document\.createElement\('a'\); a\.className = 'f-open'; a\.href = href;/);
+  assert.match(appJs, /const href = L\.safeHttpUrl\(s\.url\);\s*if \(href\) \{[\s\S]*?a\.className = 'f-open'; a\.href = href;[\s\S]*?external\.className = 'f-open-new'; external\.href = href;/);
   assert.ok(!/\.href = s\.url/.test(appJs));
 });
 

@@ -67,7 +67,13 @@ html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; 
 #feed .f-tags li::before { content: '#'; opacity: .6; }
 #feed .f-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
 #feed .f-date { font-size: 12px; opacity: .8; }
+#feed .f-open-actions { display: flex; align-items: stretch; gap: 6px; margin-left: auto; }
+#feed .f-open-icon { font-size: 18px; line-height: 1; }
+#feed .f-open-new, #feed .f-open-new:visited { min-width: 44px; min-height: 44px; display: grid; place-items: center; box-sizing: border-box; border: 1px solid #fff3df; border-radius: 6px; color: #fff3df; text-decoration: none; text-shadow: none; font-size: 20px; }
+#feed .f-open-new:hover { background: #fff3df; color: #17252b; }
+#feed .f-open-new:focus-visible, #feed .f-open:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 #feed .f-open, #feed .f-open:visited { padding: 10px 18px; border-radius: 6px; background: #fff3df; color: #17252b; font-size: 14px; font-weight: 650; text-decoration: none; text-shadow: none; }
+#feed .f-open, #feed .f-open:visited { display: inline-flex; align-items: center; gap: 8px; }
 #feed .f-open:hover { background: #fff; }
 
 #feed .f-end { display: grid; place-items: center; background: transparent; color: var(--bar-fg); }
@@ -139,7 +145,7 @@ html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; 
    text-box 非対応の古いブラウザ（Chrome <133・Safari <18.2・対応前の Firefox）では trim されず行ボックスが残るので、em の padding を足すと二重に膨らむ。従来の padding を既定にし、em の padding は対応ブラウザだけに入れる。 */
 @supports (text-box: trim-both cap alphabetic) {
   #feed .f-place span { text-box: trim-both cap alphabetic; }
-  #feed .f-open, #feed .f-open:visited { display: inline-block; padding: 1.1em 18px; text-box: trim-both cap alphabetic; }
+  #feed .f-open, #feed .f-open:visited { padding: 1.1em 18px; text-box: trim-both cap alphabetic; }
   #feed .f-end-actions button { padding: 1.07em 20px; text-box: trim-both cap alphabetic; }
   #feed .f-panel-acts button, #feed .f-panel-acts button:hover { padding: 0 10px; text-box: trim-both cap alphabetic; }
 }
