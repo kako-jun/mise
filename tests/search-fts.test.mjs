@@ -59,7 +59,7 @@ const ref = ({ cc, region, category, q, tags = [] }) => {
   const w = [], a = [];
   if (region) { w.push('s.region_code = ?'); a.push(region); } else if (cc) { w.push('s.country_code = ?'); a.push(cc); }
   if (category) { w.push('(SELECT COUNT(*) FROM site_categories x WHERE x.site_id = s.id AND x.category_id = ?) > 0'); a.push(category); }
-  if (q) { w.push('instr(s.search_text, ?) > 0'); a.push(q); }
+  if (q) for (const term of q.split(/\s+/u).filter(Boolean)) { w.push('instr(s.search_text, ?) > 0'); a.push(term); }
   for (const t of tags) { w.push('(SELECT COUNT(*) FROM site_tags x WHERE x.site_id = s.id AND (x.label_ja = ? OR x.label_en = ?)) > 0'); a.push(t, t); }
   return db.prepare(`SELECT s.id FROM sites s ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ${siteOrder()}`).all(...a).map(r => r.id);
 };
@@ -71,7 +71,7 @@ const pagesOf = async (o, limit = PAGE_SIZE) => {
 
 const terms = [
   ['日本語 3 文字以上・ヒット多数（上限超え）', 'サイト'], ['日本語 3 文字以上・中ヒット', 'りんご'], ['日本語 3 文字以上・少ヒット', 'ラーメン屋'],
-  ['英語・ヒット多数', 'garden'], ['英語・大小無視', 'apple'], ['英語の部分一致', 'ardе'], ['複数語（空白入り）', 'tokyo cafe'], ['複数語（日英の間）', 'りんご site'],
+  ['英語・ヒット多数', 'garden'], ['英語・大小無視', 'apple'], ['英語の部分一致', 'ardе'], ['複数語（全角・連続空白・逆順）', 'cafe　 tokyo'], ['複数語（日英の間）', 'りんご site'],
   ['全角英字（NFKC）', 'ＰＲＯＧＲＡＭ'], ['引用符入り', 'quote"mark'], ['0 件', 'zzqqxx'], ['1 件', 'zzrare'],
   ['2 文字（instr に分岐）', '写真'], ['1 文字（instr に分岐）', 'み'],
 ].map(([l, t]) => [l, cleanQuery(t)]);
