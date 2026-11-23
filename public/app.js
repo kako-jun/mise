@@ -485,10 +485,11 @@ function showDirectoryNow(path, updateHistory, preserveSsr) {
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
   for(const c of children) { if(c===globalThis.MiseFeedEntry.recentFolder) { box.append(renderRecentFolder(c)); continue; } const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); const hd=document.createElement('div'); hd.className='site-head'; const bl=document.createElement('span'); bl.className='site-bullet'; bl.setAttribute('aria-hidden','true'); const ci=document.createElement('span'); ci.className='site-icon cat-icon'; ci.setAttribute('aria-hidden','true'); hd.append(bl,ci,h); div.append(hd); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
   $('#picks').hidden=false; renderPick();
-  // SSR の初期表示以外は、取得完了まで前のカテゴリの件数を見せない。
-  if(!preserveSsr) $('#sample-label').hidden=true;
   const pageNo=path.length ? pageFromLocation() : 1;
-  startList({ key:`${currentScope}|${path.join('/')}|${pageNo}`, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
+  const listKey=`${currentScope}|${path.join('/')}|${pageNo}`;
+  // 同じ一覧の言語切替では取得済みの件数を保ち、別一覧の取得中は旧件数を隠す。
+  if(!preserveSsr && activeList?.key!==listKey) $('#sample-label').hidden=true;
+  startList({ key:listKey, ul:siteBox, foot:$('#directory-foot'), params:path.length?{category:path.at(-1)}:null, startPage:pageNo, preserve:!!preserveSsr,
     onTotal:(total,capped)=>{ $('#sample-label').hidden=!path.length; $('#sample-count').textContent=`(${capped ? formatCap(total) : total.toLocaleString('en-US')})`; $('#directory-empty').hidden=!!children.length || !!total || !path.length; } });
   if(!path.length) { $('#sample-label').hidden=true; $('#directory-empty').hidden=true; }
 }

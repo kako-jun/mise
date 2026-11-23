@@ -51,5 +51,8 @@ try {
   assert.equal(await page.locator('#sample-label').isVisible(), false, 'failure does not reveal stale count');
   await page.locator('#directory-foot button').click();
   await page.waitForFunction(() => !document.querySelector('#sample-label').hidden && document.querySelector('#sample-count').textContent === '(2)');
+  await page.locator('#language-toggle').click();
+  assert.equal(await page.locator('#sample-label').isVisible(), true, 'language change preserves the loaded count');
+  assert.equal(await page.locator('#sample-count').textContent(), '(2)');
   console.log('direct count browser regression: passed');
 } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
