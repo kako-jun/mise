@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // サイト自身のアイコン一式（タブのファビコン・apple-touch-icon・PWA アイコン）を書き出す。生成物は commit する（#151）。
 // 意匠: Anton の M を三毛猫のパッチ（橙・クリーム・茶）で塗り、外側にクリーム色の太い縁、その内側に濃色の輪郭（ステッカー風）。
-// ただし 16/32px の小サイズ版は濃色の輪郭（line）を縁（rim）より太くしてあり、縁は輪郭の下に隠れ、主に輪郭のアンチエイリアス画素に効く（外すと 16px で 256 画素中 123 画素が変わり、うち 3 画素は不透明）。
+// タブ用ファビコンはクリームの外縁を省き、濃色の輪郭を残す。PWA アイコンは従来の外縁を保持する。
 // M は文字でなく path（ロゴと同じ自己ホスト Anton サブセットのグリフ輪郭。フォント非依存）。
-// 出力: public/favicon.svg（小サイズ版: 濃色の輪郭を太めにして M を大きくした版（クリームの縁は輪郭の下に隠れる））/ public/favicon.ico（16・32 は小サイズ版、48 は通常版）/
+// 出力: public/favicon.svg（小サイズ版）/ public/favicon.ico（16・32 は小サイズ版、48 は通常サイズ、いずれも外縁なし）/
 //       public/pwa/icon-180.png（濃色地。iOS は透過を黒で塗るため）/ icon-192.png / icon-512.png（透過）/ icon-maskable-512.png（濃色地）
 // 実行: node scripts/build-pwa-icons.mjs（playwright と Chromium が必要。package.json の依存には入れていない。
 //   別の場所にある場合は PLAYWRIGHT_MODULE=<playwright のエントリのパス（CJS・ESM どちらも可）> CHROMIUM_PATH=<chrome 実行ファイル> で指す）
@@ -24,18 +24,19 @@ function icon({ h, rim, line, bg = null, rx = 0 }) {
   const p = extra => `<path d="${M}" ${t} ${extra}/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs>${GRAD}</defs>`
     + (bg ? `<rect width="512" height="512" ${rx ? `rx="${rx}" ` : ''}fill="${bg}"/>` : '')
-    + p(`fill="${CREAM}" stroke="${CREAM}" stroke-width="${w(rim)}" stroke-linejoin="round"`)
+    + (rim ? p(`fill="${CREAM}" stroke="${CREAM}" stroke-width="${w(rim)}" stroke-linejoin="round"`) : '')
     + p(`fill="${DARK}" stroke="${DARK}" stroke-width="${w(line)}" stroke-linejoin="round"`)
     + p('fill="url(#g)"') + '</svg>\n';
 }
 // 通常版（180/192/512）と、16/32px 用の小サイズ版（濃色の輪郭を太く・M を大きく）
 const NORMAL = { h: 420, rim: 44, line: 22 };
 // 輪郭 line=32（512 基準）は 16px で濃色が約 0.5px、32px で約 1px。白いタブでクリーム色の塗りが溶けても M の外形が読める（#151 レビュー）
-// rim は line の下に隠れて見えないが、外すと 16px で 256 画素中 123 画素（主に輪郭のアンチエイリアス画素。うち 3 画素は不透明）が変わる（承認済みの見た目を保つため残す）
-const SMALL = { h: 468, rim: 24, line: 32 };
+// ファビコンには外側のクリーム縁を付けない（#216）。
+const SMALL = { h: 468, rim: 0, line: 32 };
 const designs = {
   small: icon(SMALL),
   large: icon(NORMAL),
+  faviconLarge: icon({ ...NORMAL, rim: 0 }),
   apple: icon({ h: 360, rim: 38, line: 19, bg: DARK }),
   maskable: icon({ h: 280, rim: 29, line: 15, bg: DARK }),
   maskableContent: icon({ h: 280, rim: 29, line: 15 }), // 安全領域の実測用（背景なし）
@@ -76,7 +77,7 @@ console.log(`maskable 安全領域: 最大半径 ${maxR.toFixed(1)} / 上限 204
 if (maxR > 204.8) throw new Error('maskable の内容が安全領域を超えている');
 
 // ICO: PNG 埋め込み形式（Vista 以降・全モダンブラウザで可）。16/32 は小サイズ版、48 は通常版
-const frames = [[16, await render(designs.small, 16)], [32, await render(designs.small, 32)], [48, await render(designs.large, 48)]];
+const frames = [[16, await render(designs.small, 16)], [32, await render(designs.small, 32)], [48, await render(designs.faviconLarge, 48)]];
 const head = Buffer.alloc(6); head.writeUInt16LE(1, 2); head.writeUInt16LE(frames.length, 4);
 let offset = 6 + 16 * frames.length;
 const dir = frames.map(([size, png]) => {

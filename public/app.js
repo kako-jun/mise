@@ -25,6 +25,8 @@ Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。�
 Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
 Object.assign(words.ja, { installText:'MISE をホーム画面に追加できます。', installAdd:'インストール', installLater:'あとで' });
 Object.assign(words.en, { installText:'Add MISE to your home screen.', installAdd:'Install', installLater:'Not now' });
+Object.assign(words.ja, { clearSearch: '検索語を消去' });
+Object.assign(words.en, { clearSearch: 'Clear search' });
 const t = key => words[language][key];
 // サイト名: 画面の言語の名前（name_ja / name_en）があればそれ、無ければ言語共通の name（#167。どの言語でも名前は消えない）
 const siteName = site => (language === 'ja' ? site.name_ja : site.name_en) || site.name;
@@ -631,6 +633,7 @@ function leaveSearchUrl() {
 }
 let reqStatus = null;
 let searchTimer=0; const updateSearchSoon=()=>{ clearTimeout(searchTimer); searchTimer=setTimeout(updateSearch,250); };
+$('#search-clear').addEventListener('click',()=>{ const input=$('#query'); input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus(); });
 let composing = false;
 $('#query').addEventListener('compositionstart',()=>{composing=true;});
 $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchSoon();});

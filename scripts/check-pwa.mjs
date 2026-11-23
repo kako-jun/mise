@@ -51,7 +51,7 @@ check('apple-touch-icon が 180px の PNG', (() => { const m = html.match(/rel="
 // --- アイコン一式（#151）---
 for (const page of ['public/index.html', 'public/about.html']) {
   const h = read(page);
-  check(`${page} に <link rel="icon"> が ico(32x32) と svg の 2 本`, h.includes('<link rel="icon" href="/favicon.ico" sizes="32x32">') && h.includes('<link rel="icon" href="/favicon.svg" type="image/svg+xml">'));
+  check(`${page} に <link rel="icon"> が ico(32x32) と svg の 2 本`, h.includes('<link rel="icon" href="/favicon.ico?v=2" sizes="32x32">') && h.includes('<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">'));
   check(`${page} の apple-touch-icon が /pwa/icon-180.png`, h.includes('<link rel="apple-touch-icon" href="/pwa/icon-180.png">'));
 }
 check('manifest: purpose any の PNG が 2 つ（192・512）、maskable が別エントリ、SVG は入れない',
