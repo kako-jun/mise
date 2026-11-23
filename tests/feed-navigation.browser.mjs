@@ -26,8 +26,17 @@ try{
  await page.goto(base+'/jp/?q=cat&tag=art&page=2&view=feed');
  await page.waitForSelector('#feed .f-card[data-id]');
  const first=new URLSearchParams(requests[0]);assert.equal(first.get('q'),'cat');assert.deepEqual(first.getAll('tag'),['art']);assert.equal(first.get('page'),'2');assert.equal(first.get('limit'),'40');
- assert.equal(await page.locator('#feed .f-card[data-id]').count(),500);
+ await page.waitForFunction(()=>document.querySelectorAll('#feed .f-card[data-id]').length===500);
  const back=new URL(await page.locator('.f-directory').getAttribute('href'),base);assert.equal(back.searchParams.get('q'),'cat');assert.equal(back.searchParams.get('tag'),'art');assert.equal(back.searchParams.get('page'),'2');
  const more=new URL(await page.locator('.f-continue').getAttribute('href'),base);assert.equal(more.searchParams.get('q'),'cat');assert.equal(more.searchParams.get('tag'),'art');assert.equal(more.searchParams.get('page'),'14');assert.equal(more.hash,'#site-row-541');
+ await page.goto(base+'/jp/?q=cat&tag=art');
+ await page.waitForSelector('#feed-entry:not([hidden])');
+ const entry=page.locator('#feed-entry');
+ const entryUrl=new URL(await entry.getAttribute('href'),base);assert.equal(entryUrl.searchParams.get('q'),'cat');assert.equal(entryUrl.searchParams.get('tag'),'art');assert.equal(entryUrl.searchParams.get('view'),'feed');
+ await page.evaluate(()=>{const spacer=document.createElement('div');spacer.style.height='3000px';document.body.append(spacer);window.scrollTo(0,1500);});
+ await page.waitForFunction(()=>!document.querySelector('#back-to-top').hidden);
+ const rects=await page.evaluate(()=>{const a=document.querySelector('#feed-entry').getBoundingClientRect(),b=document.querySelector('#back-to-top').getBoundingClientRect();return {entryTop:a.top,backBottom:b.bottom,entryRight:a.right,backRight:b.right};});
+ assert.ok(rects.backBottom<=rects.entryTop,'右下の2ボタンが重ならない');assert.equal(rects.entryRight,rects.backRight);
+ await page.locator('#back-to-top').click();await page.waitForFunction(()=>scrollY===0);assert.equal(await page.evaluate(()=>document.activeElement.id),'query');
  console.log('feed navigation browser regression: passed');
 }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}
