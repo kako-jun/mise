@@ -104,6 +104,24 @@ Windows worker は `scripts/cron/mise-media.cmd` から起動し、既定で fav
 
 この slice はメディア状態だけを移行する。発見 frontier、LLM 審査/承認台帳、夜間再開 checkpoint、source cursor と public body cache は依然ローカルであり、オンラインのみへの移行は未完了。これらの collection を再開する前に別 slice で D1 化する。
 
+## URL 発見ランナー（本番 D1 へ直接）
+
+`scripts/discover_online.py`（#235 / #39 / #128）。見つけた URL を本番 D1 の `url_progress`（`source='discovered'`, `state='discovered'`）へ **直接** 入れる。ローカルに SQLite frontier・CSV・JSONL・キャッシュ・チェックポイントを作らない（メモリのみ。出力は標準出力のレポートだけ）。続きの位置（Wikidata の OFFSET）と実行リースは D1 の `discovery_cursors`（migration 0037、非公開）に置く。**事前に 0037 を本番へ適用する**（未適用でも dry-run は動くが、カーソルは先頭扱い）。
+
+```
+uv run python scripts/discover_online.py --source wikidata|official|links|all [--limit N] [--max-rows N]            # 既定 = dry-run(何も書かない)
+uv run python scripts/discover_online.py --source official --limit 200 --apply                                  # 書く
+```
+
+- 認証は `CLOUDFLARE_API_TOKEN`（上の「画像キュー」と同じ。D1 の読み書き）。D1 へは 0.3 秒間隔、429 は Retry-After を守る（`media_online.Cloudflare`）。
+- **先に dry-run**。供給元ごと・カテゴリごとの「入れるはずの件数」と、既知（`url_progress` / `sites.progress_key` に既にある）・無効（IP・内部名・ポート・SNS/ポータル内ページ）・ラン内重複の件数を見る。
+- `--apply` は、リース（`discovery_cursors` の `lease/discover`、30 分、バッチごとに更新）を取れたときだけ動く。別の機が動いていれば終了コード 2。終了時にリースを解放する。**同時に 2 台で回さない**。
+- 書き込みは `INSERT OR IGNORE`（30 行 / 文、1 文 100 パラメータ未満）→ 全キーの読み戻し検証。最終表は供給元ごとに fetched / invalid / already_known / added / verified。**検証不一致は終了コード 1**。Wikidata が 429/503 で中断したら 3（カーソルは進めない）。
+- Wikidata: `data/wikidata-leaf-map.csv` の行ごとに P856 を取る（クエリ・正規化は `pipeline/discover_wikidata.py` と同じ。WDQS は 5 秒間隔）。台帳の単位はホストのトップ URL。取り終えた行は `done`、続きは次の OFFSET。
+- official: `OFFICIAL` 表（団体・公式ディレクトリ URL・カテゴリ）の各ページを robots.txt を守って 2 秒間隔で取り、`<main>` 内の外部リンクを会員サイトとして拾う（団体自身のドメイン・SNS・検索・PDF・mailto は除く）。取得できない団体は `UNVERIFIED` に理由つきで残し、毎回レポートに出す（URL を推測で作らない）。団体を足すときは、実ページを取得して会員リンクが並ぶことを確認してから `OFFICIAL` に 1 行足す。
+- links（既掲載サイトからの外部リンク）は未実装。
+- 入った `discovered` 行は、従来どおり後段（取得・判定・審査）が進める。このランナーは `sites` へは何も入れない。
+
 ## cron の登録（kako-jun が行う）（Linux の例）
 
 手元 PC か Raspberry Pi の、リポジトリを置いたユーザーの crontab に登録する。**登録は kako-jun が行う。エージェントは登録しない。** 鍵は cron から読めるようにラッパーで読み込む。
