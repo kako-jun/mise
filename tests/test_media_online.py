@@ -2,6 +2,8 @@ import json
 import ssl
 import sys
 import unittest
+import io
+import urllib.error
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -49,6 +51,123 @@ class MediaOnlineTest(unittest.TestCase):
         self.assertEqual(result, [[], [{'ok': 1}]])
         self.assertEqual(json.loads(seen[0].data), {'batch': [
             {'sql': 'SELECT ? AS id', 'params': ['a']}, {'sql': 'SELECT ? AS id', 'params': ['b']} ]})
+
+    def test_cloudflare_retries_429_with_retry_after_and_bounded_attempts(self):
+        calls = []
+        def opener(req, timeout):
+            calls.append(req)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {'Retry-After': '0.25'}, io.BytesIO(b'rate limited'))
+            return Response(json.dumps({'success': True, 'result': [{'results': [{'ok': 1}]}]}).encode())
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=4, retry_base_seconds=0.2, retry_max_seconds=2)
+        with patch.object(media_online.time, 'sleep') as sleep, patch.object(media_online.random, 'random', return_value=0):
+            self.assertEqual(client.query('SELECT 1'), [{'ok': 1}])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([x.args[0] for x in sleep.call_args_list], [0.25, 0.25])
+
+    def test_cloudflare_stops_after_bounded_429_retries(self):
+        calls = []
+        def opener(req, timeout):
+            calls.append(req)
+            raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {}, io.BytesIO(b'rate limited'))
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=3, retry_base_seconds=0, retry_max_seconds=0)
+        with patch.object(media_online.time, 'sleep') as sleep, patch.object(media_online.random, 'random', return_value=0):
+            with self.assertRaisesRegex(RuntimeError, 'Cloudflare API 429'):
+                client.query('SELECT 1')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_cloudflare_does_not_sleep_past_retry_after_safety_cap(self):
+        calls = []
+        def opener(req, timeout):
+            calls.append(req)
+            raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {'Retry-After': '1200'}, io.BytesIO(b'rate limited'))
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=7, max_retry_after_seconds=300)
+        with patch.object(media_online.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'Cloudflare API 429'):
+                client.query('SELECT 1')
+        self.assertEqual(len(calls), 1)
+        sleep.assert_not_called()
+
+    def test_r2_put_retry_window_cannot_outlive_configured_write_budget(self):
+        calls = []; clock = [0.0]
+        def opener(req, timeout):
+            calls.append(req)
+            raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {'Retry-After': '0.75'}, io.BytesIO(b'rate limited'))
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=7, retry_base_seconds=0, retry_max_seconds=0,
+                                         max_write_retry_seconds=1)
+        def sleep(seconds): clock[0] += seconds
+        with patch.object(media_online.time, 'monotonic', side_effect=lambda: clock[0]), patch.object(media_online.time, 'sleep', side_effect=sleep):
+            with self.assertRaisesRegex(RuntimeError, 'Cloudflare API 429'):
+                client._request('https://example.test/object', method='PUT', body=b'bytes')
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(clock[0], 0.75)
+
+    def test_r2_put_revalidates_owner_and_object_before_each_retry(self):
+        calls = []; validations = []
+        def opener(req, timeout):
+            calls.append(req)
+            if len(calls) == 1:
+                raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {'Retry-After': '0'}, io.BytesIO(b'rate limited'))
+            return Response(b'{"success":true,"result":{}}')
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=3, retry_base_seconds=0, retry_max_seconds=0)
+        with patch.object(media_online.time, 'sleep'), patch.object(media_online.random, 'random', return_value=0):
+            client.put_r2('thumb/site.webp', b'bytes', before_attempt=lambda: validations.append('checked'))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(validations, ['checked', 'checked'])
+
+    def test_r2_put_aborts_retry_when_competing_object_changes(self):
+        calls = []; validations = []
+        def opener(req, timeout):
+            calls.append(req)
+            raise urllib.error.HTTPError(req.full_url, 429, 'Too Many Requests', {'Retry-After': '0'}, io.BytesIO(b'rate limited'))
+        def check():
+            validations.append(True)
+            if len(validations) == 2:
+                raise RuntimeError('R2 object changed before retry')
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener,
+                                         max_attempts=3, retry_base_seconds=0, retry_max_seconds=0)
+        with patch.object(media_online.time, 'sleep'), patch.object(media_online.random, 'random', return_value=0):
+            with self.assertRaisesRegex(RuntimeError, 'R2 object changed'):
+                client.put_r2('thumb/site.webp', b'bytes', before_attempt=check)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(validations), 2)
+
+    def test_put_attempt_guard_can_query_d1_with_single_request_slot(self):
+        methods = []
+        def opener(req, timeout):
+            methods.append(req.method)
+            if req.method == 'POST':
+                return Response(b'{"success":true,"result":[{"results":[{"site_id":"s1"}]}]}')
+            return Response(b'{"success":true,"result":{}}')
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener, max_concurrent=1)
+        client.put_r2('thumb/site.webp', b'bytes', before_attempt=lambda: client.query('SELECT 1'))
+        self.assertEqual(methods, ['POST', 'PUT'])
+
+    def test_d1_post_is_not_replayed_after_ambiguous_5xx(self):
+        calls = []
+        def opener(req, timeout):
+            calls.append(req)
+            raise urllib.error.HTTPError(req.full_url, 503, 'Service Unavailable', {}, io.BytesIO(b'transient'))
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=opener, max_attempts=5)
+        with patch.object(media_online.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(RuntimeError, 'Cloudflare API 503'):
+                client.query('UPDATE site_media_jobs SET attempts=attempts+1')
+        self.assertEqual(len(calls), 1)
+        sleep.assert_not_called()
+
+    def test_importer_request_pacing_is_shared_and_optional(self):
+        client = media_online.Cloudflare('account', 'secret', 'database', opener=lambda *_args, **_kwargs: Response(b'{"success":true,"result":[{"results":[]}] }'), min_request_interval=0.5)
+        with patch.object(media_online.time, 'monotonic', return_value=10.0), patch.object(media_online.time, 'sleep') as sleep:
+            client.query('SELECT 1')
+            client.query('SELECT 1')
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(sleep.call_args.args[0], 0.5)
 
     def test_verified_opener_relaxes_only_x509_strict_extension_check(self):
         captured = {}

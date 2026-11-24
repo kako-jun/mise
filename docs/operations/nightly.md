@@ -100,7 +100,7 @@ Windows worker は `scripts/cron/mise-media.cmd` から起動し、既定で fav
 
 ### 旧メディア台帳の移行
 
-`scripts/import_media_state.py` は既定で read-only dry-run。`--source DB=ASSET_DIR` を台帳ごとに繰り返し、全候補を同時に渡す。複数台帳の同一サイトは最新 timestamp の行だけを選び、同時刻で内容が異なるもの、D1 の方が新しいもの、既存 R2 と hash が違うものは overwrite せず ineligible として報告する。実行前に結果を確認し、明示的な `--apply` を付けたときだけ不足 R2 object を upload し、D1 を更新する。R2 の読み戻し hash と D1 の状態/metadata readback の両方が一致した行だけ `eligible_for_cleanup: true` とする。コマンドは元ファイルを削除しない。`var/` 全体の削除許可を意味しない。
+`scripts/import_media_state.py` は既定で read-only dry-run。`--source DB=ASSET_DIR` を台帳ごとに繰り返し、全候補を同時に渡す。複数台帳の同一サイトは最新 timestamp の行だけを選び、同時刻で内容が異なるもの、D1 の方が新しいもの、既存 R2 と hash が違うものは overwrite せず ineligible として報告する。Importer は同時リクエストを1件に制限し、API要求間を0.5秒空ける（最大2 req/s）。429 は `Retry-After` と指数バックオフで最大7回の試行後に停止する。dry-run の結果は `verified-existing-r2-object` / `would-upload-local-object` / `state-only` で区別する。実行前に結果を確認し、レビュー後に明示的な `--apply` を付けたときだけ不足 R2 object を upload し、D1 を更新する。R2 の読み戻し hash と D1 の状態/metadata readback の両方が一致した行だけ `eligible_for_cleanup: true` とする。コマンドは元ファイルを削除しない。`var/` 全体の削除許可を意味しない。
 
 この slice はメディア状態だけを移行する。発見 frontier、LLM 審査/承認台帳、夜間再開 checkpoint、source cursor と public body cache は依然ローカルであり、オンラインのみへの移行は未完了。これらの collection を再開する前に別 slice で D1 化する。
 

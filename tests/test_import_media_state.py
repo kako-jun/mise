@@ -47,7 +47,7 @@ class ImportMediaStateTest(unittest.TestCase):
             ]
             client.get_r2.return_value = content
             result = import_ledger(client, 'favicon', [(ledger, Path(tmp))], apply=False)
-        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True}])
+        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True, 'action': 'verified-existing-r2-object'}])
         self.assertFalse(result['ineligible'])
         client.put_r2.assert_not_called()
         client.query.assert_not_called()
@@ -68,7 +68,7 @@ class ImportMediaStateTest(unittest.TestCase):
             ]
             client.get_r2.return_value = None
             result = import_ledger(client, 'favicon', [(ledger, assets)], apply=False)
-        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True}])
+        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True, 'action': 'would-upload-local-object'}])
         self.assertFalse(result['ineligible'])
         client.put_r2.assert_not_called()
         client.query.assert_not_called()
@@ -137,11 +137,94 @@ class ImportMediaStateTest(unittest.TestCase):
             client.query.return_value = [{'site_id': 'site-1'}]
             client.get_r2.side_effect = [None, content]
             result = import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
-        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': True}])
+        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': True, 'action': 'uploaded-and-readback-verified'}])
         self.assertFalse(result['ineligible'])
         client.put_r2.assert_called_once()
         self.assertTrue(any('UPDATE site_media_jobs SET lease_owner=?,lease_until=?' in call.args[0] for call in client.query.call_args_list))
         self.assertIn('lease_owner=?', client.batch.call_args.args[0][0][0])
+
+    def test_apply_checks_lease_before_r2_put_and_skips_if_lost(self):
+        content = b'lease-expired-webp'
+        content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            (assets / favicon.site_name('site-1')).write_bytes(content)
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            client = Mock()
+            client.batch.return_value = [
+                [{'progress_key': 'example.org/', 'favicon_path': None, 'thumb_path': None}],
+                [{'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None, 'updated_at': 'old'}],
+            ]
+            client.query.side_effect = [[{'site_id': 'site-1'}], []]
+            client.get_r2.return_value = None
+            result = import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['ineligible'][0]['reason'], 'D1 lease or media state changed before R2 upload')
+        client.put_r2.assert_not_called()
+        self.assertIn("julianday(j.lease_until)>julianday('now','+2 minutes')", client.query.call_args_list[1].args[0])
+        self.assertTrue(any('lease_owner=NULL' in c.args[0] for c in client.query.call_args_list))
+
+    def test_unexpected_r2_error_releases_owned_lease_without_masking_original(self):
+        content = b'r2-error-webp'; content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            (assets / favicon.site_name('site-1')).write_bytes(content)
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            client = Mock()
+            client.batch.return_value = [
+                [{'progress_key': 'example.org/', 'favicon_path': None, 'thumb_path': None}],
+                [{'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None, 'updated_at': 'old'}],
+            ]
+            def query(sql, params=()):
+                if 'UPDATE site_media_jobs SET lease_owner=?,lease_until=?' in sql:
+                    return [{'site_id': 'site-1'}]
+                raise RuntimeError('lease release network error')
+            client.query.side_effect = query
+            client.get_r2.side_effect = RuntimeError('original R2 read error')
+            with self.assertRaisesRegex(RuntimeError, 'original R2 read error'):
+                import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual(client.query.call_count, 3)  # row finally retries failed lease cleanup
+        self.assertTrue(any('lease_owner=NULL' in c.args[0] for c in client.query.call_args_list))
+        client.put_r2.assert_not_called()
+
+    def test_local_asset_read_error_releases_owned_lease(self):
+        content = b'read-error-webp'; content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            asset_path = assets / favicon.site_name('site-1'); asset_path.write_bytes(content)
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            client = Mock()
+            client.batch.return_value = [
+                [{'progress_key': 'example.org/', 'favicon_path': None, 'thumb_path': None}],
+                [{'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None, 'updated_at': 'old'}],
+            ]
+            client.query.side_effect = [[{'site_id': 'site-1'}], None]
+            with patch.object(Path, 'read_bytes', side_effect=OSError('local disk read failed')):
+                with self.assertRaisesRegex(OSError, 'local disk read failed'):
+                    import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual(client.query.call_count, 2)
+        self.assertIn('lease_owner=NULL', client.query.call_args_list[1].args[0])
+
+    def test_malformed_attempt_count_releases_lease_in_row_finally(self):
+        content = b'malformed-attempts'; content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            db = favicon.connect(ledger)
+            db.execute("UPDATE favicons SET consecutive_failures='not-an-integer' WHERE site_id='site-1'")
+            db.commit(); db.close()
+            client = Mock()
+            client.batch.return_value = [
+                [{'progress_key': 'example.org/', 'favicon_path': None, 'thumb_path': None}],
+                [{'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None, 'updated_at': 'old'}],
+            ]
+            client.query.side_effect = [[{'site_id': 'site-1'}], None]
+            client.get_r2.return_value = content
+            with self.assertRaises(ValueError):
+                import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual(client.query.call_count, 2)
+        self.assertIn('lease_owner=NULL', client.query.call_args_list[1].args[0])
+        client.batch.assert_called_once()  # read-only D1 prefetch; no persistence batch
 
     def test_excluded_local_image_never_changes_site_pointer_or_becomes_cleanup_eligible(self):
         content = b'excluded-webp'
