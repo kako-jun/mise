@@ -3,7 +3,6 @@
 import argparse
 import os
 import sqlite3
-from urllib.parse import urlsplit
 
 MAX_SQL_FILE_BYTES = 5 * 1024 * 1024  # Keep each wrangler remote import small enough to retry independently.
 
@@ -13,13 +12,16 @@ def q(value):
 
 def progress_key(url):
     """Match migrations/0032_url_progress.sql: lowercase URL without scheme, leading www, or trailing slash."""
-    parsed = urlsplit(url)
-    host = (parsed.hostname or '').encode('idna').decode('ascii').lower().rstrip('.')
-    if host.startswith('www.'):
-        host = host[4:]
-    if parsed.port:
-        host += f':{parsed.port}'
-    return host + parsed.path.lower().rstrip('/')
+    lower = url.lower()
+    if lower.startswith('https://www.'):
+        url = url[12:]
+    elif lower.startswith('http://www.'):
+        url = url[11:]
+    elif lower.startswith('https://'):
+        url = url[8:]
+    elif lower.startswith('http://'):
+        url = url[7:]
+    return url.lower().rstrip('/')
 
 
 def main():
