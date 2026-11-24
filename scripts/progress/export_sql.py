@@ -2,7 +2,6 @@
 """Export the safe URL lifecycle projection from the nightly frontier to D1."""
 import argparse
 import os
-import re
 import sqlite3
 from urllib.parse import urlsplit
 
@@ -13,29 +12,14 @@ def q(value):
 
 
 def progress_key(url):
-    """Match request normalized_key: host without www/scheme + normalized lowercase path."""
+    """Match migrations/0032_url_progress.sql: lowercase URL without scheme, leading www, or trailing slash."""
     parsed = urlsplit(url)
     host = (parsed.hostname or '').encode('idna').decode('ascii').lower().rstrip('.')
     if host.startswith('www.'):
         host = host[4:]
-    default_port = 443 if parsed.scheme.lower() == 'https' else 80
-    if parsed.port and parsed.port != default_port:
+    if parsed.port:
         host += f':{parsed.port}'
-    path = re.sub(r'%([0-9a-fA-F]{2})', lambda m: chr(int(m[1], 16)) if re.fullmatch(r'[A-Za-z0-9._~-]', chr(int(m[1], 16))) else '%' + m[1].upper(), parsed.path)
-    path = re.sub(r'%(?:2f|5c)', '/', path, flags=re.I).replace('%20', ' ')
-    parts = []
-    for segment in path.split('/'):
-        segment = segment.split(';', 1)[0]
-        if not segment or segment == '.':
-            continue
-        if segment == '..':
-            if parts:
-                parts.pop()
-        else:
-            parts.append(segment)
-    normalized_path = ('/' + '/'.join(parts) if parts else '')
-    normalized_path = re.sub(r'[.\s/]+$', '', normalized_path).lower()
-    return host + normalized_path
+    return host + parsed.path.lower().rstrip('/')
 
 
 def main():
