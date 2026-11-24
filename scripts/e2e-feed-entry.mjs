@@ -53,15 +53,20 @@ try {
     await page.waitForURL(BASE + feedUrl(recent));
     await page.waitForSelector('#feed .f-card');
     const header = await page.locator('#feed .f-bar').evaluate(el => {
-      const [back, search] = el.children;
-      const box = el.getBoundingClientRect(), a = back.getBoundingClientRect(), b = search.getBoundingClientRect();
+      // #198: 帯はなく、矢印が左端・猫カウンター(.f-surf)が右端・検索欄は左右中央(幅 700px 未満は矢印とカウンターのあいだの 1 行)
+      const [back, search, surf] = el.children;
+      const box = el.getBoundingClientRect(), a = back.getBoundingClientRect(), b = search.getBoundingClientRect(), c = surf.getBoundingClientRect();
+      const cs = getComputedStyle(el), narrow = innerWidth < 700;
       return {
-        children: [...el.children].map(child => child.tagName),
-        positions: a.left - box.left <= 16 && box.right - b.right <= 16 && a.right <= b.left,
-        visible: getComputedStyle(el).position === 'fixed' && getComputedStyle(back).display !== 'none' && getComputedStyle(search).display !== 'none',
+        children: [...el.children].map(child => child.tagName + (child.classList.contains('f-surf') ? '.f-surf' : '')),
+        bandless: cs.backgroundColor === 'rgba(0, 0, 0, 0)' && cs.backdropFilter === 'none' && cs.borderBottomWidth === '0px',
+        edges: a.left - box.left <= 16 && box.right - c.right <= 16 && a.right <= c.left,
+        centered: narrow || Math.abs((b.left + b.right) / 2 - (box.left + box.right) / 2) <= 2,
+        row: a.right <= b.left && b.right <= c.left && (!narrow || Math.abs(a.top - b.top) < 12), // 幅を問わず 1 行(矢印 | 検索欄 | カウンター)
+        visible: cs.position === 'fixed' && [back, search, surf].every(x => getComputedStyle(x).display !== 'none'),
       };
     });
-    assert.deepEqual(header, { children: ['A', 'FORM'], positions: true, visible: true });
+    assert.deepEqual(header, { children: ['A', 'FORM', 'BUTTON.f-surf'], bandless: true, edges: true, centered: true, row: true, visible: true });
     assert.match(await page.locator('meta[name="robots"]').getAttribute('content'), /noindex/);
     if (SHOTS) await page.screenshot({ path: SHOTS + '/feed-' + label + '.png' });
     await page.locator('.f-directory').click();
