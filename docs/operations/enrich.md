@@ -55,3 +55,35 @@
 通信断などで `reserve` のまま残った行は、請求（Anthropic のコンソール）で実費を確認し、`UPDATE llm_ledger SET kind='call', cost_usd=<実費>, note='manual' WHERE id=? AND kind='reserve'`（請求が無ければ `kind='release', cost_usd=0`）で手動確定する。
 
 Message Batches（半額）は未対応。同期呼び出し、`concurrency` は 1〜4。
+
+収集機は本番 D1 だけを正本にして、URL を段階ごとに進める。ローカルファイルは持たない（メモリ上のみ）。
+
+## 掲載段（`scripts/enrich/publish_stage.py`）
+
+`url_progress.state='approved'` の URL を `url_candidates` と結合し、1 サイトごとに **1 回の `client.batch`（D1 では 1 トランザクション）** で掲載する。
+`run(client, *, limit, apply, log=print)`。`apply=False` は読み取りだけで、何も書かない。
+
+1 バッチの中身:
+
+1. `sites` を INSERT（既掲載 URL（正規化 URL と `progress_key` の両方）・拒否ホスト・拒否済み申請・同じ id がある場合は入れない。`ON CONFLICT DO NOTHING`）
+2. `site_tags`（最大 5、重複・40 字超を除く）
+3. `site_categories`（最大 3、旧 id の変換と祖先の除去済み、D1 の `categories` に存在する id のみ）。2・3 は `changes()` を使わず、「その sites 行があり、そのサイトの行がまだ無い」で守る（カテゴリ 0 件の sites 行はこのトランザクション内にしか存在しえない）。バッチの最後に、sites があるのにカテゴリが 0 件なら NOT NULL 違反を起こす文を置き、全体をロールバックする
+4. `site_media_jobs`（favicon・thumbnail、`pending`、`identity_key=progress_key`。成人サイトは thumbnail が `excluded`/`eligible=0`。migration 0033/0035 のトリガが作るので、同じ規則の `INSERT OR IGNORE` を保険として添える）
+5. `url_progress.state='published'`
+
+件数表（`category_counts`・`scope_counts`）、`search_text`・FTS、`registered_at` は既存トリガが同じトランザクションで更新する。`bulk_import` は既定の 0。
+
+- id は `fr-<key の英数字 40 字>-<sha1(key)[:8]>`。key は `frontier_key`（旧経路と同じ。host と先頭パスの比較キー）。`frontier_key` が NULL のときは `identity_key`（末尾 `/` を含む）を使うので、同じサイトでも hash の元が旧経路と変わる。名前は title（80 字まで）、空または成人なら host。`last_crawled_at` は `last_fetched_at` を UTC に直した値（無ければ NULL）。
+- 既に掲載済みのサイトは変更せず、`url_progress` だけ `published` にする。例外は `adult_content` が NULL のときだけ 0/1 を入れること（旧経路と同じ。migration 0035 のトリガが thumbnail の job を合わせる）。値が入っているものは上書きしない。
+- URL は空白・制御文字・userinfo を含むものを `gate:no_url` で止める（`scripts/progress_identity.py` の検証）。
+- ゲートに落ちた行は `state='candidate'`、`url_candidates.review_reason='gate:<理由>'`、`review_state='pending'`（黙って捨てない）。理由: `no_url` `no_host` `verdict_*`（pass/suspect 以外）`no_description` `bad_*_json` `no_valid_category` `empty_name` `too_many_params` `no_category`（D1 の `categories` に無い）`not_inserted_blocked_or_rejected_request`。
+- バッチが失敗したら何も書かれず `approved` のまま残り（結果の `errors`）、`url_progress.updated_at` を更新して列の後ろに回す（失敗する行が先頭に居座らない）。選択は `updated_at` の古い順。
+- 読み戻し検証に失敗したら、その id も事後検査の対象に入れ、**そこでループを止める**（`stopped=true`）。
+- 各サイトを読み戻して検証し（行・カテゴリ・タグ・media jobs・成人除外・state）、最後に触った id だけ `scripts/llm/integrity.py` と同じ意味の検査（uncategorized・orphan・ancestor_duplicate・empty_text・duplicate_url・カテゴリ別件数 all/国/区・scope_counts）をかける。違反は結果の `integrity` に返る。
+
+ランナー側に必要なもの（旧 `nightly.py` の `prod` 段 586-636 行の等価物。この段には入っていない）: 投入前の本番整合チェック、Time Travel の bookmark の取得と記録、1 夜の追加数の異常ガード、投入後の整合チェック。
+
+判定段との接続: 判定段は `approved`（`review_state='approved'`）を `url_progress.state='approved'` に、人が見る行を `review_state='pending'` + `state='candidate'` にする。掲載段のゲート落ちも同じ形（`state='candidate'` + `review_state='pending'` + `review_reason='gate:...'`）で戻すので、人の審査待ちと同じ扱いになる。判定段が選ぶのは `fetched` と判定のない古い `reviewing` だけなので、`candidate` に戻した行が再判定されることはない。
+
+置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`。
+テスト: `tests/test_enrich_publish_stage.py`（実 migration を適用した in-memory SQLite）。
