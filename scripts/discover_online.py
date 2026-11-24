@@ -8,7 +8,7 @@
 
 既定は --dry-run(D1 を読み、供給元を取得し、入れるはずの件数をカテゴリ別に出す。何も書かない)。
 Cloudflare REST は scripts/media_online.py の Cloudflare クライアント(CLOUDFLARE_API_TOKEN 必須)。
-終了コード: 0 正常 / 1 検証不一致 / 2 リースが取れない・引数不正 / 3 Wikidata が 429/503 で中断。
+終了コード: 0 正常 / 1 検証不一致 / 2 リースが取れない・引数不正 / 3 Wikidata が 429/503 で中断 / 4 実行中にリースを失った。
 """
 import argparse
 import collections
@@ -30,7 +30,7 @@ sys.path.insert(0, str(HERE / 'pipeline'))
 from progress_identity import progress_identity_key
 import discover_wikidata as dw
 import fetcher
-from hostnames import normalize_host, platform_page
+from hostnames import normalize_host, platform_page, registrable
 
 MAX_PARAMS = 90               # D1 は 1 文 100 個まで。余裕を持たせる
 INSERT_ROWS = 30              # 1 INSERT の行数(2 パラメータ/行)
@@ -39,6 +39,7 @@ LEASE_TTL = 1800              # 秒
 REQUEST_INTERVAL = 0.3        # D1 へのリクエスト間隔(秒)
 DIRECTORY_WAIT = 2.0          # 公式ディレクトリのページ取得間隔(秒)
 WDQS_ABORT_EXIT = 3
+LEASE_LOST_EXIT = 4
 SOURCES = ('wikidata', 'official', 'links')
 
 INTERNAL_SUFFIXES = ('.local', '.localhost', '.internal', '.intranet', '.lan', '.home', '.corp', '.test', '.example', '.invalid', '.onion')
@@ -104,6 +105,10 @@ def chunks(items, n):
 
 
 # ------------------------------------------------------------------ D1
+class LeaseLost(RuntimeError):
+    pass
+
+
 class Lease:
     """discovery_cursors の source='lease' で 2 台が同時に動かないようにする。値は '<owner>|<期限 epoch 秒>'。"""
     def __init__(self, client, owner=None, ttl=LEASE_TTL, clock=time.time):
@@ -128,7 +133,7 @@ class Lease:
     def renew(self):
         if not self._take():
             self.held = False
-            raise RuntimeError('lease lost: 別の実行が引き継いだ')
+            raise LeaseLost('lease lost: 別の実行が引き継いだ')
 
     def release(self):
         if self.held:
@@ -359,7 +364,7 @@ def main_region(html):
 def extract_member_links(html, page_url):
     """ディレクトリのページから会員の外部サイトのリンクを取る。ディレクトリ自身の登録ドメイン・SNS・検索・PDF・mailto は除く。"""
     own = urllib.parse.urlsplit(page_url).hostname or ''
-    own_root = '.'.join(own.split('.')[-3:] if own.endswith('.jp') and len(own.split('.')) >= 3 else own.split('.')[-2:])
+    own_root = registrable(own.lower())
     out = []
     for m in re.finditer(r'''<a\b[^>]*?\bhref=["']([^"']+)["']''', main_region(html), re.I):
         href = m.group(1).strip()
@@ -410,6 +415,9 @@ class PoliteFetcher:
 
 def run_official(sink, pf, adapters=None):
     for ad in (OFFICIAL if adapters is None else adapters):
+        if sink.stats.mismatch:
+            sink.stats.notes.append('official: 照合不一致のため中断')
+            break
         if not sink.room('official'):
             break
         got = 0
@@ -454,7 +462,7 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
     if apply and not lease.acquire():
         out('lease: 別の実行が動いている。何もせず終了')
         return 2, stats
-    aborted = None
+    aborted, lost = None, False
     try:
         cursors = Cursors(client, apply)
         sink = Sink(client, apply, stats, lease if apply else None, limit)
@@ -465,14 +473,25 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
             if cursors.missing_table:
                 stats.notes.append('discovery_cursors が未適用(migration 0037)。カーソルは先頭扱い')
         if 'official' in sources:
-            run_official(sink, pf or PoliteFetcher())
+            if stats.mismatch:
+                stats.notes.append('official: 照合不一致のため書き込みを止めた')
+            else:
+                run_official(sink, pf or PoliteFetcher())
         if 'links' in sources:
             stats.notes.append('links: 未実装(既掲載サイトからの外部リンク発見はこのランナーでは扱わない)')
         sink.flush()
+    except LeaseLost as e:
+        lost = True
+        stats.notes.append(str(e))
     finally:
         if apply:
-            lease.release()
+            try:
+                lease.release()
+            except Exception as e:   # 解放の失敗で元のエラーを隠さない
+                stats.notes.append(f'lease release failed: {e}')
     report(stats, apply, out)
+    if lost:
+        return LEASE_LOST_EXIT, stats
     if stats.mismatch:
         return 1, stats
     return (WDQS_ABORT_EXIT if aborted else 0), stats

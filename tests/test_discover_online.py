@@ -142,6 +142,41 @@ class Dedupe(unittest.TestCase):
         self.assertGreater(stats.mismatch, 0)
 
 
+class Stop(unittest.TestCase):
+    def test_mismatch_stops_later_sources(self):
+        d1 = FakeD1(drop_inserts=True)
+        w = WikidataTest().wdqs([wd_result(('Q1', 'https://a.example.jp/'))])
+        with mock.patch.object(fetcher, 'http_get', serve({'https://example-assoc.or.jp/members/': FIXTURE})), \
+                mock.patch.object(do, 'OFFICIAL', ADAPTER), mock.patch.object(dw, 'validate_map', return_value=[]):
+            code, stats = do.run(d1, ('wikidata', 'official'), True, None, wdqs=w, rows=[ROW],
+                                 pf=do.PoliteFetcher(sleep=lambda s: None, wait=0), out=lambda *_: None)
+        self.assertEqual(code, 1)
+        inserts = [q for q in d1.statements if q.startswith('INSERT OR IGNORE INTO url_progress')]
+        self.assertEqual(len(inserts), 1)   # wikidata の 1 文だけ。official は 0 件
+        self.assertEqual(stats.rows['official']['fetched'], 0)
+
+    def test_own_domain_links_skipped_for_www_jp(self):
+        html = '<main><a href="https://example.jp/x">self</a><a href="https://sub.example.jp/">sub</a><a href="https://other.co.jp/">o</a></main>'
+        self.assertEqual(do.extract_member_links(html, 'https://www.example.jp/members/'), ['https://other.co.jp/'])
+
+    def test_lease_lost_exit_code_4_and_release_failure_does_not_hide(self):
+        d1 = FakeD1()
+        lease = do.Lease(d1, owner='A')
+        def steal(*a, **k):
+            d1.db.execute("UPDATE discovery_cursors SET cursor_value='B|9999999999' WHERE source='lease'")
+        with mock.patch.object(fetcher, 'http_get', serve({'https://example-assoc.or.jp/members/': FIXTURE})), mock.patch.object(do, 'OFFICIAL', ADAPTER):
+            pf = do.PoliteFetcher(sleep=lambda s: None, wait=0)
+            orig = pf.get
+            def get(url):
+                steal()
+                return orig(url)
+            pf.get = get
+            with mock.patch.object(lease, 'release', side_effect=RuntimeError('net down')):
+                code, stats = do.run(d1, ('official',), True, None, pf=pf, out=lambda *_: None, lease=lease)
+        self.assertEqual(code, 4)
+        self.assertTrue(any('release failed' in n for n in stats.notes))
+
+
 class DryRun(unittest.TestCase):
     def run_official(self, apply):
         d1 = FakeD1()

@@ -116,7 +116,7 @@ uv run python scripts/discover_online.py --source official --limit 200 --apply  
 - 認証は `CLOUDFLARE_API_TOKEN`（上の「画像キュー」と同じ。D1 の読み書き）。D1 へは 0.3 秒間隔、429 は Retry-After を守る（`media_online.Cloudflare`）。
 - **先に dry-run**。供給元ごと・カテゴリごとの「入れるはずの件数」と、既知（`url_progress` / `sites.progress_key` に既にある）・無効（IP・内部名・ポート・SNS/ポータル内ページ）・ラン内重複の件数を見る。
 - `--apply` は、リース（`discovery_cursors` の `lease/discover`、30 分、バッチごとに更新）を取れたときだけ動く。別の機が動いていれば終了コード 2。終了時にリースを解放する。**同時に 2 台で回さない**。
-- 書き込みは `INSERT OR IGNORE`（30 行 / 文、1 文 100 パラメータ未満）→ 全キーの読み戻し検証。最終表は供給元ごとに fetched / invalid / already_known / added / verified。**検証不一致は終了コード 1**。Wikidata が 429/503 で中断したら 3（カーソルは進めない）。
+- 書き込みは `INSERT OR IGNORE`（30 行 / 文、1 文 100 パラメータ未満）→ 全キーの読み戻し検証。最終表は供給元ごとに fetched / invalid / already_known / added / verified。**検証不一致は終了コード 1**。Wikidata が 429/503 で中断したら 3（中断したページのカーソルは進めない。それまでに取得・検証済みのページ分は進む）。実行中にリースを失ったら 4。照合不一致が出たら以降の供給元への書き込みは止める。
 - Wikidata: `data/wikidata-leaf-map.csv` の行ごとに P856 を取る（クエリ・正規化は `pipeline/discover_wikidata.py` と同じ。WDQS は 5 秒間隔）。台帳の単位はホストのトップ URL。取り終えた行は `done`、続きは次の OFFSET。
 - official: `OFFICIAL` 表（団体・公式ディレクトリ URL・カテゴリ）の各ページを robots.txt を守って 2 秒間隔で取り、`<main>` 内の外部リンクを会員サイトとして拾う（団体自身のドメイン・SNS・検索・PDF・mailto は除く）。取得できない団体は `UNVERIFIED` に理由つきで残し、毎回レポートに出す（URL を推測で作らない）。団体を足すときは、実ページを取得して会員リンクが並ぶことを確認してから `OFFICIAL` に 1 行足す。
 - links（既掲載サイトからの外部リンク）は未実装。
