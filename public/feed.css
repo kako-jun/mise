@@ -95,14 +95,17 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 @media (orientation: landscape) and (max-height: 500px) { #feed .f-body { text-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 10px rgba(0,0,0,.45); } }
 #feed .f-name { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
 #feed .f-desc { margin: 0; font-size: 15px; line-height: 1.55; }
-#feed .f-place { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 13px; opacity: .92; }
+#feed .f-place { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 11px; opacity: .92; }
 #feed .f-place img { width: 18px; height: 14px; display: block; margin: 1px; border: 0; border-radius: 0; box-shadow: none; background: none; } /* margin:1px は旧 border 分の外形補正 */
 #feed .f-cap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 0; }
 #feed .f-long { margin: 0; font-size: 14px; line-height: 1.75; opacity: .95; cursor: pointer; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 #feed .f-cap.is-open .f-long { display: block; max-height: 34dvh; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; cursor: default; scrollbar-width: thin; }
 #feed .f-more { padding: 4px 0; border: 0; background: transparent; color: #ffcfa5; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-#feed .f-tags { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; opacity: .85; }
-#feed .f-tags li::before { content: '#'; opacity: .6; }
+#feed .f-tags { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; }
+/* リンク色は f-more と同じ。押せる範囲は縦 36px(padding 9px + 行 18px。見た目は margin の負値で据え置き。#238) */
+#feed .f-tag, #feed .f-tag:visited { display: inline-block; padding: 9px 0; margin: -9px 0; line-height: 18px; color: #ffcfa5; text-decoration: underline; text-underline-offset: 3px; }
+#feed .f-tag::before { content: '#'; opacity: .7; }
+#feed .f-tag:hover { color: #fff3df; }
 #feed .f-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
 #feed .f-date { font-size: 12px; opacity: .8; }
 #feed .f-open-actions { display: flex; align-items: stretch; gap: 6px; margin-left: auto; }
@@ -174,6 +177,7 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 #feed .f-host { margin: 0; font-size: 12px; opacity: .72; overflow-wrap: anywhere; }
 
 /* 上下センタリング（#183）。アイコン（SVG）は display:block + margin:auto で、固定高のボタンの中央に置く（字形に依存しない）。 */
+#feed .f-place[hidden] { display: none; }
 #feed .f-place span { line-height: 1; }
 #feed .f-panel-x, #feed .f-panel-x:hover { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; }
 #feed .f-panel-x svg { display: block; width: 12px; height: 12px; }

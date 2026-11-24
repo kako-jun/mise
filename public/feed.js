@@ -87,17 +87,22 @@
     const c = s.region_code;
     return window.MISE_REGIONS && /^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(c || '') && c.slice(0, 2) === s.country_code ? window.MISE_REGIONS[c] || null : null;
   }
+  // 一覧(app.js countryFlag)と同じ規則: 国名テキストは出さず「国旗 + 区画名(分かるときだけ)」。旗が無い国は出さない。
   function place(s) {
     const info = window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(s.country_code || '') ? window.MISE_COUNTRIES[s.country_code] : null;
-    if (!info) return null;
+    if (!info || !(window.MISE_FLAGS || []).includes(s.country_code)) return null;
     const region = regionInfo(s), wrap = document.createElement('p'); wrap.className = 'f-place';
-    if ((window.MISE_FLAGS || []).includes(s.country_code)) {
-      const img = document.createElement('img'); img.alt = ''; img.width = 18; img.height = 14; img.src = `/flags/${s.country_code.toLowerCase()}.svg`; img.loading = 'lazy'; img.decoding = 'async';
-      img.addEventListener('error', () => img.remove()); wrap.append(img);
-    }
-    const label = document.createElement('span'); label.textContent = region ? `${info[language]} · ${region[language]}` : info[language]; wrap.append(label);
+    const label = region ? `${info.ja} ${region.ja} / ${info.en} ${region.en}` : `${info.ja} / ${info.en}`;
+    wrap.setAttribute('role', 'img'); wrap.setAttribute('aria-label', label); wrap.title = label; wrap.dataset.country = s.country_code;
+    if (region) wrap.dataset.region = s.region_code;
+    const img = document.createElement('img'); img.alt = ''; img.width = 18; img.height = 14; img.src = `/flags/${s.country_code.toLowerCase()}.svg`; img.loading = 'lazy'; img.decoding = 'async';
+    img.addEventListener('error', () => { wrap.hidden = true; }); wrap.append(img);
+    if (region) { const name = document.createElement('span'); name.className = 'f-region'; name.textContent = region[language]; wrap.append(name); }
     return wrap;
   }
+
+  // 一覧の tagUrl と同じ宛先(範囲のパス + ?tag=)。通常一覧のタグ検索へ移る
+  const tagHref = key => { const u = new URL(globalThis.MiseFeedEntry.directoryHref(scope, []), location.origin); u.searchParams.append('tag', key); return u.pathname + u.search; };
 
   // ---- カード ----
   function configureLink(a) { if (newTab) { a.target = '_blank'; a.rel = 'noopener noreferrer'; } else { a.removeAttribute('target'); a.removeAttribute('rel'); } }
@@ -170,7 +175,7 @@
       cap.append(lp, more); body.append(cap);
     }
     let tags = []; try { tags = JSON.parse(s.tags_json || '[]'); } catch (_) {}
-    if (tags.length) { const ul = document.createElement('ul'); ul.className = 'f-tags'; for (const tg of tags) { const li = document.createElement('li'); li.textContent = (language === 'en' && tg.en) ? tg.en : tg.ja; ul.append(li); } body.append(ul); }
+    if (tags.length) { const ul = document.createElement('ul'); ul.className = 'f-tags'; for (const tg of tags) { const li = document.createElement('li'), a = document.createElement('a'); a.className = 'f-tag'; a.textContent = (language === 'en' && tg.en) ? tg.en : tg.ja; a.href = tagHref(tg.ja); li.append(a); ul.append(li); } body.append(ul); }
     const foot = document.createElement('div'); foot.className = 'f-foot';
     const sourceDate = path[0] !== globalThis.MiseFeedEntry.RECENT_CATEGORY && s.source_updated_at;
     const when = (sourceDate || s.registered_at || '').slice(0, 10);
