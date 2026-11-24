@@ -67,6 +67,12 @@
         const rank = states[x.state] ?? 0, live = x.state === 'published';
         const kinds = lang === 'ja' ? {add:'追加',remove:'取り下げ',correct:'訂正'} : {add:'Add',remove:'Remove',correct:'Correct'};
         const statuses = lang === 'ja' ? {pending:'審査待ち',approved:'承認',rejected:'却下'} : {pending:'Pending',approved:'Approved',rejected:'Rejected'};
+        const mediaStates = lang === 'ja' ? {pending:'待機',failed:'再試行待ち',none:'なし',ok:'完了',excluded:'除外'} : {pending:'Queued',failed:'Retrying',none:'None',ok:'Ready',excluded:'Excluded'};
+        const mediaCell = (state, present) => {
+          if (!state && !live) return `<td class="">—</td>`;
+          const value = state || (present ? 'ok' : 'pending');
+          return `<td class="${value === 'ok' || value === 'none' || value === 'excluded' ? 'done' : 'wait'}">${esc(mediaStates[value] || '—')}</td>`;
+        };
         const request = x.request_type ? `${kinds[x.request_type]}: ${statuses[x.request_status]}` : '—';
         return `<tr><td class="url"><a href="${esc(x.url)}" rel="nofollow noopener" target="_blank">${esc(x.url)}</a></td>`+
           `<td>${x.source === 'request' ? (lang === 'ja' ? 'ユーザー申請' : 'User request') : (lang === 'ja' ? '自動発見' : 'Discovered')}</td>`+
@@ -75,7 +81,7 @@
           `${cell(x.tags_count > 0 || rank >= 5, x.tags_count ? `${x.tags_count}${lang === 'ja' ? '件' : ''}` : rank >= 5 ? '✓' : '…')}`+
           `${cell(x.categories_count > 0 || rank >= 5, x.categories_count ? `${x.categories_count}${lang === 'ja' ? '件' : ''}` : rank >= 5 ? '✓' : '…')}`+
           `<td class="${x.request_status === 'pending' ? 'wait' : x.request_status ? 'done' : ''}">${esc(request)}</td>`+
-          `${done(!!x.favicon)}${done(!!x.thumbnail)}${cell(live, lang === 'ja' ? '掲載済み' : 'Live')}</tr>`;
+          `${mediaCell(x.favicon_state, !!x.favicon)}${mediaCell(x.thumbnail_state, !!x.thumbnail)}${cell(live, lang === 'ja' ? '掲載済み' : 'Live')}</tr>`;
       }).join('') || `<tr><td colspan="12">${lang === 'ja' ? '該当するURLはありません。' : 'No matching URLs.'}</td></tr>`;
       const start = total ? (page - 1) * pageSize + 1 : 0, end = Math.min(page * pageSize, total);
       document.querySelector('#summary').textContent = lang === 'ja' ? `${start.toLocaleString()}〜${end.toLocaleString()} 件 / ${total.toLocaleString()} 件` : `Showing ${start.toLocaleString()}–${end.toLocaleString()} of ${total.toLocaleString()}`;

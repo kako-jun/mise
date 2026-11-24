@@ -31,6 +31,25 @@ main へのマージで Workers Builds が本番へ自動デプロイする。mi
 npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 ```
 
+**例外: migration 0035（サムネイルの成人判定 eligibility）を含むリリースは、上の「migration → マージ」だけでは完了しない。** worker の再開条件を満たすまで、サムネイル worker と定期起動を停止したままにする。手順は次のとおり。
+
+1. 全 media worker と定期起動を停止する。
+2. migration 0035 を本番・プレビューへ適用する。既存サムネイル job は `eligible=0` になり、この状態では claim されない。
+3. このブランチの `scripts/llm/export_approved_sql.py` で承認済み分類 SQL を生成し、本番・プレビューの各 D1 に適用する。SQL の末尾にある NULL 分類 backfill まで適用すること。これにより既存 URL の adult=yes/no/unknown を同期し、yes 以外を有効化する。
+4. worker を止めたまま、次の確認が 0 件であることを本番・プレビューで確認する。
+
+   ```sql
+   SELECT COUNT(*) AS violations
+   FROM site_media_jobs j JOIN sites s ON s.id=j.site_id
+   WHERE j.kind='thumbnail' AND j.excluded=0
+     AND ((s.adult_content=1 AND j.eligible<>0)
+       OR (s.adult_content IS NOT 1 AND j.eligible<>1));
+   ```
+
+5. 確認後に main へマージ・デプロイし、media worker と定期起動を再開する。
+
+この順序を完了するまで worker を動かしてはならない。詳細は [nightly.md の画像キュー手順](nightly.md#画像キューd1r2)を参照。
+
 手動での再デプロイや緊急時は `npx wrangler deploy` を使う。
 
 **デプロイすると共有キャッシュが切り替わる**: 重い GET の共有キャッシュ（`caches.default`、TTL 60 秒。[architecture.md](../design/architecture.md#1-リクエストの読み取り行数の観測とキャッシュ157)）のキーにデプロイのバージョン ID（`wrangler.jsonc` の `version_metadata` バインディング `CF_VERSION_METADATA`）が入るので、デプロイ直後に旧バージョンの HTML/JSON が返ることは無い（旧バージョンの保存分は使われず TTL で消える）。

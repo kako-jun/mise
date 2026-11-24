@@ -76,6 +76,8 @@ app.get('/api/progress', async c => {
       (SELECT COUNT(*) FROM site_categories sc WHERE sc.site_id=s.id) AS categories_count,
       CASE WHEN s.favicon_path IS NOT NULL THEN 1 ELSE 0 END AS favicon,
       CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
+      (SELECT state FROM site_media_jobs mj WHERE mj.identity_key=p.identity_key AND mj.kind='favicon') AS favicon_state,
+      (SELECT state FROM site_media_jobs mj WHERE mj.identity_key=p.identity_key AND mj.kind='thumbnail') AS thumbnail_state,
       CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END AS state,
       p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
     ${from}${filterSql}

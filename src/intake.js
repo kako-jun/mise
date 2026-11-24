@@ -1,5 +1,7 @@
 // 申請(推薦 add / 取り下げ remove / 訂正 correct)の受付。Issue #4・#29、docs/operations/requests.md。
 // サーバーは申請されたURLを取りに行かない(SSRF の余地を作らない)。検証は文字列だけで行う。
+import { progressIdentityKey } from './progress-identity.js';
+
 export const TYPES = ['add', 'remove', 'correct'];
 export const LIMITS = { body: 8192, url: 500, reason: 1000, perHour: 3, perDay: 10, netPerDay: 30, addPerDay: 300, otherPerDay: 100 };
 
@@ -142,6 +144,7 @@ export async function receiveRequest(c) {
   const v = validateRequest(json);
   if (!v.ok) return v.error === 'spam' ? { status: 202, body: { status: 'pending' } } : { status: 400, body: { error: v.error } }; // ハニーポットは成功に見せる
   const { type, url, host, path, key, reason } = v.value;
+  const progressIdentity = progressIdentityKey(url);
   const db = c.env.DB;
   const ip = req.headers.get('CF-Connecting-IP');
   const hash = await ipHash(ip, salt), net = await ipHash(ip, salt, 3);
@@ -157,15 +160,15 @@ export async function receiveRequest(c) {
   // 重複・レート制限の判定は INSERT と同時に行う(競合しても上限を超えない)。IP 単位: 1時間3件・24時間10件。
   // 同一 /48(IPv6)は 24 時間 30 件。全体: 推薦は 24 時間 300 件、取り下げ・訂正は別枠で 24 時間 100 件。
   const r = await db.prepare(
-    `INSERT INTO requests (type,status,url,host,normalized_key,reason,ip_hash,note,decided_at,net_hash)
-     SELECT ?1,?2,?3,?4,?5,?6,?7,?8,CASE WHEN ?2='rejected' THEN datetime('now') END,?13
+    `INSERT INTO requests (type,status,url,host,normalized_key,reason,ip_hash,note,decided_at,net_hash,progress_identity_key)
+     SELECT ?1,?2,?3,?4,?5,?6,?7,?8,CASE WHEN ?2='rejected' THEN datetime('now') END,?13,?15
      WHERE NOT EXISTS (SELECT 1 FROM requests WHERE ip_hash=?7 AND type=?1 AND normalized_key=?5 AND status='pending')
        AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?7 AND created_at >= datetime('now','-1 hour')) < ?9
        AND (SELECT COUNT(*) FROM requests WHERE ip_hash=?7 AND created_at >= datetime('now','-1 day')) < ?10
        AND (SELECT COUNT(*) FROM requests WHERE net_hash=?13 AND created_at >= datetime('now','-1 day')) < ?14
        AND (SELECT COUNT(*) FROM requests WHERE (type='add') = ?11 AND created_at >= datetime('now','-1 day')) < ?12`
   ).bind(type, blocked ? 'rejected' : 'pending', url, host, key, reason, hash, blocked ? 'blocklisted' : null,
-    LIMITS.perHour, LIMITS.perDay, type === 'add' ? 1 : 0, type === 'add' ? LIMITS.addPerDay : LIMITS.otherPerDay, net, LIMITS.netPerDay).run();
+    LIMITS.perHour, LIMITS.perDay, type === 'add' ? 1 : 0, type === 'add' ? LIMITS.addPerDay : LIMITS.otherPerDay, net, LIMITS.netPerDay, progressIdentity).run();
   if (r.meta?.changes) return { status: 202, body: { status: 'pending' } };
   // 挿入されなかった: 同一 IP の再送なら成功に見せ、そうでなければレート超過。
   const dup = await db.prepare(`SELECT 1 AS x FROM requests WHERE ip_hash=?1 AND type=?2 AND normalized_key=?3 AND status='pending' LIMIT 1`).bind(hash, type, key).first();

@@ -90,35 +90,19 @@ pi-3b の crontab（`%` は crontab で特殊文字、Windows パスは絶対パ
 
 手動確認は `ssh kako-rog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\kako-jun\mise-start-tasks.ps1 -CheckOnly'`。この確認はタスクを起動しない。`-ExecutionPolicy Bypass` はこの起動プロセスに限る（システムの設定は変更しない）。単発ジョブの dry-run が必要な場合は既存の `mise-nightly.cmd --dry-run` を使うが、そのラッパーは元の clone を reset する。
 
-## 新規掲載の画像取得
+## 画像キュー（D1/R2）
 
-- `--apply-prod --media-favicon-limit 25 --thumbnail-limit 25` で、新規掲載分のファビコンとサムネイルを取得・配信する。各上限は 1 サイクル 0〜100 件、0 は無効。上限は独立して設定できる。本番の D1 `mise` と R2 `mise-media` 専用。従来のローカル取得だけの `--favicon-limit` は別のオプションなので、自動配信時は省く。
-- Windows の rog では `--media-favicon-limit 25 --thumbnail-limit 10` でファビコンとサムネイルを取得・配信する。Playwright Core と Chromium は Windows 上で実行する。必要な環境は[サムネイルの手順書](../collection/thumbnails.md#使い方)を参照。
-- 対象は出荷 SQL の ID に一致し、D1 に実際に掲載され、該当の画像列が未設定のサイト。サムネイルは出荷時の台帳で `adult=yes` のサイトをキューに入れない。手動の除外も取得ツールが尊重する。取得と R2 の固定キーへの保存は既存のツールを使い、R2 に現在の画像を置いた印があるときだけ D1 を更新する。
-- 未処理分は実行機の `var/nightly/media.sqlite` に残る。次の本番反映モードのサイクルは、追加が 0 件でも、処理可能になった時刻が古い順に処理する。取得に失敗した分は台帳の期限まで待ち、保存済みサムネイルの R2 への転送は翌日から再試行できる。手動の除外は待ち行列から外す。掲載と画像の成功分はそのまま反映され、保存先や段自体の失敗は `guards` と `var/nightly/<date>/media.log` に残る。
-- 元の実行機で同じサイクルをやり直すには、元の `--date` と `--apply-prod --from-stage media` に画像上限オプションを付ける。成功済みの prod 段は飛ばし、画像だけを処理する。用意が間に合わなかったサイクルにも、保存済みの `keys.txt` と `export.sqlite` があれば同じ手順を使える。
+画像キューは migration `0033_media_jobs.sql` 適用後、`site_media_jobs` と `site_media_daily_counts` を正本にする。`scripts/nightly_media.py` と `scripts/media_worker.py` は D1 から期限到来分を原子的に claim し、各 claim は 20 分の lease が付き、異常終了時は期限後に再試行できる。サムネイルの日次上限も D1 の原子的予約で複数 worker 間に共有する。成人判定の初回導入は必ずこの順で行う: **全media workerを停止 → migration 0035を適用 → `export_approved_sql.py` の承認済み分類SQLを全てD1へ適用（最後のNULL分類eligibility backfillまで実行）→ 件数を確認 → workerを再開**。migration直後、既存thumbnail jobは `eligible=0` のままなので、バックフィル完了前にworkerを起動してはならない。承認済みLLM判定 `adult=yes` は `sites.adult_content` として同期され、サムネイル収集から除外する。`adult=no` と `unknown` は旧挙動を保ち収集対象で、favicon は成人判定で除外しない。変換結果の bytes は Cloudflare R2 API へ直接 PUT する。失敗・再試行・除外・eligibility・内容ハッシュ・asset key・日次上限は D1 に記録する。変換時の SQLite は `:memory:` だけで、JSON/SQL/永続画像をローカルに保存しない。ブラウザ撮影の PNG は既存 sandbox がサイトごとに短命な一時ディレクトリへ置き、処理終了時に自動削除する（残る再開状態ではない）。`sites` の画像ポインタ更新も D1 trigger で job state に同期する。
 
-### rog 一台で画像を継続取得する
+各撮影機には Cloudflare REST API の Bearer `CLOUDFLARE_API_TOKEN` が必要（R2 S3 API の Access Key ID / Secret Access Key ではない）。アカウント ID は `CLOUDFLARE_ACCOUNT_ID`、`wrangler.jsonc`、または token で許可される Cloudflare accounts API から解決する。トークンは専用の最小権限（D1 の対象 DB 読み書き、R2 の対象 bucket の object 読み書き、および自動解決時は account list read）にし、OS の環境設定または外部 secret manager から各 PC のプロセスへ渡す。リポジトリや `var/`、D1 には保存しない。既存の Wrangler OAuth は `wrangler` コマンド用であり、この直接 API クライアントの Bearer token には自動変換されない。`MISE_D1_DATABASE_ID` と `MISE_R2_BUCKET` は任意で、既定は `wrangler.jsonc` の D1 ID と `mise-media`。HTTPS はシステムの CA と proxy 設定を使い、証明書チェーンと hostname は検証する。検査 proxy の CA に欠ける X509 拡張要件だけを緩和する（`VERIFY_X509_STRICT` を無効化）。
 
-`scripts/media_worker.py` は掲載処理とは独立して動く。成功して本番反映済みの過去・今後のサイクルの `status.json`・`keys.txt`・`export.sqlite` を読み、同じ Windows 側 `var/nightly/media.sqlite` に一度だけ取り込む。掲載失敗・処理中のサイクルは対象にしない。過去に出荷記録を残さず手動投入したサイトは対象外。ファビコンとサムネイルは期限を尊重し、R2 に格納できた画像だけ D1 に付ける。既定は両方とも Windows で処理する。並行実行を避けるため worker の専用ロックと、既存 media 段と共有する `.media.lock` を使う。
+Windows worker は `scripts/cron/mise-media.cmd` から起動し、既定で favicon 100 件・thumbnail 10 件を処理する。Playwright Core/Chromium は Windows 上で使い、robots・公開 IP・時間・受信量の既存制限を維持する。worker はローカルのキュー、カーソル、画像を保存しない。
 
-1. 実行中にコードが書き換わらない専用 clone `C:\Users\kako-jun\repos\mise-media` にこの変更を配置し、Windows 側で `npm ci` を実行する。`var` は作らず、`scripts/cron/mise-media.cmd` は `C:\Users\kako-jun\repos\mise\var` の台帳を使う。`mise-continuous` や既存 nightly の clone を reset しない。
-2. Windows のタスクスケジューラで `scripts/cron/mise-media.cmd` を同一ユーザーのログオン時に起動し、実行時間制限なし・重複インスタンス無視に設定する。初回は手動起動し `var/nightly/media-worker.log`、`media.sqlite`、少数サイトの画像 URL と D1 の状態を確認する。既定はファビコン100件、サムネイル10件ずつ、300秒の待機。画像段の失敗は掲載ジョブを停止しない。
+### 旧メディア台帳の移行
 
-Windows では `npm ci` で Playwright Core を用意し、`%LOCALAPPDATA%\ms-playwright` の Chromium headless shell を自動検出する。別の場所を使うときは `PLAYWRIGHT_DIR` と `CHROMIUM_PATH` を設定する。Windows では bwrap/systemd は使わず、既存の robots 検査・公開 IP の検査・フィルタプロキシ・撮影時間と受信量の上限を使う。サムネイル試行は既存の1日上限3000件を守る。
+`scripts/import_media_state.py` は既定で read-only dry-run。`--source DB=ASSET_DIR` を台帳ごとに繰り返し、全候補を同時に渡す。複数台帳の同一サイトは最新 timestamp の行だけを選び、同時刻で内容が異なるもの、D1 の方が新しいもの、既存 R2 と hash が違うものは overwrite せず ineligible として報告する。実行前に結果を確認し、明示的な `--apply` を付けたときだけ不足 R2 object を upload し、D1 を更新する。R2 の読み戻し hash と D1 の状態/metadata readback の両方が一致した行だけ `eligible_for_cleanup: true` とする。コマンドは元ファイルを削除しない。`var/` 全体の削除許可を意味しない。
 
-旧 WSL オプションは明示的に拒否する。Windows 撮影時は WSL を起動しない。
-
-### 別の Linux 撮影機へ渡す従来の手順
-
-1. rog 上のサイクルの `status.json` を読み、`ok` と `prod_applied` が true、`prod` 段が `ok` であることを確認する。同じサイクルの `keys.txt` と `export.sqlite` を、撮影機の非公開作業ディレクトリへコピーする。出荷時の成人向け判定を使うため、別サイクルの台帳とは混ぜない。
-2. Linux の撮影機でサムネイル用の自己検査を通し、同じ本番 D1 と R2 にアクセスできる Wrangler を用意する。撮影機に永続の `var/nightly` を作る。以下では `var/nightly/2026-11-20-7` に上記2ファイルを置いた例。撮影機ではこのコマンドや他の撮影処理を同時に実行しない。
-
-   ```sh
-   uv run --with pillow python3 scripts/nightly_media.py --var var --out var/nightly/2026-11-20-7 --d1-name mise --enqueue --favicon-limit 0 --thumbnail-limit 25
-   ```
-
-3. 次回の出荷分も同じ撮影機のキューに投入する。新しい出荷分がなければ `--enqueue` を外して未処理分を進められる。掲載の `--from-stage media` による再開は、元のサイクルの状態が残っている実行機でだけ使う。
+この slice はメディア状態だけを移行する。発見 frontier、LLM 審査/承認台帳、夜間再開 checkpoint、source cursor と public body cache は依然ローカルであり、オンラインのみへの移行は未完了。これらの collection を再開する前に別 slice で D1 化する。
 
 ## cron の登録（kako-jun が行う）（Linux の例）
 

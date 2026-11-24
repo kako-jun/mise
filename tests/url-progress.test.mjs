@@ -35,7 +35,7 @@ test('GET /api/progress merges published sites and lifecycle rows, sorted newest
   site(db, 'pub', 'https://pub.example/', '日本語', 'English');
   db.prepare("INSERT INTO site_tags(site_id,label_ja) VALUES('pub','タグ')").run();
   db.prepare("INSERT INTO site_categories(site_id,category_id) VALUES('pub','arts')").run();
-  db.prepare("UPDATE url_progress SET state='approved',updated_at='2026-11-24 02:00:00' WHERE identity_key='pub.example'").run();
+  db.prepare("UPDATE url_progress SET state='approved',updated_at='2026-11-24 02:00:00' WHERE identity_key='pub.example/'").run();
   db.prepare("INSERT INTO url_progress(identity_key,url,source,state,updated_at) VALUES('new.example','https://new.example/','discovered','fetched','2026-11-24 03:00:00')").run();
   const res = await api(db, '/api/progress');
   assert.equal(res.status, 200);
@@ -50,6 +50,8 @@ test('GET /api/progress merges published sites and lifecycle rows, sorted newest
   assert.equal(published.description_en, 'English');
   assert.equal(published.tags_count, 1);
   assert.equal(published.categories_count, 1);
+  assert.equal(published.favicon_state, 'pending');
+  assert.equal(published.thumbnail_state, 'pending');
 });
 
 test('site insert creates the canonical discovered row and marks it published in the API', async () => {
@@ -58,12 +60,12 @@ test('site insert creates the canonical discovered row and marks it published in
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].source, 'discovered');
   assert.equal(body.results[0].state, 'published');
-  assert.equal(db.prepare("SELECT identity_key FROM url_progress").get().identity_key, 'pub.example');
+  assert.equal(db.prepare("SELECT identity_key FROM url_progress").get().identity_key, 'pub.example/');
 });
 
 test('GET /api/progress keeps request source/status on an already published site', async () => {
   const db = fixture(); site(db, 'pub', 'https://pub.example/');
-  db.prepare("UPDATE url_progress SET source='request',request_type='remove',request_status='pending' WHERE identity_key='pub.example'").run();
+  db.prepare("UPDATE url_progress SET source='request',request_type='remove',request_status='pending' WHERE identity_key='pub.example/'").run();
   const body = await (await api(db, '/api/progress')).json();
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].state, 'published');
@@ -131,11 +133,11 @@ test('request triggers preserve pending-to-approved/rejected and add/remove/corr
   assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status FROM url_progress WHERE url='https://new.example/'").get() },
     { source: 'request', state: 'discovered', request_type: 'add', request_status: 'pending' });
   db.prepare("UPDATE requests SET status='approved',decided_at='2026-11-24 04:00:00' WHERE url='https://new.example/'").run();
-  const approved = db.prepare("SELECT state,request_status FROM url_progress WHERE identity_key='new.example'").get();
+  const approved = db.prepare("SELECT state,request_status FROM url_progress WHERE identity_key='new.example/'").get();
   assert.equal(approved.state, 'discovered'); assert.equal(approved.request_status, 'approved');
   for (const type of ['remove','correct']) {
     add.run(type,'pending','https://pub.example/','pub.example','pub.example',`private ${type}`);
-    const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='pub.example'").get();
+    const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='pub.example/'").get();
     assert.equal(row.request_type, type); assert.equal(row.request_status, 'pending');
     const view = await (await api(db, '/api/progress')).json();
     assert.equal(view.results.find(x => x.url === 'https://pub.example/').state, 'published');
@@ -158,7 +160,7 @@ test('normalized user request merges with published http/www variant into one UR
 test('normalized path URL with an encoded space merges despite a decoded request dedup key', async () => {
   const db = fixture(); site(db, 'pub-path', 'https://example.com/a%20b/');
   db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason)
-    VALUES('add','pending','http://www.example.com/a%20b','www.example.com','example.com/a b','private')`).run();
+    VALUES('add','pending','http://www.example.com/a%20b/','www.example.com','example.com/a b','private')`).run();
   const body = await (await api(db, '/api/progress')).json();
   assert.equal(body.total, 1);
   assert.equal(body.results.length, 1);
@@ -170,10 +172,10 @@ test('normalized path URL with an encoded space merges despite a decoded request
 
 test('request overlay does not regress an in-progress candidate stage', () => {
   const db = fixture();
-  db.prepare("INSERT INTO url_progress(identity_key,url,source,state) VALUES('candidate.example','https://candidate.example/','discovered','candidate')").run();
+  db.prepare("INSERT INTO url_progress(identity_key,url,source,state) VALUES('candidate.example/','https://candidate.example/','discovered','candidate')").run();
   db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason)
     VALUES('add','pending','http://www.candidate.example/','www.candidate.example','candidate.example','private')`).run();
-  const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='candidate.example'").get();
+  const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='candidate.example/'").get();
   assert.equal(row.state, 'candidate');
   assert.equal(row.request_type, 'add');
   assert.equal(row.request_status, 'pending');
@@ -186,7 +188,7 @@ test('updating an older request does not replace the latest request overlay for 
   add.run('add','pending','https://example.com/','example.com','example.com','old add','2026-11-23 10:00:00');
   add.run('remove','pending','https://www.example.com/','www.example.com','example.com','new remove','2026-11-24 10:00:00');
   db.prepare("UPDATE requests SET status='approved',decided_at='2026-11-25 10:00:00' WHERE type='add' AND normalized_key='example.com'").run();
-  const row = db.prepare("SELECT request_type,request_status FROM url_progress WHERE identity_key='example.com'").get();
+  const row = db.prepare("SELECT request_type,request_status FROM url_progress WHERE identity_key='example.com/'").get();
   assert.equal(row.request_type, 'remove');
   assert.equal(row.request_status, 'pending');
 });
