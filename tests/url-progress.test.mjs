@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, rmSync, readdirSync as listDir, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -35,7 +35,8 @@ test('GET /api/progress merges published sites and lifecycle rows, sorted newest
   site(db, 'pub', 'https://pub.example/', '日本語', 'English');
   db.prepare("INSERT INTO site_tags(site_id,label_ja) VALUES('pub','タグ')").run();
   db.prepare("INSERT INTO site_categories(site_id,category_id) VALUES('pub','arts')").run();
-  db.prepare("INSERT INTO url_progress(url,source,state,updated_at) VALUES('https://pub.example/','discovered','approved','2026-11-24 02:00:00'),('https://new.example/','discovered','fetched','2026-11-24 03:00:00')").run();
+  db.prepare("UPDATE url_progress SET state='approved',updated_at='2026-11-24 02:00:00' WHERE identity_key='pub.example'").run();
+  db.prepare("INSERT INTO url_progress(identity_key,url,source,state,updated_at) VALUES('new.example','https://new.example/','discovered','fetched','2026-11-24 03:00:00')").run();
   const res = await api(db, '/api/progress');
   assert.equal(res.status, 200);
   const body = await res.json();
@@ -51,17 +52,18 @@ test('GET /api/progress merges published sites and lifecycle rows, sorted newest
   assert.equal(published.categories_count, 1);
 });
 
-test('GET /api/progress uses discovered source for a published site without a lifecycle row', async () => {
+test('site insert creates the canonical discovered row and marks it published in the API', async () => {
   const db = fixture(); site(db, 'pub', 'https://pub.example/');
   const body = await (await api(db, '/api/progress')).json();
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].source, 'discovered');
   assert.equal(body.results[0].state, 'published');
+  assert.equal(db.prepare("SELECT identity_key FROM url_progress").get().identity_key, 'pub.example');
 });
 
 test('GET /api/progress keeps request source/status on an already published site', async () => {
   const db = fixture(); site(db, 'pub', 'https://pub.example/');
-  db.prepare("INSERT INTO url_progress(url,source,state,request_type,request_status) VALUES('https://pub.example/','request','published','remove','pending')").run();
+  db.prepare("UPDATE url_progress SET source='request',request_type='remove',request_status='pending' WHERE identity_key='pub.example'").run();
   const body = await (await api(db, '/api/progress')).json();
   assert.equal(body.results.length, 1);
   assert.equal(body.results[0].state, 'published');
@@ -72,7 +74,7 @@ test('GET /api/progress keeps request source/status on an already published site
 
 test('GET /api/progress pagination defaults and limit/offset boundaries', async () => {
   const db = fixture();
-  for (let i = 0; i < 3; i++) db.prepare('INSERT INTO url_progress(url,state,updated_at) VALUES(?,?,?)').run(`https://${i}.example/`, 'fetched', `2026-11-24 0${i}:00:00`);
+  for (let i = 0; i < 3; i++) db.prepare('INSERT INTO url_progress(identity_key,url,state,updated_at) VALUES(?,?,?,?)').run(`${i}.example`, `https://${i}.example/`, 'fetched', `2026-11-24 0${i}:00:00`);
   const defaults = await (await api(db, '/api/progress')).json();
   assert.equal(defaults.limit, 50); assert.equal(defaults.results.length, 3);
   assert.equal((await api(db, '/api/progress?limit=1&offset=1')).status, 200);
@@ -83,7 +85,7 @@ test('GET /api/progress pagination defaults and limit/offset boundaries', async 
 });
 
 test('GET /api/progress returns an empty page after the last row', async () => {
-  const db = fixture(); db.prepare("INSERT INTO url_progress(url) VALUES('https://one.example/')").run();
+  const db = fixture(); db.prepare("INSERT INTO url_progress(identity_key,url) VALUES('one.example','https://one.example/')").run();
   const body = await (await api(db, '/api/progress?offset=1')).json();
   assert.equal(body.total, 1); assert.deepEqual(body.results, []);
 });
@@ -106,25 +108,58 @@ test('request triggers preserve pending-to-approved/rejected and add/remove/corr
   assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status FROM url_progress WHERE url='https://new.example/'").get() },
     { source: 'request', state: 'discovered', request_type: 'add', request_status: 'pending' });
   db.prepare("UPDATE requests SET status='approved',decided_at='2026-11-24 04:00:00' WHERE url='https://new.example/'").run();
-  assert.equal(db.prepare("SELECT state FROM url_progress WHERE url='https://new.example/'").get().state, 'approved');
+  const approved = db.prepare("SELECT state,request_status FROM url_progress WHERE identity_key='new.example'").get();
+  assert.equal(approved.state, 'discovered'); assert.equal(approved.request_status, 'approved');
   for (const type of ['remove','correct']) {
     add.run(type,'pending','https://pub.example/','pub.example','pub.example',`private ${type}`);
-    const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE url='https://pub.example/'").get();
+    const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='pub.example'").get();
     assert.equal(row.request_type, type); assert.equal(row.request_status, 'pending');
     const view = await (await api(db, '/api/progress')).json();
     assert.equal(view.results.find(x => x.url === 'https://pub.example/').state, 'published');
   }
 });
 
-test('migration 0032 backfills latest request per URL without copying private columns and is rerunnable', () => {
+test('normalized user request merges with published http/www variant into one URL row', async () => {
+  const db = fixture(); site(db, 'pub', 'https://example.com/');
+  db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason)
+    VALUES('add','pending','http://www.example.com/','www.example.com','example.com','private')`).run();
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.total, 1);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].url, 'https://example.com/');
+  assert.equal(body.results[0].state, 'published');
+  assert.equal(body.results[0].request_type, 'add');
+  assert.equal(body.results[0].request_status, 'pending');
+});
+
+test('request overlay does not regress an in-progress candidate stage', () => {
+  const db = fixture();
+  db.prepare("INSERT INTO url_progress(identity_key,url,source,state) VALUES('candidate.example','https://candidate.example/','discovered','candidate')").run();
+  db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason)
+    VALUES('add','pending','http://www.candidate.example/','www.candidate.example','candidate.example','private')`).run();
+  const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='candidate.example'").get();
+  assert.equal(row.state, 'candidate');
+  assert.equal(row.request_type, 'add');
+  assert.equal(row.request_status, 'pending');
+});
+
+test('mixed ISO-T and SQLite-space timestamps sort by actual time', async () => {
+  const db = fixture();
+  db.prepare("INSERT INTO url_progress(identity_key,url,state,updated_at) VALUES('older.example','https://older.example/','fetched','2026-11-24 02:30:00'),('newer.example','https://newer.example/','fetched','2026-11-24T03:00:00Z')").run();
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.results[0].url, 'https://newer.example/');
+  assert.equal(body.results[1].url, 'https://older.example/');
+});
+
+test('migration 0032 backfills latest request per normalized URL without copying private columns', () => {
   const db = fixture({ through: '0031_recent_registration_sort.sql' });
   db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason,contact,ip_hash,net_hash,note,created_at)
     VALUES('add','pending','https://old.example/','old.example','old.example','secret1','mail1','ip1','net1','note1','2026-11-23'),
           ('add','rejected','https://old.example/','old.example','old.example','secret2','mail2','ip2','net2','note2','2026-11-24')`).run();
   const sql = readFileSync(new URL('../migrations/0032_url_progress.sql', import.meta.url), 'utf8');
-  db.exec(sql); db.exec(sql);
-  assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status,discovered_at FROM url_progress WHERE url='https://old.example/'").get() },
-    { source: 'request', state: 'rejected', request_type: 'add', request_status: 'rejected', discovered_at: '2026-11-24' });
+  db.exec(sql);
+  assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status,discovered_at FROM url_progress WHERE identity_key='old.example'").get() },
+    { source: 'request', state: 'discovered', request_type: 'add', request_status: 'rejected', discovered_at: '2026-11-24' });
   const cols = db.prepare('PRAGMA table_info(url_progress)').all().map(x => x.name);
   for (const privateField of ['reason','contact','ip_hash','net_hash','note']) assert.equal(cols.includes(privateField), false);
 });
@@ -162,9 +197,44 @@ test('nightly exporter escapes URLs and emits only changed lifecycle fields', ()
     assert.equal(run.status, 0, run.stderr);
     const sql = readFileSync(sqlPath, 'utf8');
     assert.match(sql, /it''s/); assert.match(sql, /'approved'/); assert.match(sql, /WHERE \(url_progress.state!='published'/);
-    const d = fixture(); d.exec("INSERT INTO url_progress(url,state) VALUES('https://a.example/it''s','fetched')"); d.exec(sql);
-    assert.equal(d.prepare("SELECT state FROM url_progress WHERE url=?").get("https://a.example/it's").state, 'approved');
-    d.prepare("UPDATE url_progress SET state='published' WHERE url=?").run("https://a.example/it's"); d.exec(sql);
-    assert.equal(d.prepare("SELECT state FROM url_progress WHERE url=?").get("https://a.example/it's").state, 'published');
+    assert.match(sql, /identity_key/);
+    const d = fixture(); d.prepare("INSERT INTO url_progress(identity_key,url,state) VALUES(?,?,?)").run("a.example/it's", "https://a.example/it's", 'fetched'); d.exec(sql);
+    assert.equal(d.prepare("SELECT state FROM url_progress WHERE identity_key=?").get("a.example/it's").state, 'approved');
+    d.prepare("UPDATE url_progress SET state='published' WHERE identity_key=?").run("a.example/it's"); d.exec(sql);
+    assert.equal(d.prepare("SELECT state FROM url_progress WHERE identity_key=?").get("a.example/it's").state, 'published');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('nightly exporter splits a large frontier into bounded files without dropping or duplicating URLs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mise-progress-scale-'));
+  try {
+    const dbPath = join(dir, 'frontier.sqlite'), sqlPath = join(dir, 'url-progress.sql'), db = new DatabaseSync(dbPath);
+    db.exec(readFileSync(new URL('../scripts/pipeline/schema.sql', import.meta.url), 'utf8'));
+    const insert = db.prepare('INSERT INTO frontier(key,host,url,source,discovered_at,state) VALUES(?,?,?,?,?,?)');
+    const expected = new Set();
+    const count = 25000;
+    const tx = db.prepare('BEGIN');
+    tx.run();
+    for (let i = 0; i < count; i++) {
+      const n = String(i).padStart(5, '0'), url = `https://site${n}.example/${'p'.repeat(80)}`;
+      expected.add(url);
+      insert.run(`site${n}.example`, `site${n}.example`, url, 'commoncrawl-webgraph', '2026-11-24T00:00:00Z', 'discovered');
+    }
+    db.prepare('COMMIT').run(); db.close();
+    const run = spawnSync('uv', ['run', 'python3', new URL('../scripts/progress/export_sql.py', import.meta.url).pathname, '--db', dbPath, '--out', sqlPath], { encoding: 'utf8', timeout: 60000 });
+    assert.equal(run.status, 0, run.stderr || run.error?.message);
+    const outputs = listDir(dir).filter(name => name.startsWith('url-progress.sql')).sort().map(name => join(dir, name));
+    assert.ok(outputs.length > 1, `expected multiple outputs, got ${outputs.length}`);
+    const seen = [];
+    for (const output of outputs) {
+      assert.ok(statSync(output).size <= 5 * 1024 * 1024, `${output} exceeds 5 MiB`);
+      for (const line of readFileSync(output, 'utf8').split('\n')) {
+        const m = line.match(/^INSERT INTO url_progress\(identity_key,url,[\s\S]*?VALUES\('([^']+)','([^']+)'/);
+        if (m) seen.push(m[2]);
+      }
+    }
+    assert.equal(seen.length, count);
+    assert.equal(new Set(seen).size, count);
+    assert.deepEqual(new Set(seen), expected);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
