@@ -42,7 +42,7 @@ JUDGE_GUARD_WINDOW = 100        # 判定の費用ガード: 直近 JUDGE_GUARD_H
 JUDGE_GUARD_HOURS = 6           # 窓の長さ。この時間たつと窓が空になり自然に再開する
 STALE_RESERVE_HOURS = 6         # これより古い llm_ledger の reserve 行が残っていれば開始しない(exit 5)
 HEARTBEAT_MAX_FAILS = 3         # heartbeat の更新が(リース喪失ではなく)D1 の一時エラーで連続この回数失敗したらリース喪失扱い
-MAX_PUBLISH_PER_DAY = 1000      # 直近 24 時間に作られた sites(D1 から数える)がこの件数に達したら掲載しない(正常終了。残りは翌日以降)
+MAX_PUBLISH_PER_DAY = 5000      # 既定。直近 24 時間に作られた sites(D1 から数える)がこの件数に達したら掲載しない(正常終了。残りは翌日以降)。--max-publish-per-day で変更
 STALE_REVIEWING_MINUTES = 30    # docs/operations/enrich.md の前提チェックと同じ
 
 
@@ -205,7 +205,7 @@ def integrity_stop(p):
     return Stop(1, f'publish: 整合チェック違反 {"; ".join(parts)} / この回に掲載した id: {ids[:20]}(Time Travel の bookmark で復元を検討)')
 
 
-def run_round(client, n, active, limits, apply, out, *, budget_month, concurrency, fetch, llm, lease, hb, state):
+def run_round(client, n, active, limits, apply, out, *, budget_month, concurrency, max_publish_per_day, fetch, llm, lease, hb, state):
     """1 回分。-> (その回の各段の stats, 何か選ばれたか)。止める時は Stop。state['final'] は最後に返す終了コード(判定の費用ガード)。"""
     res, selected = {}, 0
 
@@ -243,10 +243,10 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
         guard_lease()
         limit = limits['publish']
         if apply:
-            room = MAX_PUBLISH_PER_DAY - published_last_day(client)
+            room = max_publish_per_day - published_last_day(client)
             limit = min(limit, max(0, room))
             if limit <= 0:
-                out(f'掲載しない: 直近 24 時間に作られた sites が日次上限 {MAX_PUBLISH_PER_DAY} 件に達した')
+                out(f'掲載しない: 直近 24 時間に作られた sites が日次上限 {max_publish_per_day} 件に達した')
                 state['daily_cap'] = True
         if limit > 0:
             try:
@@ -279,11 +279,15 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
 
 
 def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=None, apply=False, budget_month=judge_stage.MONTHLY_CAP_USD,
-                 concurrency=1, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark):
+                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark):
     """-> (終了コード, 最初と最後の状態別件数)。テストは fetch / llm / lease / clock / bookmark_fn を差し込む。"""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     if any(not 1 <= v <= MAX_LIMIT for v in limits.values()):
         raise ValueError(f'各段の limit は 1〜{MAX_LIMIT}')
+    if max_publish_per_day is None:
+        max_publish_per_day = MAX_PUBLISH_PER_DAY
+    if max_publish_per_day < 1:
+        raise ValueError('max_publish_per_day は 1 以上')
     active = {s for s in STAGES if s in stages}
     lease = lease or do.Lease(client, ttl=LEASE_TTL, key=LEASE_KEY)
     if not apply:
@@ -300,7 +304,7 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
         while True:
             n += 1
             res, selected = run_round(client, n, active, limits, apply, out, budget_month=budget_month, concurrency=concurrency,
-                                      fetch=fetch, llm=llm, lease=lease, hb=hb, state=state)
+                                      max_publish_per_day=max_publish_per_day, fetch=fetch, llm=llm, lease=lease, hb=hb, state=state)
             cur = progress_counts(client)
             if apply and cur == prev and selected:
                 out('WARNING 停止: この回で url_progress が 1 件も動かなかった(対象はあるが進まない。ログを確認)。終了コードは 0')
@@ -309,7 +313,7 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
             if not apply:
                 break
             if state['daily_cap']:
-                out(f'停止: 日次の掲載上限 {MAX_PUBLISH_PER_DAY} 件(残りは翌日以降)')
+                out(f'停止: 日次の掲載上限 {max_publish_per_day} 件(残りは翌日以降)')
                 break
             if not selected:
                 out('残りなし: 全段で対象が 0 件')
@@ -364,6 +368,7 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--rounds', type=int, default=0, help='回数。0 = 残りが無くなるか停止条件まで')
     ap.add_argument('--max-seconds', type=float, default=None, help='この秒数を超えたら次の回に入らず終了')
     ap.add_argument('--budget-month', type=float, default=judge_stage.MONTHLY_CAP_USD, help='月の LLM 費用の上限(USD)')
+    ap.add_argument('--max-publish-per-day', type=int, default=MAX_PUBLISH_PER_DAY, help=f'直近 24 時間に作られた sites の日次上限(1 以上。既定 {MAX_PUBLISH_PER_DAY})')
     ap.add_argument('--judge-concurrency', type=int, default=1, help='判定段の並列数(1〜4)')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かない')
@@ -377,13 +382,13 @@ def main(argv=None, *, client=None, **inject):
         v = getattr(a, f'{s}_limit')
         v = a.limit if v is None else v
         limits[s] = DEFAULT_LIMITS[s] if v is None else v
-    if min(limits.values()) < 1 or max(limits.values()) > MAX_LIMIT or a.rounds < 0 or (a.max_seconds is not None and a.max_seconds <= 0) or not 1 <= a.judge_concurrency <= 4 or a.budget_month <= 0:
-        ap.error(f'--limit は 1〜{MAX_LIMIT}、--rounds は 0 以上、--max-seconds は正、--judge-concurrency は 1〜4、--budget-month は正')
+    if min(limits.values()) < 1 or max(limits.values()) > MAX_LIMIT or a.rounds < 0 or (a.max_seconds is not None and a.max_seconds <= 0) or not 1 <= a.judge_concurrency <= 4 or a.budget_month <= 0 or a.max_publish_per_day < 1:
+        ap.error(f'--limit は 1〜{MAX_LIMIT}、--rounds は 0 以上、--max-seconds は正、--judge-concurrency は 1〜4、--budget-month は正、--max-publish-per-day は 1 以上')
     if client is None:
         import media_online
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
     code, _, _ = run_pipeline(client, stages=stages, limits=limits, rounds=a.rounds, max_seconds=a.max_seconds, apply=a.apply,
-                              budget_month=a.budget_month, concurrency=a.judge_concurrency, **inject)
+                              budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, **inject)
     return code
 
 

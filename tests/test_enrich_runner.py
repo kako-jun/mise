@@ -423,16 +423,28 @@ class Guards(Runner):
         for i in range(3):
             add_candidate(self.d1, f'c{i}.example.jp')
         recent = eo.published_last_day(self.d1)
-        old = eo.MAX_PUBLISH_PER_DAY
-        eo.MAX_PUBLISH_PER_DAY = recent + 2
-        try:
-            code, start, end = self.go(stages=('publish',))
-        finally:
-            eo.MAX_PUBLISH_PER_DAY = old
+        code, start, end = self.go(stages=('publish',), max_publish_per_day=recent + 2)
         self.assertEqual(code, 0)
         self.assertEqual(end['published'] - start['published'], 2)
         self.assertIn('日次', self.text())
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 1)
+
+    def test_max_publish_per_day_default_and_flag(self):
+        self.assertEqual(eo.MAX_PUBLISH_PER_DAY, 5000)
+        seen = {}
+        orig = eo.run_pipeline
+        eo.run_pipeline = lambda client, **k: (seen.update(k), (0, None, None))[1]
+        try:
+            self.assertEqual(eo.main([], client=self.d1), 0)
+            self.assertEqual(seen['max_publish_per_day'], 5000)
+            self.assertEqual(eo.main(['--max-publish-per-day', '123'], client=self.d1), 0)
+            self.assertEqual(seen['max_publish_per_day'], 123)
+            for bad in ('0', '-5'):
+                with self.assertRaises(SystemExit) as cm:
+                    eo.main(['--max-publish-per-day', bad], client=self.d1)
+                self.assertEqual(cm.exception.code, 2)
+        finally:
+            eo.run_pipeline = orig
 
     def test_ledger_settle_error_exit_5_releases_lease(self):
         self.seed()
