@@ -4,12 +4,10 @@ html.feed-mode body { margin: 0; overflow: hidden; }
 #feed {
   /* 触って決める値 */
   --bg-blur: 28px;          /* 背景(同じ絵の拡大)のぼかし */
-  --thumb-blur: 1.5px;        /* 上半分(サイトの雰囲気を見せる側)のぼかし */
-  --scrim-blur: 14px;       /* 文字を重ねる下半分のぼかし */
-  --scrim-alpha: .54;       /* 下半分の暗さ(0〜1)。濃いほど読みやすい */
-  --hero-h: 62%;            /* サムネの枠の高さ(カード高に対する割合)。上端基準で、下端は背景へ溶かす */
+  --thumb-blur: 1.5px;      /* 背景いっぱいに拡大したサムネのぼかし */
+  --scrim-alpha: .86;       /* 下端の黒の濃さ(0〜1)。濃いほど文字が読みやすい */
   --pan-sec: 10s;           /* サムネを左右にゆっくり動かす片道の秒数(往復で2倍) */
-  --scrim-height: 70%;      /* スクリムが立ち上がる高さ */
+  --scrim-height: 72%;      /* 黒のグラデーションが立ち上がる高さ */
   --bar-h: 55px;
   --ink: #17252b; --paper: #fffaf0; --accent: #b9460e; --line: rgba(8,123,144,.22);
   --bar-bg: rgba(255,255,255,.82); --bar-fg: #12272c; --btn: #087b90;
@@ -33,8 +31,8 @@ html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; 
 #feed .f-bg, #feed .f-hero { position: absolute; left: 0; right: 0; overflow: hidden; }
 #feed .f-bg { top: 0; bottom: 0; }
 #feed .f-bg > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: blur(var(--bg-blur)); transform: scale(1.7); }
-/* 上部: 横長の絵を幅いっぱいに。低解像度の拡大なので弱くぼかし、下端は背景へ溶かす */
-#feed .f-hero { top: 0; height: var(--hero-h); -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent 100%); mask-image: linear-gradient(to bottom, #000 80%, transparent 100%); }
+/* サムネは画面全体を埋める背景。cover で見切れる分は下のパンで動かす */
+#feed .f-hero { top: 0; bottom: 0; }
 #feed .f-hero > * { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; filter: blur(var(--thumb-blur)); transform: scale(1.04); }
 /* 見切れる幅(--pan-px: 片側ぶん)があるときだけ、画像を枠より広く取って中央に置き、表示中のカードだけ左右に往復させる(transform のみ) */
 #feed .f-hero > img[data-pan] { inset: 0 auto 0 50%; width: var(--pan-w); margin-left: calc(var(--pan-w) / -2); }
@@ -48,11 +46,9 @@ html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; 
 #feed .f-bg > .f-lqip { transform: scale(1.8) !important; }
 #feed .f-img { opacity: 0; transition: opacity .6s ease; }
 #feed .f-img.is-in { opacity: 1; }
-/* 下半分: ぼかし + 暗いスクリム。上へ向かって自然に消える */
-#feed .f-scrim { position: absolute; left: 0; right: 0; bottom: 0; height: var(--scrim-height); pointer-events: none;
-  background: linear-gradient(to bottom, rgba(8,14,18,0) 0%, rgba(8,14,18,calc(var(--scrim-alpha) * .78)) 38%, rgba(8,14,18,var(--scrim-alpha)) 100%);
-  -webkit-backdrop-filter: blur(var(--scrim-blur)); backdrop-filter: blur(var(--scrim-blur));
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 26%); mask-image: linear-gradient(to bottom, transparent 0%, #000 26%); }
+/* 黒の重ね: 全体にごく薄い黒で画像を締め、下ほど濃い黒へ(灰色・ぼかしは使わない) */
+#feed .f-scrim { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0,0,0,.28) 0%, rgba(0,0,0,.08) 22%, rgba(0,0,0,0) calc(100% - var(--scrim-height)), rgba(0,0,0,calc(var(--scrim-alpha) * .55)) calc(100% - var(--scrim-height) * .55), rgba(0,0,0,var(--scrim-alpha)) 100%); }
 #feed .f-body { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; padding: 0 18px 18px; display: flex; flex-direction: column; gap: 8px; max-height: 78%; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
 @media (orientation: landscape) and (max-height: 500px) { #feed .f-body { text-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 10px rgba(0,0,0,.45); } }
 #feed .f-name { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
