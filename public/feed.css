@@ -58,7 +58,7 @@ html[data-theme="dark"] #feed { --bar-bg: rgba(7,20,28,.82); --bar-fg: #effaff; 
 #feed .f-name { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }
 #feed .f-desc { margin: 0; font-size: 15px; line-height: 1.55; }
 #feed .f-place { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 13px; opacity: .92; }
-#feed .f-place img { width: 18px; height: 14px; display: block; margin: 1px; border: 0; }
+#feed .f-place img { width: 18px; height: 14px; display: block; margin: 1px; border: 0; border-radius: 0; box-shadow: none; background: none; } /* margin:1px は旧 border 分の外形補正 */
 #feed .f-cap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 0; }
 #feed .f-long { margin: 0; font-size: 14px; line-height: 1.75; opacity: .95; cursor: pointer; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
 #feed .f-cap.is-open .f-long { display: block; max-height: 34dvh; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; cursor: default; scrollbar-width: thin; }
