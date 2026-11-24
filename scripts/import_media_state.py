@@ -20,7 +20,7 @@ import favicon
 import thumbnail
 
 
-def import_ledger(client, kind, sources, apply=False):
+def import_ledger(client, kind, sources, apply=False, progress=None):
     if kind not in ('favicon', 'thumbnail'):
         raise ValueError('kind must be favicon or thumbnail')
     table = 'favicons' if kind == 'favicon' else 'thumbs'
@@ -68,141 +68,205 @@ def import_ledger(client, kind, sources, apply=False):
             prefetched[sid] = ((results[i * 2] or [None])[0], (results[i * 2 + 1] or [None])[0])
     pending_writes = []
     owner = str(uuid.uuid4())
-    for sid, (stamp, row, asset_dir) in selected_rows:
-            sid = row['site_id']
-            site, current = prefetched[sid]
-            if not site or not site.get('progress_key'):
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'site/progress identity missing'})
-                continue
-            if not current:
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 media job missing'})
-                continue
-            current_meta = json.loads(current.get('metadata_json') or '{}')
-            current_stamp = current_meta.get('captured_at' if kind == 'thumbnail' else 'changed_at') or current_meta.get('last_checked_at') or ''
-            if current_stamp and stamp and current_stamp > stamp:
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 has a newer media result'})
-                continue
-            if current_stamp == stamp and current.get('content_hash') and row.get('thumb_hash' if kind == 'thumbnail' else 'icon_hash') != current['content_hash']:
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'same-time D1 and local assets disagree'})
-                continue
-            content_hash = row.get('icon_hash' if kind == 'favicon' else 'thumb_hash')
-            exclude = bool(row.get('exclude', 0))
-            state = 'excluded' if exclude else ('ok' if content_hash else ('none' if row.get('status') == 'none' else 'failed' if row.get('status') not in ('pending', None) else 'pending'))
-            fixed_key = favicon.site_name(sid) if kind == 'favicon' else thumbnail.thumb_name(sid)
-            pointer = site['favicon_path' if kind == 'favicon' else 'thumb_path']
-            if not content_hash and not exclude and pointer:
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 already points to an asset absent from this local row'})
-                continue
-            if exclude and (content_hash or pointer or current.get('asset_key')):
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'excluded image has existing local or online media; refusing pointer changes'})
-                continue
-            lease_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=20)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    active_leases = set()
+
+    def release_owned_lease(sid):
+        try:
+            client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?',
+                         (sid, kind, owner))
+            active_leases.discard(sid)
+        except Exception:
+            # Never hide the original transport/database error; the existing lease expires.
+            pass
+
+    def owned_call(sid, method, *args, **kwargs):
+        try:
+            return getattr(client, method)(*args, **kwargs)
+        except BaseException:
             if apply:
-                lease = client.query(
-                    'UPDATE site_media_jobs SET lease_owner=?,lease_until=? WHERE identity_key=? AND site_id=? AND kind=? AND (lease_until IS NULL OR julianday(lease_until)<=julianday(\'now\')) RETURNING site_id',
-                    (owner, lease_until, site['progress_key'], sid, kind))
-                if not lease:
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 media job is currently leased'})
+                release_owned_lease(sid)
+            raise
+
+    try:
+        for index, (sid, (stamp, row, asset_dir)) in enumerate(selected_rows, 1):
+                if progress and index % 100 == 0:
+                    progress({'kind': kind, 'processed': index, 'total': len(selected_rows),
+                              'api_requests': getattr(client, 'request_count', None),
+                              'retries': getattr(client, 'retry_count', None),
+                              'rate_limits': getattr(client, 'rate_limit_count', None)})
+                sid = row['site_id']
+                site, current = prefetched[sid]
+                if not site or not site.get('progress_key'):
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'site/progress identity missing'})
                     continue
-            key_name = fixed_key if content_hash and not exclude else None
-            asset_key = key_name
-            if exclude:
-                remote = client.get_r2(prefix + fixed_key)
-                if remote is not None:
-                    if apply:
-                        client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'R2 asset exists for excluded site; refusing cleanup eligibility'})
+                if not current:
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 media job missing'})
                     continue
-            if content_hash and not exclude:
-                local_path = Path(asset_dir) / key_name
-                data = local_path.read_bytes() if local_path.is_file() else None
-                remote = client.get_r2(prefix + key_name)
-                if data is not None:
-                    actual = favicon.icon_name(data) if kind == 'favicon' else thumbnail.content_hash(data)
-                    if actual != content_hash:
-                        if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'local asset hash mismatch'})
+                current_meta = json.loads(current.get('metadata_json') or '{}')
+                current_stamp = current_meta.get('captured_at' if kind == 'thumbnail' else 'changed_at') or current_meta.get('last_checked_at') or ''
+                if current_stamp and stamp and current_stamp > stamp:
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 has a newer media result'})
+                    continue
+                if current_stamp == stamp and current.get('content_hash') and row.get('thumb_hash' if kind == 'thumbnail' else 'icon_hash') != current['content_hash']:
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'same-time D1 and local assets disagree'})
+                    continue
+                content_hash = row.get('icon_hash' if kind == 'favicon' else 'thumb_hash')
+                exclude = bool(row.get('exclude', 0))
+                state = 'excluded' if exclude else ('ok' if content_hash else ('none' if row.get('status') == 'none' else 'failed' if row.get('status') not in ('pending', None) else 'pending'))
+                fixed_key = favicon.site_name(sid) if kind == 'favicon' else thumbnail.thumb_name(sid)
+                pointer = site['favicon_path' if kind == 'favicon' else 'thumb_path']
+                if not content_hash and not exclude and pointer:
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 already points to an asset absent from this local row'})
+                    continue
+                if exclude and (content_hash or pointer or current.get('asset_key')):
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'excluded image has existing local or online media; refusing pointer changes'})
+                    continue
+                lease_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=20)).isoformat(timespec='seconds').replace('+00:00', 'Z')
+                if apply:
+                    lease = owned_call(sid, 'query',
+                        'UPDATE site_media_jobs SET lease_owner=?,lease_until=? WHERE identity_key=? AND site_id=? AND kind=? AND (lease_until IS NULL OR julianday(lease_until)<=julianday(\'now\')) RETURNING site_id',
+                        (owner, lease_until, site['progress_key'], sid, kind))
+                    if not lease:
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 media job is currently leased'})
                         continue
-                if remote is not None:
-                    actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
-                    if actual != content_hash:
-                        if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'existing R2 object differs; refusing overwrite'})
+                    active_leases.add(sid)
+                key_name = fixed_key if content_hash and not exclude else None
+                asset_key = key_name
+                action = 'state-only'
+                if exclude:
+                    remote = owned_call(sid, 'get_r2', prefix + fixed_key) if apply else client.get_r2(prefix + fixed_key)
+                    if remote is not None:
+                        if apply:
+                            release_owned_lease(sid)
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'R2 asset exists for excluded site; refusing cleanup eligibility'})
                         continue
-                elif not apply and data is None:
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
+                    action = 'excluded-no-asset'
+                if content_hash and not exclude:
+                    local_path = Path(asset_dir) / key_name
+                    try:
+                        data = local_path.read_bytes() if local_path.is_file() else None
+                    except BaseException:
+                        if apply: release_owned_lease(sid)
+                        raise
+                    remote = owned_call(sid, 'get_r2', prefix + key_name) if apply else client.get_r2(prefix + key_name)
+                    if data is not None:
+                        actual = favicon.icon_name(data) if kind == 'favicon' else thumbnail.content_hash(data)
+                        if actual != content_hash:
+                            if apply: release_owned_lease(sid)
+                            outcomes['ineligible'].append({'site_id': sid, 'reason': 'local asset hash mismatch'})
+                            continue
+                    if remote is not None:
+                        actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
+                        if actual != content_hash:
+                            if apply: release_owned_lease(sid)
+                            outcomes['ineligible'].append({'site_id': sid, 'reason': 'existing R2 object differs; refusing overwrite'})
+                            continue
+                        action = 'verified-existing-r2-object'
+                    elif not apply and data is None:
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
+                        continue
+                    elif not apply:
+                        # Dry-run can validate the local bytes/hash and report the upload
+                        # that --apply would perform without treating the absent remote
+                        # object as a failure or attempting a write.
+                        remote = None
+                        action = 'would-upload-local-object'
+                    elif data is None:
+                        if apply: release_owned_lease(sid)
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
+                        continue
+                    else:
+                        pointer_col = 'favicon_path' if kind == 'favicon' else 'thumb_path'
+                        still_owned = owned_call(sid, 'query',
+                            f"SELECT j.site_id FROM site_media_jobs j JOIN sites s ON s.id=j.site_id WHERE j.identity_key=? AND j.site_id=? AND j.kind=? AND j.lease_owner=? AND julianday(j.lease_until)>julianday('now','+2 minutes') AND j.content_hash IS ? AND j.asset_key IS ? AND j.updated_at IS ? AND s.{pointer_col} IS ?",
+                            (site['progress_key'], sid, kind, owner, current.get('content_hash'), current.get('asset_key'), current.get('updated_at'), pointer))
+                        if not still_owned:
+                            release_owned_lease(sid)
+                            outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 lease or media state changed before R2 upload'})
+                            continue
+                        def validate_put_attempt():
+                            owned = owned_call(sid, 'query',
+                                f"SELECT j.site_id FROM site_media_jobs j JOIN sites s ON s.id=j.site_id WHERE j.identity_key=? AND j.site_id=? AND j.kind=? AND j.lease_owner=? AND julianday(j.lease_until)>julianday('now','+2 minutes') AND j.content_hash IS ? AND j.asset_key IS ? AND j.updated_at IS ? AND s.{pointer_col} IS ?",
+                                (site['progress_key'], sid, kind, owner, current.get('content_hash'), current.get('asset_key'), current.get('updated_at'), pointer))
+                            if not owned:
+                                raise RuntimeError('D1 lease/state changed before R2 PUT attempt')
+                            existing = owned_call(sid, 'get_r2', prefix + key_name)
+                            if existing is not None:
+                                remote_hash = favicon.icon_name(existing) if kind == 'favicon' else thumbnail.content_hash(existing)
+                                if remote_hash != content_hash:
+                                    raise RuntimeError('R2 object changed before R2 PUT attempt; refusing overwrite')
+                            # Recheck after the R2 read, which may take time or observe a competing writer.
+                            owned = owned_call(sid, 'query',
+                                f"SELECT j.site_id FROM site_media_jobs j JOIN sites s ON s.id=j.site_id WHERE j.identity_key=? AND j.site_id=? AND j.kind=? AND j.lease_owner=? AND julianday(j.lease_until)>julianday('now','+2 minutes') AND j.content_hash IS ? AND j.asset_key IS ? AND j.updated_at IS ? AND s.{pointer_col} IS ?",
+                                (site['progress_key'], sid, kind, owner, current.get('content_hash'), current.get('asset_key'), current.get('updated_at'), pointer))
+                            if not owned:
+                                raise RuntimeError('D1 lease/state changed before R2 PUT attempt')
+                        owned_call(sid, 'put_r2', prefix + key_name, data, before_attempt=validate_put_attempt)
+                        remote = owned_call(sid, 'get_r2', prefix + key_name)
+                        action = 'uploaded-and-readback-verified'
+                    if apply and remote is None:
+                        release_owned_lease(sid)
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'R2 readback failed after upload'})
+                        continue
+                    if remote is not None:
+                        actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
+                        if actual != content_hash:
+                            if apply: release_owned_lease(sid)
+                            outcomes['ineligible'].append({'site_id': sid, 'reason': 'remote R2 asset hash mismatch'})
+                            continue
+                meta = {k: v for k, v in row.items() if k != 'site_id'}
+                checked = row.get('last_checked_at')
+                retry = row.get('next_check_at')
+                error = row.get('last_error') or (row.get('status') if state == 'failed' else None)
+                failures = int(row.get('consecutive_failures') or 0)
+                if not apply:
+                    outcomes['verified'].append({'site_id': sid, 'eligible_for_cleanup': False, 'would_import': True, 'action': action})
                     continue
-                elif not apply:
-                    # Dry-run can validate the local bytes/hash and report the upload
-                    # that --apply would perform without treating the absent remote
-                    # object as a failure or attempting a write.
-                    remote = None
-                elif data is None:
-                    if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
-                    continue
+                metadata_json = json.dumps(meta, ensure_ascii=False, separators=(',', ':'))
+                if kind == 'favicon':
+                    site_sql = 'UPDATE sites SET favicon_path=?,favicon_v=? WHERE id=?'
+                    site_params = (key_name, favicon.icon_v(content_hash) if content_hash else None, sid)
                 else:
-                    client.put_r2(prefix + key_name, data)
-                    remote = client.get_r2(prefix + key_name)
-                if apply and remote is None:
-                    if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'R2 readback failed after upload'})
+                    site_sql = 'UPDATE sites SET thumb_path=?,thumb_lqip=?,thumb_captured_at=? WHERE id=?'
+                    site_params = (key_name, row.get('lqip') if content_hash else None, row.get('captured_at') if content_hash else None, sid)
+                job_sql = ('UPDATE site_media_jobs SET state=?,attempts=?,consecutive_failures=?,last_error=?,last_checked_at=?,next_retry_at=?,excluded=?,content_hash=?,asset_key=?,metadata_json=?,updated_at=datetime(\'now\') '
+                           'WHERE identity_key=? AND site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday(\'now\') AND content_hash IS ? AND asset_key IS ? AND updated_at IS ? RETURNING site_id')
+                job_params = (state, int(row.get('attempts') or failures), failures, error, checked, retry, int(exclude), content_hash, asset_key,
+                              metadata_json, site['progress_key'], sid, kind, owner, current.get('content_hash'), current.get('asset_key'), current.get('updated_at'))
+                if exclude:
+                    site_sql, site_params = ('SELECT id FROM sites WHERE id=? AND ' + ('favicon_path' if kind == 'favicon' else 'thumb_path') + ' IS NULL', (sid,))
+                elif kind == 'favicon':
+                    site_sql = "UPDATE sites SET favicon_path=?,favicon_v=? WHERE id=? AND favicon_path IS ? AND EXISTS (SELECT 1 FROM site_media_jobs WHERE site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday('now') AND state=? AND content_hash IS ? AND asset_key IS ?) RETURNING id"
+                    site_params = (key_name, favicon.icon_v(content_hash) if content_hash else None, sid, pointer,
+                                   sid, kind, owner, state, content_hash, asset_key)
+                else:
+                    site_sql = "UPDATE sites SET thumb_path=?,thumb_lqip=?,thumb_captured_at=? WHERE id=? AND thumb_path IS ? AND EXISTS (SELECT 1 FROM site_media_jobs WHERE site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday('now') AND state=? AND content_hash IS ? AND asset_key IS ?) RETURNING id"
+                    site_params = (key_name, row.get('lqip') if content_hash else None, row.get('captured_at') if content_hash else None,
+                                   sid, pointer, sid, kind, owner, state, content_hash, asset_key)
+                verify_sql = 'SELECT state,content_hash,asset_key,metadata_json,lease_owner FROM site_media_jobs WHERE site_id=? AND kind=?'
+                pointer_sql = f"SELECT {'favicon_path' if kind == 'favicon' else 'thumb_path'} AS pointer FROM sites WHERE id=?"
+                pending_writes.append((sid, state, content_hash, asset_key, metadata_json, pointer,
+                                       (job_sql, job_params), (site_sql, site_params), (verify_sql, (sid, kind)), (pointer_sql, (sid,)),
+                                       ('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))))
+                item = pending_writes.pop()
+                statements = [item[6], item[7], item[8], item[9], item[10]]
+                results = owned_call(sid, 'batch', statements)
+                active_leases.discard(sid)
+                sid, state, content_hash, asset_key, metadata_json, prior_pointer = item[:6]
+                job_written = (results[0] or [None])[0]
+                site_written = (results[1] or [None])[0]
+                verify = (results[2] or [None])[0]
+                pointer_row = (results[3] or [None])[0]
+                expected_pointer = asset_key if content_hash and not exclude else prior_pointer
+                if (not job_written or not site_written or not verify or not pointer_row or pointer_row.get('pointer') != expected_pointer or
+                        verify.get('state') != state or verify.get('content_hash') != content_hash or verify.get('asset_key') != asset_key or
+                        verify.get('metadata_json') != metadata_json or verify.get('lease_owner') != owner):
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 guarded update/readback mismatch'})
                     continue
-                if remote is not None:
-                    actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
-                    if actual != content_hash:
-                        if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'remote R2 asset hash mismatch'})
-                        continue
-            meta = {k: v for k, v in row.items() if k != 'site_id'}
-            checked = row.get('last_checked_at')
-            retry = row.get('next_check_at')
-            error = row.get('last_error') or (row.get('status') if state == 'failed' else None)
-            failures = int(row.get('consecutive_failures') or 0)
-            if not apply:
-                outcomes['verified'].append({'site_id': sid, 'eligible_for_cleanup': False, 'would_import': True})
-                continue
-            metadata_json = json.dumps(meta, ensure_ascii=False, separators=(',', ':'))
-            if kind == 'favicon':
-                site_sql = 'UPDATE sites SET favicon_path=?,favicon_v=? WHERE id=?'
-                site_params = (key_name, favicon.icon_v(content_hash) if content_hash else None, sid)
-            else:
-                site_sql = 'UPDATE sites SET thumb_path=?,thumb_lqip=?,thumb_captured_at=? WHERE id=?'
-                site_params = (key_name, row.get('lqip') if content_hash else None, row.get('captured_at') if content_hash else None, sid)
-            job_sql = ('UPDATE site_media_jobs SET state=?,attempts=?,consecutive_failures=?,last_error=?,last_checked_at=?,next_retry_at=?,excluded=?,content_hash=?,asset_key=?,metadata_json=?,updated_at=datetime(\'now\') '
-                       'WHERE identity_key=? AND site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday(\'now\') AND content_hash IS ? AND asset_key IS ? AND updated_at IS ? RETURNING site_id')
-            job_params = (state, int(row.get('attempts') or failures), failures, error, checked, retry, int(exclude), content_hash, asset_key,
-                          metadata_json, site['progress_key'], sid, kind, owner, current.get('content_hash'), current.get('asset_key'), current.get('updated_at'))
-            if exclude:
-                site_sql, site_params = ('SELECT id FROM sites WHERE id=? AND ' + ('favicon_path' if kind == 'favicon' else 'thumb_path') + ' IS NULL', (sid,))
-            elif kind == 'favicon':
-                site_sql = "UPDATE sites SET favicon_path=?,favicon_v=? WHERE id=? AND favicon_path IS ? AND EXISTS (SELECT 1 FROM site_media_jobs WHERE site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday('now') AND state=? AND content_hash IS ? AND asset_key IS ?) RETURNING id"
-                site_params = (key_name, favicon.icon_v(content_hash) if content_hash else None, sid, pointer,
-                               sid, kind, owner, state, content_hash, asset_key)
-            else:
-                site_sql = "UPDATE sites SET thumb_path=?,thumb_lqip=?,thumb_captured_at=? WHERE id=? AND thumb_path IS ? AND EXISTS (SELECT 1 FROM site_media_jobs WHERE site_id=? AND kind=? AND lease_owner=? AND julianday(lease_until)>julianday('now') AND state=? AND content_hash IS ? AND asset_key IS ?) RETURNING id"
-                site_params = (key_name, row.get('lqip') if content_hash else None, row.get('captured_at') if content_hash else None,
-                               sid, pointer, sid, kind, owner, state, content_hash, asset_key)
-            verify_sql = 'SELECT state,content_hash,asset_key,metadata_json,lease_owner FROM site_media_jobs WHERE site_id=? AND kind=?'
-            pointer_sql = f"SELECT {'favicon_path' if kind == 'favicon' else 'thumb_path'} AS pointer FROM sites WHERE id=?"
-            pending_writes.append((sid, state, content_hash, asset_key, metadata_json, pointer,
-                                   (job_sql, job_params), (site_sql, site_params), (verify_sql, (sid, kind)), (pointer_sql, (sid,)),
-                                   ('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))))
-            item = pending_writes.pop()
-            statements = [item[6], item[7], item[8], item[9], item[10]]
-            results = client.batch(statements)
-            sid, state, content_hash, asset_key, metadata_json, prior_pointer = item[:6]
-            job_written = (results[0] or [None])[0]
-            site_written = (results[1] or [None])[0]
-            verify = (results[2] or [None])[0]
-            pointer_row = (results[3] or [None])[0]
-            expected_pointer = asset_key if content_hash and not exclude else prior_pointer
-            if (not job_written or not site_written or not verify or not pointer_row or pointer_row.get('pointer') != expected_pointer or
-                    verify.get('state') != state or verify.get('content_hash') != content_hash or verify.get('asset_key') != asset_key or
-                    verify.get('metadata_json') != metadata_json or verify.get('lease_owner') != owner):
-                outcomes['ineligible'].append({'site_id': sid, 'reason': 'D1 guarded update/readback mismatch'})
-                continue
-            outcomes['verified'].append({'site_id': sid, 'eligible_for_cleanup': True})
+                outcomes['verified'].append({'site_id': sid, 'eligible_for_cleanup': True, 'action': action})
+    finally:
+        for leased_sid in tuple(active_leases):
+            release_owned_lease(leased_sid)
     return outcomes
 
 
@@ -219,7 +283,11 @@ def main(argv=None):
         if not sep or not db or not asset_dir:
             ap.error('--source must be DB=ASSET_DIR')
         sources.append((Path(db), Path(asset_dir)))
-    result = import_ledger(Cloudflare(), a.kind, sources, apply=a.apply)
+    # The importer is deliberately serial and capped at two API requests per second.
+    # A bounded client-side rate also applies to D1 batches and R2 readbacks.
+    client = Cloudflare(min_request_interval=0.5, max_concurrent=1, max_attempts=7)
+    result = import_ledger(client, a.kind, sources, apply=a.apply,
+                           progress=lambda item: print(json.dumps({'progress': item}, ensure_ascii=False), file=sys.stderr, flush=True))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return int(bool(result['ineligible']))
 

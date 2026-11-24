@@ -5,11 +5,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import datetime
+import email.utils
 import hashlib
 import re
+import random
 import sqlite3
 import ssl
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -38,11 +41,26 @@ def build_verified_opener():
 
 
 class Cloudflare:
-    def __init__(self, account=None, token=TOKEN, database=DATABASE, bucket=BUCKET, opener=None):
+    def __init__(self, account=None, token=TOKEN, database=DATABASE, bucket=BUCKET, opener=None, *,
+                 min_request_interval=0.0, max_concurrent=4, max_attempts=6,
+                 retry_base_seconds=1.0, retry_max_seconds=30.0, max_retry_after_seconds=300.0,
+                 max_write_retry_seconds=240.0):
         if not token:
             raise RuntimeError('CLOUDFLARE_API_TOKEN が必要です')
         self.account, self.token, self.database, self.bucket = account or os.environ.get('CLOUDFLARE_ACCOUNT_ID') or CONFIG_ACCOUNT, token, database, bucket
         self.opener = opener or build_verified_opener()
+        self.min_request_interval = max(0.0, float(min_request_interval))
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_base_seconds = max(0.0, float(retry_base_seconds))
+        self.retry_max_seconds = max(self.retry_base_seconds, float(retry_max_seconds))
+        self.max_retry_after_seconds = max(0.0, float(max_retry_after_seconds))
+        self.max_write_retry_seconds = max(0.0, float(max_write_retry_seconds))
+        self._request_slots = threading.BoundedSemaphore(max(1, int(max_concurrent)))
+        self._pace_lock = threading.Lock()
+        self._next_request_at = 0.0
+        self.request_count = 0
+        self.retry_count = 0
+        self.rate_limit_count = 0
         if not self.account:
             accounts = self._request('https://api.cloudflare.com/client/v4/accounts?per_page=1')
             found = accounts.get('result') or []
@@ -50,14 +68,73 @@ class Cloudflare:
                 raise RuntimeError('Cloudflare API からアカウント ID を取得できません')
             self.account = found[0]['id']
 
-    def _request(self, url, method='GET', body=None, content_type=None):
+    def _retry_after_seconds(self, error):
+        value = error.headers.get('Retry-After') if error.headers else None
+        if not value:
+            return 0.0
+        try:
+            return max(0.0, float(value))
+        except ValueError:
+            try:
+                when = email.utils.parsedate_to_datetime(value)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=datetime.timezone.utc)
+                return max(0.0, (when - datetime.datetime.now(datetime.timezone.utc)).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return 0.0
+
+    def _read_response(self, req, *, retry_server_errors=False, not_found_is_none=False,
+                       max_retry_elapsed_seconds=None, before_attempt=None, timeout=60):
+        retry_started = time.monotonic()
+        for attempt in range(self.max_attempts):
+            # Callbacks may make their own D1/R2 requests, so they must run before
+            # holding this client's bounded request slot (max_concurrent=1 in importer).
+            if before_attempt:
+                before_attempt()
+            with self._request_slots:
+                with self._pace_lock:
+                    now = time.monotonic()
+                    wait = max(0.0, self._next_request_at - now)
+                    self._next_request_at = max(now, self._next_request_at) + self.min_request_interval
+                if wait:
+                    time.sleep(wait)
+                self.request_count += 1
+                try:
+                    with self.opener(req, timeout=timeout) as response:
+                        return response.read()
+                except urllib.error.HTTPError as error:
+                    if error.code == 429:
+                        self.rate_limit_count += 1
+                    if error.code == 404 and not_found_is_none:
+                        error.close()
+                        return None
+                    retryable = error.code == 429 or (retry_server_errors and error.code in (500, 502, 503, 504, 529))
+                    if not retryable or attempt + 1 >= self.max_attempts:
+                        raise
+                    retry_after = self._retry_after_seconds(error)
+                    if retry_after > self.max_retry_after_seconds:
+                        raise
+                    self.retry_count += 1
+                    ceiling = min(self.retry_max_seconds, self.retry_base_seconds * (2 ** attempt))
+                    backoff = ceiling * (0.5 + random.random() * 0.5)
+                    delay = max(backoff, retry_after)
+                    if (max_retry_elapsed_seconds is not None and
+                            time.monotonic() - retry_started + delay > max_retry_elapsed_seconds):
+                        raise
+                    error.close()
+            time.sleep(delay)
+        raise RuntimeError('Cloudflare request retry loop exhausted')
+
+    def _request(self, url, method='GET', body=None, content_type=None, before_attempt=None):
         headers = {'Authorization': f'Bearer {self.token}'}
         if content_type:
             headers['Content-Type'] = content_type
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with self.opener(req, timeout=60) as response:
-                data = response.read()
+            data = self._read_response(req, retry_server_errors=method in ('GET', 'PUT'),
+                                       max_retry_elapsed_seconds=self.max_write_retry_seconds if method == 'PUT' else None,
+                                       before_attempt=before_attempt,
+                                       timeout=25 if method == 'PUT' else 60)
         except urllib.error.HTTPError as e:
             raise RuntimeError(f'Cloudflare API {e.code}: {e.read(500).decode("utf-8", "replace")}') from e
         result = json.loads(data) if data else {}
@@ -79,18 +156,17 @@ class Cloudflare:
         result = self._request(url, 'POST', body, 'application/json')
         return [item.get('results', []) for item in result.get('result', [])]
 
-    def put_r2(self, key, data, content_type='image/webp'):
+    def put_r2(self, key, data, content_type='image/webp', before_attempt=None):
         encoded = urllib.parse.quote(key, safe='/')
         url = f'https://api.cloudflare.com/client/v4/accounts/{self.account}/r2/buckets/{self.bucket}/objects/{encoded}'
-        self._request(url, 'PUT', data, content_type)
+        self._request(url, 'PUT', data, content_type, before_attempt=before_attempt)
 
     def get_r2(self, key):
         encoded = urllib.parse.quote(key, safe='/')
         url = f'https://api.cloudflare.com/client/v4/accounts/{self.account}/r2/buckets/{self.bucket}/objects/{encoded}'
         req = urllib.request.Request(url, headers={'Authorization': f'Bearer {self.token}'})
         try:
-            with self.opener(req, timeout=60) as response:
-                return response.read()
+            return self._read_response(req, retry_server_errors=True, not_found_is_none=True)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
