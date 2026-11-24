@@ -402,7 +402,7 @@ def states_of(client, keys):
 
 
 # ------------------------------------------------------------------ run
-def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1):
+def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None):
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
              "moved_without_llm": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
              "stopped": None, "dry_run": not apply}
@@ -449,8 +449,22 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             log(f"judge: move of {r['identity_key']} failed ({type(e).__name__})")
             count("write_failed")
 
+    def beat():
+        """-> True to go on. heartbeat() raising (lease lost) stops the run; the error is re-raised at the end."""
+        if heartbeat is None:
+            return True
+        try:
+            heartbeat()
+            return True
+        except Exception as e:  # noqa: BLE001
+            ctx.stop = ctx.stop or "heartbeat"
+            fatal.append(e)
+            return False
+
     def do_chunk(chunk):
         if ctx.stop or ctx.consecutive_failures >= 3:
+            return
+        if not beat():
             return
         claimed = []
         try:
@@ -490,6 +504,8 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
                 ctx.consecutive_failures = 0
             elif any(k != "stopped" for k, _ in kinds):
                 ctx.consecutive_failures += 1
+        if not beat():   # lease lost: no more writes (the claims expire by themselves; the cost is already settled)
+            return
         try:
             write(client, stmts)
         except Exception as e:  # noqa: BLE001 - the cost is already settled; count the attempt, rows stay 'fetched'

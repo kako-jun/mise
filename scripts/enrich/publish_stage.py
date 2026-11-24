@@ -308,7 +308,7 @@ def guards_pass(client, p):
     return bool(client.query(f"SELECT 1 WHERE NOT {bl} AND NOT {ro}", params))
 
 
-def run(client, *, limit, apply, log=print):
+def run(client, *, limit, apply, log=print, heartbeat=None):
     # oldest url_progress.updated_at first: a row whose batch keeps failing is touched below, so it goes to the back of the queue
     rows = client.query(
         "SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
@@ -334,6 +334,8 @@ def run(client, *, limit, apply, log=print):
 
     try:
         for row in rows:
+            if heartbeat:
+                heartbeat()   # raises when the runner lost its lease: stop before the next site's batch
             try:
                 p = plan(dict(row))
                 have_cats = {r["id"] for r in client.query(f"SELECT id FROM categories WHERE id IN ({','.join('?' * len(p['cats']))})", p["cats"])}
@@ -387,6 +389,9 @@ def run(client, *, limit, apply, log=print):
             res["published"] += 1
             res["ids"].append(p["id"])
             touched.append(p["id"])
+    except BaseException as e:
+        e.result = res   # the caller sees what was done (integrity is filled in by the finally below: same dict)
+        raise
     finally:
         # an exception from a hold batch / verify must not skip the integrity check of what was already published
         if apply and touched:

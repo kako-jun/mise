@@ -8,13 +8,14 @@
                                          [--rounds N] [--max-seconds S] [--budget-month USD] [--judge-concurrency 1..4] [--dry-run | --apply]
 
 既定は --dry-run(読むだけ。1 回だけ回し、各段の対象件数を出す)。--apply で書く。--rounds 0 は「残りが無くなるか停止条件まで」。
-終了コード: 0 正常(残り無し・予算切れ・--max-seconds・--rounds 到達・1 回の上限) / 1 検証不一致・整合チェック違反・異常ガード・
-            前提チェック不合格・判定段が止まった / 2 リースが取れない・引数不正 / 3 レート制限(429) / 4 実行中にリースを失った。
+終了コード: 0 正常(残り無し・予算切れ・--max-seconds・--rounds 到達・日次の掲載上限) / 1 検証不一致・整合チェック違反・異常ガード・
+            前提チェック不合格・判定段が止まった・判定の費用ガード / 2 リースが取れない・引数不正 / 3 レート制限(429) /
+            4 実行中にリースを失った / 5 費用台帳を確定できない(人の対応が必要。スケジューラは再試行しない)。
 """
 import argparse
-import collections
-import os
+import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -28,15 +29,17 @@ DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'publish': 60}
 STATES = ('discovered', 'queued', 'fetched', 'reviewing', 'candidate', 'approved', 'rejected', 'failed', 'blocked', 'published')
 LEASE_KEY = 'enrich'
 LEASE_TTL = 1800
+HEARTBEAT_SECONDS = 120         # 段の内部(判定・取得・掲載)でリースを更新する間隔
+MAX_LIMIT = 200                 # 1 段・1 回あたりの件数の上限(これを超える指定は引数エラー。リース TTL に収める)
+LEDGER_EXIT = 5
 REQUEST_INTERVAL = 0.3
 
 # --- 異常ガード(旧 nightly.py の「前日比の異常で本番反映を止める」の代わり。単純な定数) ---
 PUBLISH_MAX_ERRORS = 5          # 1 回の掲載段のバッチ失敗数がこれ以上なら止める
 PUBLISH_MAX_ERROR_RATIO = 0.5   # 選んだ行のうちバッチ失敗がこの割合を超えたら止める(選択 4 件以上)
 PUBLISH_MAX_HELD_RATIO = 0.5    # 選んだ行のうちゲート保留がこの割合を超えたら止める(選択 10 件以上)
-JUDGE_MIN_SAMPLE = 10           # 判定結果の割合を見る最小件数
-JUDGE_MAX_NONAPPROVE_RATIO = 0.95   # 判定した行のうち approved 以外(rejected+candidate)がこの割合を超えたら、その回の掲載を行わず止める
-MAX_PUBLISH_PER_RUN = 1000      # 1 回のランナー実行で掲載する上限(超えたら正常終了。残りは次回)
+JUDGE_GUARD_WINDOW = 100        # 判定の費用ガード: 直近(judged_at 降順)この件数の判定で approved が 0 件なら判定段を止める(掲載は止めない)
+MAX_PUBLISH_PER_DAY = 1000      # 直近 24 時間に作られた sites(D1 から数える)がこの件数に達したら掲載しない(正常終了。残りは翌日以降)
 STALE_REVIEWING_MINUTES = 30    # docs/operations/enrich.md の前提チェックと同じ
 
 
@@ -47,7 +50,46 @@ class Stop(Exception):
 
 
 def is_rate_limit(e):
-    return any(t in str(e) for t in ('429', 'rate limit', 'Too Many Requests'))
+    """例外(と原因の連鎖)が HTTP ステータス 429 を持てばそれ。無ければ文言 'HTTP 429' / 'API 429' / 'rate limit' だけ。"""
+    seen = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        for attr in ('code', 'status', 'status_code'):
+            if getattr(e, attr, None) == 429:
+                return True
+        if re.search(r'HTTP 429|API 429|rate.?limit', str(e), re.I):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
+class Heartbeat:
+    """段の内部から呼ばれる。HEARTBEAT_SECONDS ごとにリースを更新し、失っていれば LeaseLost を上げる(スレッドから呼ばれうる)。"""
+    def __init__(self, lease, clock, interval=HEARTBEAT_SECONDS):
+        self.lease, self.clock, self.interval = lease, clock, interval
+        self.last = clock()
+        self.lock = threading.Lock()
+
+    def __call__(self):
+        with self.lock:
+            if self.clock() - self.last >= self.interval:
+                self.lease.renew()
+                self.last = self.clock()
+
+    def now(self):
+        with self.lock:
+            self.lease.renew()
+            self.last = self.clock()
+
+
+def published_last_day(client):
+    return int(client.query("SELECT COUNT(*) AS n FROM sites WHERE registered_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')")[0]['n'])
+
+
+def judge_unapproved_window(client):
+    """直近 JUDGE_GUARD_WINDOW 件の判定(judged_at 降順)が全部 approved でないか。窓が埋まっていなければ False。"""
+    rows = client.query("SELECT review_state FROM url_candidates WHERE judged_at IS NOT NULL ORDER BY judged_at DESC LIMIT ?", [JUDGE_GUARD_WINDOW])
+    return len(rows) >= JUDGE_GUARD_WINDOW and not any(r['review_state'] == 'approved' for r in rows)
 
 
 def progress_counts(client):
@@ -64,12 +106,12 @@ def month_spent(client):
 
 
 def stale_reviewing(client):
-    """docs/operations/enrich.md の前提: 判定を持たない古い reviewing(旧 export の写像が作った行)。
-    判定段自身の中断した claim(取得段が 'fetched' にした行 = url_candidates.state='fetched')は判定段が 30 分後に取り直すので数えない。"""
+    """docs/operations/enrich.md の前提: reviewing かつ review_state が空(旧 export の写像が作った行)。判定段自身が作る reviewing も
+    review_state は空だが updated_at が新しいので、30 分以内に更新された行は数えない(それより古いものが残っていれば止まる)。"""
     return [r['identity_key'] for r in client.query(
         "SELECT p.identity_key FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state='reviewing' "
         f"AND p.updated_at < datetime('now','-{STALE_REVIEWING_MINUTES} minutes') AND (c.review_state IS NULL OR c.review_state='') "
-        "AND COALESCE(c.state,'')<>'fetched' ORDER BY p.identity_key LIMIT 50")]
+        "ORDER BY p.identity_key LIMIT 50")]
 
 
 def time_travel_bookmark(client):
@@ -98,12 +140,15 @@ def fmt_summary(start, end, out):
         out(f'  {s:<12}{a:>9}{b:>9}{b - a:>+9}')
 
 
-def preflight(client, apply, bookmark_fn, out):
+def preflight(client, apply, bookmark_fn, out, judge_active=True):
     counts = progress_counts(client)
     sites = client.query('SELECT COUNT(*) AS n FROM sites')[0]['n']
     out('pre-flight: ' + ', '.join(f'{k}={v}' for k, v in counts.items() if v) + f', sites={sites}')
     out(f'pre-flight: LLM spend this month (UTC) = ${month_spent(client):.4f} (cap ${judge_stage.MONTHLY_CAP_USD:.2f})')
-    bad = stale_reviewing(client)
+    odd = client.query("SELECT COUNT(*) AS n FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state='approved' "
+                       "AND COALESCE(c.review_state,'')<>'approved'")[0]['n']
+    out(f'pre-flight: url_progress.state=approved なのに review_state が approved でない行 = {odd}(掲載段は選ばない)')
+    bad = stale_reviewing(client) if judge_active else []   # 判定段を含む実行のときだけ
     if bad:
         msg = (f'pre-flight: 判定を持たない古い reviewing が {len(bad)}+ 件ある(旧データを LLM に送ってしまうため開始しない)。'
                f'docs/operations/enrich.md「実行と排他」の前提を確認: {bad[:10]}')
@@ -118,23 +163,42 @@ def preflight(client, apply, bookmark_fn, out):
     return counts
 
 
-def run_round(client, n, active, limits, apply, out, *, budget_month, concurrency, fetch, llm, lease, totals):
-    """1 回分。-> (その回の各段の stats, 何か選ばれたか)。止める時は Stop。"""
-    res, selected, hold_publish = {}, 0, None
+def integrity_stop(p):
+    """整合チェック違反の Stop(違反の種類と行、この回に掲載した id を出す。例外型名ではなく id)。"""
+    integ = dict(p.get('integrity') or {})
+    failed = integ.pop('post_check_failed', None)
+    ids = list(p.get('ids') or [])
+    parts = []
+    if failed:
+        parts.append(f'整合チェック自体が失敗({failed[0][1] if failed and len(failed[0]) > 1 else failed})。この回に掲載した id を確認')
+    for name, rows in integ.items():
+        parts.append(f'{name}: {[list(map(str, r)) for r in rows[:3]]}')
+    return Stop(1, f'publish: 整合チェック違反 {"; ".join(parts)} / この回に掲載した id: {ids[:20]}(Time Travel の bookmark で復元を検討)')
+
+
+def run_round(client, n, active, limits, apply, out, *, budget_month, concurrency, fetch, llm, lease, hb, state):
+    """1 回分。-> (その回の各段の stats, 何か選ばれたか)。止める時は Stop。state['final'] は最後に返す終了コード(判定の費用ガード)。"""
+    res, selected = {}, 0
 
     def guard_lease():
         if apply:
-            lease.renew()   # LeaseLost は呼び出し側で exit 4
+            hb.now()   # LeaseLost は呼び出し側で exit 4
 
+    beat = hb if apply else None
     if 'fetch' in active:
         guard_lease()
-        res['fetch'] = fetch_stage.run(client, limit=limits['fetch'], apply=apply, log=out, fetch=fetch, workers=fetch_stage.WORKERS)
+        res['fetch'] = fetch_stage.run(client, limit=limits['fetch'], apply=apply, log=out, fetch=fetch, workers=fetch_stage.WORKERS, heartbeat=beat)
         selected += res['fetch'].get('selected', 0)
         if res['fetch'].get('verify_failed'):
             raise Stop(1, f'fetch: 読み戻し検証が {res["fetch"]["verify_failed"]} 件不一致(ログの verify failed の行を確認)')
+    if 'judge' in active and apply and judge_unapproved_window(client):
+        msg = f'judge: 直近 {JUDGE_GUARD_WINDOW} 件の判定で approved が 0 件。費用を使い続けないため判定段を止める(掲載は続ける)。判定の内容を確認'
+        out('停止(最後に exit 1): ' + msg)
+        active.discard('judge')
+        state['final'] = 1
     if 'judge' in active:
         guard_lease()
-        s = judge_stage.run(client, limit=limits['judge'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency)
+        s = judge_stage.run(client, limit=limits['judge'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency, heartbeat=beat)
         res['judge'] = s
         selected += s.get('selected', 0)
         if s.get('budget_stopped'):
@@ -142,27 +206,35 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
             out(f'judge: 予算上限に達したため判定段を止める({s.get("stopped")})。他の段は続ける')
         elif s.get('stopped'):
             raise Stop(1, f'judge が止まった: {s["stopped"]}')
-        judged = s.get('judged', 0)
-        nonappr = s.get('rejected', 0) + s.get('candidate', 0)
-        if apply and judged >= JUDGE_MIN_SAMPLE and nonappr / judged > JUDGE_MAX_NONAPPROVE_RATIO:
-            hold_publish = f'judge の結果が異常: {judged} 件中 approved 以外が {nonappr} 件(> {JUDGE_MAX_NONAPPROVE_RATIO:.0%})'
     if 'publish' in active:
         guard_lease()
-        if hold_publish:
-            table('publish', {'skipped': hold_publish}, out)
-            raise Stop(1, hold_publish + '。この回の掲載を行わず停止')
         limit = limits['publish']
         if apply:
-            limit = min(limit, max(0, MAX_PUBLISH_PER_RUN - totals['published']))
-        p = publish_stage.run(client, limit=limit, apply=apply, log=out) if limit > 0 else {'selected': 0, 'published': 0, 'ids': [], 'integrity': {}, 'verify_problems': {}}
+            room = MAX_PUBLISH_PER_DAY - published_last_day(client)
+            limit = min(limit, max(0, room))
+            if limit <= 0:
+                out(f'掲載しない: 直近 24 時間に作られた sites が日次上限 {MAX_PUBLISH_PER_DAY} 件に達した')
+                state['daily_cap'] = True
+        if limit > 0:
+            try:
+                p = publish_stage.run(client, limit=limit, apply=apply, log=out, heartbeat=beat)
+            except do.LeaseLost:
+                raise
+            except Exception as e:
+                part = getattr(e, 'result', None)
+                if part and part.get('integrity'):
+                    out(f'publish が例外で中断: {type(e).__name__}')
+                    raise integrity_stop(part) from e
+                raise
+        else:
+            p = {'selected': 0, 'published': 0, 'ids': [], 'integrity': {}, 'verify_problems': {}}
         res['publish'] = p
-        selected += p.get('selected', 0)
-        totals['published'] += p.get('published', 0)
+        if limit > 0:
+            selected += p.get('selected', 0)
         if p.get('verify_problems') or p.get('stopped'):
             raise Stop(1, f'publish: 読み戻し検証の不一致 {p.get("verify_problems")}')
         if p.get('integrity'):
-            ids = sorted({str(t[0]) for rows in p['integrity'].values() for t in rows if t})
-            raise Stop(1, f'publish: 整合チェック違反 {list(p["integrity"])} 対象: {ids[:20]}(Time Travel の bookmark で復元を検討)')
+            raise integrity_stop(p)
         sel, err, held = p.get('selected', 0), p.get('errors', 0), p.get('held', 0)
         if apply and (err >= PUBLISH_MAX_ERRORS or (sel >= 4 and err / sel > PUBLISH_MAX_ERROR_RATIO)):
             raise Stop(1, f'publish: バッチ失敗が異常({err}/{sel})')
@@ -177,6 +249,8 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
                  concurrency=1, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark):
     """-> (終了コード, 最初と最後の状態別件数)。テストは fetch / llm / lease / clock / bookmark_fn を差し込む。"""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
+    if any(not 1 <= v <= MAX_LIMIT for v in limits.values()):
+        raise ValueError(f'各段の limit は 1〜{MAX_LIMIT}')
     active = {s for s in STAGES if s in stages}
     lease = lease or do.Lease(client, ttl=LEASE_TTL, key=LEASE_KEY)
     if not apply:
@@ -185,26 +259,27 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
         out('lease: 別の実行が動いている。何もせず終了')
         return 2, None, None
     started, start, end, code = clock(), None, None, 0
-    totals = collections.Counter()
+    state = {'final': 0, 'daily_cap': False}
+    hb = Heartbeat(lease, clock)
     try:
-        start = preflight(client, apply, bookmark_fn, out)
+        start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active)
         n, prev = 0, start
         while True:
             n += 1
             res, selected = run_round(client, n, active, limits, apply, out, budget_month=budget_month, concurrency=concurrency,
-                                      fetch=fetch, llm=llm, lease=lease, totals=totals)
+                                      fetch=fetch, llm=llm, lease=lease, hb=hb, state=state)
             cur = progress_counts(client)
             if apply and cur == prev and selected:
-                out('停止: この回で url_progress が 1 件も動かなかった(対象はあるが進まない。ログを確認)')
+                out('WARNING 停止: この回で url_progress が 1 件も動かなかった(対象はあるが進まない。ログを確認)。終了コードは 0')
                 break
             prev = cur
             if not apply:
                 break
+            if state['daily_cap']:
+                out(f'停止: 日次の掲載上限 {MAX_PUBLISH_PER_DAY} 件(残りは翌日以降)')
+                break
             if not selected:
                 out('残りなし: 全段で対象が 0 件')
-                break
-            if apply and totals['published'] >= MAX_PUBLISH_PER_RUN:
-                out(f'停止: 1 回の実行の掲載上限 {MAX_PUBLISH_PER_RUN} 件に達した(残りは次回)')
                 break
             if rounds and n >= rounds:
                 out(f'停止: --rounds {rounds} に到達')
@@ -215,11 +290,14 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
             if not active:
                 out('残りなし: 動かせる段が無い')
                 break
+        code = state['final']
     except do.LeaseLost as e:
         out(f'lease lost: {e}')
         code = do.LEASE_LOST_EXIT
     except judge_stage.LedgerSettleError as e:
-        out(f'停止: 費用台帳を確定できなかった。予約(reserve)はそのまま残っている: {e}。docs/operations/enrich.md「残った reserve 行の解消」を確認')
+        out(f'停止(exit {LEDGER_EXIT}・再試行しない): 費用台帳を確定できなかった。予約(reserve)はそのまま残っている: {e}。'
+            'docs/operations/enrich.md「残った reserve 行の解消」を人が確認するまで再実行しない')
+        code = LEDGER_EXIT
     except Stop as e:
         out(f'停止(exit {e.code}): {e.message}')
         code = e.code
@@ -262,8 +340,8 @@ def main(argv=None, *, client=None, **inject):
     if not stages or any(s not in STAGES for s in stages):
         ap.error(f'--stages は {",".join(STAGES)} のカンマ区切り')
     limits = {s: getattr(a, f'{s}_limit') or a.limit or DEFAULT_LIMITS[s] for s in STAGES}
-    if min(limits.values()) < 1 or a.rounds < 0 or (a.max_seconds is not None and a.max_seconds <= 0) or not 1 <= a.judge_concurrency <= 4 or a.budget_month <= 0:
-        ap.error('--limit は 1 以上、--rounds は 0 以上、--max-seconds は正、--judge-concurrency は 1〜4、--budget-month は正')
+    if min(limits.values()) < 1 or max(limits.values()) > MAX_LIMIT or a.rounds < 0 or (a.max_seconds is not None and a.max_seconds <= 0) or not 1 <= a.judge_concurrency <= 4 or a.budget_month <= 0:
+        ap.error(f'--limit は 1〜{MAX_LIMIT}、--rounds は 0 以上、--max-seconds は正、--judge-concurrency は 1〜4、--budget-month は正')
     if client is None:
         import media_online
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)

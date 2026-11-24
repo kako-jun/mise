@@ -197,9 +197,21 @@ class Runner(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('reviewing', self.text())
         self.assertEqual(self.lease_rows(), [])
-        # the judge's own stale claim (candidate row fetched by the fetch stage) is tolerated
+        # state of the candidate row does not matter; a claim updated within 30 minutes (the judge's own) is ignored
         self.d1.db.execute("UPDATE url_candidates SET state='fetched'")
+        self.assertEqual(eo.stale_reviewing(self.d1), ['old.example.jp/'])
+        self.d1.db.execute("UPDATE url_progress SET updated_at=datetime('now')")
         self.assertEqual(eo.stale_reviewing(self.d1), [])
+
+    def test_preflight_check_only_with_judge_stage(self):
+        add_candidate(self.d1, 'old.example.jp', state='reviewing', review_state='')
+        self.d1.db.execute("UPDATE url_progress SET updated_at='2000-01-01 00:00:00'")
+        self.assertEqual(self.go(stages=('fetch', 'publish'))[0], 0)
+
+    def test_preflight_reports_approved_without_review_state(self):
+        add_candidate(self.d1, 'odd.example.jp', review_state='pending')
+        self.go(apply=False, llm=None)
+        self.assertIn('review_state が approved でない行 = 1', self.text())
 
     def test_bookmark_failure_warns_and_continues(self):
         def bad(c):
@@ -249,6 +261,156 @@ class Runner(unittest.TestCase):
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='fetched'")[0], 3)
         with self.assertRaises(SystemExit):
             eo.main(['--stages', 'bogus'], client=self.d1)
+
+
+class Guards(Runner):
+    def test_limit_cap(self):
+        with self.assertRaises(ValueError):
+            self.go(limits={'fetch': eo.MAX_LIMIT + 1})
+        with self.assertRaises(SystemExit):
+            eo.main(['--limit', str(eo.MAX_LIMIT + 1)], client=self.d1)
+
+    def test_heartbeat_judge_lease_lost_exit_4(self):
+        for i in range(12):
+            self.seed({f'https://site{i}-home.jp/': {}})
+        d1, inner, t = self.d1, AdultLLM(), [0.0]
+
+        def clock():
+            t[0] += 200   # always past the heartbeat interval
+            return t[0]
+
+        def steal(params):
+            d1.db.execute("UPDATE discovery_cursors SET cursor_value='thief|9999999999' WHERE source='lease' AND cursor_key='enrich'")
+            return inner(params)
+        code, _, _ = self.go(llm=steal, clock=clock, stages=('fetch', 'judge'))
+        self.assertEqual(code, 4)
+        self.assertLessEqual(len(inner.calls), 2)   # the first chunk only (triage + describe); no further chunk after the loss
+        self.assertEqual(d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 0)   # no write batch after the loss
+
+    def test_heartbeat_fetch_and_publish_stop(self):
+        for i in range(7):
+            self.seed({f'https://f{i}-home.jp/': {}})
+
+        class Lost(Exception):
+            pass
+        calls = []
+
+        def hb():
+            calls.append(1)
+            if len(calls) == 2:
+                raise Lost()
+        with self.assertRaises(Lost):
+            eo.fetch_stage.run(self.d1, limit=10, apply=True, log=lambda *_: None, fetch=fake_fetch, heartbeat=hb)
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='fetched'")[0], 5)   # only the first claim group
+        d1 = FakeD1()
+        add_candidate(d1, 'a.example.jp'); add_candidate(d1, 'b.example.jp')
+        n = []
+
+        def hb2():
+            n.append(1)
+            if len(n) == 2:
+                raise Lost()
+        with self.assertRaises(Lost) as cm:
+            ps.run(d1, limit=10, apply=True, log=lambda *_: None, heartbeat=hb2)
+        self.assertEqual(len(cm.exception.result['ids']), 1)
+
+    def test_judge_cost_guard_skips_judge_keeps_publish_exit_1(self):
+        for i in range(eo.JUDGE_GUARD_WINDOW):
+            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, 'rejected', ?)", (f'old{i}.jp/', f'2026-11-01T00:00:{i % 60:02d}Z'))
+        self.seed()
+        add_candidate(self.d1, 'ready.example.jp')
+        llm = AdultLLM()
+        code, start, end = self.go(llm=llm)
+        self.assertEqual(code, 1, self.text())
+        self.assertEqual(llm.calls, [])
+        self.assertIsNotNone(self.d1.one('SELECT 1 FROM sites WHERE id=?', (ps.site_id('ready.example.jp'),)))   # publish was not stopped
+        self.assertEqual(end['fetched'] - start['fetched'], 3)
+        self.assertEqual(self.lease_rows(), [])
+
+    def test_judge_guard_needs_full_window_and_one_approval(self):
+        for i in range(eo.JUDGE_GUARD_WINDOW):
+            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, ?, ?)",
+                               (f'old{i}.jp/', 'approved' if i == 0 else 'rejected', f'2026-11-01T00:00:{i % 60:02d}Z'))
+        self.assertFalse(eo.judge_unapproved_window(self.d1))
+        self.d1.db.execute("DELETE FROM url_candidates WHERE identity_key='old0.jp/'")
+        self.assertFalse(eo.judge_unapproved_window(self.d1))   # window not full
+
+    def test_publish_batch_failure_guard(self):
+        for i in range(eo.PUBLISH_MAX_ERRORS):
+            add_candidate(self.d1, f'e{i}.example.jp', tags=json.dumps(['boom']))
+        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='boom' BEGIN SELECT RAISE(ABORT,'poison'); END")
+        code, _, _ = self.go(stages=('publish',))
+        self.assertEqual(code, 1)
+        self.assertIn('バッチ失敗が異常', self.text())
+
+    def test_daily_publish_cap_from_d1(self):
+        for i in range(3):
+            add_candidate(self.d1, f'c{i}.example.jp')
+        recent = eo.published_last_day(self.d1)
+        old = eo.MAX_PUBLISH_PER_DAY
+        eo.MAX_PUBLISH_PER_DAY = recent + 2
+        try:
+            code, start, end = self.go(stages=('publish',))
+        finally:
+            eo.MAX_PUBLISH_PER_DAY = old
+        self.assertEqual(code, 0)
+        self.assertEqual(end['published'] - start['published'], 2)
+        self.assertIn('日次', self.text())
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 1)
+
+    def test_ledger_settle_error_exit_5_releases_lease(self):
+        self.seed()
+        orig = eo.judge_stage.run
+        eo.judge_stage.run = lambda *a, **k: (_ for _ in ()).throw(js.LedgerSettleError('settle failed'))
+        try:
+            code, _, _ = self.go()
+        finally:
+            eo.judge_stage.run = orig
+        self.assertEqual(code, 5)
+        self.assertEqual(self.lease_rows(), [])
+        self.assertIn('再試行しない', self.text())
+
+    def test_no_progress_stops_with_warning_exit_0(self):
+        self.seed()
+        orig = eo.fetch_stage.run
+        eo.fetch_stage.run = lambda *a, **k: {'selected': 3}
+        try:
+            code, _, _ = self.go(stages=('fetch',))
+        finally:
+            eo.fetch_stage.run = orig
+        self.assertEqual(code, 0)
+        self.assertIn('WARNING 停止', self.text())
+
+    def test_enrich_and_discover_leases_coexist(self):
+        a, b = do.Lease(self.d1, owner='A'), do.Lease(self.d1, owner='B', key=eo.LEASE_KEY)
+        self.assertTrue(a.acquire() and b.acquire())
+        self.assertEqual(sorted(r['cursor_key'] for r in self.lease_rows()), ['discover', 'enrich'])
+        b.release()
+        self.assertEqual([r['cursor_key'] for r in self.lease_rows()], ['discover'])
+
+    def test_rate_limit_detection(self):
+        class H(Exception):
+            code = 429
+        self.assertTrue(eo.is_rate_limit(H()))
+        e = RuntimeError('wrapped'); e.__cause__ = H()
+        self.assertTrue(eo.is_rate_limit(e))
+        self.assertTrue(eo.is_rate_limit(RuntimeError('Cloudflare API 429: x')))
+        self.assertTrue(eo.is_rate_limit(RuntimeError('HTTP 429')))
+        self.assertFalse(eo.is_rate_limit(RuntimeError('selected 14290 rows')))
+
+    def test_integrity_violation_visible_when_publish_raises(self):
+        add_candidate(self.d1, 'ok.example.jp'); add_candidate(self.d1, 'bad.example.jp', description_en='')
+        self.d1.db.execute("UPDATE url_progress SET updated_at='2000-01-01' WHERE identity_key='ok.example.jp/'")
+        orig_batch = self.d1.batch
+        self.d1.batch = lambda st: (_ for _ in ()).throw(RuntimeError('hold down')) if any('review_reason' in x for x, _ in st) else orig_batch(st)
+        orig = ps.post_check
+        ps.post_check = lambda c, ids: {'uncategorized': [(ids[0],)]}
+        try:
+            code, _, _ = self.go(stages=('publish',))
+        finally:
+            ps.post_check = orig
+        self.assertEqual(code, 1)
+        self.assertIn(ps.site_id('ok.example.jp'), self.text())
 
 
 class PublishNits(unittest.TestCase):
