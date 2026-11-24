@@ -33,7 +33,7 @@ export function meterDb(db, acc) {
 
 // 共有キャッシュに入れてよい GET か。DB を読む重い経路（検索・カテゴリ・範囲・活動・sitemap・範囲ページの SSR・アバウト）。
 // 入れない: /api/picks（毎回ランダム。キャッシュすると結果が変わる）・/api/requests（POST）・/icon/・/thumb/（R2。immutable で別に長期キャッシュ）・その他の /api/*（404 等）。
-const CACHE_PATHS = new Set(['/api/sites', '/api/categories', '/api/scopes', '/api/activity', '/sitemap.xml']);
+const CACHE_PATHS = new Set(['/api/sites', '/api/categories', '/api/scopes', '/api/activity', '/api/progress', '/sitemap.xml']);
 export function isCacheable(req) {
   if (req.method !== 'GET' || req.headers.has('Authorization')) return false;
   const { pathname } = new URL(req.url);

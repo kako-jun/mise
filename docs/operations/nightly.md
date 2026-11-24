@@ -21,6 +21,7 @@
 12 favicon    --favicon-limit N のときだけ(既定は無効): ファビコン取得(#125。`uv run --with pillow` で起動。Pillow が無ければ失敗として guards に出る) -> 取得だけ（ローカルの `var/favicons/<k>.webp`〔サイト固定のキー〕と台帳 `var/favicons.sqlite` に置く。**SQL は作らない**: ローカルにしか無い画像を D1 に指す SQL の誤適用を避けるため）。D1 への反映は、R2 へ置いたあと手で `sql`（既定 `--store r2-remote`、`--since` なし。[手順](../collection/favicons.md#r2-への保存と配信)）。本番には触れず、失敗しても夜間全体は失敗にしない
 13 media      #176: 本番に反映したサイトを画像取得の待ち行列へ追加し、取得 → R2 → D1 の順に進める（既定は無効。[設定と再開](#新規掲載の画像取得)）
 14 usage      使用量ガード(#157。既定で有効、`--no-usage-guard` で無効): Cloudflare の Workers リクエスト・D1 行数を込みの枠(アカウント全体の合計［Workers と Pages Functions］。mise は内数の表示だけ)と比べ、50%/80%・月末予測・急増を guards に載せる(読むだけ。トークンが無い・API が失敗しても警告のみで続行し、前の段が失敗した夜も動く。手順は [usage-guard.md](usage-guard.md))
+15 progress   `--apply-prod` のとき、発見・取得・判定・公開・画像処理の区切りで D1 `url_progress` へ URL の状態を同期（差分だけ更新）。申請 URL も同じ表へ入る。失敗しても収集・公開を止めず guards に記録
 ```
 
 - **discover-wikidata（#128）**: 本番の `/api/categories`（読み取りのみ）で `site_count` が 100 未満の葉（対応表 `data/wikidata-leaf-map.csv` にある葉）のうち、対応表の行がまだ全部は `done` でない葉を少ない順に `--wikidata-leaves N`（既定 3、0 で無効）葉まで取る。不足の葉が無い・全葉が完了ならこの段はスキップし（guards に記録）、対応表の順（固定）になるのは本番 API が取れないときだけ。WDQS が 429/503 で中断すると `discover-wikidata` は終了コード 3 で終わり、guards に「Wikidata が中断した（Retry-After）」を残して夜間は続行する。行ごとの続きの OFFSET は台帳の `source_cursor` に残り、夜をまたいで進む。WDQS のルール（5 秒間隔・429/503 で中断・キャッシュ）は [pipeline.md](../collection/pipeline.md#発見元)。
@@ -33,7 +34,7 @@
   - 引用不一致が共通原因の兆候である可能性もあるため、件数・対象数・失敗率・連続サイクル数を `status.json` の `llm_validation_warning` とログに警告として残す。警告だけでは周回を止めない。
 - 途中の段からやり直したいときは `--from-stage <段>`（例: `--from-stage sql`）。`status.json` を消さずに、その段以降を成功済みでも実行し直す。
 - 失敗した段があればそれ以降は進めず、`status.json` に記録して exit 1。多重起動は `var/nightly/.lock` の flock で防ぎ、取れなければ exit 75。
-- 本番 D1 に触れるのは prod 段と、明示的に有効にした media 段。`--apply-prod` が無ければ `wrangler` は呼ばない。`--dry-run` と `--apply-prod` は併用できない。
+- 本番 D1 に触れるのは prod 段と、明示的に有効にした media 段、および `--apply-prod` 時の URL 進捗同期。`--apply-prod` が無ければ `wrangler` は呼ばない。`--dry-run` と `--apply-prod` は併用できない。
 - 「出荷済み」は `var/nightly/shipped.txt`（本番反映に成功した key のうち、**`export_approved_sql.py` が実際に SQL へ出した key だけ**。カテゴリ無し・重複で外れた key は記録しない。`keys.txt` も同じ）。承認済みで未出荷のものを 1 夜 `--max-add` 件まで出す。本物の台帳は変えず、`export.sqlite`（台帳のコピー）で上限をかけて書き出す。
 
 ## コマンド
