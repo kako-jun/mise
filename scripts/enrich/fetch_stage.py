@@ -180,13 +180,16 @@ def claim(client, rows, now):
     return mine
 
 
-def select_rows(client, limit, now):
+def select_rows(client, limit, now, priority=None):
+    order, extra = 'p.identity_key', ''
+    if priority is not None:
+        order, extra = priority.order(client, 'p.identity_key')
     cutoff = (now - datetime.timedelta(minutes=STALE_MINUTES)).strftime(FMT)
     return client.query(
-        "SELECT p.identity_key, p.url, p.source, p.state, p.discovered_at, p.updated_at, COALESCE(c.fetch_attempts,0) AS fetch_attempts "
+        "SELECT p.identity_key, p.url, p.source, p.state, p.discovered_at, p.updated_at, COALESCE(c.fetch_attempts,0) AS fetch_attempts" + extra + " "
         "FROM url_progress p LEFT JOIN url_candidates c ON c.identity_key=p.identity_key "
         "WHERE (p.state='discovered' AND (c.next_fetch_at IS NULL OR c.next_fetch_at<=?)) OR (p.state='queued' AND p.updated_at<?) "
-        "ORDER BY p.identity_key LIMIT ?", [now.strftime(FMT), cutoff, int(limit)])
+        "ORDER BY " + order + " LIMIT ?", [now.strftime(FMT), cutoff, int(limit)])
 
 
 def _transient(e):
@@ -263,12 +266,14 @@ def write_results(client, results, stamp, stats, log):
                 log(f'verify failed: {k} expected {st}/{attempts} got {dict(b) if b else None}')
 
 
-def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS, heartbeat=None):
+def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS, heartbeat=None, priority=None):
     """取得段の 1 回分。戻り: 件数の dict。apply=False は選択のみ(claim も書き込みもしない)。
     CLAIM_ROWS 行ずつ claim -> 取得 -> 書き込みまで進める(claim は書き込み直前まで新しい。claim を失った行は書かない)。"""
     fetch = fetch or fetch_one
     fetcher.HOST_WAIT = max(fetcher.HOST_WAIT, HOST_INTERVAL)
-    rows = select_rows(client, limit, now())
+    rows = select_rows(client, limit, now(), priority)
+    if priority is not None:
+        priority.report(rows, log, 'fetch')
     stats = collections.Counter(selected=len(rows))
     if not apply:
         log(f'dry-run: {len(rows)} 件が対象(claim・書き込みなし)')

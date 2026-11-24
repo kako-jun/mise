@@ -5,7 +5,7 @@
 続きの位置は url_progress の状態そのもの、排他は D1 discovery_cursors のリース(source='lease', cursor_key='enrich')。
 
   uv run python scripts/enrich_online.py [--stages fetch,judge,publish] [--limit N | --fetch-limit/--judge-limit/--publish-limit N]
-                                         [--rounds N] [--max-seconds S] [--budget-month USD] [--judge-concurrency 1..4] [--dry-run | --apply]
+                                         [--rounds N] [--max-seconds S] [--budget-month USD] [--judge-concurrency 1..4] [--priority leaf|none] [--dry-run | --apply]
 
 既定は --dry-run(読むだけ。1 回だけ回し、各段の対象件数を出す)。--apply で書く。--rounds 0 は「残りが無くなるか停止条件まで」。
 終了コード: 0 正常(残り無し・予算切れ・--max-seconds・--rounds 到達・日次の掲載上限) / 1 検証不一致・整合チェック違反・異常ガード・
@@ -22,7 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import discover_online as do
-from enrich import fetch_stage, judge_stage, publish_stage
+from enrich import fetch_stage, judge_stage, priority as prio, publish_stage
 
 STAGES = ('fetch', 'judge', 'publish')
 DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'publish': 60}
@@ -216,7 +216,8 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
     beat = hb if apply else None
     if 'fetch' in active:
         guard_lease()
-        res['fetch'] = fetch_stage.run(client, limit=limits['fetch'], apply=apply, log=out, fetch=fetch, workers=fetch_stage.WORKERS, heartbeat=beat)
+        res['fetch'] = fetch_stage.run(client, limit=limits['fetch'], apply=apply, log=out, fetch=fetch, workers=fetch_stage.WORKERS, heartbeat=beat,
+                                    priority=state['sel']['fetch'])
         selected += res['fetch'].get('selected', 0)
         if res['fetch'].get('verify_failed'):
             raise Stop(1, f'fetch: 読み戻し検証が {res["fetch"]["verify_failed"]} 件不一致(ログの verify failed の行を確認)')
@@ -231,7 +232,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
     if 'judge' in active:
         guard_lease()
         s = judge_stage.run(client, limit=limits['judge'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency,
-                            heartbeat=beat, llm_enabled=llm_on)
+                            heartbeat=beat, llm_enabled=llm_on, priority=state['sel']['judge'])
         res['judge'] = s
         selected += s.get('selected', 0) if llm_on else s.get('moved_without_llm', 0)
         if s.get('budget_stopped'):
@@ -279,7 +280,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
 
 
 def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=None, apply=False, budget_month=judge_stage.MONTHLY_CAP_USD,
-                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark):
+                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark, priority='none'):
     """-> (終了コード, 最初と最後の状態別件数)。テストは fetch / llm / lease / clock / bookmark_fn を差し込む。"""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     if any(not 1 <= v <= MAX_LIMIT for v in limits.values()):
@@ -296,7 +297,7 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
         out('lease: 別の実行が動いている。何もせず終了')
         return 2, None, None
     started, start, end, code = clock(), None, None, 0
-    state = {'final': 0, 'daily_cap': False}
+    state = {'final': 0, 'daily_cap': False, 'sel': {s: prio.Selector(priority) for s in ('fetch', 'judge')}}
     hb = Heartbeat(lease, clock)
     try:
         start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active)
@@ -370,6 +371,7 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--budget-month', type=float, default=judge_stage.MONTHLY_CAP_USD, help='月の LLM 費用の上限(USD)')
     ap.add_argument('--max-publish-per-day', type=int, default=MAX_PUBLISH_PER_DAY, help=f'直近 24 時間に作られた sites の日次上限(1 以上。既定 {MAX_PUBLISH_PER_DAY})')
     ap.add_argument('--judge-concurrency', type=int, default=1, help='判定段の並列数(1〜4)')
+    ap.add_argument('--priority', choices=prio.MODES, default='leaf', help='取得・判定の行の選び方。leaf = 掲載数が目標未満の葉を埋める行を先に(機械順。既定)、none = identity_key 順')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かない')
     mode.add_argument('--apply', action='store_true', help='本番 D1 へ書く')
@@ -388,7 +390,7 @@ def main(argv=None, *, client=None, **inject):
         import media_online
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
     code, _, _ = run_pipeline(client, stages=stages, limits=limits, rounds=a.rounds, max_seconds=a.max_seconds, apply=a.apply,
-                              budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, **inject)
+                              budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, priority=a.priority, **inject)
     return code
 
 

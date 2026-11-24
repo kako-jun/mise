@@ -4,7 +4,7 @@
 
 ## 取得段
 
-`scripts/enrich/fetch_stage.py`（`run(client, *, limit, apply, log)`）。`url_progress.state='discovered'` の行を `identity_key` の機械順に取り、トップページを取得して `url_candidates` に特徴（title / description / lang / kana_count / text_len / ad_hits / ext_refs / flags / text_head / personal_score / 成人属性 / 種別 / 更新の兆候）を書く。取得・抽出は `scripts/pipeline` の fetcher / features をそのまま使う（公開 IP のみ・IP 固定・オフサイトのリダイレクト拒否・512KB・20 秒・robots.txt 遵守・同一ホスト 2 秒以上）。ローカルファイルは作らない。
+`scripts/enrich/fetch_stage.py`（`run(client, *, limit, apply, log)`）。`url_progress.state='discovered'` の行を優先順（下の「優先順」。`--priority none` なら `identity_key` の機械順）に取り、トップページを取得して `url_candidates` に特徴（title / description / lang / kana_count / text_len / ad_hits / ext_refs / flags / text_head / personal_score / 成人属性 / 種別 / 更新の兆候）を書く。取得・抽出は `scripts/pipeline` の fetcher / features をそのまま使う（公開 IP のみ・IP 固定・オフサイトのリダイレクト拒否・512KB・20 秒・robots.txt 遵守・同一ホスト 2 秒以上）。ローカルファイルは作らない。
 
 - claim: `discovered -> queued` を `updated_at` の比較交換（`UPDATE ... RETURNING` で勝敗判定）で行い、2 台が同じ行を取らない。30 分を超えた `queued` は再 claim できる。5 行ずつ claim -> 取得 -> 書き込みと進め、書き込み（upsert・状態更新）は自分の claim と一致するときだけ効く。`client.batch` は 1 回 5 文以内。
 - 取得前に `rejected` にするのは、無効なホスト、サービスのトップ・サービス内ページ（`platform_page`）、公的機関（`public_body_other_pipeline`: 公的機関は別パイプライン public-bodies で扱う）だけ。共有サービス上の自作サイト・ISP の `/~user/`・名前の形が変わったドメインは「保留であって拒否ではない」ので、他と同じように取得する。
@@ -88,6 +88,19 @@ Message Batches（半額）は未対応。同期呼び出し、`concurrency` は
 置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`、旧 `export_sql.py`（非 published の `url_progress.state` を上書きし `reviewing` を作る。最初の `--apply` の前に停止する）。
 テスト: `tests/test_enrich_publish_stage.py`（実 migration を適用した in-memory SQLite）。
 
+## 優先順（`scripts/enrich/priority.py`）
+
+LLM 費用（月上限）を、掲載数が目標（`FLOOR`=100 サイト）に届いていない葉カテゴリを埋める行へ先に使う。**順序は機械的**で、人気・規模・トラフィックは使わない。取得段（`discovered`）と判定段（`fetched`）が対象。claim は変えず、選択の `ORDER BY` だけが変わる。
+
+- 葉 = `categories` で子を持たない行（132）。不足 = `max(0, 100 − 掲載数 − 処理中)`。掲載数は `site_categories` の葉ごとの件数、処理中は `url_progress` が `fetched`/`reviewing`/`approved`/`queued` の行（判定済みなら `url_candidates.categories` の先頭、無ければ `hint_leaf`）。集計 SQL は 3 本。
+- rank 0: `hint_leaf` が不足のある葉（不足が大きい葉が先、次に `identity_key`）／ rank 1: ヒントなし・葉でない値（`identity_key` 順）／ rank 2: ヒントの葉が既に 100 以上（落とさず後回し。`identity_key` 順）。
+- 葉 id は `categories` 表の id を正規表現で検証して `CASE` に定数で埋め込む（束縛変数 0、D1 の 100 個制限に触れない）。選択は `LIMIT` で絞ったまま。
+- 公平枠: 段ごとの選択 5 回に 1 回（`FAIRNESS_EVERY`）は優先せず `identity_key` 順だけで選ぶ。rank 2 が永久に止まらない。
+- 毎回、不足の大きい上位 5 葉と選ばれた行の rank 0/1/2 の件数をログに出す。
+- `--priority leaf|none`（ランナー既定 `leaf`）。各段の `run(..., priority=None)` は従来どおり（`Selector` を渡したときだけ有効）。
+- 掲載段の選択は変えない。熟議段はこの時点の main に無いので対象外。
+- テスト: `tests/test_enrich_priority.py`。
+
 ## ランナー（`scripts/enrich_online.py`）
 
 取得 → 判定 → 掲載を 1 回の実行で回す。ローカルに状態・ログ・チェックポイントを持たない（標準出力のみ）。続きの位置は `url_progress` の状態そのもので、どの収集機から再実行しても続きから進む。排他は D1 `discovery_cursors` のリース（`source='lease'`, `cursor_key='enrich'`。URL 発見ランナーの `discover` とは別キー）。
@@ -98,7 +111,7 @@ uv run python scripts/enrich_online.py --apply --rounds 0               # 残り
 uv run python scripts/enrich_online.py --apply --stages fetch,judge --limit 30 --max-seconds 3000
 ```
 
-主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--publish-limit`（既定 60 / 30 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
+主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--publish-limit`（既定 60 / 30 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
 
 終了コード: `0` 正常（残り無し・予算上限・`--max-seconds`・`--rounds`・日次の掲載上限）/ `1` 検証不一致・整合チェック違反・異常ガード・前提チェック不合格・判定段の停止・判定の費用ガード / `2` リースが取れない・引数不正 / `3` レート制限（429）/ `4` 実行中にリースを失った / `5` 費用台帳を確定できない（人の対応が必要）。**スケジューラは 5 で再試行しない**（再実行のたびに課金して `reserve` 行が増える。「残った reserve 行の解消」を人が済ませてから再開）。
 
