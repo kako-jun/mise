@@ -47,6 +47,6 @@ CREATE TRIGGER IF NOT EXISTS sites_progress_ai AFTER INSERT ON sites BEGIN
     WHEN lower(substr(NEW.url,1,7))='http://' THEN substr(NEW.url,8)
     ELSE NEW.url END,'/')) WHERE id=NEW.id;
   INSERT INTO url_progress(identity_key,url,source,state,discovered_at,updated_at)
-  SELECT progress_key,url,'discovered','published',registered_at,registered_at FROM sites WHERE id=NEW.id
+  SELECT progress_key,url,'discovered','published',COALESCE(registered_at,datetime('now')),COALESCE(registered_at,datetime('now')) FROM sites WHERE id=NEW.id
   ON CONFLICT(identity_key) DO UPDATE SET url=excluded.url,state='published',updated_at=excluded.updated_at;
 END;
