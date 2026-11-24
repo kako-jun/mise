@@ -27,6 +27,8 @@ npm run build:globe  # src/client/globe.js から public/globe.js を生成
 
 main へのマージで Workers Builds が本番へ自動デプロイする。migration は自動適用されないため、**マージ前に**手動で本番へ適用する（順序は、**migration 適用 → マージ**）。**マージ前に必ず `node scripts/check-migrations-applied.mjs`**（本番 `mise` とプレビュー `mise-preview` の未適用を読み取りだけで確かめ、未適用があれば非 0 で終了する）を実行する。スキーマは旧 Worker でも動く後方互換の形にする。
 
+**例外: `0037_backfill_last_crawled_at.sql`（#201。`sites.last_crawled_at` を `site_checks.last_ok_at` から一度だけ埋めるデータだけの UPDATE）は、コードがこの migration に依存しない**（列は 0007 から在り、値が空なら画面は日付を出さないだけ）。そのため**コードを先にマージしてよく、0037 は人が後から本番へ適用する**。適用するまで `check-migrations-applied.mjs` は 0037 を未適用と報告する（想定どおり・無視してよい。他の migration の未適用は従来どおり止める）。0037 は `site_checks`（0017）が本番に在るときだけ意味がある。
+
 ```sh
 npx wrangler d1 migrations apply mise --remote   # マージ前に実行
 ```

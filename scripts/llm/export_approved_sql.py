@@ -49,6 +49,7 @@ Never touched: ids starting with pb-, sites holding a leaf under government (gua
 without any valid id (old ids are translated first, see judge.modernize_categories). Summary on stdout.
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -147,12 +148,21 @@ def clean_tags(tags):
 
 def crawled_at(row):
     """The time the page was actually fetched (frontier.last_fetched_at) -> sites.last_crawled_at (the "last checked" shown on the site, #201).
-    Missing/unreadable -> None (NULL). Never the approval or registration time: that would pass off a date we did not check."""
+    frontier writes `2026-11-24T11:26:33+00:00` (frontier.now()); the D1 data uses `%Y-%m-%dT%H:%M:%SZ` (0008/0009/0014), so parse, convert to UTC, rewrite.
+    Missing / empty / unparseable / no timezone -> None (NULL). Never the approval or registration time: that would pass off a date we did not check."""
     try:
         v = row["last_fetched_at"]
     except (KeyError, IndexError):
         return None
-    return v if isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}[T ][0-9:.]+Z?", v) else None
+    if not isinstance(v, str) or not v.strip():
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        return None
+    return d.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def statements(row, norm=None):

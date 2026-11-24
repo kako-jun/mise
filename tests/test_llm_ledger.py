@@ -409,7 +409,7 @@ class ExportTests(Base):
 
     def test_approved_adult_classification_is_exported_to_d1_for_media_eligibility(self):
         sql = self.export()
-        self.assertIn('region_code,adult_content)', sql)
+        self.assertIn('region_code,adult_content,last_crawled_at)', sql)
         t = self.target()
         t.executescript(sql)
         self.assertEqual(t.execute("SELECT adult_content FROM sites WHERE url='https://adultsite.example/'").fetchone()[0], 1)
@@ -563,11 +563,17 @@ class ExportTests(Base):
         self.assertIsNone(self.listed(t, "onlytag.example"))  # no category at all: not listed (#137, uncategorized is a violation)
 
     def test_last_crawled_at_is_the_real_fetch_time_or_null(self):
-        """#201: 掲載時の sites.last_crawled_at は frontier.last_fetched_at(実際の取得日時)。無い・不正なら NULL(承認日・登録日で偽らない)。"""
+        """#201: 掲載時の sites.last_crawled_at は frontier.last_fetched_at(実際の取得日時)を UTC の %Y-%m-%dT%H:%M:%SZ に直したもの。無い・不正なら NULL(承認日・登録日で偽らない)。"""
+        import frontier
         c = export_approved_sql.crawled_at
+        real = frontier.now()  # 本番の実形式 `...+00:00`
+        self.assertTrue(real.endswith("+00:00"))
+        self.assertEqual(c({"last_fetched_at": real}), real[:-6] + "Z")
+        self.assertEqual(c({"last_fetched_at": "2026-11-24T11:26:33+00:00"}), "2026-11-24T11:26:33Z")
         self.assertEqual(c({"last_fetched_at": "2026-11-20T06:50:10Z"}), "2026-11-20T06:50:10Z")
-        self.assertIsNone(c({"last_fetched_at": None}))
-        self.assertIsNone(c({"last_fetched_at": "yesterday"}))
+        self.assertEqual(c({"last_fetched_at": "2026-11-24T08:30:00+09:00"}), "2026-11-23T23:30:00Z")
+        for bad in (None, "", "  ", "yesterday", "2026-11-20", "2026-13-40T00:00:00Z", 5):
+            self.assertIsNone(c({"last_fetched_at": bad}), bad)
         self.assertIsNone(c({}))
 
     def test_tags_are_deduplicated_case_insensitively_and_length_capped(self):

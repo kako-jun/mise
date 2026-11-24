@@ -114,6 +114,10 @@ test('最終チェック日: last_crawled_at だけを見て、無い・不正�
   assert.equal(checkedDate({ last_crawled_at: 'garbage' }), null);
   assert.equal(checkedDate({ last_crawled_at: '' }), null);
   assert.equal(checkedDate(null), null);
+  // 未来日（現在 + 1 日より先）は出さない。ちょうど今・直近は出す
+  const iso = ms => new Date(Date.now() + ms).toISOString();
+  assert.equal(checkedDate({ last_crawled_at: iso(3 * 86400000) }), null);
+  assert.equal(checkedDate({ last_crawled_at: iso(-60000) }), iso(-60000).slice(0, 10));
   // 画面側は日付の意味を『最終チェック』『Last checked』に統一している（旧「登録」「更新」「最終巡回」に戻さない）
   const feed = read('public/feed.js'), app = read('public/app.js');
   assert.match(feed, /checked: '最終チェック'/); assert.match(feed, /checked: 'Last checked'/);
