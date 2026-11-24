@@ -278,3 +278,27 @@ test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照す
   for (const f of ['feed.css', 'feed-lib.js', 'feed.js']) assert.match(html, new RegExp('/' + f.replace('.', '\\.') + '\\?v=\\d+'));
   assert.equal(lib.navPosition(0, 500, true, 'en').denom, '500+');
 });
+
+test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止まり、再開は数え直す(#199)', () => {
+  const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
+  const run = { enabled: true, held: false, atEnd: false };
+  let now = 0, adv = 0, last;
+  const frames = (ms, ctx = run) => { for (let i = 0; i < ms / 50; i++) { now += 50; last = a.tick(now, ctx); if (last.advance) adv++; } };
+  a.tick(now, run);
+  frames(950); assert.equal(adv, 0); assert.ok(last.progress > .9 && last.state === 'running');
+  frames(100); assert.equal(adv, 1); // 1000ms で 1 回
+  frames(850); assert.equal(adv, 1); frames(100); assert.equal(adv, 2); // 続けて進む
+  // 手動操作: 進行を捨て、resumeDelay のあいだ進めない。その後 interval 数え直す
+  adv = 0; frames(500); a.poke(now); frames(250); assert.equal(last.state, 'quiet'); assert.equal(last.progress, 0);
+  frames(950); assert.equal(adv, 0); frames(300); assert.equal(adv, 1);
+  // held: 進めず進行を保つ。解けたら resumeDelay 待って最初から
+  adv = 0; frames(500); const p = last.progress; frames(5000, { ...run, held: true }); assert.equal(adv, 0); assert.equal(last.state, 'held'); assert.equal(last.progress, p);
+  frames(250); assert.equal(last.state, 'quiet'); frames(950); assert.equal(adv, 0); frames(350); assert.equal(adv, 1);
+  // オフ・終了カードでは進まず 0。巻き戻しの合図も出さない
+  adv = 0; frames(5000, { ...run, enabled: false }); assert.equal(adv, 0); assert.equal(last.progress, 0);
+  frames(5000, { ...run, atEnd: true }); assert.equal(adv, 0); assert.equal(last.state, 'off');
+  // reset(カード切替)で進行だけ 0 に
+  frames(500); a.reset(); frames(600); assert.equal(adv, 0);
+  // 長い空白(タブ復帰)でも 1 フレームは 100ms までしか進めない
+  a.tick(now += 60000, run); assert.equal(adv, 0);
+});

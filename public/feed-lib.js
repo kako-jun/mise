@@ -74,5 +74,30 @@
     return over >= PAN_MIN_OVER ? { w, px: over / 2 } : null;
   };
 
-  g.MiseFeedLib = { panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
+  // 縦フィードの自動送り(#199)。時間の進み・停止・再開だけの純粋な状態機械(DOM・タイマーに触れない)。
+  // tick(now, { enabled, held, atEnd }) を毎フレーム呼ぶ。now はミリ秒(performance.now / rAF の時刻)。
+  // - enabled=false か atEnd(終了カード・0件)のあいだは進めず 0 に戻す。
+  // - held(展開・パネル・検索・hover/focus・タブ非表示)のあいだは止めて進行を保つ。held が解けたら resumeDelay 待って最初から数え直す。
+  // - poke(now)(手動操作)でも進行を捨て、resumeDelay 待ってから数え直す。
+  // - 1 フレームで進める時間は 100ms まで(タブ復帰・長い停止で一気に進めない)。
+  // 戻り値 { progress: 0..1, advance: 次へ進む合図, state: 'off'|'held'|'quiet'|'running' }
+  function makeAutoAdvance({ interval, resumeDelay }) {
+    let elapsed = 0, last = null, quietUntil = 0, wasHeld = false;
+    return {
+      poke(now) { quietUntil = now + resumeDelay; elapsed = 0; },
+      reset() { elapsed = 0; },
+      tick(now, { enabled, held, atEnd }) {
+        const dt = last === null ? 0 : Math.min(100, Math.max(0, now - last)); last = now;
+        if (!enabled || atEnd) { elapsed = 0; wasHeld = false; return { progress: 0, advance: false, state: 'off' }; }
+        if (held) { wasHeld = true; return { progress: elapsed / interval, advance: false, state: 'held' }; }
+        if (wasHeld) { wasHeld = false; quietUntil = now + resumeDelay; elapsed = 0; }
+        if (now < quietUntil) return { progress: 0, advance: false, state: 'quiet' };
+        elapsed += dt;
+        if (elapsed >= interval) { elapsed = 0; return { progress: 1, advance: true, state: 'running' }; }
+        return { progress: elapsed / interval, advance: false, state: 'running' };
+      },
+    };
+  }
+
+  g.MiseFeedLib = { makeAutoAdvance, panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
 })(globalThis);

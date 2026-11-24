@@ -6,6 +6,9 @@
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
+  const AUTO_ADVANCE_MS = 12000;   // 自動送り(#199): 1 枚を見せる時間
+  const AUTO_RESUME_MS = 4000;     // 手動操作・停止が解けてから、数え直しを始めるまでの無操作時間
+  const AUTO_KEY = 'mise-feed-auto-v1'; // 自動送りのオン/オフ(localStorage。'on' / 'off')
   const MAX_SITES = 500;         // 1 回の範囲選択で読み込むサイト数の上限(100 件ずつ取得 = 最大 5 リクエスト)
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
   const SEEN_KEY = 'mise-seen-v1'; // 端末内保存(localStorage)。{v:1, sites:{サイトID: 初めて見た日時ISO}}
@@ -18,9 +21,9 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { searchLabel: 'サイトを検索', clearSearch: '検索語を消去', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', position: (c, n) => `${n}件中 ${c}件目`, checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
+      directoryTitle: '箇条書きに戻る', autoLabel: '自動', autoOn: '入', autoOff: '切', autoTitle: on => `自動送り: ${on ? 'オン' : 'オフ'}(${on ? '一定時間で次のサイトへ進みます' : '押すとオン'})`, noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', position: (c, n) => `${n}件中 ${c}件目`, checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
     en: { searchLabel: 'Search sites', clearSearch: 'Clear search', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', position: (c, n) => `${c} of ${n}`, checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
+      directoryTitle: 'Back to list view', autoLabel: 'Auto', autoOn: 'ON', autoOff: 'OFF', autoTitle: on => `Auto-advance: ${on ? 'on' : 'off'} (${on ? 'moves to the next site after a while' : 'press to turn on'})`, noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', position: (c, n) => `${c} of ${n}`, checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
@@ -411,6 +414,44 @@
     el.textContent = v.text; el.title = t('position')(fmt(v.cur), v.denom);
   }
 
+  // ---- 自動送り(#199)。時間の進みは L.makeAutoAdvance、ここは入力・状態の読み取りと表示だけ ----
+  const auto = L.makeAutoAdvance({ interval: AUTO_ADVANCE_MS, resumeDelay: AUTO_RESUME_MS });
+  const savedAuto = storage.get(AUTO_KEY);
+  let autoOn = savedAuto === 'on' ? true : savedAuto === 'off' ? false : !reduced.matches; // 保存が無ければ既定オン。reduced-motion のときは既定オフ
+  function setAuto(on, quiet) {
+    autoOn = on; if (!quiet) storage.set(AUTO_KEY, on ? 'on' : 'off');
+    const b = $('.f-auto'); if (!b) return;
+    b.setAttribute('aria-pressed', String(on)); $('.f-auto-state', b).textContent = t(on ? 'autoOn' : 'autoOff'); b.title = t('autoTitle')(on); b.setAttribute('aria-label', `${t('autoLabel')}: ${t(on ? 'autoOn' : 'autoOff')}`);
+    if (!quiet) auto.poke(performance.now());
+  }
+  const canHover = matchMedia('(hover: hover)');
+  // いま自動送りを止めておくべきか。表示中のカードだけ調べる(全カードを毎フレーム調べない)
+  function autoHeld() {
+    if (document.hidden) return true;
+    const panel = $('.f-panel'); if (panel && !panel.hidden) return true;
+    const ae = document.activeElement, search = $('.f-search');
+    if (search && ae && search.contains(ae)) return true;
+    const c = cards[current]; if (!c || !c.matches('.f-card:not(.f-end)')) return false;
+    if (c.querySelector('.f-cap.is-open')) return true;
+    if (ae && c.contains(ae) && ae.matches('a, button, .f-long') && ae.matches(':focus-visible')) return true;
+    return canHover.matches && !!c.querySelector('a:hover, button:hover');
+  }
+  function startAuto() {
+    const poke = () => auto.poke(performance.now());
+    for (const ev of ['wheel', 'touchstart', 'touchmove', 'touchend', 'pointerdown', 'keydown']) addEventListener(ev, poke, { passive: true, capture: true }); // scroll は自動送り自身でも出るので使わない
+    const barEl = $('.f-progress'), fill = barEl.firstChild; let shown = '';
+    const frame = now => {
+      const atEnd = !list.length || current >= list.length;
+      const r = auto.tick(now, { enabled: autoOn, held: autoOn && !atEnd && autoHeld(), atEnd });
+      const st = autoOn && !atEnd ? r.state : 'off';
+      if (st !== shown) { shown = st; barEl.dataset.state = st; }
+      fill.style.transform = `scaleX(${r.progress.toFixed(4)})`;
+      if (r.advance) step(1);
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+
   // ---- 地球連動 ----
   function fly(site) {
     clearTimeout(globeTimer);
@@ -439,14 +480,19 @@
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
     const pos = mk('div', 'f-pos', { 'aria-live': 'off' }); pos.hidden = true;
     nav.append(prev, pos, next);
+    const autoBtn = mk('button', 'f-auto', { type: 'button', 'aria-pressed': 'false' });
+    autoBtn.innerHTML = '<span class="f-auto-label"></span><span class="f-auto-state"></span>'; $('.f-auto-label', autoBtn).textContent = t('autoLabel');
+    autoBtn.addEventListener('click', () => { setAuto(!autoOn); });
+    nav.append(autoBtn);
+    const progress = mk('div', 'f-progress', { 'aria-hidden': 'true' }); progress.append(mk('i'));
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;
-    root.append(bar, scroller, nav, hint, panel); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
+    root.append(bar, scroller, nav, hint, panel, progress); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
     scroller.addEventListener('scroll', () => window.dispatchEvent(new Event('mise-globe-busy')), { passive: true }); // スクロール中は背面の地球の描画を休ませる(#196)
     observer = new IntersectionObserver(entries => {
       for (const e of entries) if (e.isIntersecting) {
-        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null;
+        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null; auto.reset();
         updateButtons(); fly(idx === 'end' ? null : list[current]);
       }
       for (const e of entries) {
@@ -459,6 +505,7 @@
     }, { root: scroller, threshold: IN_VIEW_THRESHOLD });
     loadSeen();
     showLoading();
+    setAuto(autoOn, true); startAuto();
     addEventListener('keydown', e => {
       if (e.key === 'Escape' && $('.f-panel') && !$('.f-panel').hidden) { closePanel(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
