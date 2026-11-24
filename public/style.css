@@ -331,7 +331,8 @@ html[data-theme="dark"] .tag-chip { background: rgba(18, 44, 55, .74); border-co
 .tag-label { display: block; line-height: 1; text-box: trim-both cap alphabetic; }
 .tag-chip button:hover, .tag-chip button:focus-visible { background: rgba(40, 103, 115, .2); }
 /* タッチ端末: × の押せる範囲は縦 44px まで広げるので、はみ出し分（上下 8px）をチップ列の余白と行間で確保し、検索欄・おすすめリンク・隣の行を奪わない。横は隣のチップに食い込まない 5px まで。 */
-@media (pointer: coarse) { .tag-chips { padding: 8px 0; row-gap: 16px; } .tag-chip button::before { inset: -11px -5px; } .site-tag { margin: 8px 0; } .site-tag::before { content: ""; position: absolute; inset: -9px -1px; } }
+@media (pointer: coarse) { .tag-chips { padding: 8px 0; row-gap: 16px; } .tag-chip button::before { inset: -11px -5px; } .site-tag { margin: 8px 0; } .site-tag::before { content: ""; position: absolute; inset: calc(-9px - 1px) -1px; } }
+/* ↑ inset は padding box 基準で、タグの border 1px を含まない。上下 9px だけだと押せる範囲は 18 - 2 + 18 = 34px になるので、border 分（1px）を足して 36px にする。横は border-box の外端までで、隣のタグ・文字には食い込まない。 */
 @media (max-width: 700px) { .tag-chips { flex: 1 0 100%; } }
 
 /* 検索結果リンク右の「別タブで開く」ボタン。枠・背景なし、タップ領域 32px は透明な余白で確保（負マージンで行高は増やさない）。 */
