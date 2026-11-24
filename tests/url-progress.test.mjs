@@ -1,0 +1,170 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import app from '../src/index.js';
+
+const migrationFiles = readdirSync(new URL('../migrations/', import.meta.url)).filter(f => f.endsWith('.sql')).sort();
+function fixture({ through = null } = {}) {
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE d1_migrations (id INTEGER PRIMARY KEY, name TEXT, applied_at TEXT)');
+  for (const f of migrationFiles) {
+    if (through && f > through) break;
+    db.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
+  }
+  if (!through) db.exec('DELETE FROM requests; DELETE FROM site_tags; DELETE FROM site_categories; DELETE FROM sites; DELETE FROM url_progress;');
+  return db;
+}
+const d1 = db => ({ prepare: sql => {
+  let args = [];
+  const q = { bind(...a) { args = a; return q; }, all: async () => ({ results: db.prepare(sql).all(...args) }), first: async () => db.prepare(sql).get(...args) };
+  return q;
+} });
+const assets = { fetch: async req => new Response(readFileSync(new URL(`../public${new URL(req.url).pathname}`, import.meta.url)), { headers: { 'content-type': 'text/html' } }) };
+const api = (db, path, deps = {}) => app.request(path, {}, { DB: d1(db), ASSETS: assets, ...deps });
+function site(db, id, url, descJa = '説明', descEn = 'Description') {
+  db.prepare('INSERT INTO sites(id,url,name,description_ja,description_en,registered_at) VALUES(?,?,?,?,?,?)')
+    .run(id, url, id, descJa, descEn, '2026-11-24T00:00:00Z');
+}
+
+test('GET /api/progress merges published sites and lifecycle rows, sorted newest first', async () => {
+  const db = fixture();
+  site(db, 'pub', 'https://pub.example/', '日本語', 'English');
+  db.prepare("INSERT INTO site_tags(site_id,label_ja) VALUES('pub','タグ')").run();
+  db.prepare("INSERT INTO site_categories(site_id,category_id) VALUES('pub','arts')").run();
+  db.prepare("INSERT INTO url_progress(url,source,state,updated_at) VALUES('https://pub.example/','discovered','approved','2026-11-24 02:00:00'),('https://new.example/','discovered','fetched','2026-11-24 03:00:00')").run();
+  const res = await api(db, '/api/progress');
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.total, 2);
+  assert.equal(body.results[0].url, 'https://new.example/');
+  assert.equal(body.results[0].state, 'fetched');
+  const published = body.results[1];
+  assert.equal(published.state, 'published');
+  assert.equal(published.source, 'discovered');
+  assert.equal(published.description_ja, '日本語');
+  assert.equal(published.description_en, 'English');
+  assert.equal(published.tags_count, 1);
+  assert.equal(published.categories_count, 1);
+});
+
+test('GET /api/progress uses discovered source for a published site without a lifecycle row', async () => {
+  const db = fixture(); site(db, 'pub', 'https://pub.example/');
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].source, 'discovered');
+  assert.equal(body.results[0].state, 'published');
+});
+
+test('GET /api/progress keeps request source/status on an already published site', async () => {
+  const db = fixture(); site(db, 'pub', 'https://pub.example/');
+  db.prepare("INSERT INTO url_progress(url,source,state,request_type,request_status) VALUES('https://pub.example/','request','published','remove','pending')").run();
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].state, 'published');
+  assert.equal(body.results[0].source, 'request');
+  assert.equal(body.results[0].request_type, 'remove');
+  assert.equal(body.results[0].request_status, 'pending');
+});
+
+test('GET /api/progress pagination defaults and limit/offset boundaries', async () => {
+  const db = fixture();
+  for (let i = 0; i < 3; i++) db.prepare('INSERT INTO url_progress(url,state,updated_at) VALUES(?,?,?)').run(`https://${i}.example/`, 'fetched', `2026-11-24 0${i}:00:00`);
+  const defaults = await (await api(db, '/api/progress')).json();
+  assert.equal(defaults.limit, 50); assert.equal(defaults.results.length, 3);
+  assert.equal((await api(db, '/api/progress?limit=1&offset=1')).status, 200);
+  assert.equal((await api(db, '/api/progress?limit=100&offset=1000000')).status, 200);
+  for (const qs of ['?limit=0', '?limit=101', '?limit=x', '?offset=-1', '?offset=1000001', '?offset=', '?limit=']) {
+    assert.equal((await api(db, `/api/progress${qs}`)).status, 400, qs);
+  }
+});
+
+test('GET /api/progress returns an empty page after the last row', async () => {
+  const db = fixture(); db.prepare("INSERT INTO url_progress(url) VALUES('https://one.example/')").run();
+  const body = await (await api(db, '/api/progress?offset=1')).json();
+  assert.equal(body.total, 1); assert.deepEqual(body.results, []);
+});
+
+test('GET /api/progress never returns private request or review fields', async () => {
+  const db = fixture();
+  db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason,contact,ip_hash,net_hash,note)
+    VALUES('add','pending','https://request.example/','request.example','request.example','private reason','me@example.test','ip-secret','net-secret','admin note')`).run();
+  const res = await api(db, '/api/progress'); const body = await res.json();
+  const serialized = JSON.stringify(body);
+  for (const secret of ['private reason', 'me@example.test', 'ip-secret', 'net-secret', 'admin note']) assert.equal(serialized.includes(secret), false);
+  assert.equal(body.results[0].source, 'request');
+  assert.equal(body.results[0].request_status, 'pending');
+});
+
+test('request triggers preserve pending-to-approved/rejected and add/remove/correct overlay states', async () => {
+  const db = fixture(); site(db, 'pub', 'https://pub.example/');
+  const add = db.prepare("INSERT INTO requests(type,status,url,host,normalized_key,reason) VALUES(?,?,?,?,?,?)");
+  add.run('add','pending','https://new.example/','new.example','new.example','x');
+  assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status FROM url_progress WHERE url='https://new.example/'").get() },
+    { source: 'request', state: 'discovered', request_type: 'add', request_status: 'pending' });
+  db.prepare("UPDATE requests SET status='approved',decided_at='2026-11-24 04:00:00' WHERE url='https://new.example/'").run();
+  assert.equal(db.prepare("SELECT state FROM url_progress WHERE url='https://new.example/'").get().state, 'approved');
+  for (const type of ['remove','correct']) {
+    add.run(type,'pending','https://pub.example/','pub.example','pub.example',`private ${type}`);
+    const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE url='https://pub.example/'").get();
+    assert.equal(row.request_type, type); assert.equal(row.request_status, 'pending');
+    const view = await (await api(db, '/api/progress')).json();
+    assert.equal(view.results.find(x => x.url === 'https://pub.example/').state, 'published');
+  }
+});
+
+test('migration 0032 backfills latest request per URL without copying private columns and is rerunnable', () => {
+  const db = fixture({ through: '0031_recent_registration_sort.sql' });
+  db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason,contact,ip_hash,net_hash,note,created_at)
+    VALUES('add','pending','https://old.example/','old.example','old.example','secret1','mail1','ip1','net1','note1','2026-11-23'),
+          ('add','rejected','https://old.example/','old.example','old.example','secret2','mail2','ip2','net2','note2','2026-11-24')`).run();
+  const sql = readFileSync(new URL('../migrations/0032_url_progress.sql', import.meta.url), 'utf8');
+  db.exec(sql); db.exec(sql);
+  assert.deepEqual({ ...db.prepare("SELECT source,state,request_type,request_status,discovered_at FROM url_progress WHERE url='https://old.example/'").get() },
+    { source: 'request', state: 'rejected', request_type: 'add', request_status: 'rejected', discovered_at: '2026-11-24' });
+  const cols = db.prepare('PRAGMA table_info(url_progress)').all().map(x => x.name);
+  for (const privateField of ['reason','contact','ip_hash','net_hash','note']) assert.equal(cols.includes(privateField), false);
+});
+
+test('GET /progress redirects bare path and the screen is linked from the footer in both languages', async () => {
+  const db = fixture();
+  const redirect = await api(db, '/progress');
+  assert.equal(redirect.status, 301); assert.equal(redirect.headers.get('location'), '/progress/');
+  const screen = await api(db, '/progress/');
+  assert.equal(screen.status, 200); assert.match(await screen.text(), /Collection and publishing progress/);
+  const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const appJs = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(index, /href="\/progress\/" data-i18n="progress"/);
+  assert.match(appJs, /progress:'収集・掲載の進捗'/); assert.match(appJs, /progress:'Collection and publishing status'/);
+  assert.match(readFileSync(new URL('../public/progress.css', import.meta.url), 'utf8'), /overflow:auto/);
+});
+
+test('GET /api/progress sets the browser API cache policy and database failures are not cached', async () => {
+  const db = fixture();
+  const ok = await api(db, '/api/progress');
+  assert.equal(ok.headers.get('cache-control'), 'public, max-age=30');
+  const broken = await app.request('/api/progress', {}, { DB: { prepare: () => { throw new Error('db down'); } }, ASSETS: assets });
+  assert.equal(broken.status, 500); assert.equal(broken.headers.get('cache-control'), 'no-store');
+});
+
+test('nightly exporter escapes URLs and emits only changed lifecycle fields', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mise-progress-'));
+  try {
+    const dbPath = join(dir, 'frontier.sqlite'), sqlPath = join(dir, 'out.sql'), db = new DatabaseSync(dbPath);
+    db.exec(readFileSync(new URL('../scripts/pipeline/schema.sql', import.meta.url), 'utf8'));
+    db.exec("INSERT INTO frontier(key,host,url,source,discovered_at,state) VALUES('a','a.example','https://a.example/it''s','commoncrawl-webgraph','2026-11-24T00:00:00Z','candidate')");
+    db.exec("INSERT INTO llm_judgement(key,input_hash,origin,model,judged_at,imported_at,spam_verdict,spam_kind,spam_reason,categories,tags,adult,site_kind,site_kind_reason,site_scope,confidence,description_ja,description_en,review_state) VALUES('a','h','judge','m','now','now','pass','none','','[]','[]','unknown','unknown','','standalone','high','説明','Description','approved')");
+    db.close();
+    const run = spawnSync('uv', ['run', 'python3', new URL('../scripts/progress/export_sql.py', import.meta.url).pathname, '--db', dbPath, '--out', sqlPath], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    const sql = readFileSync(sqlPath, 'utf8');
+    assert.match(sql, /it''s/); assert.match(sql, /'approved'/); assert.match(sql, /WHERE \(url_progress.state!='published'/);
+    const d = fixture(); d.exec("INSERT INTO url_progress(url,state) VALUES('https://a.example/it''s','fetched')"); d.exec(sql);
+    assert.equal(d.prepare("SELECT state FROM url_progress WHERE url=?").get("https://a.example/it's").state, 'approved');
+    d.prepare("UPDATE url_progress SET state='published' WHERE url=?").run("https://a.example/it's"); d.exec(sql);
+    assert.equal(d.prepare("SELECT state FROM url_progress WHERE url=?").get("https://a.example/it's").state, 'published');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
