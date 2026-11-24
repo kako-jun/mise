@@ -562,6 +562,14 @@ class ExportTests(Base):
         self.assertEqual((n("site_categories", "onlycat.example"), n("site_tags", "onlycat.example")), (1, 0))
         self.assertIsNone(self.listed(t, "onlytag.example"))  # no category at all: not listed (#137, uncategorized is a violation)
 
+    def test_last_crawled_at_is_the_real_fetch_time_or_null(self):
+        """#201: 掲載時の sites.last_crawled_at は frontier.last_fetched_at(実際の取得日時)。無い・不正なら NULL(承認日・登録日で偽らない)。"""
+        c = export_approved_sql.crawled_at
+        self.assertEqual(c({"last_fetched_at": "2026-11-20T06:50:10Z"}), "2026-11-20T06:50:10Z")
+        self.assertIsNone(c({"last_fetched_at": None}))
+        self.assertIsNone(c({"last_fetched_at": "yesterday"}))
+        self.assertIsNone(c({}))
+
     def test_tags_are_deduplicated_case_insensitively_and_length_capped(self):
         rows = export_approved_sql.clean_tags(["Photo", "photo", " PHOTO ", "x" * 41, "a  b", "c", "d", "e", "f"])
         self.assertEqual(rows, ["Photo", "a b", "c", "d", "e"])

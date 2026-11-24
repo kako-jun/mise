@@ -44,7 +44,7 @@ uv run python3 scripts/recrawl/recrawl.py sql --out var/site_checks.sql   # site
 
 ## 出力と migration
 
-台帳は `var/recrawl.sqlite`（`.gitignore`、再生成可能）。`sql` が `migrations/0017_recrawl.sql` の `site_checks` 向け `INSERT OR REPLACE` を出す。表示側（フィード・一覧からの除外）はまだ `site_checks` を読まない。本番適用は人が行う。
+台帳は `var/recrawl.sqlite`（`.gitignore`、再生成可能）。`sql` が `migrations/0017_recrawl.sql` の `site_checks` 向け `INSERT OR REPLACE` を出す。`sql` はさらに、画面の「最終チェック / Last checked」の取得元 `sites.last_crawled_at` を、再巡回で**成功した日時**（`last_ok_at`）に進める `UPDATE`（より新しいときだけ・成功が無いサイトは触らない）も出す（#201。失敗しただけの `last_checked_at` や登録日では埋めない）。既存の本番データで `last_crawled_at` が空のサイトは `migrations/0037_backfill_last_crawled_at.sql` が `site_checks.last_ok_at` から一度だけ埋める（冪等）。**どちらも本番適用は人が行う**（自動では流さない・この作業では適用していない）。表示側（フィード・一覧からの除外）はまだ `site_checks` を読まない。
 
 ## 未実装（#2 の残り）
 
