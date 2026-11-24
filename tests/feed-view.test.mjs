@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import vm from 'node:vm';
 import { inlineScriptHashes, pageCsp } from '../src/security.js';
 import { wantsNoindex, isFeedView } from '../src/seo.js';
@@ -224,4 +224,24 @@ test('feed.js: 寸法が変わったら、表示中でないカードの data-pa
   assert.match(fn[1], /removeProperty\('--pan-w'\)/);
   assert.match(fn[1], /removeProperty\('--pan-px'\)/);
   assert.ok(!/clientWidth|clientHeight|getBoundingClientRect|offsetWidth|offsetHeight/.test(fn[1]), '読まない(強制レイアウトを起こさない)');
+});
+
+test('feed(#198): ヘッダーに帯(背景・ぼかし・下線)がなく、検索欄は通常画面と同じ作り、猫サーフィンのカウンターがある', () => {
+  const bar = css.match(/#feed \.f-bar \{[^}]*\}/)[0];
+  assert.ok(!/background|backdrop-filter|border-bottom/.test(bar), '帯の見た目を持たない');
+  assert.match(css, /#feed \.f-card \{[^}]*height: 100dvh/, 'カードは全画面');
+  assert.match(appJs, /placeholder: ' '/, '通常画面と同じ空白の placeholder(「サイトを検索」を見せない)');
+  assert.match(appJs, /f-search-clear/, 'クリアボタン');
+  assert.match(appJs, /surfCounter\(\)/); assert.match(appJs, /padStart\(6, '0'\)/, '6 桁ゼロ埋め');
+  const motion = css.match(/@media \(prefers-reduced-motion: no-preference\) \{[^@]*f-surf-rig[\s\S]*?\n\}/)[0];
+  assert.match(motion, /f-surf-hop/, '猫の動きは reduced-motion では付かない');
+  assert.ok(existsSync(new URL('../public/fonts/mise-dot-digits-v1.woff2', import.meta.url)) && existsSync(new URL('../public/licenses/PressStart2P-OFL.txt', import.meta.url)), 'フォントとライセンスを同梱');
+});
+
+test('feed(#198): 「見た」は 60% 以上・1.5 秒以上の定数で、素通り(滞在前に離れる)は数えず、同じサイトは 1 回', () => {
+  assert.match(appJs, /IN_VIEW_THRESHOLD = 0\.6;/); assert.match(appJs, /SEEN_DWELL_MS = 1500;/);
+  const fired = [], timers = new Map(); let id = 0;
+  const d = lib.makeDwell(1500, s => fired.push(s), { setTimeout: (f, ms) => { timers.set(++id, f); return id; }, clearTimeout: i => timers.delete(i) });
+  d.start('a', 'siteA'); d.stop('a'); assert.equal(timers.size, 0, '素通りはタイマーごと消える');
+  d.start('b', 'siteB'); [...timers.values()].forEach(f => f()); assert.deepEqual(fired, ['siteB']);
 });
