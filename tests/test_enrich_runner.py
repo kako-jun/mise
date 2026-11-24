@@ -263,6 +263,9 @@ class Runner(unittest.TestCase):
             eo.main(['--stages', 'bogus'], client=self.d1)
 
 
+NOW_SQL = "strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour')"
+
+
 class Guards(Runner):
     def test_limit_cap(self):
         with self.assertRaises(ValueError):
@@ -285,7 +288,13 @@ class Guards(Runner):
         code, _, _ = self.go(llm=steal, clock=clock, stages=('fetch', 'judge'))
         self.assertEqual(code, 4)
         self.assertLessEqual(len(inner.calls), 2)   # the first chunk only (triage + describe); no further chunk after the loss
-        self.assertEqual(d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 0)   # no write batch after the loss
+        self.assertEqual(d1.one("SELECT COUNT(*) FROM url_progress WHERE state='reviewing'")[0], 0)   # the claim was given back
+        # restart 31 minutes later (the thief is gone): not blocked by the pre-flight, finishes
+        d1.db.execute("DELETE FROM discovery_cursors")
+        d1.db.execute("UPDATE url_progress SET updated_at=datetime('now','-31 minutes') WHERE state IN ('fetched','reviewing','approved','candidate')")
+        self.out.clear()
+        self.assertEqual(self.go()[0], 0, self.text())
+        self.assertEqual(d1.one("SELECT COUNT(*) FROM url_progress WHERE state='reviewing'")[0], 0)
 
     def test_heartbeat_fetch_and_publish_stop(self):
         for i in range(7):
@@ -316,7 +325,7 @@ class Guards(Runner):
 
     def test_judge_cost_guard_skips_judge_keeps_publish_exit_1(self):
         for i in range(eo.JUDGE_GUARD_WINDOW):
-            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, 'rejected', ?)", (f'old{i}.jp/', f'2026-11-01T00:00:{i % 60:02d}Z'))
+            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, 'rejected', strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour'))", (f'old{i}.jp/',))
         self.seed()
         add_candidate(self.d1, 'ready.example.jp')
         llm = AdultLLM()
@@ -329,11 +338,75 @@ class Guards(Runner):
 
     def test_judge_guard_needs_full_window_and_one_approval(self):
         for i in range(eo.JUDGE_GUARD_WINDOW):
-            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, ?, ?)",
-                               (f'old{i}.jp/', 'approved' if i == 0 else 'rejected', f'2026-11-01T00:00:{i % 60:02d}Z'))
+            self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 hour'))",
+                               (f'old{i}.jp/', 'approved' if i == 0 else 'rejected'))
         self.assertFalse(eo.judge_unapproved_window(self.d1))
         self.d1.db.execute("DELETE FROM url_candidates WHERE identity_key='old0.jp/'")
         self.assertFalse(eo.judge_unapproved_window(self.d1))   # window not full
+        self.d1.db.execute("INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES('x/', 'rejected', strftime('%Y-%m-%dT%H:%M:%SZ','now'))")
+        self.assertTrue(eo.judge_unapproved_window(self.d1))
+        self.d1.db.execute("UPDATE url_candidates SET judged_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 hours') WHERE judged_at IS NOT NULL")
+        self.assertFalse(eo.judge_unapproved_window(self.d1))   # recovers by itself once the window is empty
+
+    def test_guard_still_moves_rows_without_llm(self):
+        for i in range(eo.JUDGE_GUARD_WINDOW):
+            self.d1.db.execute(f"INSERT INTO url_candidates(identity_key,review_state,judged_at) VALUES(?, 'rejected', {NOW_SQL})", (f'old{i}.jp/',))
+        add_candidate(self.d1, 'human.example.jp', state='fetched', review_state='approved')
+        self.seed({'https://fresh-home.jp/': {}})
+        llm = AdultLLM()
+        code, _, _ = self.go(llm=llm)
+        self.assertEqual(code, 1)
+        self.assertEqual(llm.calls, [])
+        self.assertIsNotNone(self.d1.one('SELECT 1 FROM sites WHERE id=?', (ps.site_id('human.example.jp'),)))   # moved without LLM, then published
+        self.assertEqual(self.d1.one("SELECT state FROM url_progress WHERE identity_key='fresh-home.jp/'")[0], 'fetched')
+
+    def test_judge_llm_disabled_needs_no_key(self):
+        d1 = FakeD1()
+        add_candidate(d1, 'm.example.jp', state='fetched', review_state='rejected')
+        add_candidate(d1, 'n.example.jp', state='fetched', review_state='')
+        os.environ.pop('ANTHROPIC_API_KEY', None)
+        s = js.run(d1, limit=10, apply=True, log=lambda *_: None, llm_enabled=False)
+        self.assertEqual((s['moved_without_llm'], s['judged']), (1, 0))
+        self.assertEqual(d1.one("SELECT state FROM url_progress WHERE identity_key='n.example.jp/'")[0], 'fetched')
+
+    def test_judge_stop_rate_limit_exit_3(self):
+        self.seed()
+        orig = eo.judge_stage.run
+        eo.judge_stage.run = lambda *a, **k: {'selected': 1, 'stopped': 'API refused the request: HTTP 429 rate limit', 'budget_stopped': False}
+        try:
+            self.assertEqual(self.go()[0], 3)
+        finally:
+            eo.judge_stage.run = orig
+
+    def test_limit_zero_is_an_error(self):
+        for a in (['--limit', '0'], ['--judge-limit', '0']):
+            with self.assertRaises(SystemExit):
+                eo.main(a, client=self.d1)
+
+    def test_heartbeat_tolerates_transient_errors(self):
+        class L:
+            n = 0
+
+            def renew(self):
+                self.n += 1
+                if self.n <= 2:
+                    raise RuntimeError('d1 blip')
+        hb = eo.Heartbeat(L(), lambda: 0.0)
+        hb.now(); hb.now()          # two blips: tolerated
+        hb.now()                    # success resets
+        l2 = L(); l2.n = -10
+        hb2 = eo.Heartbeat(l2, lambda: 0.0)
+        hb2.now(); hb2.now()
+        with self.assertRaises(do.LeaseLost):
+            hb2.now()               # third in a row
+
+    def test_preflight_refuses_old_reserve_exit_5(self):
+        self.d1.db.execute("INSERT INTO llm_ledger(id,ts,kind,cost_usd) VALUES('r', strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 hours'), 'reserve', 0.5)")
+        code, _, _ = self.go()
+        self.assertEqual(code, 5)
+        self.assertEqual(self.lease_rows(), [])
+        self.d1.db.execute("UPDATE llm_ledger SET ts=strftime('%Y-%m-%dT%H:%M:%SZ','now')")   # a fresh (in-flight) reserve is fine
+        self.assertEqual(self.go(stages=('publish',))[0], 0)
 
     def test_publish_batch_failure_guard(self):
         for i in range(eo.PUBLISH_MAX_ERRORS):

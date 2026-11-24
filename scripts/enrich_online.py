@@ -38,7 +38,10 @@ REQUEST_INTERVAL = 0.3
 PUBLISH_MAX_ERRORS = 5          # 1 回の掲載段のバッチ失敗数がこれ以上なら止める
 PUBLISH_MAX_ERROR_RATIO = 0.5   # 選んだ行のうちバッチ失敗がこの割合を超えたら止める(選択 4 件以上)
 PUBLISH_MAX_HELD_RATIO = 0.5    # 選んだ行のうちゲート保留がこの割合を超えたら止める(選択 10 件以上)
-JUDGE_GUARD_WINDOW = 100        # 判定の費用ガード: 直近(judged_at 降順)この件数の判定で approved が 0 件なら判定段を止める(掲載は止めない)
+JUDGE_GUARD_WINDOW = 100        # 判定の費用ガード: 直近 JUDGE_GUARD_HOURS 時間の判定がこの件数以上あり approved が 0 件なら、LLM を呼ばない(掲載・取得・LLM 無しの移動は続ける)
+JUDGE_GUARD_HOURS = 6           # 窓の長さ。この時間たつと窓が空になり自然に再開する
+STALE_RESERVE_HOURS = 6         # これより古い llm_ledger の reserve 行が残っていれば開始しない(exit 5)
+HEARTBEAT_MAX_FAILS = 3         # heartbeat の更新が(リース喪失ではなく)D1 の一時エラーで連続この回数失敗したらリース喪失扱い
 MAX_PUBLISH_PER_DAY = 1000      # 直近 24 時間に作られた sites(D1 から数える)がこの件数に達したら掲載しない(正常終了。残りは翌日以降)
 STALE_REVIEWING_MINUTES = 30    # docs/operations/enrich.md の前提チェックと同じ
 
@@ -68,18 +71,30 @@ class Heartbeat:
     def __init__(self, lease, clock, interval=HEARTBEAT_SECONDS):
         self.lease, self.clock, self.interval = lease, clock, interval
         self.last = clock()
+        self.fails = 0
         self.lock = threading.Lock()
+
+    def _renew(self):
+        try:
+            self.lease.renew()
+        except do.LeaseLost:
+            raise
+        except Exception:   # D1 の一時エラー: 次の拍で再試行し、連続で失敗したときだけリース喪失扱い
+            self.fails += 1
+            if self.fails >= HEARTBEAT_MAX_FAILS:
+                raise do.LeaseLost(f'リースを {self.fails} 回連続で更新できなかった')
+            return
+        self.fails = 0
+        self.last = self.clock()
 
     def __call__(self):
         with self.lock:
             if self.clock() - self.last >= self.interval:
-                self.lease.renew()
-                self.last = self.clock()
+                self._renew()
 
     def now(self):
         with self.lock:
-            self.lease.renew()
-            self.last = self.clock()
+            self._renew()
 
 
 def published_last_day(client):
@@ -87,9 +102,15 @@ def published_last_day(client):
 
 
 def judge_unapproved_window(client):
-    """直近 JUDGE_GUARD_WINDOW 件の判定(judged_at 降順)が全部 approved でないか。窓が埋まっていなければ False。"""
-    rows = client.query("SELECT review_state FROM url_candidates WHERE judged_at IS NOT NULL ORDER BY judged_at DESC LIMIT ?", [JUDGE_GUARD_WINDOW])
-    return len(rows) >= JUDGE_GUARD_WINDOW and not any(r['review_state'] == 'approved' for r in rows)
+    """直近 JUDGE_GUARD_HOURS 時間(D1 時刻)の判定が JUDGE_GUARD_WINDOW 件以上あり、approved が 0 件か。"""
+    r = client.query("SELECT COUNT(*) AS n, COALESCE(SUM(review_state='approved'),0) AS ok FROM url_candidates "
+                     f"WHERE judged_at >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-{int(JUDGE_GUARD_HOURS)} hours')")[0]
+    return int(r['n']) >= JUDGE_GUARD_WINDOW and int(r['ok']) == 0
+
+
+def stale_reserves(client):
+    return int(client.query("SELECT COUNT(*) AS n FROM llm_ledger WHERE kind='reserve' "
+                            f"AND ts < strftime('%Y-%m-%dT%H:%M:%SZ','now','-{int(STALE_RESERVE_HOURS)} hours')")[0]['n'])
 
 
 def progress_counts(client):
@@ -148,6 +169,14 @@ def preflight(client, apply, bookmark_fn, out, judge_active=True):
     odd = client.query("SELECT COUNT(*) AS n FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state='approved' "
                        "AND COALESCE(c.review_state,'')<>'approved'")[0]['n']
     out(f'pre-flight: url_progress.state=approved なのに review_state が approved でない行 = {odd}(掲載段は選ばない)')
+    if judge_active:
+        n_res = stale_reserves(client)
+        if n_res:
+            msg = (f'pre-flight: {STALE_RESERVE_HOURS} 時間より古い reserve 行が {n_res} 件ある(費用台帳が未解消)。'
+                   'docs/operations/enrich.md「残った reserve 行の解消」を人が済ませるまで開始しない')
+            if apply:
+                raise Stop(LEDGER_EXIT, msg)
+            out('WARNING ' + msg)
     bad = stale_reviewing(client) if judge_active else []   # 判定段を含む実行のときだけ
     if bad:
         msg = (f'pre-flight: 判定を持たない古い reviewing が {len(bad)}+ 件ある(旧データを LLM に送ってしまうため開始しない)。'
@@ -191,21 +220,25 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
         selected += res['fetch'].get('selected', 0)
         if res['fetch'].get('verify_failed'):
             raise Stop(1, f'fetch: 読み戻し検証が {res["fetch"]["verify_failed"]} 件不一致(ログの verify failed の行を確認)')
+    llm_on = True
     if 'judge' in active and apply and judge_unapproved_window(client):
-        msg = f'judge: 直近 {JUDGE_GUARD_WINDOW} 件の判定で approved が 0 件。費用を使い続けないため判定段を止める(掲載は続ける)。判定の内容を確認'
-        out('停止(最後に exit 1): ' + msg)
-        active.discard('judge')
+        llm_on = False
+        if not state.get('guard_said'):
+            state['guard_said'] = True
+            out(f'停止(最後に exit 1): judge: 直近 {JUDGE_GUARD_HOURS} 時間の判定が {JUDGE_GUARD_WINDOW} 件以上あり approved が 0 件。'
+                'LLM を呼ばない(費用を使い続けないため。LLM を使わない移動・取得・掲載は続ける)。判定の内容を確認')
         state['final'] = 1
     if 'judge' in active:
         guard_lease()
-        s = judge_stage.run(client, limit=limits['judge'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency, heartbeat=beat)
+        s = judge_stage.run(client, limit=limits['judge'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency,
+                            heartbeat=beat, llm_enabled=llm_on)
         res['judge'] = s
-        selected += s.get('selected', 0)
+        selected += s.get('selected', 0) if llm_on else s.get('moved_without_llm', 0)
         if s.get('budget_stopped'):
             active.discard('judge')
             out(f'judge: 予算上限に達したため判定段を止める({s.get("stopped")})。他の段は続ける')
         elif s.get('stopped'):
-            raise Stop(1, f'judge が止まった: {s["stopped"]}')
+            raise Stop(3 if is_rate_limit(RuntimeError(str(s['stopped']))) else 1, f'judge が止まった: {s["stopped"]}')
     if 'publish' in active:
         guard_lease()
         limit = limits['publish']
@@ -339,7 +372,11 @@ def main(argv=None, *, client=None, **inject):
     stages = [s.strip() for s in a.stages.split(',') if s.strip()]
     if not stages or any(s not in STAGES for s in stages):
         ap.error(f'--stages は {",".join(STAGES)} のカンマ区切り')
-    limits = {s: getattr(a, f'{s}_limit') or a.limit or DEFAULT_LIMITS[s] for s in STAGES}
+    limits = {}
+    for s in STAGES:
+        v = getattr(a, f'{s}_limit')
+        v = a.limit if v is None else v
+        limits[s] = DEFAULT_LIMITS[s] if v is None else v
     if min(limits.values()) < 1 or max(limits.values()) > MAX_LIMIT or a.rounds < 0 or (a.max_seconds is not None and a.max_seconds <= 0) or not 1 <= a.judge_concurrency <= 4 or a.budget_month <= 0:
         ap.error(f'--limit は 1〜{MAX_LIMIT}、--rounds は 0 以上、--max-seconds は正、--judge-concurrency は 1〜4、--budget-month は正')
     if client is None:
