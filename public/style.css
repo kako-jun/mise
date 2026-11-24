@@ -244,7 +244,7 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 .site-place[hidden] { display: none; }
 .site-flag { display: block; line-height: 0; }
 .site-region { display: block; margin-left: 5px; font-size: 11px; line-height: 1; text-box: trim-both cap alphabetic; color: #4f7480; }
-.site-flag img { width: 18px; height: 13.5px; display: block; border: 1px solid rgba(0, 0, 0, .25); }
+.site-flag img { width: 18px; height: 13.5px; display: block; margin: 1px; border: 0; }
 @media (pointer: coarse) { .site-place { padding: 8px 6px; margin: -8px 0 -8px 0; } }
 
 /* #35: 実測適用(index.html の __miseLogo)前は不可視で領域だけ確保。0.8s 後は必ず表示するフォールバック */
@@ -261,7 +261,7 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 .scope-nav a.scope-item[aria-current="page"] { opacity: 1; border-bottom-color: #cc6f32; color: #12272c; }
 .scope-nav a.scope-item[aria-current="true"] { opacity: 1; border-bottom-color: currentColor; }
 .scope-nav a.scope-item:focus-visible, .scope-more:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
-.scope-flag { display: block; width: 16px; height: 12px; border: 1px solid rgba(0, 0, 0, .25); }
+.scope-flag { display: block; width: 16px; height: 12px; margin: 1px; border: 0; }
 .scope-globe { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
 .scope-count { margin-left: 2px; font-size: 11px; line-height: 1; text-box: trim-both cap alphabetic; color: #3b565c; font-variant-numeric: tabular-nums; }
 .scope-more-icon { display: block; width: 16px; height: 16px; fill: currentColor; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
@@ -270,7 +270,6 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
 html[data-theme="dark"] .scope-count { color: #b4d3d9; }
-html[data-theme="dark"] .scope-flag { border-color: rgba(255, 255, 255, .3); }
 @media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-more { min-height: 36px; min-width: 36px; } .scope-count { font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-more { transition: none; } }
 /* 範囲内に 1 件も無いカテゴリは隠さず薄く表示する（国ごとに同じ構造に見える）。 */
