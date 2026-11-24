@@ -144,4 +144,4 @@ rog のローカル frontier / llm_judgement を D1 へ移すための表。`ide
 
 ## discovery_cursors（非公開、0037）
 
-URL 発見ランナー（`scripts/discover_online.py`）の続きの位置と実行リースを持つ表。ローカルに状態ファイルを持たないため、Wikidata のページング位置（`source='wikidata'`、`cursor_key='<葉>:<rel>:<qid>'`、値は次の OFFSET か `done`）と、同時実行を防ぐリース（`source='lease'`、`cursor_key='discover'`、値は `<owner>|<期限 epoch 秒>`）だけを置く。**公開 API・SSR は一切 SELECT しない**。`tests/discovery-cursors-migration.test.mjs` が `src/` からの参照を検査する。
+URL 発見ランナー（`scripts/discover_online.py`）の続きの位置と実行リースを持つ表。ローカルに状態ファイルを持たないため、Wikidata のページング位置（`source='wikidata'`、`cursor_key='<葉>:<rel>:<qid>'`、値は次の OFFSET か `done`）、クラス表のキーセット位置（`source='wikidata-classes'`、`cursor_key='<name>:<ハッシュ>'`、値は最後に取った項目 ID か `done`）と、同時実行を防ぐリース（`source='lease'`、`cursor_key='discover'`、値は `<owner>|<期限 epoch 秒>`）だけを置く。**公開 API・SSR は一切 SELECT しない**。`tests/discovery-cursors-migration.test.mjs` が `src/` からの参照を検査する。
