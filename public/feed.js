@@ -408,7 +408,7 @@
     const el = $('.f-pos'); if (!el) return;
     const v = L.navPosition(current, list.length, hasMore || loadFailed, language);
     el.hidden = !v; if (!v) return;
-    el.textContent = v.text; el.title = t('position')(fmt(v.cur), fmt(v.total) + (v.more ? '+' : ''));
+    el.textContent = v.text; el.title = t('position')(fmt(v.cur), v.denom);
   }
 
   // ---- 地球連動 ----

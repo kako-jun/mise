@@ -59,7 +59,7 @@
     const n = Math.floor(Number(loaded));
     if (!Number.isFinite(n) || n < 1) return null;
     const cur = Math.max(1, Math.min(n, Math.floor(Number(current) || 0) + 1));
-    return { cur, total: n, more: !!more, text: `${fmtCount(cur, lang)} / ${fmtCount(n, lang)}${more ? '+' : ''}` };
+    return { cur, total: n, more: !!more, denom: `${fmtCount(n, lang)}${more ? '+' : ''}`, text: `${fmtCount(cur, lang)} / ${fmtCount(n, lang)}${more ? '+' : ''}` };
   };
   // 要求した範囲 want のデータがまだ揃っていない（絞り込み・描画を保留する）か
   const isPending = (loaded, complete, want) => !covers(loaded, complete, want);

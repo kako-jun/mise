@@ -274,3 +274,7 @@ test('縦フィードの位置表示は押せない・読み上げ控えめ・�
   assert.match(css, /\.f-pos \{[^}]*pointer-events: none/);
   assert.match(css, /\.f-nav button \{ width: 44px; height: 44px/);
 });
+test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照する(キャッシュ版の上げ忘れ防止は変更時に手で上げる)', () => {
+  for (const f of ['feed.css', 'feed-lib.js', 'feed.js']) assert.match(html, new RegExp('/' + f.replace('.', '\\.') + '\\?v=\\d+'));
+  assert.equal(lib.navPosition(0, 500, true, 'en').denom, '500+');
+});
