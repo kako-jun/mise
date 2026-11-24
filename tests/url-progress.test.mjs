@@ -208,6 +208,9 @@ test('GET /progress redirects bare path and the screen is linked from the footer
   assert.equal(redirect.status, 301); assert.equal(redirect.headers.get('location'), '/progress/');
   const screen = await api(db, '/progress/');
   assert.equal(screen.status, 200); assert.match(await screen.text(), /Collection and publishing progress/);
+  const csp = screen.headers.get('content-security-policy');
+  assert.match(csp, /script-src 'self'/); assert.match(csp, /style-src 'self'/); assert.match(csp, /connect-src 'self'/);
+  assert.doesNotMatch(csp, /default-src 'none'; frame-ancestors 'none'; base-uri 'none'$/);
   const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const appJs = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(index, /href="\/progress\/" data-i18n="progress"/);
