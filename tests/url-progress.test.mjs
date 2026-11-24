@@ -84,6 +84,29 @@ test('GET /api/progress pagination defaults and limit/offset boundaries', async 
   }
 });
 
+test('GET /api/progress filters the search text, source, stage, and missing media before pagination', async () => {
+  const db = fixture();
+  site(db, 'media-ready', 'https://ready.example/', 'Needle description');
+  db.prepare("UPDATE sites SET favicon_path='ready.webp',thumb_path='ready.webp' WHERE id='media-ready'").run();
+  site(db, 'missing-thumb', 'https://thumb.example/');
+  db.prepare("UPDATE sites SET favicon_path='icon.webp' WHERE id='missing-thumb'").run();
+  db.prepare("INSERT INTO url_progress(identity_key,url,source,state) VALUES('new.example','https://new.example/','request','fetched')").run();
+
+  let body = await (await api(db, '/api/progress?q=needle')).json();
+  assert.equal(body.total, 1); assert.equal(body.results[0].url, 'https://ready.example/');
+  body = await (await api(db, '/api/progress?source=request&state=fetched')).json();
+  assert.equal(body.total, 1); assert.equal(body.results[0].url, 'https://new.example/');
+  body = await (await api(db, '/api/progress?state=published&missing=thumbnail')).json();
+  assert.equal(body.total, 1); assert.equal(body.results[0].url, 'https://thumb.example/');
+  body = await (await api(db, '/api/progress?missing=media&limit=1&offset=1')).json();
+  assert.equal(body.total, 2); assert.equal(body.results.length, 1);
+});
+
+test('GET /api/progress validates filter values and bounds search text', async () => {
+  const db = fixture();
+  for (const qs of ['?source=other','?state=other','?missing=other',`?q=${'x'.repeat(101)}`]) assert.equal((await api(db, `/api/progress${qs}`)).status, 400, qs.slice(0,40));
+});
+
 test('GET /api/progress returns an empty page after the last row', async () => {
   const db = fixture(); db.prepare("INSERT INTO url_progress(identity_key,url) VALUES('one.example','https://one.example/')").run();
   const body = await (await api(db, '/api/progress?offset=1')).json();
@@ -214,7 +237,13 @@ test('GET /progress redirects bare path and the screen is linked from the footer
   const index = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
   const appJs = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(index, /href="\/progress\/" data-i18n="progress"/);
-  assert.match(appJs, /progress:'収集・掲載の進捗'/); assert.match(appJs, /progress:'Collection and publishing status'/);
+  assert.match(appJs, /progress:'進捗'/); assert.match(appJs, /progress:'Progress'/);
+  assert.match(index, /footer-meta[^>]*>[\s\S]*?class="progress-link"/);
+  assert.match(readFileSync(new URL('../public/style.css', import.meta.url), 'utf8'), /\.footer-meta \{ display: grid; grid-template-columns: minmax\(0, 1fr\) auto minmax\(0, 1fr\)/);
+  const screenHtml = readFileSync(new URL('../public/progress.html', import.meta.url), 'utf8');
+  const screenJs = readFileSync(new URL('../public/progress.js', import.meta.url), 'utf8');
+  assert.match(screenHtml, /id="filters"/); assert.match(screenHtml, /id="missing"/); assert.match(screenHtml, /data-page-action="last"/); assert.match(screenHtml, /class="page-size-select"/);
+  assert.match(screenJs, /new URLSearchParams\(location\.search\)/); assert.match(screenJs, /data-page-action/); assert.match(screenJs, /Math\.trunc\(Number\(p\.get\('page'\)\)/);
   assert.match(readFileSync(new URL('../public/progress.css', import.meta.url), 'utf8'), /overflow:auto/);
 });
 

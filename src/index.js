@@ -53,6 +53,23 @@ app.get('/api/progress', async c => {
   if (!/^\d{1,7}$/.test(raw) || !/^\d{1,3}$/.test(limitRaw)) return c.json({ error: 'invalid pagination' }, 400);
   const offset = Number(raw), limit = Number(limitRaw);
   if (limit < 1 || limit > 100 || offset > 1000000) return c.json({ error: 'invalid pagination' }, 400);
+  const q = (c.req.query('q') ?? '').trim();
+  const source = c.req.query('source') ?? 'all', state = c.req.query('state') ?? 'all', missing = c.req.query('missing') ?? 'all';
+  const states = ['discovered','queued','fetched','candidate','reviewing','approved','rejected','failed','blocked','published'];
+  if (q.length > 100 || !['all','discovered','request'].includes(source) || !['all', ...states].includes(state) || !['all','favicon','thumbnail','media'].includes(missing)) return c.json({ error: 'invalid filter' }, 400);
+  const where = [], values = [];
+  if (q) {
+    const escaped = `%${q.replace(/[\\%_]/g, c => `\\${c}`)}%`;
+    where.push("(p.url LIKE ? ESCAPE '\\' OR COALESCE(s.name,'') LIKE ? ESCAPE '\\' OR COALESCE(s.description_ja,'') LIKE ? ESCAPE '\\' OR COALESCE(s.description_en,'') LIKE ? ESCAPE '\\')");
+    values.push(escaped, escaped, escaped, escaped);
+  }
+  if (source !== 'all') { where.push('p.source=?'); values.push(source); }
+  if (state !== 'all') { where.push("(CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END)=?"); values.push(state); }
+  if (missing === 'favicon') where.push('(s.id IS NULL OR s.favicon_path IS NULL)');
+  if (missing === 'thumbnail') where.push('(s.id IS NULL OR s.thumb_path IS NULL)');
+  if (missing === 'media') where.push('(s.id IS NULL OR s.favicon_path IS NULL OR s.thumb_path IS NULL)');
+  const from = "FROM url_progress p LEFT JOIN sites s ON s.id=(SELECT s2.id FROM sites s2 WHERE s2.progress_key=p.identity_key ORDER BY s2.registered_at DESC LIMIT 1)";
+  const filterSql = where.length ? ` WHERE ${where.join(' AND ')}` : '';
   const { results } = await c.env.DB.prepare(`
     SELECT p.url AS url, s.name AS name, s.description_ja AS description_ja, s.description_en AS description_en,
       (SELECT COUNT(*) FROM site_tags t WHERE t.site_id=s.id) AS tags_count,
@@ -61,10 +78,9 @@ app.get('/api/progress', async c => {
       CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
       CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END AS state,
       p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
-    FROM url_progress p
-    LEFT JOIN sites s ON s.id=(SELECT s2.id FROM sites s2 WHERE s2.progress_key=p.identity_key ORDER BY s2.registered_at DESC LIMIT 1)
-    ORDER BY datetime(p.updated_at) DESC, p.identity_key LIMIT ?1 OFFSET ?2`).bind(limit, offset).all();
-  const total = await c.env.DB.prepare('SELECT COUNT(*) AS total FROM url_progress').first();
+    ${from}${filterSql}
+    ORDER BY datetime(p.updated_at) DESC, p.identity_key LIMIT ? OFFSET ?`).bind(...values, limit, offset).all();
+  const total = await c.env.DB.prepare(`SELECT COUNT(*) AS total ${from}${filterSql}`).bind(...values).first();
   return c.json({ results, total: total.total, offset, limit });
 });
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md
