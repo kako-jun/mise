@@ -4,7 +4,7 @@
 ローカルに状態を持たない(SQLite の frontier・CSV・JSONL・キャッシュ・チェックポイントを作らない)。
 続きの位置とリースは D1 の discovery_cursors(migration 0037)に置く。標準出力のレポートだけが出力。
 
-  uv run python scripts/discover_online.py --source wikidata|official|links|cc|all [--limit N] [--dry-run | --apply]
+  uv run python scripts/discover_online.py --source wikidata|wikidata-classes|official|links|cc|all [--limit N] [--dry-run | --apply]
 
 既定は --dry-run(D1 を読み、供給元を取得し、入れるはずの件数をカテゴリ別に出す。何も書かない)。
 Cloudflare REST は scripts/media_online.py の Cloudflare クライアント(CLOUDFLARE_API_TOKEN 必須)。
@@ -12,6 +12,7 @@ Cloudflare REST は scripts/media_online.py の Cloudflare クライアント(CL
 """
 import argparse
 import collections
+import hashlib
 import json
 import os
 import platform
@@ -40,7 +41,7 @@ REQUEST_INTERVAL = 0.3        # D1 へのリクエスト間隔(秒)
 DIRECTORY_WAIT = 2.0          # 公式ディレクトリのページ取得間隔(秒)
 WDQS_ABORT_EXIT = 3
 LEASE_LOST_EXIT = 4
-SOURCES = ('wikidata', 'official', 'links', 'cc')
+SOURCES = ('wikidata', 'wikidata-classes', 'official', 'links', 'cc')
 
 INTERNAL_SUFFIXES = ('.local', '.localhost', '.internal', '.intranet', '.lan', '.home', '.corp', '.test', '.example', '.invalid', '.onion')
 # 会員一覧から出る外部リンクのうち、会員の公式サイトではないもの(SNS・検索・動画・共有)
@@ -347,6 +348,147 @@ def run_wikidata(sink, cursors, wdqs, rows, max_rows, page_size=dw.PAGE_SIZE):
     return aborted
 
 
+# ------------------------------------------------------------------ 供給元: Wikidata のクラス表(wikidata-classes)
+# 1 行 = 1 つの束ね(カテゴリ)。qids は根のクラスで、そのサブクラス(P279*)の P31 を持つ項目をすべて対象にする(複数は OR)。
+# country は国の性質(P17=国 / P495=原産国)で Japan(Q17)に絞る。None なら世界全体。
+# 知名度(言語版リンク数など)では絞らない。公式サイト P856 を持つ項目は個人・零細も含めて全部対象(mise は規模で差別しない)。
+# 終了・統合済み(P576/P582)も含めるので、終了日でも絞らない。除くのは candidate_from_url の機械的な拒否だけ(SNS・ポータル・内部 IP・非 80/443 など)。
+# 並びは項目 ID の文字列順のキーセット。カーソルは「最後に取った項目 ID」で、1 回の実行は --limit / --max-rows で区切って何回かに分けて回す。
+# ここを足す・直すときは、必ず実 WDQS で件数と上位を確認する(docs/operations/nightly.md)。
+WIKIDATA_CLASSES = [
+    # --- 日本の企業・組織(P17=Japan)
+    {'name': 'jp-game-company', 'category': 'game-company', 'qids': ['Q210167', 'Q1137109', 'Q43400508'], 'country': 'P17'},
+    {'name': 'jp-company', 'category': 'company', 'qids': ['Q783794'], 'country': 'P17'},   # business(Q4830453) の P279* は WDQS の 60 秒を超える
+    {'name': 'jp-finance', 'category': 'finance-insurance', 'qids': ['Q22687', 'Q43183', 'Q3591545'], 'country': 'P17'},
+    {'name': 'jp-construction-realestate', 'category': 'construction-realestate', 'qids': ['Q811930', 'Q1660104'], 'country': 'P17'},
+    {'name': 'jp-transport-energy', 'category': 'transport-energy', 'qids': ['Q249556', 'Q46970'], 'country': 'P17'},
+    {'name': 'jp-medical-pharma', 'category': 'medical-pharma', 'qids': ['Q19644607', 'Q16917'], 'country': 'P17'},
+    {'name': 'jp-broadcaster', 'category': 'tv-radio', 'qids': ['Q1616075', 'Q14350', 'Q15265344'], 'country': 'P17'},
+    {'name': 'jp-newspaper-publisher', 'category': 'newspaper-publisher', 'qids': ['Q11032', 'Q2085381', 'Q1320047'], 'country': 'P17'},
+    {'name': 'jp-anime-studio', 'category': 'anime-studio', 'qids': ['Q1107679'], 'country': 'P17'},
+    {'name': 'jp-education', 'category': 'education', 'qids': ['Q3918'], 'country': 'P17'},
+    {'name': 'jp-public-service', 'category': 'public-service', 'qids': ['Q327333', 'Q2659904'], 'country': 'P17'},
+    # --- 海外の企業・Web サービス(世界全体)。規模・知名度では選ばない。根クラスを狭く 1 行 1 根にしているのは WDQS のクエリ費用(60 秒制限)で区切るためだけ
+    {'name': 'global-public-company', 'category': 'global-company', 'qids': ['Q891723'], 'country': None},
+    {'name': 'global-multinational', 'category': 'global-company', 'qids': ['Q161726'], 'country': None},
+    {'name': 'global-conglomerate', 'category': 'global-company', 'qids': ['Q778575'], 'country': None},
+    {'name': 'global-tech-company', 'category': 'global-company', 'qids': ['Q18388277'], 'country': None},
+    {'name': 'global-startup', 'category': 'global-company', 'qids': ['Q129238'], 'country': None},
+    {'name': 'global-software-company', 'category': 'web-service', 'qids': ['Q1058914'], 'country': None},
+    {'name': 'global-online-shop', 'category': 'web-service', 'qids': ['Q4382945'], 'country': None},
+    {'name': 'global-web-service', 'category': 'web-service', 'qids': ['Q193424'], 'country': None},
+    {'name': 'global-sns', 'category': 'web-service', 'qids': ['Q3220391'], 'country': None},
+    {'name': 'global-streaming', 'category': 'web-service', 'qids': ['Q63241860'], 'country': None},
+    {'name': 'global-marketplace', 'category': 'web-service', 'qids': ['Q3390477'], 'country': None},
+    {'name': 'global-mobile-app', 'category': 'web-service', 'qids': ['Q620615'], 'country': None},
+    # --- 独自の公式サイトを持つタイトル・IP
+    {'name': 'jp-video-game', 'category': 'game-title', 'qids': ['Q7889', 'Q7058673'], 'country': 'P495'},
+    {'name': 'jp-film-anime', 'category': 'film-anime-title', 'qids': ['Q11424', 'Q63952888'], 'country': 'P495'},
+    {'name': 'jp-franchise-manga', 'category': 'ip-franchise', 'qids': ['Q196600', 'Q21198342'], 'country': 'P495'},
+    {'name': 'global-video-game', 'category': 'global-title-ip', 'qids': ['Q7889'], 'country': None},
+    {'name': 'global-film', 'category': 'global-title-ip', 'qids': ['Q11424'], 'country': None},
+    {'name': 'global-franchise', 'category': 'global-title-ip', 'qids': ['Q196600'], 'country': None},
+]
+CLASS_PAGE_SIZE = 200
+_QID = re.compile(r'^Q[1-9]\d{0,9}$')
+_PROP = re.compile(r'^P[1-9]\d{0,5}$')
+
+
+def validate_classes(rows):
+    errs, names = [], set()
+    for i, r in enumerate(rows):
+        w = f'行{i}'
+        if not re.match(r'^[a-z][a-z0-9-]*$', str(r.get('name', ''))) or r['name'] in names:
+            errs.append(f'{w}: name の形式・重複')
+        names.add(r.get('name'))
+        if not r.get('category') or not r.get('qids') or not all(_QID.match(q) for q in r['qids']):
+            errs.append(f'{w}: category / qids')
+        if r.get('country') is not None and not _PROP.match(str(r['country'])):
+            errs.append(f'{w}: country は P 番号か None(キーが無ければ世界全体)')
+        if set(r) - {'name', 'category', 'qids', 'country'}:
+            errs.append(f'{w}: 未知のキー(知名度の足切りなどは持たない)')
+    return errs
+
+
+def class_cursor_name(row):
+    """クラス・国が変わったら別カーソルにする(古い位置を新条件に流用しない)。"""
+    sig = hashlib.sha1(f'{",".join(row["qids"])}|{row.get("country")}'.encode()).hexdigest()[:6]
+    return f'{row["name"]}:{sig}'
+
+
+ENTITY = 'http://www.wikidata.org/entity/'
+
+
+def build_class_query(row, limit, after):
+    """根クラスのサブクラスの P31 で、公式サイト P856 を持つ項目の ID を、IRI の文字列順で after(例 'Q123'。空は先頭)より後ろから limit 件。
+    重い部分(クラスの辿り・並べ替え)だけをここで行い、URL は build_urls_query で別に引く(1 クエリを 60 秒の制限に収めるため)。"""
+    country = f'?item wdt:{row["country"]} wd:Q17 . ' if row.get('country') else ''
+    roots = ' '.join(f'wd:{q}' for q in row['qids'])
+    return (f'SELECT DISTINCT ?item WHERE {{ VALUES ?root {{ {roots} }} ?cls wdt:P279* ?root . ?item wdt:P31 ?cls . {country}?item wdt:P856 [] . '
+            f'FILTER(STR(?item) > "{ENTITY}{after}") }} ORDER BY STR(?item) LIMIT {int(limit)}')
+
+
+def build_urls_query(qids):
+    """項目 ID の一覧 -> 1 項目 1 URL(P856 が複数なら文字列順で最小の 1 つ。--limit で行が切れて URL を落とさないため)。"""
+    return ('SELECT ?item (MIN(STR(?u)) AS ?url) WHERE { VALUES ?item { ' + ' '.join(f'wd:{q}' for q in qids) + ' } ?item wdt:P856 ?u } GROUP BY ?item ORDER BY STR(?item)')
+
+
+def parse_item_ids(data):
+    out = []
+    for b in (data.get('results') or {}).get('bindings') or []:
+        v = (b.get('item') or {}).get('value', '')
+        if v.startswith(ENTITY) and _QID.match(v[len(ENTITY):]):
+            out.append(v[len(ENTITY):])
+    return out
+
+
+def run_wikidata_classes(sink, cursors, wdqs, rows, max_rows, page_size=CLASS_PAGE_SIZE, source='wikidata-classes'):
+    """クラスごとに、カーソル(最後に取った項目 ID)より後ろを取り、sink へ渡す。戻り値は中断理由(なければ None)。"""
+    errs = validate_classes(rows)
+    if errs:
+        raise ValueError('クラス表が不正: ' + '; '.join(errs))
+    remaining, aborted = max_rows, None
+    for row in rows:
+        if remaining <= 0 or not sink.room(source):
+            break
+        cur = class_cursor_name(row)
+        state = cursors.get(source, cur) or ''
+        if state != 'done' and state != '' and not _QID.match(state):
+            sink.stats.notes.append(f'{source} {cur}: カーソル値が不正({state[:20]!r})。先頭から取り直す')
+            state = ''
+        if state == 'done':
+            continue
+        after, fetched, done_row, ok = state, 0, False, True
+        while remaining - fetched > 0 and sink.room(source):
+            limit = min(page_size, remaining - fetched)
+            left = sink.room_left(source)
+            if left is not None:
+                limit = min(limit, left)   # 上限で打ち切るページを作らない(カーソルより先の URL を捨てない)
+            try:
+                ids = parse_item_ids(wdqs.query(build_class_query(row, limit, after)))
+                got = dw.parse_results(wdqs.query(build_urls_query(ids))) if ids else []
+            except dw.WdqsAbort as e:
+                aborted = str(e); ok = False; break
+            except dw.WdqsSkip as e:
+                sink.stats.notes.append(f'{source} {cur}: skip {e}'); ok = False; break
+            for _qid, url, _label in got:
+                sink.offer(source, row['category'], url)
+            fetched += len(ids)
+            if ids:
+                after = max(ids)   # 文字列順(WDQS の ORDER BY STR(?item) と同じ)
+            if len(ids) < limit:
+                done_row = True; break
+        remaining -= fetched
+        sink.flush()   # 入れて検証してからカーソルを進める
+        if sink.stats.mismatch:
+            break
+        if ok or fetched:
+            cursors.set(source, cur, 'done' if done_row else after)
+        if aborted:
+            break
+    return aborted
+
+
 # ------------------------------------------------------------------ 供給元: 公式ディレクトリ
 def main_region(html):
     """<main> か id=main/contents の範囲(ヘッダー・フッターのナビを除く)。無ければ全体。"""
@@ -456,7 +598,7 @@ def report(stats, apply, out=print):
         out(f'!! verify mismatch: {stats.mismatch} 件')
 
 
-def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None, extra=None):
+def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None, extra=None, class_rows=None):
     stats = Stats()
     lease = lease or Lease(client)
     if apply and not lease.acquire():
@@ -466,12 +608,20 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
     try:
         cursors = Cursors(client, apply)
         sink = Sink(client, apply, stats, lease if apply else None, limit)
+        wdqs = wdqs or WdqsClient()   # wikidata と wikidata-classes で同じクライアント(5 秒間隔を共有)
         if 'wikidata' in sources:
-            aborted = run_wikidata(sink, cursors, wdqs or WdqsClient(), rows if rows is not None else dw.load_map(), max_rows)
+            aborted = run_wikidata(sink, cursors, wdqs, rows if rows is not None else dw.load_map(), max_rows)
             if aborted:
                 stats.notes.append(f'wikidata 中断: {aborted}')
-            if cursors.missing_table:
-                stats.notes.append('discovery_cursors が未適用(migration 0037)。カーソルは先頭扱い')
+        if 'wikidata-classes' in sources and not aborted:
+            if stats.mismatch:
+                stats.notes.append('wikidata-classes: 照合不一致のため書き込みを止めた')
+            else:
+                aborted = run_wikidata_classes(sink, cursors, wdqs, class_rows if class_rows is not None else WIKIDATA_CLASSES, max_rows)
+                if aborted:
+                    stats.notes.append(f'wikidata-classes 中断: {aborted}')
+        if cursors.missing_table:
+            stats.notes.append('discovery_cursors が未適用(migration 0037)。カーソルは先頭扱い')
         if 'official' in sources:
             if stats.mismatch:
                 stats.notes.append('official: 照合不一致のため書き込みを止めた')
@@ -500,9 +650,9 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--source', choices=['wikidata', 'official', 'links', 'cc', 'all'], default='all')
+    ap.add_argument('--source', choices=['wikidata', 'wikidata-classes', 'official', 'links', 'cc', 'all'], default='all')
     ap.add_argument('--limit', type=int, default=None, help='供給元ごとの追加(予定)件数の上限')
-    ap.add_argument('--max-rows', type=int, default=1000, help='wikidata: 1 回に取る SPARQL 行数の合計の上限')
+    ap.add_argument('--max-rows', type=int, default=1000, help='wikidata / wikidata-classes: 1 回に取る SPARQL 行数(項目数)の合計の上限')
     ap.add_argument('--max-sites', type=int, default=100, help='links: 1 回に処理する公開済みサイト数の上限(sites.id 昇順で続きから)')
     ap.add_argument('--cc-sample-every', type=int, default=1000, help='cc: ホスト名ハッシュで 1/N を決定論的に抽出')
     mode = ap.add_mutually_exclusive_group()

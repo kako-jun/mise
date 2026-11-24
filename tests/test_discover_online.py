@@ -6,6 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -291,6 +292,161 @@ class WikidataTest(unittest.TestCase):
 
     def test_shipped_map_is_valid_for_runner(self):
         self.assertEqual(dw.validate_map(dw.load_map()), [])
+
+
+CLS = {'name': 'jp-test', 'category': 'test-cat', 'qids': ['Q783794', 'Q4830453'], 'country': 'P17'}
+CLS_GLOBAL = {'name': 'global-test', 'category': 'global-cat', 'qids': ['Q193424'], 'country': None}
+
+
+class FakeWdqs:
+    """WDQS の 2 種のクエリ(項目 ID の取得 / URL の取得)に、文字列順のキーセットで答える。calls に全クエリが残る。"""
+    def __init__(self, items, interval_sleeps=None, statuses=None):
+        self.items = dict(items)       # QID -> URL
+        self.calls = []
+        self.statuses = list(statuses or [])
+
+    def http_get(self, url):
+        q = urllib.parse.unquote_plus(url.split('query=', 1)[1].split('&format', 1)[0])
+        self.calls.append(q)
+        if self.statuses:
+            st = self.statuses.pop(0)
+            if st != 200:
+                return st, {'Retry-After': '30'}, b''
+        if 'VALUES ?item {' in q:
+            ids = re.findall(r'wd:(Q\d+)', q)
+            rows = [{'item': {'value': f'http://www.wikidata.org/entity/{i}'}, 'url': {'value': self.items[i]}} for i in ids]
+        else:
+            after = re.search(r'STR\(\?item\) > "http://www.wikidata.org/entity/([^"]*)"', q).group(1)
+            lim = int(re.search(r'LIMIT (\d+)$', q).group(1))
+            ids = sorted(i for i in self.items if 'http://www.wikidata.org/entity/' + i > 'http://www.wikidata.org/entity/' + after)[:lim]
+            rows = [{'item': {'value': f'http://www.wikidata.org/entity/{i}'}} for i in ids]
+        return 200, {}, json.dumps({'results': {'bindings': rows}}).encode()
+
+    def client(self, **kw):
+        return do.WdqsClient(sleep=kw.get('sleep', lambda s: None), http_get=self.http_get, clock=kw.get('clock', time_monotonic))
+
+
+time_monotonic = __import__('time').monotonic
+
+
+class WikidataClassesTest(unittest.TestCase):
+    def test_query_is_keyset_without_popularity_filter(self):
+        q = do.build_class_query(CLS, 200, 'Q400')
+        self.assertIn('VALUES ?root { wd:Q783794 wd:Q4830453 }', q)
+        self.assertIn('wdt:P279* ?root', q)
+        self.assertIn('?item wdt:P31 ?cls', q)
+        self.assertIn('?item wdt:P856 []', q)
+        self.assertIn('?item wdt:P17 wd:Q17', q)
+        self.assertIn('FILTER(STR(?item) > "http://www.wikidata.org/entity/Q400")', q)
+        self.assertIn('ORDER BY STR(?item) LIMIT 200', q)
+        self.assertNotIn('OFFSET', q)
+        self.assertNotIn('sitelinks', q)   # 知名度で絞らない
+        self.assertNotIn('P576', q)        # 終了・統合済みも含める
+        self.assertNotIn('wd:Q17', do.build_class_query(CLS_GLOBAL, 10, ''))
+        self.assertIn('VALUES ?item { wd:Q1 wd:Q2 }', do.build_urls_query(['Q1', 'Q2']))
+
+    def test_table_valid_and_has_no_popularity_key(self):
+        self.assertEqual(do.validate_classes(do.WIKIDATA_CLASSES), [])
+        self.assertIn('wikidata-classes', do.SOURCES)
+        for b in [dict(CLS, qids=['x']), dict(CLS, name='Bad Name'), dict(CLS, min_sitelinks=3)]:
+            self.assertTrue(do.validate_classes([b]), b)
+        self.assertTrue(do.validate_classes([CLS, CLS]))   # 名前重複
+        self.assertFalse(any('min_sitelinks' in r for r in do.WIKIDATA_CLASSES))
+
+    def test_keyset_paging_cursor_resume_dedupe_and_invalid(self):
+        d1 = FakeD1()
+        stats = do.Stats()
+        f = FakeWdqs({'Q5': 'https://a.example.jp/x', 'Q7': 'http://192.168.0.1/', 'Q9': 'https://www.a.example.jp/y', 'Q95': 'https://b.co.jp/'})
+        do.run_wikidata_classes(do.Sink(d1, True, stats), do.Cursors(d1, True), f.client(), [CLS], 1000, page_size=3)
+        self.assertEqual({r[0] for r in d1.db.execute('SELECT identity_key FROM url_progress')}, {'a.example.jp/', 'b.co.jp/'})
+        st = stats.rows['wikidata-classes']
+        self.assertEqual((st['fetched'], st['invalid'], st['duplicate_in_run'], st['added'], st['verified']), (4, 1, 1, 2, 2))
+        self.assertEqual(stats.categories[('wikidata-classes', 'test-cat')]['added'], 2)
+        self.assertIn('entity/"', f.calls[0])                 # 先頭ページ(after なし)
+        self.assertIn('entity/Q9")', f.calls[2])              # 2 ページ目は前ページの最後の ID の後ろから(文字列順)
+        cur = do.class_cursor_name(CLS)
+        self.assertEqual(d1.db.execute("SELECT cursor_value FROM discovery_cursors WHERE source='wikidata-classes' AND cursor_key=?", (cur,)).fetchone()[0], 'done')
+        f2 = FakeWdqs({})
+        do.run_wikidata_classes(do.Sink(d1, True, do.Stats()), do.Cursors(d1, True), f2.client(), [CLS], 1000, page_size=3)
+        self.assertEqual(f2.calls, [])   # 取り終えたクラスはネットワークに出ない
+
+    def test_resume_from_stored_cursor_and_condition_change_resets(self):
+        d1 = FakeD1()
+        d1.db.execute("INSERT INTO discovery_cursors(source,cursor_key,cursor_value) VALUES('wikidata-classes',?,'Q600')", (do.class_cursor_name(CLS),))
+        d1.db.commit()
+        f = FakeWdqs({'Q1': 'https://old.co.jp/', 'Q700': 'https://z.co.jp/'})
+        do.run_wikidata_classes(do.Sink(d1, True, do.Stats()), do.Cursors(d1, True), f.client(), [CLS], 1000, page_size=3)
+        self.assertIn('entity/Q600")', f.calls[0])
+        self.assertEqual([r[0] for r in d1.db.execute('SELECT identity_key FROM url_progress')], ['z.co.jp/'])
+        self.assertNotEqual(do.class_cursor_name(CLS), do.class_cursor_name(dict(CLS, country=None)))
+        self.assertNotEqual(do.class_cursor_name(CLS), do.class_cursor_name(dict(CLS, qids=['Q1'])))
+
+    def test_split_runs_with_limit_cover_everything_once(self):
+        """--limit で区切った複数回の実行で、取りこぼしも重複もなく全部入る。"""
+        d1 = FakeD1()
+        f = FakeWdqs({f'Q{n}': f'https://s{n}.co.jp/' for n in range(1, 8)})
+        for _ in range(4):
+            do.run_wikidata_classes(do.Sink(d1, True, do.Stats(), None, 3), do.Cursors(d1, True), f.client(), [CLS], 1000)
+        self.assertEqual(d1.count(), 7)
+
+    def test_invalid_cursor_value_restarts_with_note_and_never_reaches_query(self):
+        for bad in ['x" ) } # inject', 'Q1"', '12', 'q5']:
+            d1 = FakeD1()
+            d1.db.execute("INSERT INTO discovery_cursors(source,cursor_key,cursor_value) VALUES('wikidata-classes',?,?)", (do.class_cursor_name(CLS), bad))
+            d1.db.commit()
+            f = FakeWdqs({'Q1': 'https://a.co.jp/'})
+            stats = do.Stats()
+            do.run_wikidata_classes(do.Sink(d1, True, stats), do.Cursors(d1, True), f.client(), [CLS], 1000)
+            self.assertTrue(f.calls and all(bad not in c for c in f.calls), bad)
+            self.assertIn('entity/"', f.calls[0])   # 先頭から
+            self.assertTrue(any('カーソル値が不正' in n for n in stats.notes))
+            self.assertEqual(d1.count(), 1)
+
+    def test_country_key_is_optional(self):
+        row = {'name': 'no-country', 'category': 'c', 'qids': ['Q193424']}
+        self.assertEqual(do.validate_classes([row]), [])
+        self.assertNotIn('wd:Q17', do.build_class_query(row, 5, ''))
+        do.class_cursor_name(row)
+        f = FakeWdqs({'Q1': 'https://a.co.jp/'})
+        do.run_wikidata_classes(do.Sink(FakeD1(), True, do.Stats()), do.Cursors(FakeD1(), True), f.client(), [row], 1000)
+        self.assertTrue(f.calls)
+
+    def test_personal_domains_are_kept(self):
+        for u in ['https://tanaka-taro.jp/', 'https://hanako.hatenablog.com/', 'https://yamada.example.net/about/me']:
+            self.assertIsNotNone(do.candidate_from_url(u), u)
+
+    def test_abort_429_keeps_cursor_and_exit_3(self):
+        d1 = FakeD1()
+        f = FakeWdqs({'Q1': 'https://a.co.jp/'}, statuses=[429])
+        code, _ = do.run(d1, ('wikidata-classes',), True, None, wdqs=f.client(), class_rows=[CLS], out=lambda *_: None)
+        self.assertEqual(code, 3)
+        self.assertEqual(d1.db.execute("SELECT COUNT(*) FROM discovery_cursors WHERE source='wikidata-classes'").fetchone()[0], 0)
+
+    def test_dry_run_writes_nothing_and_interval(self):
+        d1 = FakeD1()
+        sleeps, now = [], [0.0]
+        f = FakeWdqs({'Q1': 'https://a.example.jp/'})
+        w = f.client(sleep=lambda s: (sleeps.append(s), now.__setitem__(0, now[0] + s)), clock=lambda: now[0])
+        out = []
+        code, stats = do.run(d1, ('wikidata-classes',), False, None, wdqs=w, class_rows=[CLS, CLS_GLOBAL], out=out.append)
+        self.assertEqual(code, 0)
+        self.assertEqual(d1.count(), 0)
+        self.assertEqual(d1.db.execute('SELECT COUNT(*) FROM discovery_cursors').fetchone()[0], 0)
+        self.assertEqual(stats.categories[('wikidata-classes', 'test-cat')]['would_add'], 1)
+        self.assertTrue(sleeps and all(s > 4.99 for s in sleeps))   # クエリの間は 5 秒以上(ID 取得と URL 取得の間も)
+        self.assertTrue(any(l.startswith('wikidata-classes') for l in out))
+
+    def test_creates_no_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.getcwd()
+            os.chdir(tmp)
+            try:
+                d1 = FakeD1()
+                code, _ = do.run(d1, ('wikidata-classes',), True, None, wdqs=FakeWdqs({'Q1': 'https://a.example.jp/'}).client(), class_rows=[CLS], out=lambda *_: None)
+                self.assertEqual(code, 0)
+                self.assertEqual(os.listdir(tmp), [])
+            finally:
+                os.chdir(old)
 
 
 class NoLocalState(unittest.TestCase):
