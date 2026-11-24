@@ -149,3 +149,7 @@ URL 発見ランナー（`scripts/discover_online.py`）の続きの位置と実
 ## llm_ledger（非公開、0038）
 
 オンライン補強の judge 段（`scripts/enrich/judge_stage.py`）の LLM 費用台帳。1 リクエスト 1 行（`reserve` → `call` / `release`）。月（UTC、D1 の時計）の `SUM(cost_usd)` を上限 100 USD と比べる。**公開 API・SSR は一切 SELECT しない**。`tests/url-candidates-migration.test.mjs` が `src/` からの参照を検査する。運用は [operations/enrich.md](../operations/enrich.md)。
+
+## deliberations（非公開、0039）
+
+オンライン補強の合議段（`scripts/enrich/deliberate_stage.py`）の記録。1 URL 1 行（`identity_key`）。3 匹の猫（白猫 `shiro`・黒猫 `kuro`・よもぎ猫 `yomogi`）の票（`*_vote` = approve / hold / reject、`*_reason`、`*_model`）、`status`（`running` = claim 中で `lease_until` が合言葉兼期限 / `decided` = 2/3 以上で `decision` が approve か reject / `meeting` = 会議中、人の判断待ち）、`input_hash`（合議の版・モデル・`url_candidates.input_hash`・`review_reason`。変われば再合議）。**公開 API・SSR は一切 SELECT しない**（判定理由を含む）。`tests/url-candidates-migration.test.mjs` が `src/` からの参照を検査する。運用は [operations/enrich.md](../operations/enrich.md)。
