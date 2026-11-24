@@ -28,7 +28,7 @@ def api_body(workers=None, d1=None, other_workers=None, other_d1=None, pages=Non
     for off in range(0, 70):
         d = datetime.date(2026, 10, 1) + datetime.timedelta(days=off)
         rows = []
-        for name, src in (('mise', workers), ('tail-match', other_workers)):
+        for name, src in (('mise', workers), ('other-worker', other_workers)):
             if src and d.isoformat() in src:
                 rows.append({'sum': {'requests': src[d.isoformat()]}, 'dimensions': {'scriptName': name}})
         acc['w' + d.strftime('%Y%m%d')] = rows

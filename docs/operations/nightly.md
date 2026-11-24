@@ -55,7 +55,7 @@ uv run python3 scripts/nightly.py --date 2026-11-20-2       # 同じ日の 2 回
 
 `var/nightly/continuous.json` は現在のサイクルと最後の発見時刻を記録する。終了済みサイクルの確認前に再起動しても結果を再利用し、途中終了は同じ名前で再開する。**投入段の実行中に落ちて成否不明のときは再投入せず停止**する。月予算ガード中は Claude API 判定と公開を待ち、発見と取得前フィルタだけの `--discover-only` を6時間ごとに続ける。UTC の月が変わったら通常処理に戻り予算を確認し直す。異常ガード、未解決、画像処理の警告、コマンド失敗では停止する。`continuous.json` の `stopped`、対象の `status.json`・`report.md`・本番データと bookmark を確認してから原因を直し、停止状態を退避した上で再開する。投入成否不明を未確認のまま状態を書き換えない。保留・robots 拒否・期限待ちを承認や強制再取得しない。
 
-Windows では `scripts/cron/mise-continuous.cmd` を専用クローン `C:\\Users\\kako-jun\\repos\\mise-continuous` から起動する。依存は専用クローンで `npm ci` して固定バージョンの Wrangler を用意し、データだけ既存の `C:\\Users\\kako-jun\\repos\\mise\\var` を共有する。従来の `mise-nightly.cmd` は起動時に元クローンを `git reset --hard` するため、**同じクローンで長時間動かさない**。専用クローンも実行中に更新せず、停止後に更新する。Windows のタスクスケジューラで該当ユーザーのログオン時または起動時にこの `.cmd` を起動し、既存インスタンスを多重起動しない設定にする。ジョブログは共有 `var/nightly/continuous.log`。認証用 env と Wrangler の本番認証は既存夜間ジョブと同じユーザーに用意する。停止したタスクは原因の確認前に無条件で再試行しない。
+Windows では `scripts/cron/mise-continuous.cmd` を `<リポジトリのパス>` とは別の専用クローンから起動する。依存は専用クローンで `npm ci` して固定バージョンの Wrangler を用意し、データだけ既存クローンの `var/`（`<リポジトリのパス>\var`）を共有する。従来の `mise-nightly.cmd` は起動時に元クローンを `git reset --hard` するため、**同じクローンで長時間動かさない**。専用クローンも実行中に更新せず、停止後に更新する。Windows のタスクスケジューラで該当ユーザーのログオン時または起動時にこの `.cmd` を起動し、既存インスタンスを多重起動しない設定にする。ジョブログは共有 `var/nightly/continuous.log`。認証用 env と Wrangler の本番認証は既存夜間ジョブと同じユーザーに用意する。停止したタスクは原因の確認前に無条件で再試行しない。
 
 ファビコンは `--media-favicon-limit` を指定したときだけ実行する。サムネイルには別途撮影経路の設定が必要で、この継続処理だけでは画像取得は完了しない。`--once` は 1 サイクルだけ動かす運用確認用で、本番反映を含む（`--apply-prod` が必要）。
 
@@ -69,26 +69,26 @@ Windows では `scripts/cron/mise-continuous.cmd` を専用クローン `C:\\Use
 
 主なオプション: `--from-stage <段>`（途中再開）、`--current-db <sqlite>`（gate 段の土台を本番再現 DB にする。無ければ空 DB）、`--max-links 300`（discover-links の 1 シードあたりの上限）、`--max-add 300`（1 夜の追加上限）、`--anomaly-factor 5`（前日比の異常ガードの倍率）、`--discover-limit 200`（0 で discover-cc 無効）、`--cc-sample-every 1000`（discover-cc の抽出率。`crc32(逆ホスト) % N == 0` の .jp ホストだけ台帳に入る決定論サンプリングなので、N が台帳に入る母集団の天井になり、入れ切ると毎夜 added=0 で供給が止まる。100 で約 10 倍、10 で約 100 倍。N の小さい側は大きい側の上位集合なので既存は重複として弾かれる。`--discover-limit` が 0 のとき無効）、`--wikidata-leaves 3`（0 で Wikidata 無効）、`--fetch-limit 600`、`--favicon-limit 0`（ファビコン段。0 で無効が既定。[collection/favicons.md](../collection/favicons.md)）、`--judge-limit 600`、`--llm-retries 2`（llm 段の未解決の自動再試行回数。0 で従来動作）、`--judge-mode batch|sync`、`--budget-month 100`、`--db`、`--var-dir`、`--ledger`。API キーは環境変数 `ANTHROPIC_API_KEY` のみ（[jobs.md](jobs.md#鍵クレジットllm-予算)。値は出力にも status.json にも出ない）。
 
-## 実行機 kako-rog（Windows）と pi-3b の cron
+## 収集機（Windows）とスケジューラ
 
-実行機は **kako-rog**（Windows 11）。pi-3b の cron が ssh で起動する（tail-match と同じ型。[tail-match の cron 構成](https://github.com/kako-jun/tail-match/blob/main/scripts/cron/README.md)）。**ライブ版のラッパーは rog のリポ外** `C:\Users\kako-jun\mise-nightly.cmd`（`git reset --hard` が自分自身を書き換える事故を避ける）。`scripts/cron/mise-nightly.cmd` はその参照コピーで、**ASCII のみ**（SSH のコードページで .cmd の非 ASCII コメントが壊れる。tail-match #405）。変更したら両方を揃える。
+実行機（収集機）は Windows 11。別の常時稼働機のスケジューラ（cron）が ssh で起動する。**ライブ版のラッパーは収集機のリポ外**（ユーザーのホーム直下の `mise-nightly.cmd`。`git reset --hard` が自分自身を書き換える事故を避ける）。`scripts/cron/mise-nightly.cmd` はその参照コピーで、**ASCII のみ**（SSH のコードページで .cmd の非 ASCII コメントが壊れる）。変更したら両方を揃える。
 
-- ラッパーは `git fetch` + `git reset --hard origin/main`（毎回最新）→ `PYTHONUTF8=1` → `C:\Users\kako-jun\.config\mise\anthropic.env` を環境変数へ → `uv run python scripts\nightly.py --fetch-limit 300 --judge-limit 300 %*`。ログは `C:\Users\kako-jun\mise-nightly.log` に追記。`--apply-prod` は付けない（人が確認してから）。
-- リポは `C:\Users\kako-jun\repos\mise`。状態（`var/`）と LLM 台帳（`C:\Users\kako-jun\.config\mise\llm-ledger.jsonl`）は **rog が正本**。他の機で実行しない（予算と出荷済みが二重になる）。
-- 本番反映（`--apply-prod`）に進む前に、rog の `npx wrangler whoami` が通ること（Cloudflare 認証）を確認する。
+- ラッパーは `git fetch` + `git reset --hard origin/main`（毎回最新）→ `PYTHONUTF8=1` → `<ユーザー設定ディレクトリ>\mise\anthropic.env` を環境変数へ → `uv run python scripts\nightly.py --fetch-limit 300 --judge-limit 300 %*`。ログはホーム直下の `mise-nightly.log` に追記。`--apply-prod` は付けない（人が確認してから）。
+- リポは `<リポジトリのパス>`。状態（`var/`）と LLM 台帳（`<ユーザー設定ディレクトリ>\mise\llm-ledger.jsonl`）は **収集機が正本**。他の機で実行しない（予算と出荷済みが二重になる）。
+- 本番反映（`--apply-prod`）に進む前に、収集機で `npx wrangler whoami` が通ること（Cloudflare 認証）を確認する。
 - ロックは `scripts/llm/filelock.py`（POSIX は `fcntl.flock`、Windows は `msvcrt.locking`）。`npx` は `shutil.which` で解決する。
 
-pi-3b の 00:37 cron は、単発 `mise-nightly.cmd` ではなく、Windows の URL 継続タスク `MiseContinuous` と画像タスク `MiseMedia` を確認する。両タスクは事前に同じログオンユーザーで登録し、専用 clone・認証・重複実行無視・時間制限なしを設定する。`scripts/cron/mise-start-tasks.ps1` を rog の `C:\Users\kako-jun\mise-start-tasks.ps1` に配置し、まず `-CheckOnly` で両タスクが存在し実行中または待機中と確認する。
+スケジューラの 00:37 の定期起動は、単発 `mise-nightly.cmd` ではなく、Windows の URL 継続タスク `MiseContinuous` と画像タスク `MiseMedia` を確認する。両タスクは事前に同じログオンユーザーで登録し、専用 clone・認証・重複実行無視・時間制限なしを設定する。`scripts/cron/mise-start-tasks.ps1` を収集機のホーム直下に配置し、まず `-CheckOnly` で両タスクが存在し実行中または待機中と確認する。
 
-スクリプトは実行中のタスクには触れず、`Ready` のものだけ開始し、起動後に `Running` であることを確認する。異常・無効・不在・起動直後の終了は非ゼロとし、pi のログに出す。既存の `.continuous.lock`・`.media-worker.lock`、停止フラグと各ジョブのガードはそのまま維持する。タスクは現状 `Interactive` ログオン型のため、rog に対象ユーザーがログオンしていないと実行できない。ログオン後は Windows タスク自体のログオントリガーでも起動する。
+スクリプトは実行中のタスクには触れず、`Ready` のものだけ開始し、起動後に `Running` であることを確認する。異常・無効・不在・起動直後の終了は非ゼロとし、スケジューラ側のログに出す。既存の `.continuous.lock`・`.media-worker.lock`、停止フラグと各ジョブのガードはそのまま維持する。タスクは現状 `Interactive` ログオン型のため、収集機に対象ユーザーがログオンしていないと実行できない。ログオン後は Windows タスク自体のログオントリガーでも起動する。
 
-pi-3b の crontab（`%` は crontab で特殊文字、Windows パスは絶対パス）:
+定期起動の書式（`%` は crontab で特殊文字、Windows パスは絶対パス）:
 
 ```cron
-37 0 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new kako-rog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\kako-jun\mise-start-tasks.ps1' >> /tmp/mise-nightly.log 2>&1
+37 0 * * * ssh -o ConnectTimeout=10 -o ServerAliveInterval=60 -o ServerAliveCountMax=10 -o StrictHostKeyChecking=accept-new <収集機のssh名> 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <ホーム直下>\mise-start-tasks.ps1' >> <ログのパス> 2>&1
 ```
 
-手動確認は `ssh kako-rog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\kako-jun\mise-start-tasks.ps1 -CheckOnly'`。この確認はタスクを起動しない。`-ExecutionPolicy Bypass` はこの起動プロセスに限る（システムの設定は変更しない）。単発ジョブの dry-run が必要な場合は既存の `mise-nightly.cmd --dry-run` を使うが、そのラッパーは元の clone を reset する。
+手動確認は同じコマンドに `-CheckOnly` を付けて収集機で実行する。この確認はタスクを起動しない。`-ExecutionPolicy Bypass` はこの起動プロセスに限る（システムの設定は変更しない）。単発ジョブの dry-run が必要な場合は既存の `mise-nightly.cmd --dry-run` を使うが、そのラッパーは元の clone を reset する。
 
 ## 画像キュー（D1/R2）
 

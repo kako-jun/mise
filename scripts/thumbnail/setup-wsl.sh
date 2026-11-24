@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run inside rog's Arch WSL as the same user that runs the Windows task.
+# Run inside the collector machine's Arch WSL as the same user that runs the Windows task.
 set -euo pipefail
 for program in bwrap systemd-run node npm uv; do
   command -v "$program" >/dev/null || { printf 'missing: %s\n' "$program" >&2; exit 1; }
