@@ -105,3 +105,22 @@ test('新着 API は登録日時で絞り、同日時でもページをまたい
   const listing = await ssr('/jp/?category=recent');
   assert.match(listing, /https:\/\/recent-a\.example\//);
 });
+
+test('最終チェック日: last_crawled_at だけを見て、無い・不正なら出さない（登録日・更新日で代用しない。#201）', () => {
+  const { checkedDate } = globalThis.MiseFeedEntry;
+  assert.equal(checkedDate({ last_crawled_at: '2026-11-20T06:50:10Z', registered_at: '2020-01-01', source_updated_at: '2021-01-01' }), '2026-11-20');
+  assert.equal(checkedDate({ last_crawled_at: null, registered_at: '2026-11-01 00:00:00', source_updated_at: '2026-10-01' }), null);
+  assert.equal(checkedDate({ registered_at: '2026-11-01' }), null);
+  assert.equal(checkedDate({ last_crawled_at: 'garbage' }), null);
+  assert.equal(checkedDate({ last_crawled_at: '' }), null);
+  assert.equal(checkedDate(null), null);
+  // 未来日（現在 + 1 日より先）は出さない。ちょうど今・直近は出す
+  const iso = ms => new Date(Date.now() + ms).toISOString();
+  assert.equal(checkedDate({ last_crawled_at: iso(3 * 86400000) }), null);
+  assert.equal(checkedDate({ last_crawled_at: iso(-60000) }), iso(-60000).slice(0, 10));
+  // 画面側は日付の意味を『最終チェック』『Last checked』に統一している（旧「登録」「更新」「最終巡回」に戻さない）
+  const feed = read('public/feed.js'), app = read('public/app.js');
+  assert.match(feed, /checked: '最終チェック'/); assert.match(feed, /checked: 'Last checked'/);
+  assert.match(app, /checked:'最終チェック'/); assert.match(app, /checked:'Last checked'/);
+  assert.doesNotMatch(feed, /registered_at|source_updated_at/);
+});

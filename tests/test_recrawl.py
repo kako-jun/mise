@@ -352,9 +352,37 @@ class StateMachine(unittest.TestCase):
         self.site(db)
         recrawl.apply_result(db, self.site(db), self.res('ok'), T0)
         m = sqlite3.connect(':memory:'); self.addCleanup(m.close)
+        m.execute('CREATE TABLE sites(id TEXT PRIMARY KEY, last_crawled_at TEXT)')  # to_sql は sites.last_crawled_at も更新する(#201)
         m.executescript((Path(__file__).parents[1] / 'migrations' / '0017_recrawl.sql').read_text())
         m.executescript(recrawl.to_sql(db))
         self.assertEqual(m.execute('SELECT state FROM site_checks').fetchone()[0], 'listed')
+
+    def test_sql_sets_last_crawled_at_from_last_ok_only(self):
+        """#201: 画面の最終チェック(sites.last_crawled_at)は成功日時だけ。失敗のみのサイト・既に新しい値があるサイトは動かさない。"""
+        import sqlite3
+        db = recrawl.connect(':memory:'); self.addCleanup(db.close)
+        for sid, ok, chk in [('ok', '2026-11-20T01:00:00Z', '2026-11-20T01:00:00Z'), ('fail', None, '2026-11-21T01:00:00Z'), ('newer', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z'), ('junk', '2026-11-05T00:00:00Z', '2026-11-05T00:00:00Z')]:
+            db.execute("INSERT INTO sites(site_id,url,last_checked_at,last_ok_at) VALUES(?,?,?,?)", (sid, 'http://x/' + sid, chk, ok))
+        m = sqlite3.connect(':memory:'); self.addCleanup(m.close)
+        m.execute("CREATE TABLE sites(id TEXT PRIMARY KEY, last_crawled_at TEXT)")
+        m.executemany("INSERT INTO sites VALUES(?,?)", [('ok', None), ('fail', None), ('newer', '2026-11-10T00:00:00Z'), ('junk', 'garbage')])
+        m.executescript((Path(__file__).parents[1] / 'migrations' / '0017_recrawl.sql').read_text())
+        m.executescript(recrawl.to_sql(db))
+        self.assertEqual(dict(m.execute('SELECT id,last_crawled_at FROM sites').fetchall()),
+                         {'ok': '2026-11-20T01:00:00Z', 'fail': None, 'newer': '2026-11-10T00:00:00Z', 'junk': '2026-11-05T00:00:00Z'})  # 解釈不能な既存値も上書き
+
+    def test_backfill_migration_uses_last_ok_not_checked(self):
+        import sqlite3
+        m = sqlite3.connect(':memory:'); self.addCleanup(m.close)
+        m.execute("CREATE TABLE sites(id TEXT PRIMARY KEY, last_crawled_at TEXT, registered_at TEXT)")
+        m.executescript((Path(__file__).parents[1] / 'migrations' / '0017_recrawl.sql').read_text())
+        m.executemany("INSERT INTO sites VALUES(?,?,?)", [('a', None, '2026-01-01'), ('b', None, '2026-01-01'), ('c', '2026-11-10T00:00:00Z', '2026-01-01'), ('d', None, '2026-01-01')])
+        m.executemany("INSERT INTO site_checks(site_id,last_checked_at,last_ok_at) VALUES(?,?,?)",
+                      [('a', '2026-11-20T00:00:00Z', '2026-11-19T00:00:00Z'), ('b', '2026-11-20T00:00:00Z', None), ('c', '2026-11-20T00:00:00Z', '2026-11-20T00:00:00Z')])
+        sql = (Path(__file__).parents[1] / 'migrations' / '0037_backfill_last_crawled_at.sql').read_text()
+        m.executescript(sql); m.executescript(sql)  # 冪等
+        self.assertEqual(dict(m.execute('SELECT id,last_crawled_at FROM sites').fetchall()),
+                         {'a': '2026-11-19T00:00:00Z', 'b': None, 'c': '2026-11-10T00:00:00Z', 'd': None})
 
 
 if __name__ == '__main__':

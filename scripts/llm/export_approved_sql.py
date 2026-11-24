@@ -49,6 +49,7 @@ Never touched: ids starting with pb-, sites holding a leaf under government (gua
 without any valid id (old ids are translated first, see judge.modernize_categories). Summary on stdout.
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -145,6 +146,25 @@ def clean_tags(tags):
     return out[:5]
 
 
+def crawled_at(row):
+    """The time the page was actually fetched (frontier.last_fetched_at) -> sites.last_crawled_at (the "last checked" shown on the site, #201).
+    frontier writes `2026-11-24T11:26:33+00:00` (frontier.now()); the D1 data uses `%Y-%m-%dT%H:%M:%SZ` (0008/0009/0014), so parse, convert to UTC, rewrite.
+    Missing / empty / unparseable / no timezone -> None (NULL). Never the approval or registration time: that would pass off a date we did not check."""
+    try:
+        v = row["last_fetched_at"]
+    except (KeyError, IndexError):
+        return None
+    if not isinstance(v, str) or not v.strip():
+        return None
+    try:
+        d = datetime.datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        return None
+    return d.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def statements(row, norm=None):
     sid, url = site_id(row["key"]), row["final_url"] or row["url"]
     cc, rc = row["country_code"], row["region_code"]
@@ -157,8 +177,8 @@ def statements(row, norm=None):
     out = []
     out.append(f"UPDATE sites SET adult_content={q(adult_content)} WHERE {norm_sql('url')} IN ({keys});")
     out.append(
-        f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code,adult_content) "
-        f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)},{q(adult_content)} "
+        f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code,adult_content,last_crawled_at) "
+        f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)},{q(adult_content)},{q(crawled_at(row))} "
         f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({keys})) AND NOT {blocked_sql(cands)} "
         f"AND NOT {requested_off_sql(cands)} ON CONFLICT DO NOTHING;")
     # changes() is the row count of the statement right before: 1 after a new sites row, 0 when it was skipped. Tags come first
@@ -185,7 +205,7 @@ def build(db_path):
     con.row_factory = sqlite3.Row
     try:
         rows = con.execute(
-            "SELECT j.*, f.host, f.url, f.final_url, f.title FROM llm_judgement j JOIN frontier f ON f.key=j.key "
+            "SELECT j.*, f.host, f.url, f.final_url, f.title, f.last_fetched_at FROM llm_judgement j JOIN frontier f ON f.key=j.key "
             "WHERE j.review_state='approved' AND f.state='candidate' ORDER BY j.key").fetchall()
     finally:
         con.close()

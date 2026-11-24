@@ -43,5 +43,15 @@
     return `${directoryHref(scope, path, Math.floor(offset / PAGE_SIZE) + 1)}#${sitePositionId(offset + 1)}`;
   }
 
-  g.MiseFeedEntry = { DEFAULT_SCOPE, PAGE_SIZE, parsePage, validScope, scopeFromPath, directoryHref, feedEntryHref, sitePositionId, continueListHref, RECENT_CATEGORY, RECENT_DAYS, recentFolder };
+  // 最終チェック日（#201）。一覧・縦フィードで同じ判定を使う。last_crawled_at だけを見て、無い・読めないなら null
+  // （登録日 registered_at や元サイトの更新日 source_updated_at で代用しない）。形式は YYYY-MM-DD
+  const checkedDate = site => {
+    const v = site && site.last_crawled_at;
+    if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(v)) return null;
+    const t = Date.parse(v);
+    // 現在時刻 + 1 日より先（未来日）は偽の日付なので出さない。日付は保存値（UTC）の先頭 10 桁
+    return Number.isNaN(t) || t > Date.now() + 86400000 ? null : v.slice(0, 10);
+  };
+
+  g.MiseFeedEntry = { checkedDate, DEFAULT_SCOPE, PAGE_SIZE, parsePage, validScope, scopeFromPath, directoryHref, feedEntryHref, sitePositionId, continueListHref, RECENT_CATEGORY, RECENT_DAYS, recentFolder };
 })(globalThis);
