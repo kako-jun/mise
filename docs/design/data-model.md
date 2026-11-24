@@ -97,7 +97,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 ### 制約と注意
 
 - カテゴリ未所属のサイトも `GET /api/sites`（`category` 指定なし）と検索には出る（`category_ids` が空配列。画面では「未分類」）。カテゴリ別の一覧には出ない。
-- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。frontier 台帳（`var/frontier.sqlite`）は D1 に入っていない。D1 に入るのは掲載したサイトだけで、LLM 判定の承認済み候補は `scripts/llm/export_approved_sql.py` が出す SQL で入れる（[llm-judge.md](../collection/llm-judge.md#台帳への取り込みと承認)）。
+- 官公庁の台帳（`data/public-bodies/`）が正本で、D1 へは `scripts/public_bodies_sql.py` が生成する migration（`0015`）で入れる（[public-bodies.md](../collection/public-bodies.md)）。自動発見・ユーザー申請・掲載サイトは D1 の `url_progress` で URL ごとに一行へまとめる（0032、`/api/progress`、[進捗画面](/progress/)）。`identity_key` はスキーム・`www`・末尾スラッシュを畳んだ URL キーで、`source` は発見元、`state` は処理段階。申請の種別と審査状態は理由・連絡先を含めず記録する。ユーザー申請は `requests` の trigger から同期し、夜間処理は発見・取得・判定・公開・画像段階の区切りで frontier の状態を同期する。`sites` と結合して説明・タグ・カテゴリ・画像の登録状況を出し、公開済みは右端を完了にする。frontier は夜間処理の実行・再開用キューであり、URL の公開進捗を別一覧に分けない。
 
 ## 将来案（未実装）
 

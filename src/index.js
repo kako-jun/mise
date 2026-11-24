@@ -47,6 +47,26 @@ app.get('/api/activity', async c => {
   const { results } = await c.env.DB.prepare(`SELECT date(registered_at) AS day, COUNT(*) AS count FROM sites WHERE bulk_import = 0 AND datetime(registered_at) IS NOT NULL AND datetime(registered_at) <= datetime('now') AND date(registered_at) >= date('now','-6 days') AND (?1 IS NULL OR country_code = ?1) AND (?2 IS NULL OR region_code = ?2) GROUP BY date(registered_at) ORDER BY day`).bind(sc.region ? null : sc.cc, sc.region).all();
   return c.json({total:totals.total, known_daily:results});
 });
+// URL 単位の共通進捗表。公開済みの表示情報は sites と結合し、申請理由・連絡先・IP 情報は返さない。
+app.get('/api/progress', async c => {
+  const raw = c.req.query('offset') ?? '0', limitRaw = c.req.query('limit') ?? '50';
+  if (!/^\d{1,7}$/.test(raw) || !/^\d{1,3}$/.test(limitRaw)) return c.json({ error: 'invalid pagination' }, 400);
+  const offset = Number(raw), limit = Number(limitRaw);
+  if (limit < 1 || limit > 100 || offset > 1000000) return c.json({ error: 'invalid pagination' }, 400);
+  const { results } = await c.env.DB.prepare(`
+    SELECT p.url AS url, s.name AS name, s.description_ja AS description_ja, s.description_en AS description_en,
+      (SELECT COUNT(*) FROM site_tags t WHERE t.site_id=s.id) AS tags_count,
+      (SELECT COUNT(*) FROM site_categories sc WHERE sc.site_id=s.id) AS categories_count,
+      CASE WHEN s.favicon_path IS NOT NULL THEN 1 ELSE 0 END AS favicon,
+      CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
+      CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END AS state,
+      p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
+    FROM url_progress p
+    LEFT JOIN sites s ON s.id=(SELECT s2.id FROM sites s2 WHERE s2.progress_key=p.identity_key ORDER BY s2.registered_at DESC LIMIT 1)
+    ORDER BY datetime(p.updated_at) DESC, p.identity_key LIMIT ?1 OFFSET ?2`).bind(limit, offset).all();
+  const total = await c.env.DB.prepare('SELECT COUNT(*) AS total FROM url_progress').first();
+  return c.json({ results, total: total.total, offset, limit });
+});
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md
 const NOJS = `<!doctype html><meta charset="utf-8"><title>MISE</title><p>JavaScript を有効にして送信してください。</p><p>Please enable JavaScript to send this form.</p>`;
 app.post('/api/requests', async c => {
@@ -63,6 +83,8 @@ app.get('/', async c => page(c, DEFAULT_SCOPE, await loadScopes(c.env.DB)));
 // アバウトページ（#118）。範囲（/:scope/）より先に登録する。/about は /about/ へ 301。理由は docs/design/seo.md。
 app.get('/about', c => { const u = new URL(c.req.url); u.pathname = '/about/'; return c.redirect(u.toString(), 301); });
 app.get('/about/', async c => renderAbout(await c.env.ASSETS.fetch(new Request(new URL('/about.html', c.req.url)))));
+app.get('/progress', c => c.redirect('/progress/', 301));
+app.get('/progress/', async c => c.html(await (await c.env.ASSETS.fetch(new Request(new URL('/progress.html', c.req.url)))).text()));
 // /jp/ /us/ /all/。大文字は小文字へ 301。サイトが 1 件も無い国・不正な値は 404（sitemap にも載せない）。
 // 末尾スラッシュなし（/jp）は存在する範囲だけ /jp/ へ 301（クエリは維持）。run_worker_first の拡張子なしパターンで Worker に届く。
 // 区画（都道府県・州）は /jp/13/ /us/ca/（範囲名 jp-13 の「-」を「/」にした形）。区画にサイトが 1 件も無いとき・不正な値は 404、大文字は小文字へ 301。
