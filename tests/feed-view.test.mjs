@@ -258,3 +258,23 @@ test('feed.js: 国・地域は一覧と同じ規則(国名テキストを出さ�
   assert.match(css, /#feed \.f-tag::before \{ content: '#'/, '# 表記を維持');
   assert.match(css, /#feed \.f-place\[hidden\] \{ display: none; \}/);
 });
+
+// 縦フィードの現在位置(#204): 読み込み済み件数を分母にし、続き・失敗では + を付けて不正確な分数を出さない
+test('navPosition は分母が確定しないとき + を付け、範囲に丸める', () => {
+  assert.equal(lib.navPosition(0, 120, false, 'ja').text, '1 / 120');
+  assert.equal(lib.navPosition(2, 1200, false, 'en').text, '3 / 1,200');
+  assert.equal(lib.navPosition(2, 500, true, 'ja').text, '3 / 500+');
+  assert.equal(lib.navPosition(120, 120, false, 'ja').cur, 120, '終了カード(current=件数)は分母に丸める');
+  assert.equal(lib.navPosition(-5, 10, false, 'ja').cur, 1);
+  assert.equal(lib.navPosition(0, 0, false, 'ja'), null);
+  assert.equal(lib.navPosition(0, NaN, true, 'ja'), null);
+});
+test('縦フィードの位置表示は押せない・読み上げ控えめ・ボタンは44px以上', () => {
+  assert.match(appJs, /'f-pos', \{ 'aria-live': 'off' \}/);
+  assert.match(css, /\.f-pos \{[^}]*pointer-events: none/);
+  assert.match(css, /\.f-nav button \{ width: 44px; height: 44px/);
+});
+test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照する(キャッシュ版の上げ忘れ防止は変更時に手で上げる)', () => {
+  for (const f of ['feed.css', 'feed-lib.js', 'feed.js']) assert.match(html, new RegExp('/' + f.replace('.', '\\.') + '\\?v=\\d+'));
+  assert.equal(lib.navPosition(0, 500, true, 'en').denom, '500+');
+});
