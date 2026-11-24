@@ -28,7 +28,7 @@ def pf():
 
 def add_sites(d1, urls):
     for i, u in enumerate(urls, 1):
-        d1.db.execute('INSERT INTO sites(id,url,progress_key) VALUES(?,?,?)', (i, u, u))
+        d1.db.execute('INSERT INTO sites(id,url,progress_key) VALUES(?,?,?)', (f'fr-site{i}-{i:08x}', u, u))
     d1.db.commit()
 
 
@@ -104,16 +104,35 @@ class LinksTest(unittest.TestCase):
     def test_apply_slices_and_cursor_in_d1(self):
         code, _ = self.run_links(True, max_sites=1)
         self.assertEqual(code, 0)
-        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), '1')
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site1-00000001')
         self.assertIn('https://yamada-taro.jp/', urls(self.d1))
         self.assertNotIn('https://hobby-page.example.com/', urls(self.d1))
         self.run_links(True, max_sites=1)
-        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), '2')
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site2-00000002')
         self.assertIn('https://hobby-page.example.com/', urls(self.d1))
         _, stats = self.run_links(True, max_sites=5)
-        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), '3')
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site3-00000003')
         self.assertIn('https://zzz.example.org/', urls(self.d1))
         self.assertEqual(stats.mismatch, 0)
+
+    def test_second_run_resumes_from_text_cursor_and_done_note(self):
+        self.run_links(True, max_sites=1)
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site1-00000001')
+        order = []
+        real = do.PoliteFetcher.get
+
+        def spy(self_, url):
+            order.append(url)
+            return real(self_, url)
+        with mock.patch.object(do.PoliteFetcher, 'get', spy):
+            _, stats = self.run_links(True, max_sites=1)   # 2 回目: 文字列カーソルから 2 件目だけ(飛ばさず・繰り返さず)
+        self.assertEqual(order, ['https://second.example.jp/'])
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site2-00000002')
+        with mock.patch.object(do.PoliteFetcher, 'get', spy):
+            self.run_links(True, max_sites=5)
+        self.assertEqual(order[1:], ['https://second.example.jp/', 'https://third.example.jp/'][1:])
+        _, stats = self.run_links(True, max_sites=5)   # 全部読み終えた後は 0 サイト(呼び出し側の終了判定)
+        self.assertTrue(any('links: 処理 0 サイト(' in n for n in stats.notes))
 
     def test_tilde_path_reaches_url_progress_and_cc_arg_validated(self):
         self.run_links(True)
@@ -145,7 +164,7 @@ class LinksTest(unittest.TestCase):
     def test_unfetchable_site_still_advances(self):
         self.pages.pop('https://second.example.jp/')
         self.run_links(True)
-        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), '3')
+        self.assertEqual(cursor(self.d1, 'links', 'sites_id'), 'fr-site3-00000003')
 
 
 def cc_opener(hosts, calls=None):

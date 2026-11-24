@@ -27,7 +27,7 @@ class FakeD1:
         self.db = sqlite3.connect(':memory:')
         self.db.row_factory = sqlite3.Row
         self.db.execute(URL_PROGRESS_DDL)
-        self.db.execute('CREATE TABLE sites (id INTEGER PRIMARY KEY, url TEXT, progress_key TEXT)')
+        self.db.execute('CREATE TABLE sites (id TEXT PRIMARY KEY, url TEXT, progress_key TEXT)')
         if with_cursors:
             self.db.executescript(CURSORS_DDL)
         self.drop_inserts = drop_inserts
