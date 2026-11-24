@@ -635,28 +635,17 @@ class Night:
         return {"note": "反映済み・整合 OK", "count": {"added": self.status["added"]}}
 
     def s_favicon(self):
-        """ファビコンの取得(#125)。既定は無効(--favicon-limit 0)。有効にしてもローカルへ取得するだけで、SQL は作らず、本番 D1・R2 には触れない。
-        失敗しても夜間ジョブ全体は失敗にしない(guards に残して続行)。"""
+        """D1 の期限付きファビコン仕事を取得し、画像 bytes は直接 R2 に置く。"""
         a = self.a
         if a.favicon_limit <= 0:
             return {"status": "skipped", "note": "--favicon-limit 0(既定)で無効"}
-        fdb = os.path.join(self.var, "favicons.sqlite")
-        script = os.path.join(ROOT, "scripts/favicon/favicon.py")
-        recrawl_db = os.path.join(self.var, "recrawl.sqlite")
-        steps = []
-        if os.path.exists(recrawl_db):
-            steps.append(("import", ["--db", fdb, "import", "--recrawl", recrawl_db]))
-        steps.append(("run", ["--db", fdb, "run", "--apply", "--limit", str(a.favicon_limit), "--store-dir", os.path.join(self.var, "favicons")]))
-        notes = []
-        for name, argv in steps:
-            # ここだけ python3 でなく python: 実行機 kako-rog(Windows)の venv に python3.exe は無い(Store の偽 python3 を拾うと Pillow が無く毎晩失敗する)。uv run python は Linux でも動く
-            # 夜間ジョブ本体は Pillow を持たないので、favicon.py だけ --with pillow で起動する(無ければ favicon.py が非 0 で終わり、ここで失敗として残る)
-            rc, out = run_cmd(["uv", "run", "--with", "pillow", "python", script, *argv])
-            if rc != 0:
-                self.status["guards"].append(f"favicon {name} 失敗(続行)")
-                return {"note": f"{name}: 失敗(exit {rc}、続行): " + out.strip()[-150:]}
-            notes.append(f"{name}: " + out.strip()[-80:])
-        return {"note": " / ".join(notes)}
+        cmd = [os.environ.get("UV") or "uv", "run", "--with", "pillow", "python" if os.name == "nt" else "python3",
+               os.path.join(ROOT, "scripts/nightly_media.py"), "--favicon-limit", str(a.favicon_limit), "--thumbnail-limit", "0"]
+        rc, out = run_cmd(cmd)
+        if rc:
+            self.status["guards"].append("favicon 取得失敗")
+            return {"note": out.strip()[-250:]}
+        return {"note": out.strip()[-250:]}
 
     def s_media(self):
         a = self.a
@@ -669,10 +658,7 @@ class Night:
             return {"status": "skipped", "note": "今回の本番反映は未完了"}
         cmd = [os.environ.get("UV") or "uv", "run", "--with", "pillow", "python" if os.name == "nt" else "python3",
                os.path.join(ROOT, "scripts/nightly_media.py"),
-               "--var", self.var, "--out", self.dir, "--d1-name", a.d1_name,
                "--favicon-limit", str(a.media_favicon_limit), "--thumbnail-limit", str(a.thumbnail_limit)]
-        if prod_ok and self.status["prod_applied"]:
-            cmd.append("--enqueue")
         try:
             rc, out = run_cmd(cmd)
         except (OSError, subprocess.SubprocessError) as e:

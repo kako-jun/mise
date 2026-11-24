@@ -4,12 +4,12 @@
   uv run python3 scripts/llm/export_approved_sql.py [--db var/frontier.sqlite] [--out var/approved-sites.sql]
 
 Read-only on the ledger (SQLite read-only mode); no network, no API. The SQL is a derived file under var/ (git-ignored):
-it only INSERTs, and every statement guards itself against what the target database already holds, so running it twice
-adds nothing. Apply it to the local D1 only (npx wrangler d1 execute mise --local --file var/approved-sites.sql).
+it inserts new sites and synchronizes the approved adult classification on a matching existing URL, so running it twice
+adds nothing. Apply it to D1 with the site's normal SQL export workflow.
 
 Exported: review_state=approved with verdict pass / suspect and both descriptions, and only while the host is still
 frontier.state='candidate' (a host that moved to rejected / blocked_by_robots / deferred is not exported even if approved).
-Per site: sites (id, url, name, description_ja/en, country_code, region_code) / site_categories (max 3) / site_tags (max 5).
+Per site: sites (id, url, name, description_ja/en, country_code, region_code, adult_content) / site_categories (max 3) / site_tags (max 5).
   - id = fr-<host with unsafe characters as '-'>-<8 hex of sha1(key)>; name = the frontier title as of the export (it can
     differ from the title the LLM saw), or the host when the title is empty or the site is adult=yes.
   - Skipped by the SQL itself when: the site is already listed (same host+path; scheme, a leading www., trailing slash, case
@@ -106,6 +106,11 @@ def site_name(row):
     return title[:80]
 
 
+def adult_content_value(row):
+    """D1 thumbnail policy source: approved llm_judgement.adult yes/no; unknown stays NULL."""
+    return 1 if row["adult"] == "yes" else 0 if row["adult"] == "no" else None
+
+
 def blocked_sql(urls):
     """Same rule as the intake: the host or a parent domain (never above a shared-hosting user area) for whole-host rows,
     the host itself plus the folded path for path_prefix rows. No LIKE, so _ and % in a row are plain characters.
@@ -143,16 +148,19 @@ def clean_tags(tags):
 def statements(row, norm=None):
     sid, url = site_id(row["key"]), row["final_url"] or row["url"]
     cc, rc = row["country_code"], row["region_code"]
+    adult_content = adult_content_value(row)
     cc = cc if cc and COUNTRY.fullmatch(cc) else None
     rc = rc if cc and rc and REGION.fullmatch(rc) and rc.startswith(cc + "-") else None
     # redirects keep the host but may change the path (/ -> /ja/), so every spelling of the site is checked
     cands = list(dict.fromkeys([url, row["url"], "https://" + row["key"]]))
     keys = ",".join(q(k) for k in url_keys(cands))
-    out = [
-        f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code) "
-        f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)} "
+    out = []
+    out.append(f"UPDATE sites SET adult_content={q(adult_content)} WHERE {norm_sql('url')} IN ({keys});")
+    out.append(
+        f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code,adult_content) "
+        f"SELECT {q(sid)},{q(url)},{q(site_name(row))},{q(row['description_ja'])},{q(row['description_en'])},{q(cc)},{q(rc)},{q(adult_content)} "
         f"WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({keys})) AND NOT {blocked_sql(cands)} "
-        f"AND NOT {requested_off_sql(cands)} ON CONFLICT DO NOTHING;"]
+        f"AND NOT {requested_off_sql(cands)} ON CONFLICT DO NOTHING;")
     # changes() is the row count of the statement right before: 1 after a new sites row, 0 when it was skipped. Tags come first
     # (one statement; a new site gets at least one row), categories second (they see the sites or the tags count). An empty
     # list emits no statement and leaves the previous count in place, so the chain stays correct.
@@ -201,6 +209,9 @@ def build(db_path):
     head = ["-- Approved sites from the frontier ledger (scripts/llm/export_approved_sql.py). Derived file: do not edit.",
             "-- Idempotent: every INSERT is guarded against rows that already exist and against blocked_hosts.",
             f"-- {stats['exported']} site(s)."]
+    body.append("-- Finish the thumbnail eligibility backfill only after all approved adult classifications above are synchronized.")
+    body.append("UPDATE site_media_jobs SET eligible=1,state=CASE WHEN (SELECT thumb_path FROM sites WHERE sites.id=site_media_jobs.site_id) IS NULL THEN 'pending' ELSE 'ok' END,updated_at=datetime('now') "
+                "WHERE kind='thumbnail' AND excluded=0 AND site_id IN (SELECT id FROM sites WHERE adult_content IS NULL);")
     return "\n".join(head + body) + "\n", stats
 
 

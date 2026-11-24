@@ -3,6 +3,11 @@
 import argparse
 import os
 import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from progress_identity import progress_identity_key
 
 MAX_SQL_FILE_BYTES = 5 * 1024 * 1024  # Keep each wrangler remote import small enough to retry independently.
 
@@ -11,17 +16,7 @@ def q(value):
 
 
 def progress_key(url):
-    """Match migrations/0032_url_progress.sql: lowercase URL without scheme, leading www, or trailing slash."""
-    lower = url.lower()
-    if lower.startswith('https://www.'):
-        url = url[12:]
-    elif lower.startswith('http://www.'):
-        url = url[11:]
-    elif lower.startswith('https://'):
-        url = url[8:]
-    elif lower.startswith('http://'):
-        url = url[7:]
-    return url.lower().rstrip('/')
+    return progress_identity_key(url)
 
 
 def main():

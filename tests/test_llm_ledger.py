@@ -404,7 +404,36 @@ class ExportTests(Base):
         for k in ("beta.example", "delta.example"):
             self.assertNotIn(f"-- {k}", sql)
         self.assertNotIn("--remote", sql)
-        self.assertNotIn("DELETE", sql); self.assertNotIn("UPDATE", sql)
+        self.assertNotIn("DELETE", sql)
+        self.assertIn("UPDATE sites SET adult_content=1", sql)
+
+    def test_approved_adult_classification_is_exported_to_d1_for_media_eligibility(self):
+        sql = self.export()
+        self.assertIn('region_code,adult_content)', sql)
+        t = self.target()
+        t.executescript(sql)
+        self.assertEqual(t.execute("SELECT adult_content FROM sites WHERE url='https://adultsite.example/'").fetchone()[0], 1)
+        self.assertEqual(t.execute("SELECT eligible,state FROM site_media_jobs WHERE site_id=(SELECT id FROM sites WHERE url='https://adultsite.example/') AND kind='thumbnail'").fetchone(), (0, 'excluded'))
+        self.assertEqual(t.execute("SELECT eligible,state FROM site_media_jobs WHERE site_id=(SELECT id FROM sites WHERE url='https://adultsite.example/') AND kind='favicon'").fetchone(), (1, 'pending'))
+
+    def test_export_synchronizes_adult_yes_for_an_already_published_site(self):
+        t = self.target()
+        t.execute("INSERT INTO sites(id,url,name,description_ja) VALUES('existing-adult','https://adultsite.example/','existing','説明')")
+        t.executescript(self.export())
+        self.assertEqual(t.execute("SELECT adult_content FROM sites WHERE id='existing-adult'").fetchone()[0], 1)
+        self.assertEqual(t.execute("SELECT eligible,state FROM site_media_jobs WHERE site_id='existing-adult' AND kind='thumbnail'").fetchone(), (0, 'excluded'))
+
+    def test_exported_unknown_classification_clears_adult_yes_and_reenables_thumbnail(self):
+        t = self.target()
+        t.execute("INSERT INTO sites(id,url,name,description_ja,adult_content) VALUES('existing-adult','https://adultsite.example/','existing','説明',1)")
+        self.db.execute("UPDATE llm_judgement SET adult='unknown' WHERE key='adultsite.example'")
+        self.db.commit()
+        sql = self.export()
+        self.assertIn("UPDATE sites SET adult_content=NULL", sql)
+        self.assertIn("UPDATE site_media_jobs SET eligible=1", sql)
+        t.executescript(sql)
+        self.assertIsNone(t.execute("SELECT adult_content FROM sites WHERE id='existing-adult'").fetchone()[0])
+        self.assertEqual(t.execute("SELECT eligible,state FROM site_media_jobs WHERE site_id='existing-adult' AND kind='thumbnail'").fetchone(), (1, 'pending'))
 
     def test_counts_table_follows_the_nightly_insert(self):
         """migration 0022 のトリガ: 夜間の一括投入（通常 INSERT）のあとも集計表 = 再帰 CTE（#126）。"""
