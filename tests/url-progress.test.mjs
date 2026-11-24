@@ -132,6 +132,19 @@ test('normalized user request merges with published http/www variant into one UR
   assert.equal(body.results[0].request_status, 'pending');
 });
 
+test('normalized path URL with an encoded space merges despite a decoded request dedup key', async () => {
+  const db = fixture(); site(db, 'pub-path', 'https://example.com/a%20b/');
+  db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason)
+    VALUES('add','pending','http://www.example.com/a%20b','www.example.com','example.com/a b','private')`).run();
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.total, 1);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].url, 'https://example.com/a%20b/');
+  assert.equal(body.results[0].state, 'published');
+  assert.equal(body.results[0].request_type, 'add');
+  assert.equal(body.results[0].request_status, 'pending');
+});
+
 test('request overlay does not regress an in-progress candidate stage', () => {
   const db = fixture();
   db.prepare("INSERT INTO url_progress(identity_key,url,source,state) VALUES('candidate.example','https://candidate.example/','discovered','candidate')").run();
@@ -140,6 +153,18 @@ test('request overlay does not regress an in-progress candidate stage', () => {
   const row = db.prepare("SELECT state,request_type,request_status FROM url_progress WHERE identity_key='candidate.example'").get();
   assert.equal(row.state, 'candidate');
   assert.equal(row.request_type, 'add');
+  assert.equal(row.request_status, 'pending');
+});
+
+test('updating an older request does not replace the latest request overlay for its URL key', () => {
+  const db = fixture();
+  const add = db.prepare(`INSERT INTO requests(type,status,url,host,normalized_key,reason,created_at)
+    VALUES(?,?,?,?,?,?,?)`);
+  add.run('add','pending','https://example.com/','example.com','example.com','old add','2026-11-23 10:00:00');
+  add.run('remove','pending','https://www.example.com/','www.example.com','example.com','new remove','2026-11-24 10:00:00');
+  db.prepare("UPDATE requests SET status='approved',decided_at='2026-11-25 10:00:00' WHERE type='add' AND normalized_key='example.com'").run();
+  const row = db.prepare("SELECT request_type,request_status FROM url_progress WHERE identity_key='example.com'").get();
+  assert.equal(row.request_type, 'remove');
   assert.equal(row.request_status, 'pending');
 });
 
@@ -162,6 +187,19 @@ test('migration 0032 backfills latest request per normalized URL without copying
     { source: 'request', state: 'discovered', request_type: 'add', request_status: 'rejected', discovered_at: '2026-11-24' });
   const cols = db.prepare('PRAGMA table_info(url_progress)').all().map(x => x.name);
   for (const privateField of ['reason','contact','ip_hash','net_hash','note']) assert.equal(cols.includes(privateField), false);
+});
+
+test('migration 0032 backfills legacy published rows with NULL registered_at', () => {
+  const db = fixture({ through: '0031_recent_registration_sort.sql' });
+  // Simulate an older pre-clock row: the normal insert trigger would fill this value on current writes.
+  db.exec('DROP TRIGGER sites_registration_clock');
+  db.prepare("INSERT INTO sites(id,url,name,description_ja,registered_at) VALUES('legacy-null','https://legacy-null.example/','Legacy','legacy',NULL)").run();
+  db.exec(readFileSync(new URL('../migrations/0032_url_progress.sql', import.meta.url), 'utf8'));
+  const row = db.prepare("SELECT identity_key,state,discovered_at,updated_at FROM url_progress WHERE identity_key='legacy-null.example'").get();
+  assert.ok(row);
+  assert.equal(row.state, 'published');
+  assert.match(row.discovered_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  assert.equal(row.updated_at, row.discovered_at);
 });
 
 test('GET /progress redirects bare path and the screen is linked from the footer in both languages', async () => {
