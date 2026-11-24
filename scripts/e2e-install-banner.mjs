@@ -82,12 +82,12 @@ await scenario('localStorage が使えなくてもバナーは出て閉じられ
   await ready(page); await fire(page); await untilShown(page, true);
   await page.click('#install-later'); await untilShown(page, false);
 });
-await scenario('日本語表示・ダーク・モバイル幅（375px）で崩れず、下部に収まる', async (page) => {
+await scenario('日本語表示・ダーク・モバイル幅（375px）で崩れず、下部の左半分に収まる', async (page) => {
   await page.addInitScript(() => { try { localStorage.setItem('mise-language', 'ja'); localStorage.setItem('mise-theme', 'dark'); } catch (_) {} });
   await ready(page); await fire(page); await untilShown(page, true);
   assert.equal(await page.textContent('#install-later'), 'あとで'); assert.equal(await page.textContent('#install-add'), 'インストール');
   const g = await page.evaluate(() => { const b = document.querySelector('#install-banner').getBoundingClientRect(); return { l: b.left, r: b.right, bb: b.bottom, h: b.height, vw: innerWidth, vh: innerHeight, sw: document.documentElement.scrollWidth }; });
-  assert.ok(g.l >= 0 && g.r <= g.vw && g.bb <= g.vh && g.sw <= g.vw, JSON.stringify(g)); assert.ok(g.h < 130, `高さ ${g.h}`); await shot(page, 'banner-mobile-ja-dark');
+  assert.ok(g.l >= 0 && g.r <= g.vw && g.bb <= g.vh && g.sw <= g.vw, JSON.stringify(g)); assert.ok(g.r <= g.vw / 2, `画面左半分に収まる ${JSON.stringify(g)}`); assert.ok(g.h < 220, `高さ ${g.h}`); await shot(page, 'banner-mobile-ja-dark');
 }, { width: 375, height: 667 });
 await scenario('回帰: 起動処理が最後まで走る（日本語カテゴリ・?category= / ?q= の復元。バナー関連の宣言順で止まらない）', async (page) => {
   await bootRegression(page, '/');
