@@ -112,19 +112,19 @@ class LeaseLost(RuntimeError):
 
 class Lease:
     """discovery_cursors の source='lease' で 2 台が同時に動かないようにする。値は '<owner>|<期限 epoch 秒>'。"""
-    def __init__(self, client, owner=None, ttl=LEASE_TTL, clock=time.time):
-        self.client, self.ttl, self.clock = client, ttl, clock
+    def __init__(self, client, owner=None, ttl=LEASE_TTL, clock=time.time, key='discover'):
+        self.client, self.ttl, self.clock, self.key = client, ttl, clock, key
         self.owner = owner or f'{platform.node() or "host"}-{uuid.uuid4().hex[:8]}'.replace('|', '_')
         self.held = False
 
     def _take(self):
         now = int(self.clock())
         self.client.query(
-            "INSERT INTO discovery_cursors(source,cursor_key,cursor_value) VALUES('lease','discover',?) "
+            "INSERT INTO discovery_cursors(source,cursor_key,cursor_value) VALUES('lease',?,?) "
             "ON CONFLICT(source,cursor_key) DO UPDATE SET cursor_value=excluded.cursor_value, updated_at=datetime('now') "
             "WHERE cursor_value IS NULL OR cursor_value LIKE ? || '|%' OR CAST(substr(cursor_value, instr(cursor_value,'|')+1) AS INTEGER) < ?",
-            (f'{self.owner}|{now + self.ttl}', self.owner, now))
-        rows = self.client.query("SELECT cursor_value FROM discovery_cursors WHERE source='lease' AND cursor_key='discover'")
+            (self.key, f'{self.owner}|{now + self.ttl}', self.owner, now))
+        rows = self.client.query("SELECT cursor_value FROM discovery_cursors WHERE source='lease' AND cursor_key=?", (self.key,))
         return bool(rows) and str(rows[0].get('cursor_value', '')).split('|', 1)[0] == self.owner
 
     def acquire(self):
@@ -138,7 +138,7 @@ class Lease:
 
     def release(self):
         if self.held:
-            self.client.query("DELETE FROM discovery_cursors WHERE source='lease' AND cursor_key='discover' AND cursor_value LIKE ? || '|%'", (self.owner,))
+            self.client.query("DELETE FROM discovery_cursors WHERE source='lease' AND cursor_key=? AND cursor_value LIKE ? || '|%'", (self.key, self.owner))
             self.held = False
 
 

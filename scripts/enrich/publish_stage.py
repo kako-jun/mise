@@ -308,11 +308,11 @@ def guards_pass(client, p):
     return bool(client.query(f"SELECT 1 WHERE NOT {bl} AND NOT {ro}", params))
 
 
-def run(client, *, limit, apply, log=print):
+def run(client, *, limit, apply, log=print, heartbeat=None):
     # oldest url_progress.updated_at first: a row whose batch keeps failing is touched below, so it goes to the back of the queue
     rows = client.query(
         "SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
-        "WHERE p.state='approved' ORDER BY p.updated_at,p.identity_key LIMIT ?", [int(limit)])
+        "WHERE p.state='approved' AND c.review_state='approved' ORDER BY p.updated_at,p.identity_key LIMIT ?", [int(limit)])
     res = {"selected": len(rows), "published": 0, "already_listed": 0, "held": 0, "errors": 0, "dry_run": not apply,
            "would_publish": 0, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
     touched = []
@@ -332,63 +332,74 @@ def run(client, *, limit, apply, log=print):
         except Exception:
             pass
 
-    for row in rows:
-        try:
-            p = plan(dict(row))
-            have_cats = {r["id"] for r in client.query(f"SELECT id FROM categories WHERE id IN ({','.join('?' * len(p['cats']))})", p["cats"])}
-            p["cats"] = [c for c in p["cats"] if c in have_cats]
-            if not p["cats"]:
-                raise Gate("gate:no_category")   # in categories.csv but not in this D1: never publish a site without a category
-            stmts = publish_statements(p)
-            if max(len(s[1]) for s in stmts) > MAX_PARAMS:
-                raise Gate("gate:too_many_params")
-            if existing_site(client, p):
-                res["already_listed"] += 1
-                if apply:
-                    client.batch(media_and_state(p, new_site=False))   # the existing sites row is never altered (adult_content only NULL -> 0/1)
-                continue
-            if not apply:
-                if guards_pass(client, p):
-                    res["would_publish"] += 1
-                else:
-                    res["held"] += 1
-                    res["held_reasons"]["gate:not_inserted_blocked_or_rejected_request"] = res["held_reasons"].get("gate:not_inserted_blocked_or_rejected_request", 0) + 1
-                continue
-            client.batch(stmts)
-        except Gate as g:
-            hold(row["identity_key"], str(g))
-            continue
-        except Exception as e:   # the batch is atomic: nothing of this site was written; the row stays 'approved' and is retried later
-            if "NOT NULL" in str(e) and "site_media_jobs" in str(e):   # the no-category fail-safe fired (a category vanished between check and batch)
-                try:
-                    hold(row["identity_key"], "gate:no_category")
-                    continue
-                except Exception as e2:
-                    e = e2
-            failed(row["identity_key"], e)
-            continue
-        problems = verify(client, p)
-        if problems:
-            st = client.query("SELECT state FROM url_progress WHERE identity_key=?", [p["identity_key"]])
-            state = st[0]["state"] if st else None
-            if not client.query("SELECT 1 FROM sites WHERE id=?", [p["id"]]):
-                if state == "approved":
-                    hold(p["identity_key"], "gate:not_inserted_blocked_or_rejected_request")   # skipped by a SQL guard (blocked host / request)
-                    continue
-                if state == "published":   # another writer listed the same URL between the check and the batch: the guard skipped our insert
+    try:
+        for row in rows:
+            if heartbeat:
+                heartbeat()   # raises when the runner lost its lease: stop before the next site's batch
+            try:
+                p = plan(dict(row))
+                have_cats = {r["id"] for r in client.query(f"SELECT id FROM categories WHERE id IN ({','.join('?' * len(p['cats']))})", p["cats"])}
+                p["cats"] = [c for c in p["cats"] if c in have_cats]
+                if not p["cats"]:
+                    raise Gate("gate:no_category")   # in categories.csv but not in this D1: never publish a site without a category
+                stmts = publish_statements(p)
+                if max(len(s[1]) for s in stmts) > MAX_PARAMS:
+                    raise Gate("gate:too_many_params")
+                if existing_site(client, p):
                     res["already_listed"] += 1
+                    if apply:
+                        client.batch(media_and_state(p, new_site=False))   # the existing sites row is never altered (adult_content only NULL -> 0/1)
                     continue
-            res["verify_problems"][p["id"]] = problems
+                if not apply:
+                    if guards_pass(client, p):
+                        res["would_publish"] += 1
+                    else:
+                        res["held"] += 1
+                        res["held_reasons"]["gate:not_inserted_blocked_or_rejected_request"] = res["held_reasons"].get("gate:not_inserted_blocked_or_rejected_request", 0) + 1
+                    continue
+                client.batch(stmts)
+            except Gate as g:
+                hold(row["identity_key"], str(g))
+                continue
+            except Exception as e:   # the batch is atomic: nothing of this site was written; the row stays 'approved' and is retried later
+                if "NOT NULL" in str(e) and "site_media_jobs" in str(e):   # the no-category fail-safe fired (a category vanished between check and batch)
+                    try:
+                        hold(row["identity_key"], "gate:no_category")
+                        continue
+                    except Exception as e2:
+                        e = e2
+                failed(row["identity_key"], e)
+                continue
+            problems = verify(client, p)
+            if problems:
+                st = client.query("SELECT state FROM url_progress WHERE identity_key=?", [p["identity_key"]])
+                state = st[0]["state"] if st else None
+                if not client.query("SELECT 1 FROM sites WHERE id=?", [p["id"]]):
+                    if state == "approved":
+                        hold(p["identity_key"], "gate:not_inserted_blocked_or_rejected_request")   # skipped by a SQL guard (blocked host / request)
+                        continue
+                    if state == "published":   # another writer listed the same URL between the check and the batch: the guard skipped our insert
+                        res["already_listed"] += 1
+                        continue
+                res["verify_problems"][p["id"]] = problems
+                touched.append(p["id"])
+                log(f"verify {p['id']}: {problems}; stopping (this stage writes public data)")
+                res["stopped"] = True
+                break
+            res["published"] += 1
+            res["ids"].append(p["id"])
             touched.append(p["id"])
-            log(f"verify {p['id']}: {problems}; stopping (this stage writes public data)")
-            res["stopped"] = True
-            break
-        res["published"] += 1
-        res["ids"].append(p["id"])
-        touched.append(p["id"])
-    if apply and touched:
-        res["integrity"] = post_check(client, touched)
-        for n, r in res["integrity"].items():
-            log(f"integrity {n}: {r[:3]}")
-    log("publish_stage: " + json.dumps({k: v for k, v in res.items() if k != "ids"}, ensure_ascii=False))
+    except BaseException as e:
+        e.result = res   # the caller sees what was done (integrity is filled in by the finally below: same dict)
+        raise
+    finally:
+        # an exception from a hold batch / verify must not skip the integrity check of what was already published
+        if apply and touched:
+            try:
+                res["integrity"] = post_check(client, touched)
+            except Exception as e:
+                res["integrity"] = {"post_check_failed": [(type(e).__name__, str(e)[:200])]}
+            for n, r in res["integrity"].items():
+                log(f"integrity {n}: {r[:3]}")
+        log("publish_stage: " + json.dumps({k: v for k, v in res.items() if k != "ids"}, ensure_ascii=False))
     return res

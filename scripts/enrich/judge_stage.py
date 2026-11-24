@@ -402,7 +402,8 @@ def states_of(client, keys):
 
 
 # ------------------------------------------------------------------ run
-def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1):
+def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True):
+    """llm_enabled=False: never calls the LLM (no key needed); only the deterministic moves of rows that already carry a review_state are done."""
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
              "moved_without_llm": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
              "stopped": None, "dry_run": not apply}
@@ -416,13 +417,17 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
     stats["selected"] = len(rows)
     ledger = Ledger(client, judge.new_run_id(), budget_month)
     todo = [r for r in rows if not r.get("review_state")]
+    if not llm_enabled:
+        stats["llm_disabled"] = True
+        if apply:
+            todo = []
     if not apply:
         stats["would_call_llm_for"] = len(todo)
         stats["would_move_without_llm"] = len(rows) - len(todo)
         stats["month_spent_usd"] = round(ledger.month_total(), 6)
         log(f"judge dry-run: {stats}")
         return stats
-    if llm is None:
+    if llm is None and llm_enabled:
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY is not set (the value is never printed)")
         llm = default_llm
@@ -449,8 +454,22 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             log(f"judge: move of {r['identity_key']} failed ({type(e).__name__})")
             count("write_failed")
 
+    def beat():
+        """-> True to go on. heartbeat() raising (lease lost) stops the run; the error is re-raised at the end."""
+        if heartbeat is None:
+            return True
+        try:
+            heartbeat()
+            return True
+        except Exception as e:  # noqa: BLE001
+            ctx.stop = ctx.stop or "heartbeat"
+            fatal.append(e)
+            return False
+
     def do_chunk(chunk):
         if ctx.stop or ctx.consecutive_failures >= 3:
+            return
+        if not beat():
             return
         claimed = []
         try:
@@ -490,6 +509,12 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
                 ctx.consecutive_failures = 0
             elif any(k != "stopped" for k, _ in kinds):
                 ctx.consecutive_failures += 1
+        if not beat():
+            # lease lost: the cost is already settled, so keep the result with the claim-guarded writes (a row somebody else moved is not
+            # touched), then give the rest of the claim back (best effort) so a stale 'reviewing' does not block the next start
+            best_effort(stmts)
+            best_effort([s for r in chunk for s in unclaim_statements(r)])
+            return
         try:
             write(client, stmts)
         except Exception as e:  # noqa: BLE001 - the cost is already settled; count the attempt, rows stay 'fetched'

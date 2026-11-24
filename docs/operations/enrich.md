@@ -81,9 +81,42 @@ Message Batches（半額）は未対応。同期呼び出し、`concurrency` は
 - 読み戻し検証に失敗したら、その id も事後検査の対象に入れ、**そこでループを止める**（`stopped=true`）。
 - 各サイトを読み戻して検証し（行・カテゴリ・タグ・media jobs・成人除外・state）、最後に触った id だけ `scripts/llm/integrity.py` と同じ意味の検査（uncategorized・orphan・ancestor_duplicate・empty_text・duplicate_url・カテゴリ別件数 all/国/区・scope_counts）をかける。違反は結果の `integrity` に返る。
 
-ランナー側に必要なもの（旧 `nightly.py` の `prod` 段 586-636 行の等価物。この段には入っていない）: 投入前の本番整合チェック、Time Travel の bookmark の取得と記録、1 夜の追加数の異常ガード、投入後の整合チェック。
+ランナー側に必要なもの（旧 `nightly.py` の `prod` 段の等価物）は `scripts/enrich_online.py` が持つ（下の「ランナー」）。
 
 判定段との接続: 判定段は `approved`（`review_state='approved'`）を `url_progress.state='approved'` に、人が見る行を `review_state='pending'` + `state='candidate'` にする。掲載段のゲート落ちも同じ形（`state='candidate'` + `review_state='pending'` + `review_reason='gate:...'`）で戻すので、人の審査待ちと同じ扱いになる。判定段が選ぶのは `fetched` と判定のない古い `reviewing` だけなので、`candidate` に戻した行が再判定されることはない。
 
-置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`。
+置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`、旧 `export_sql.py`（非 published の `url_progress.state` を上書きし `reviewing` を作る。最初の `--apply` の前に停止する）。
 テスト: `tests/test_enrich_publish_stage.py`（実 migration を適用した in-memory SQLite）。
+
+## ランナー（`scripts/enrich_online.py`）
+
+取得 → 判定 → 掲載を 1 回の実行で回す。ローカルに状態・ログ・チェックポイントを持たない（標準出力のみ）。続きの位置は `url_progress` の状態そのもので、どの収集機から再実行しても続きから進む。排他は D1 `discovery_cursors` のリース（`source='lease'`, `cursor_key='enrich'`。URL 発見ランナーの `discover` とは別キー）。
+
+```
+uv run python scripts/enrich_online.py                                  # dry-run（既定。各段の対象件数だけ。1 回のみ）
+uv run python scripts/enrich_online.py --apply --rounds 0               # 残りが無くなるか停止条件まで
+uv run python scripts/enrich_online.py --apply --stages fetch,judge --limit 30 --max-seconds 3000
+```
+
+主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--publish-limit`（既定 60 / 30 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--judge-concurrency`（1〜4）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
+
+終了コード: `0` 正常（残り無し・予算上限・`--max-seconds`・`--rounds`・日次の掲載上限）/ `1` 検証不一致・整合チェック違反・異常ガード・前提チェック不合格・判定段の停止・判定の費用ガード / `2` リースが取れない・引数不正 / `3` レート制限（429）/ `4` 実行中にリースを失った / `5` 費用台帳を確定できない（人の対応が必要）。**スケジューラは 5 で再試行しない**（再実行のたびに課金して `reserve` 行が増える。「残った reserve 行の解消」を人が済ませてから再開）。
+
+開始時（`--apply`）: 状態別件数・`sites` 件数・当月の LLM 費用・`url_progress.state='approved'` なのに `review_state` が `approved` でない行の件数（掲載段は選ばない）を表示し、Time Travel の bookmark を取得して表示する（取れなければ警告して続行）。判定段を含む実行のときは、「実行と排他」の前提（`reviewing` かつ `review_state` 空）が 30 分より古く残っていれば開始しない（exit 1。ids を表示）。判定段自身が作る `reviewing` も `review_state` は空だが `updated_at` が新しいので 30 分以内の行は数えない。判定段が中断・停止する経路は claim を戻すので、通常の中断後に古い claim は残らない。プロセスが強制終了されて残った claim は旧データと区別できない（判定段は 30 分超の `reviewing` をどれも再 claim するため）。ids を確認し、判定段自身の跡と分かったものだけ次の SQL で戻す: `UPDATE url_progress SET state='fetched', updated_at=datetime('now') WHERE state='reviewing' AND identity_key IN (...) AND identity_key IN (SELECT identity_key FROM url_candidates WHERE review_state IS NULL OR review_state='')`（旧データなら戻さず、先に中身を確認する）。**最初の `--apply` の前に一度だけ**、運用者が上の SQL で件数を数える（0 であること）。**旧 `export_sql.py` は非 published の `url_progress.state` をローカル frontier で上書きし `reviewing` を作る**ので、最初の `--apply` の前に停止しておく（置き換え対象。止めないと状態を巻き戻す）。
+
+各回: 取得 → 判定 → 掲載の順に、段ごとにリースを更新してから実行し、段の件数を表にして出す。掲載後は掲載段の `post_check`（整合チェック）の結果を見る。
+
+停止条件:
+- 全段で対象が 0 件 / 動かせる段が無い（判定段は予算上限で外れる）/ `--rounds` / `--max-seconds` / 日次の掲載上限（`MAX_PUBLISH_PER_DAY`=1000。D1 の直近 24 時間に作られた `sites` から数える）→ exit 0
+- 1 回動かして `url_progress` の件数が 1 件も変わらない（対象はあるが進まない）→ `WARNING` 行を出して exit 0
+- 掲載の保護（異常ガード。定数は `enrich_online.py` 冒頭）→ exit 1: バッチ失敗が 5 件以上または選択の 50% 超（選択 4 件以上）／ゲート保留が選択の 50% 超（選択 10 件以上）／読み戻し検証の不一致・整合チェック違反（違反の種類と行、その回に掲載した id を表示。bookmark で復元を検討。掲載が例外で途中終了しても整合結果は表示する）
+- 判定段の費用ガード: 直近 6 時間（`JUDGE_GUARD_HOURS`、D1 時刻の `judged_at`）の判定が 100 件（`JUDGE_GUARD_WINDOW`）以上あり `approved` が 0 件なら、LLM を呼ばない（判定段は `llm_enabled=False` で動き、`review_state` を持つ行の LLM を使わない移動だけ行う。取得・掲載は止めない）。最後に exit 1。**回復**: 判定の内容（`url_candidates` の最近の `review_reason`）を確認して原因を直し、6 時間待つと窓が空になり自然に再開する（窓は広げない）
+- 費用台帳を確定できない（`LedgerSettleError`）→ 予約は残したまま exit 5。開始時にも、6 時間より古い `llm_ledger` の `reserve` 行が残っていれば開始せず exit 5（解消するまで再開しない）
+- レート制限 → exit 3（判定段が止まった理由に 429 / rate limit を含むときも exit 3。HTTP ステータス 429 を例外から取れればそれ、無ければ文言 `HTTP 429` / `API 429` / `rate limit`）、リース喪失 → exit 4
+- リースは段の境目に更新し、段の内部（取得は claim ごと、判定は chunk ごと・書き込み前、掲載はサイトごと）でも 2 分ごとに更新する。失っていれば次の書き込みの前に中断する（各段の `run(..., heartbeat=None)`）。D1 の一時エラーでの更新失敗は次の拍で再試行し、3 回連続で失敗したときだけリース喪失（exit 4）扱い。判定段が中断したときは、課金済みの結果を claim 条件つきで書いてから、残りの claim を `fetched` に戻す（古い `reviewing` を残さない）
+
+終了時は `url_progress` の状態別件数（`discovered … published`）と開始時からの差を表示する。リースは終了時に必ず解放する（異常終了時は期限 30 分で切れる）。
+
+別の収集機で再開する: 同じコマンドをそのまま実行する。リースが残っていれば exit 2（期限切れまで待つか、動いている実行を終わらせる）。定期実行の差し替え（スケジューラのタスク定義）は運用者が行い、実行コマンドを上のものに置き換える。旧 `nightly.py` の `sql`/`gate`/`prod` 段と `export_approved_sql.py` はこのランナーに置き換わる。
+
+テスト: `tests/test_enrich_runner.py`（偽 D1・偽取得・偽 LLM）。

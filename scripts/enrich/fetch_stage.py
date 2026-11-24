@@ -263,7 +263,7 @@ def write_results(client, results, stamp, stats, log):
                 log(f'verify failed: {k} expected {st}/{attempts} got {dict(b) if b else None}')
 
 
-def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS):
+def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS, heartbeat=None):
     """取得段の 1 回分。戻り: 件数の dict。apply=False は選択のみ(claim も書き込みもしない)。
     CLAIM_ROWS 行ずつ claim -> 取得 -> 書き込みまで進める(claim は書き込み直前まで新しい。claim を失った行は書かない)。"""
     fetch = fetch or fetch_one
@@ -274,6 +274,8 @@ def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WOR
         log(f'dry-run: {len(rows)} 件が対象(claim・書き込みなし)')
         return dict(stats)
     for group in chunks(rows, CLAIM_ROWS):
+        if heartbeat:
+            heartbeat()   # raises when the runner lost its lease: stop before the next claim
         mine = claim(client, group, now())
         stats['claimed'] += len(mine)
         if mine:
