@@ -140,4 +140,4 @@ URL 正規化はスキームとホストの小文字化など安全な範囲に�
 
 ## url_candidates（非公開、0036）
 
-rog のローカル frontier / llm_judgement を D1 へ移すための表。`identity_key`（`url_progress` と同じ）で 1 URL 1 行。frontier 由来の `adult` / `site_kind` は `fetch_adult` / `fetch_site_kind`。**公開 API・SSR は一切 SELECT しない**（`text_head`・`spam_reason`・`site_kind_reason`・`notes`・`review_reason`・`long_description_evidence` などの内部情報を含む）。公開に出す進捗は `url_progress` だけ。`tests/url-candidates-migration.test.mjs` が `src/` からの参照を検査する。
+rog のローカル frontier / llm_judgement を D1 へ移すための表。`identity_key`（`url_progress` と同じ）で 1 URL 1 行。rog の frontier.key（小文字ホストから先頭の www. を除いたもの。llm_judgement の結合キー）は `frontier_key` に保存。型は rog の `schema.sql` に揃える（adult は yes/no/unknown の文字列）。frontier 由来の `adult` / `site_kind` は `fetch_adult` / `fetch_site_kind`。**公開 API・SSR は一切 SELECT しない**（`text_head`・`spam_reason`・`site_kind_reason`・`notes`・`review_reason`・`long_description_evidence` などの内部情報を含む）。公開に出す進捗は `url_progress` だけ。`tests/url-candidates-migration.test.mjs` が `src/` からの参照を検査する。
