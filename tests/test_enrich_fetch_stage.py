@@ -1,4 +1,5 @@
 """取得段(scripts/enrich/fetch_stage.py)。D1 は実マイグレーションから作った in-memory SQLite、取得は偽関数。ネットワーク・本番には出ない。"""
+import collections
 import datetime
 import os
 import re
@@ -26,6 +27,7 @@ class FakeD1:
         self.db.executescript(CAND_DDL)
         self.max_params = 0
         self.writes = 0
+        self.max_batch = 0
 
     def query(self, sql, params=()):
         params = list(params)
@@ -39,6 +41,7 @@ class FakeD1:
         return rows
 
     def batch(self, stmts):
+        self.max_batch = max(self.max_batch, len(stmts))
         return [self.query(s, p) for s, p in stmts]
 
     def add(self, url, state='discovered', updated='2026-11-24 00:00:00'):
@@ -64,8 +67,8 @@ def ok(**kw):
     return {'error': None, 'status': 200, 'robots_status': 'allowed', 'final_url': 'https://x/', 'feat': {**GOOD, **kw}}
 
 
-def err(code, detail='', status=None):
-    return {'error': code, 'error_detail': detail, 'status': status, 'robots_status': None, 'final_url': None, 'feat': None}
+def err(code, detail='', status=None, dns_own=None):
+    return {'error': code, 'error_detail': detail, 'status': status, 'robots_status': None, 'final_url': None, 'feat': None, 'dns_own': dns_own}
 
 
 def fake(table):
@@ -99,13 +102,14 @@ class FetchStage(unittest.TestCase):
     def test_terminal_states(self):
         d = FakeD1()
         cases = {'https://a-robots.jp/': (err('robots_disallowed'), 'blocked', 'robots'),
-                 'https://b-nx.jp/': (err('dns', '[Errno -2] Name or service not known'), 'failed', 'dns_nxdomain'),
+                 'https://b-nx.jp/': (err('dns', 'x', dns_own='[Errno -2] Name or service not known'), 'failed', 'dns_nxdomain'),
                  'https://c-404.jp/': ({**ok(), 'status': 404, 'feat': None}, 'failed', 'http_404'),
                  'https://d-410.jp/': ({**ok(), 'status': 410, 'feat': None}, 'failed', 'http_410'),
                  'https://e-pdf.jp/': (err('not_html'), 'failed', 'not_html'),
                  'https://f-off.jp/': (err('redirect_offsite'), 'rejected', 'redirect_offsite'),
                  'https://g-park.jp/': (ok(flags='{"parking": "domain for sale", "noindex": false}'), 'rejected', 'parking_or_default_page'),
                  'https://h-noidx.jp/': (ok(flags='{"noindex": true}'), 'rejected', 'noindex')}
+        cases['https://i-403.jp/'] = ({**ok(), 'status': 403, 'feat': None}, 'blocked', 'http_403')
         keys = {u: d.add(u) for u in cases}
         go(d, {u: v[0] for u, v in cases.items()})
         for u, (_, st, reason) in cases.items():
@@ -122,7 +126,7 @@ class FetchStage(unittest.TestCase):
         d = FakeD1(); k = d.add('https://www.city.kanazawa.ishikawa.jp/')
         called = []
         s = fs.run(d, limit=10, apply=True, log=lambda *_: None, fetch=lambda u: called.append(u), now=lambda: T0)
-        self.assertEqual(d.state(k), 'rejected'); self.assertEqual(called, []); self.assertEqual(d.cand(k)['reject_reason'], 'government')
+        self.assertEqual(d.state(k), 'rejected'); self.assertEqual(called, []); self.assertEqual(d.cand(k)['reject_reason'], fs.PUBLIC_BODY_REASON)
 
     def test_transient_backoff_and_cap(self):
         d = FakeD1(); u = 'https://slow-site.jp/'; k = d.add(u)
@@ -178,7 +182,7 @@ class FetchStage(unittest.TestCase):
         for i in range(130):
             u = f'https://bulk{i:03d}-ex.jp/'; d.add(u); table[u] = ok()
         s = go(d, table, limit=500)
-        self.assertEqual(s['fetched'], 130); self.assertLessEqual(d.max_params, 100)
+        self.assertEqual(s['fetched'], 130); self.assertLessEqual(d.max_params, 100); self.assertLessEqual(d.max_batch, fs.BATCH_STATEMENTS)
 
     def test_dry_run_writes_nothing(self):
         d = FakeD1(); k = d.add('https://dry-site.jp/')
@@ -201,6 +205,57 @@ class FetchStage(unittest.TestCase):
         d.db.execute("UPDATE url_candidates SET spam_verdict='ok', categories='x' WHERE identity_key=?", (k,)); d.db.execute("UPDATE url_progress SET state='discovered' WHERE identity_key=?", (k,)); d.db.commit()
         go(d, {u: ok(title='新題')})
         c = d.cand(k); self.assertEqual((c['spam_verdict'], c['categories'], c['title'], c['fetch_attempts']), ('ok', 'x', '新題', 2))
+
+    def test_shared_service_and_isp_sites_are_fetched(self):
+        d = FakeD1()
+        urls = ['https://user.hatenablog.com/', 'https://someone.github.io/', 'https://isp-example.ne.jp/~user/', 'https://0762231234.jp/',
+                'https://abcdefghijklmnopqrstuvwxyz-0123456789.jp/']
+        keys = [d.add(u) for u in urls]
+        s = go(d, {u: ok() for u in urls})
+        self.assertEqual(s['fetched'], len(urls))
+        for k in keys: self.assertEqual(d.state(k), 'fetched')
+
+    def test_platform_page_rejected_without_fetch(self):
+        d = FakeD1(); called = []
+        from hostnames import blocklist
+        host = blocklist('platform_pages.txt')['host'][0]
+        k = d.add(f'https://{host}/some/user/page')
+        fs.run(d, limit=5, apply=True, log=lambda *_: None, fetch=lambda u: called.append(u), now=lambda: T0)
+        self.assertEqual((d.state(k), called, d.cand(k)['reject_reason']), ('rejected', [], 'platform_page'))
+        self.assertIsNone(d.cand(k)['last_fetched_at'])
+
+    def test_dns_failure_of_other_host_is_transient(self):
+        d = FakeD1(); k = d.add('https://apex-ok.jp/')
+        go(d, {'https://apex-ok.jp/': err('dns', '[Errno -2] Name or service not known', dns_own=None)})
+        self.assertEqual(d.state(k), 'discovered')
+
+    def test_classify_exception_does_not_strand_rows(self):
+        d = FakeD1(); ka = d.add('https://aa-bad.jp/'); kb = d.add('https://bb-good.jp/')
+        bad = ok(); bad['feat'] = {'flags': '{not json'}   # classify 内で例外
+        s = go(d, {'https://aa-bad.jp/': bad, 'https://bb-good.jp/': ok()})
+        self.assertEqual((d.state(ka), d.state(kb)), ('discovered', 'fetched'))
+        self.assertEqual(s['claimed'], 2)
+
+    def test_transient_and_pre_reject_keep_existing_features(self):
+        d = FakeD1(); u = 'https://keep-feat.jp/'; k = d.add(u)
+        go(d, {u: ok()})
+        d.db.execute("UPDATE url_progress SET state='discovered' WHERE identity_key=?", (k,)); d.db.commit()
+        go(d, {u: err('connect', 'timeout')})
+        c = d.cand(k); self.assertEqual((c['title'], c['flags'] is not None, c['state'], c['fetch_attempts']), ('たろうの部屋', True, 'discovered', 2))
+        d2 = FakeD1(); k2 = d2.add('https://www.city.kanazawa.ishikawa.jp/')
+        d2.db.execute("INSERT INTO url_candidates(identity_key,title,last_fetched_at) VALUES(?,?,?)", (k2, 'old', 'old-at')); d2.db.commit()
+        go(d2, {})
+        c2 = d2.cand(k2); self.assertEqual((c2['title'], c2['last_fetched_at'], c2['state']), ('old', 'old-at', 'rejected'))
+
+    def test_lost_claim_writes_nothing(self):
+        d = FakeD1(); u = 'https://lost-claim.jp/'; k = d.add(u)
+        row = fs.select_rows(d, 5, T0)[0]
+        mine = fs.claim(d, [row], T0)
+        # 別の run が stale として取り直した状態を作る
+        d.db.execute("UPDATE url_progress SET updated_at='2026-11-24 13:00:00' WHERE identity_key=?", (k,)); d.db.commit()
+        stats = collections.Counter()
+        fs.write_results(d, fs.process_chunk(mine, fake({u: ok()}), 1), T0, stats, lambda *_: None)
+        self.assertIsNone(d.cand(k)); self.assertEqual(d.state(k), 'queued')
 
 
 if __name__ == '__main__':

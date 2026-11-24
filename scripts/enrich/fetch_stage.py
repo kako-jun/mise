@@ -11,7 +11,6 @@ fetcher / features / hostnames をそのまま使う(SSRF 対策・robots 遵守
 import collections
 import concurrent.futures
 import datetime
-import json
 import secrets
 import sys
 import urllib.parse
@@ -29,18 +28,16 @@ MAX_ATTEMPTS = 5          # 一時エラーでこの回数失敗したら failed
 BACKOFF_HOURS = 1         # 一時エラー後の待ち: 1h * 2^(試行-1)
 HOST_INTERVAL = 2.0       # 同一ホストへのリクエスト間隔の下限(秒)
 WORKERS = 4
-CHUNK = 50                # 1 バッチあたりの行数(1 文 100 パラメータ以下)
+BATCH_STATEMENTS = 5      # client.batch 1 回の文の数(discover_online と同じ)
+CLAIM_ROWS = 5            # 1 回に claim・取得・書き込みする行数(長い run でも claim が古びない)
+WRITE_ROWS = 2            # 1 行 = 2 文(upsert + 状態更新)
+PUBLIC_BODY_REASON = 'public_body_other_pipeline'   # 公的機関は別パイプライン(public-bodies)で扱う
 TEXT_HEAD_MAX = 300       # features.extract の text_head 上限
 
 PERMANENT_ERRORS = {'not_html'}                       # failed(恒久)
 REJECT_ERRORS = {'redirect_offsite', 'ssrf_blocked', 'bad_port', 'bad_url'}   # rejected(取得対象外)
 FMT = '%Y-%m-%d %H:%M:%S'
 
-CAND_COLS = ['host', 'url', 'state', 'next_fetch_at', 'priority', 'fetch_attempts', 'last_fetched_at', 'last_http_status',
-             'last_error', 'reject_reason', 'robots_status', 'final_url', 'title', 'description', 'lang', 'kana_count',
-             'text_len', 'ad_hits', 'ext_refs', 'flags', 'text_head', 'personal_score', 'fetch_adult', 'fetch_site_kind',
-             'freshness_signal_at', 'freshness_source', 'frontier_key']
-CAND_INSERT_ONLY = ['source', 'discovered_at', 'depth']   # 競合時は更新しない(初回の出自を保つ)
 
 
 def _utcnow():
@@ -73,6 +70,11 @@ def fetch_one(url):
             out['feat'] = feat
         else:
             out['error'] = 'not_html'
+    if out['error'] == 'dns':   # fetch_site は www/apex の最後のエラーだけ残すので、この行自身のホスト名が引けるかを確かめ直す
+        try:
+            fetcher.check_public_host(host)
+        except fetcher.FetchError as e:
+            out['dns_own'] = e.detail if e.code == 'dns' else None
     return out
 
 
@@ -86,7 +88,7 @@ def classify(out, host):
     if err in PERMANENT_ERRORS:
         return 'failed', err, False
     if err == 'dns':
-        if dns_is_permanent(out.get('error_detail')):
+        if dns_is_permanent(out.get('dns_own')):   # この行自身のホスト名が引けないときだけ恒久
             return 'failed', 'dns_nxdomain', False
         return 'discovered', 'dns', True
     if err:   # connect(タイムアウト含む) / protocol / robots_unavailable / too_many_redirects / exception:*
@@ -98,6 +100,8 @@ def classify(out, host):
         return 'failed', f'http_{status}', False
     if status == 429 or status >= 500:
         return 'discovered', f'http_{status}', True
+    if status == 403:
+        return 'blocked', 'http_403', False
     if status != 200:
         return 'rejected', f'http_{status}', False
     feat = out.get('feat')
@@ -112,42 +116,49 @@ def classify(out, host):
 
 
 def pre_reject(host, url):
-    """取得前の決定論フィルタ(scripts/pipeline の triage と同じ規則)。"""
+    """取得前に rejected にしてよいのは、無効なホスト・公的機関(別パイプライン)・サービスのトップ/サービス内ページだけ。
+    共有サービス上の自作サイト(shared_service_user)や名前の形(spam_like_name)では落とさず、他のサイトと同じように取得する。"""
     reason = prefilter(host, jp_only=False)
-    return reason or platform_page(url)
+    if reason == 'government':
+        return PUBLIC_BODY_REASON
+    if reason == 'invalid_host':
+        return reason
+    return platform_page(url)
+
+
+FEATURE_COLS = ['title', 'description', 'lang', 'kana_count', 'text_len', 'ad_hits', 'ext_refs', 'flags', 'text_head',
+                'personal_score', 'fetch_adult', 'fetch_site_kind', 'freshness_signal_at', 'freshness_source']
 
 
 def candidate_params(row, host, out, state, reason, attempts, next_fetch_at, now):
-    feat = out.get('feat') or {}
-    adult = site_kind = None
-    text_head, desc = feat.get('text_head'), feat.get('description')
+    """url_candidates へ書く列。特徴列は抽出できたときだけ、取得系の列は実際に取得したときだけ含める(含めない列は上書きされない)。"""
+    vals = {'host': host, 'url': row['url'], 'state': state, 'priority': priority(host), 'frontier_key': host_key(host),
+            'reject_reason': reason if state in ('rejected', 'failed', 'blocked') else None}
+    if out.get('pre'):
+        return vals
+    vals.update({'next_fetch_at': next_fetch_at, 'fetch_attempts': attempts, 'last_fetched_at': now, 'last_http_status': out.get('status'),
+                 'last_error': reason if state in ('discovered', 'failed') else None,
+                 'robots_status': out.get('robots_status'), 'final_url': out.get('final_url')})
+    feat = out.get('feat')
     if feat:
-        view = {'flags': feat['flags'], 'host': host}
-        adult = features.adult_attr(view)
-        site_kind = features.site_kind(host, feat.get('title'), feat.get('description'))
+        text_head, desc = feat.get('text_head'), feat.get('description')
+        adult = features.adult_attr({'flags': feat['flags'], 'host': host})
         if adult == 'yes':   # 成人向けは本文冒頭と description を保存しない(title と属性だけ)。拒否はしない
             text_head = desc = None
-    vals = {
-        'host': host, 'url': row['url'], 'state': state, 'next_fetch_at': next_fetch_at, 'priority': priority(host),
-        'fetch_attempts': attempts, 'last_fetched_at': now, 'last_http_status': out.get('status'),
-        'last_error': reason if state in ('discovered', 'failed') else None,
-        'reject_reason': reason if state in ('rejected', 'failed', 'blocked') else None,
-        'robots_status': out.get('robots_status'), 'final_url': out.get('final_url'),
-        'title': feat.get('title'), 'description': desc, 'lang': feat.get('lang'), 'kana_count': feat.get('kana_count'),
-        'text_len': feat.get('text_len'), 'ad_hits': feat.get('ad_hits'), 'ext_refs': feat.get('ext_refs'), 'flags': feat.get('flags'),
-        'text_head': text_head[:TEXT_HEAD_MAX] if text_head else None, 'personal_score': feat.get('personal_score'),
-        'fetch_adult': adult, 'fetch_site_kind': site_kind, 'freshness_signal_at': feat.get('freshness_signal_at'),
-        'freshness_source': feat.get('freshness_source'), 'frontier_key': host_key(host),
-    }
+        vals.update({k: feat.get(k) for k in FEATURE_COLS if k in feat}, description=desc,
+                    text_head=text_head[:TEXT_HEAD_MAX] if text_head else None, fetch_adult=adult,
+                    fetch_site_kind=features.site_kind(host, feat.get('title'), feat.get('description')))
     return vals
 
 
-def upsert_sql(vals, row):
+def upsert_sql(vals, row, claimed_at):
+    """claim を持っている間だけ書く(claim を失った run は何も書かない)。競合時は vals の列だけ更新する。"""
     ins = {'identity_key': row['identity_key'], 'source': row['source'], 'discovered_at': row['discovered_at'], 'depth': 0, **vals}
     cols = list(ins)
-    sql = (f"INSERT INTO url_candidates({','.join(cols)},updated_at) VALUES({','.join('?' * len(cols))},datetime('now')) "
-           f"ON CONFLICT(identity_key) DO UPDATE SET {','.join(f'{c}=excluded.{c}' for c in CAND_COLS)},updated_at=datetime('now')")
-    return sql, [ins[c] for c in cols]
+    sql = (f"INSERT INTO url_candidates({','.join(cols)},updated_at) SELECT {','.join('?' * len(cols))},datetime('now') "
+           f"WHERE EXISTS(SELECT 1 FROM url_progress WHERE identity_key=? AND state='queued' AND updated_at=?) "
+           f"ON CONFLICT(identity_key) DO UPDATE SET {','.join(f'{c}=excluded.{c}' for c in vals)},updated_at=datetime('now')")
+    return sql, [ins[c] for c in cols] + [row['identity_key'], claimed_at]
 
 
 def chunks(items, n):
@@ -156,21 +167,16 @@ def chunks(items, n):
 
 
 def claim(client, rows, now):
-    """discovered(または 30 分超の queued)を queued にする。updated_at の比較交換で、2 台が同じ行を取らない。"""
-    token_tail = secrets.token_hex(4)
+    """discovered(または 30 分超の queued)を queued にする。state と updated_at の比較交換で、2 台が同じ行を取らない。
+    勝ったかどうかは RETURNING で判定する。row['claimed_at'] が書き込み時のガードになる。"""
     mine = []
-    for batch in chunks(rows, CHUNK):
-        stmts = []
-        for i, r in enumerate(batch):
-            r['token'] = f"{now.strftime(FMT)}.{token_tail}"
-            stmts.append(("UPDATE url_progress SET state='queued', updated_at=? WHERE identity_key=? AND state=? AND updated_at=?",
-                          [r['token'], r['identity_key'], r['state'], r['updated_at']]))
-        client.batch(stmts)
-        keys = [r['identity_key'] for r in batch]
-        got = {x['identity_key'] for x in client.query(
-            f"SELECT identity_key FROM url_progress WHERE state='queued' AND updated_at LIKE ? AND identity_key IN ({','.join('?' * len(keys))})",
-            [f'%.{token_tail}', *keys])}
-        mine += [r for r in batch if r['identity_key'] in got]
+    stamp = now.strftime(FMT)
+    for r in rows:
+        got = client.query("UPDATE url_progress SET state='queued', updated_at=? WHERE identity_key=? AND state=? AND updated_at=? RETURNING identity_key",
+                           [stamp, r['identity_key'], r['state'], r['updated_at']])
+        if got:
+            r['claimed_at'] = stamp
+            mine.append(r)
     return mine
 
 
@@ -183,47 +189,42 @@ def select_rows(client, limit, now):
         "ORDER BY p.identity_key LIMIT ?", [now.strftime(FMT), cutoff, int(limit)])
 
 
-def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS):
-    """取得段の 1 回分。戻り: 件数の dict。apply=False は選択のみ(claim も書き込みもしない)。"""
-    fetch = fetch or fetch_one
-    fetcher.HOST_WAIT = max(fetcher.HOST_WAIT, HOST_INTERVAL)
-    t = now()
-    rows = select_rows(client, limit, t)
-    stats = collections.Counter(selected=len(rows))
-    if not apply:
-        log(f'dry-run: {len(rows)} 件が対象(claim・書き込みなし)')
-        return dict(stats)
-    rows = claim(client, rows, t)
-    stats['claimed'] = len(rows)
-    final = []
-    by_host = collections.defaultdict(list)
+def _transient(e):
+    return {'error': f'exception:{type(e).__name__}', 'status': None, 'robots_status': None, 'final_url': None, 'feat': None}
+
+
+def process_chunk(rows, fetch, workers):
+    """取得(ネットワークのみ)。同一ホストは順番に。戻り: [(row, host, out, state, reason)]。行ごとの例外は一時エラー。"""
+    done, by_host = [], collections.defaultdict(list)
     for r in rows:
         host = host_of(r['url'])
         reason = pre_reject(host, r['url']) if host else 'invalid_host'
         if reason:
-            final.append((r, host, {'pre': True, 'status': None, 'robots_status': None, 'final_url': None, 'feat': None}, 'rejected', reason))
+            done.append((r, host, {'pre': True, 'status': None, 'robots_status': None, 'final_url': None, 'feat': None}, 'rejected', reason))
         else:
             by_host[host].append(r)
 
+    def one(r, host):
+        try:
+            out = fetch(r['url'])
+            st, reason, _ = classify(out, host)
+        except Exception as e:
+            out = _transient(e)
+            st, reason = 'discovered', out['error']
+        return r, host, out, st, reason
+
     def run_host(host, group):
-        outs = []
-        for r in group:
-            try:
-                out = fetch(r['url'])
-            except Exception as e:   # 想定外は一時エラー扱い(再試行回数で打ち止め)
-                out = {'error': f'exception:{type(e).__name__}', 'status': None, 'robots_status': None, 'final_url': None, 'feat': None}
-            outs.append((r, host, out))
-        return outs
+        return [one(r, host) for r in group]
 
     with concurrent.futures.ThreadPoolExecutor(max(1, workers)) as ex:
-        futs = [ex.submit(run_host, h, g) for h, g in by_host.items()]
-        for fut in concurrent.futures.as_completed(futs):
-            for r, host, out in fut.result():
-                st, reason, transient = classify(out, host)
-                final.append((r, host, out, st, reason))
-    for batch in chunks(final, CHUNK):
+        for fut in [ex.submit(run_host, h, g) for h, g in by_host.items()]:
+            done += fut.result()
+    return done
+
+
+def write_results(client, results, stamp, stats, log):
+    for batch in chunks(results, WRITE_ROWS):
         stmts, expect = [], {}
-        stamp = now()
         for r, host, out, st, reason in batch:
             attempts = int(r['fetch_attempts'] or 0)
             next_at = None
@@ -235,13 +236,21 @@ def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WOR
                     next_at = (stamp + datetime.timedelta(hours=BACKOFF_HOURS * 2 ** (attempts - 1))).strftime(FMT)
             elif not out.get('pre'):
                 attempts += 1
-            vals = candidate_params(r, host, out, st, reason, attempts, next_at, stamp.strftime(FMT))
-            sql, params = upsert_sql(vals, r)
-            stmts.append((sql, params))
+            try:
+                vals = candidate_params(r, host, out, st, reason, attempts, next_at, stamp.strftime(FMT))
+            except Exception as e:   # 特徴の組み立てに失敗しても行を宙に浮かせない
+                out = {**_transient(e)}
+                attempts = int(r['fetch_attempts'] or 0) + 1
+                st = 'failed' if attempts >= MAX_ATTEMPTS else 'discovered'
+                reason = out['error']
+                next_at = None if st == 'failed' else (stamp + datetime.timedelta(hours=BACKOFF_HOURS * 2 ** (attempts - 1))).strftime(FMT)
+                vals = candidate_params(r, host, out, st, reason, attempts, next_at, stamp.strftime(FMT))
+            stmts.append(upsert_sql(vals, r, r['claimed_at']))
             stmts.append(("UPDATE url_progress SET state=?, updated_at=? WHERE identity_key=? AND state='queued' AND updated_at=?",
-                          [st, stamp.strftime(FMT), r['identity_key'], r['token']]))
-            expect[r['identity_key']] = (st, attempts)
+                          [st, stamp.strftime(FMT), r['identity_key'], r['claimed_at']]))
+            expect[r['identity_key']] = (st, None if out.get('pre') else attempts)
             stats[st if st != 'discovered' else 'retry'] += 1
+        assert len(stmts) <= BATCH_STATEMENTS
         client.batch(stmts)
         keys = list(expect)
         back = {x['identity_key']: x for x in client.query(
@@ -249,8 +258,25 @@ def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WOR
             f"WHERE p.identity_key IN ({','.join('?' * len(keys))})", keys)}
         for k, (st, attempts) in expect.items():
             b = back.get(k)
-            if not b or b['state'] != st or b['cstate'] != st or b['fetch_attempts'] != attempts:
+            if not b or b['state'] != st or b['cstate'] != st or (attempts is not None and b['fetch_attempts'] != attempts):
                 stats['verify_failed'] += 1
                 log(f'verify failed: {k} expected {st}/{attempts} got {dict(b) if b else None}')
+
+
+def run(client, *, limit, apply, log=print, fetch=None, now=_utcnow, workers=WORKERS):
+    """取得段の 1 回分。戻り: 件数の dict。apply=False は選択のみ(claim も書き込みもしない)。
+    CLAIM_ROWS 行ずつ claim -> 取得 -> 書き込みまで進める(claim は書き込み直前まで新しい。claim を失った行は書かない)。"""
+    fetch = fetch or fetch_one
+    fetcher.HOST_WAIT = max(fetcher.HOST_WAIT, HOST_INTERVAL)
+    rows = select_rows(client, limit, now())
+    stats = collections.Counter(selected=len(rows))
+    if not apply:
+        log(f'dry-run: {len(rows)} 件が対象(claim・書き込みなし)')
+        return dict(stats)
+    for group in chunks(rows, CLAIM_ROWS):
+        mine = claim(client, group, now())
+        stats['claimed'] += len(mine)
+        if mine:
+            write_results(client, process_chunk(mine, fetch, workers), now(), stats, log)
     log('fetch stage: ' + ', '.join(f'{k}={v}' for k, v in sorted(stats.items())))
     return dict(stats)
