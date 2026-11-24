@@ -25,7 +25,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 | `site_media_jobs` | サイト固定のキーと `kind`（favicon/thumbnail）ごとに 1 行。取得状態・試行回数・失敗/次回期限・除外・eligible・hash・asset key・メタデータは D1 に置き、claim lease は複数 worker の重複取得を抑える。成人判定は承認済み `llm_judgement.adult` から `sites.adult_content` に反映し、`yes` のサムネイルだけを除外する。`no` と `unknown` は従来どおり対象、favicon は判定に関係なく対象。画像 bytes は R2 のみ。既存ローカル台帳は importer で検証移行するまで cleanup しない | 0033–0035 |
 | `registered_at` | mise への登録日時。INSERT 時に DB のトリガが記録する | 0003, 0006 |
 | `bulk_import` | 台帳などからの一括投入の印（1）。直近登録の集計（`/api/activity`）・NEW タグ・既定の並びの先頭から外す。この場合の `registered_at` は出典の確認日 | 0015 |
-| `last_crawled_at` | 最後に取得に成功した日時 | 0007 |
+| `last_crawled_at` | 最後に取得に成功した日時。**画面の「最終チェック / Last checked」の唯一の取得元**（#201）。migration の個別 UPDATE でしか入らず、夜間ジョブ・再巡回（`site_checks`）は更新しないため、未設定（NULL）のサイトが多い | 0007 |
 | `source_updated_at` | 元サイトの更新日（`YYYY-MM-DD`）。確認できた場合のみ | 0012 |
 | `source_updated_evidence_url` | 更新日の根拠 URL | 0012 |
 | `country_code` | 運営者の所在国（ISO 3166-1 alpha-2 大文字 2 文字、CHECK で形式を縛る） | 0011 |
