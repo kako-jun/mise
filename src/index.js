@@ -54,23 +54,17 @@ app.get('/api/progress', async c => {
   const offset = Number(raw), limit = Number(limitRaw);
   if (limit < 1 || limit > 100 || offset > 1000000) return c.json({ error: 'invalid pagination' }, 400);
   const { results } = await c.env.DB.prepare(`
-    SELECT * FROM (
-      SELECT COALESCE(p.url,s.url) AS url, s.name AS name, s.description_ja AS description_ja,
-        s.description_en AS description_en,
-        (SELECT COUNT(*) FROM site_tags t WHERE t.site_id=s.id) AS tags_count,
-        (SELECT COUNT(*) FROM site_categories sc WHERE sc.site_id=s.id) AS categories_count,
-        CASE WHEN s.favicon_path IS NOT NULL THEN 1 ELSE 0 END AS favicon,
-        CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
-        'published' AS state, COALESCE(p.source,'discovered') AS source, p.request_type AS request_type,
-        p.request_status AS request_status, COALESCE(p.updated_at,s.registered_at) AS updated_at
-      FROM sites s LEFT JOIN url_progress p ON p.url=s.url
-      UNION ALL
-      SELECT p.url AS url, NULL AS name, NULL AS description_ja, NULL AS description_en,
-        0 AS tags_count, 0 AS categories_count, 0 AS favicon, 0 AS thumbnail,
-        p.state AS state, p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
-      FROM url_progress p LEFT JOIN sites s ON s.url=p.url WHERE s.id IS NULL
-    ) ORDER BY updated_at DESC, url LIMIT ?1 OFFSET ?2`).bind(limit, offset).all();
-  const total = await c.env.DB.prepare(`SELECT COUNT(*) AS total FROM (SELECT url FROM sites UNION SELECT url FROM url_progress)`).first();
+    SELECT p.url AS url, s.name AS name, s.description_ja AS description_ja, s.description_en AS description_en,
+      (SELECT COUNT(*) FROM site_tags t WHERE t.site_id=s.id) AS tags_count,
+      (SELECT COUNT(*) FROM site_categories sc WHERE sc.site_id=s.id) AS categories_count,
+      CASE WHEN s.favicon_path IS NOT NULL THEN 1 ELSE 0 END AS favicon,
+      CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
+      CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END AS state,
+      p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
+    FROM url_progress p
+    LEFT JOIN sites s ON s.id=(SELECT s2.id FROM sites s2 WHERE s2.progress_key=p.identity_key ORDER BY s2.registered_at DESC LIMIT 1)
+    ORDER BY datetime(p.updated_at) DESC, p.identity_key LIMIT ?1 OFFSET ?2`).bind(limit, offset).all();
+  const total = await c.env.DB.prepare('SELECT COUNT(*) AS total FROM url_progress').first();
   return c.json({ results, total: total.total, offset, limit });
 });
 // 申請の受付(推薦 add・取り下げ remove・訂正 correct)。受付のみで読み出しAPIは無い。docs/operations/requests.md

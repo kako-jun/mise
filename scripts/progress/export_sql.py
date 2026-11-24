@@ -1,11 +1,41 @@
 #!/usr/bin/env python3
 """Export the safe URL lifecycle projection from the nightly frontier to D1."""
 import argparse
+import os
+import re
 import sqlite3
+from urllib.parse import urlsplit
 
+MAX_SQL_FILE_BYTES = 5 * 1024 * 1024  # Keep each wrangler remote import small enough to retry independently.
 
 def q(value):
     return "'" + str(value).replace("'", "''") + "'"
+
+
+def progress_key(url):
+    """Match request normalized_key: host without www/scheme + normalized lowercase path."""
+    parsed = urlsplit(url)
+    host = (parsed.hostname or '').encode('idna').decode('ascii').lower().rstrip('.')
+    if host.startswith('www.'):
+        host = host[4:]
+    default_port = 443 if parsed.scheme.lower() == 'https' else 80
+    if parsed.port and parsed.port != default_port:
+        host += f':{parsed.port}'
+    path = re.sub(r'%([0-9a-fA-F]{2})', lambda m: chr(int(m[1], 16)) if re.fullmatch(r'[A-Za-z0-9._~-]', chr(int(m[1], 16))) else '%' + m[1].upper(), parsed.path)
+    path = re.sub(r'%(?:2f|5c)', '/', path, flags=re.I).replace('%20', ' ')
+    parts = []
+    for segment in path.split('/'):
+        segment = segment.split(';', 1)[0]
+        if not segment or segment == '.':
+            continue
+        if segment == '..':
+            if parts:
+                parts.pop()
+        else:
+            parts.append(segment)
+    normalized_path = ('/' + '/'.join(parts) if parts else '')
+    normalized_path = re.sub(r'[.\s/]+$', '', normalized_path).lower()
+    return host + normalized_path
 
 
 def main():
@@ -32,15 +62,34 @@ def main():
         if r['review_state'] in ('pending', 'approved', 'rejected'):
             state = 'reviewing' if r['review_state'] == 'pending' else r['review_state']
         source = 'request' if r['source'] == 'request' else 'discovered'
-        sql.append("INSERT INTO url_progress(url,source,state,discovered_at,updated_at) VALUES(" + ','.join((
-            q(r['url']), q(source), q(state), q(r['discovered_at']), "datetime('now')")) + ") "
-            "ON CONFLICT(url) DO UPDATE SET source=CASE WHEN url_progress.source='request' THEN 'request' ELSE excluded.source END, "
+        sql.append("INSERT INTO url_progress(identity_key,url,source,state,discovered_at,updated_at) VALUES(" + ','.join((
+            q(progress_key(r['url'])), q(r['url']), q(source), q(state), q(r['discovered_at']), "datetime('now')")) + ") "
+            "ON CONFLICT(identity_key) DO UPDATE SET source=CASE WHEN url_progress.source='request' THEN 'request' ELSE excluded.source END, "
             "state=CASE WHEN url_progress.state='published' THEN 'published' ELSE excluded.state END, updated_at=excluded.updated_at "
             "WHERE (url_progress.state!='published' AND url_progress.state != excluded.state) "
             "OR (url_progress.source='discovered' AND excluded.source='request');")
-    with open(a.out, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(sql) + '\n')
-    print(f'progress: {len(rows)} URLs exported')
+    body = '\n'.join(sql) + '\n'
+    if len(body.encode('utf-8')) <= MAX_SQL_FILE_BYTES:
+        with open(a.out, 'w', encoding='utf-8') as f:
+            f.write(body)
+        parts = [a.out]
+    else:
+        if os.path.exists(a.out):
+            os.remove(a.out)
+        parts, batch, size = [], [sql[0]], len((sql[0] + '\n').encode('utf-8'))
+        for statement in sql[1:]:
+            line_size = len((statement + '\n').encode('utf-8'))
+            if size + line_size > MAX_SQL_FILE_BYTES and len(batch) > 1:
+                parts.append(f'{a.out}.part-{len(parts) + 1:04d}.sql')
+                with open(parts[-1], 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(batch) + '\n')
+                batch, size = [sql[0]], len((sql[0] + '\n').encode('utf-8'))
+            batch.append(statement)
+            size += line_size
+        parts.append(f'{a.out}.part-{len(parts) + 1:04d}.sql')
+        with open(parts[-1], 'w', encoding='utf-8') as f:
+            f.write('\n'.join(batch) + '\n')
+    print(f'progress: {len(rows)} URLs exported in {len(parts)} file(s)')
 
 
 if __name__ == '__main__':
