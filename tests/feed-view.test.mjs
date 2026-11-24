@@ -245,3 +245,16 @@ test('feed(#198): 「見た」は 60% 以上・1.5 秒以上の定数で、素�
   d.start('a', 'siteA'); d.stop('a'); assert.equal(timers.size, 0, '素通りはタイマーごと消える');
   d.start('b', 'siteB'); [...timers.values()].forEach(f => f()); assert.deepEqual(fired, ['siteB']);
 });
+
+test('feed.js: 国・地域は一覧と同じ規則(国名テキストを出さない)・タグは一覧の宛先へのリンク(#202)', () => {
+  const place = appJs.slice(appJs.indexOf('function place(s)'), appJs.indexOf('// ---- カード ----'));
+  assert.ok(!/info\[language\]/.test(place), '国名を表示テキストにしない');
+  assert.match(place, /MISE_FLAGS/, '旗が無い国は出さない');
+  assert.match(place, /region\[language\]/, '区画名だけを出す');
+  assert.match(place, /aria-label/);
+  assert.match(appJs, /className = 'f-tag'[\s\S]*a\.href = tagHref\(tg\.ja\)/, 'タグは a.f-tag で tagHref へ');
+  assert.match(appJs, /searchParams\.append\('tag', key\)/, '一覧の tagUrl と同じ ?tag=');
+  assert.match(css, /#feed \.f-tag[^{]*\{[^}]*padding: 9px 0; margin: -9px 0/, '押せる範囲 36px(#238)');
+  assert.match(css, /#feed \.f-tag::before \{ content: '#'/, '# 表記を維持');
+  assert.match(css, /#feed \.f-place\[hidden\] \{ display: none; \}/);
+});
