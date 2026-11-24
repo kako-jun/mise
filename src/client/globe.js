@@ -226,8 +226,12 @@ try {
   window.addEventListener('resize', resize); resize();
   // タブが非表示の間はレンダを止める（復帰時に再開）。
   let rafId = 0;
+  // 縦フィード(?view=feed)のスクロール中は描画を休む(#196)。フィード側が scroll のたびに mise-globe-busy を送り、最後の通知から GLOBE_BUSY_MS は何も描かない(表示は直前のフレームのまま)。
+  const GLOBE_BUSY_MS = 250; let busyUntil = 0;
+  window.addEventListener('mise-globe-busy', () => { busyUntil = performance.now() + GLOBE_BUSY_MS; });
   function animate() {
     rafId = requestAnimationFrame(animate);
+    if (performance.now() < busyUntil) return;
     const idle = !drag && !peekHeld && performance.now() - lastActiveAt >= IDLE_RESUME_MS;
     if (peek && idle) {
       peek = false; targetTilt = 0; targetDistance = 6.6;
