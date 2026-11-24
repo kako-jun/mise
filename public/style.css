@@ -400,6 +400,8 @@ html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited
 }
 
 /* 間違いサラダと同じ、控えめな訪問数とビルド日。 */
-.footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 20px 0 8px; font-size: 12px; opacity: .6; }
+.footer-meta { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; margin: 20px 0 8px; font-size: 12px; opacity: .6; }
 .footer-meta #visit-counter { font-variant-numeric: tabular-nums; }
-.footer-meta #build-version { margin-left: auto; }
+.footer-meta #visit-counter { justify-self: start; }
+.footer-meta .progress-link { justify-self: center; }
+.footer-meta #build-version { justify-self: end; }

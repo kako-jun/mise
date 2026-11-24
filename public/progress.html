@@ -3,13 +3,24 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,follow"><title>Processing status — MISE</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/progress.css?v=1">
-<script src="/progress.js?v=1" defer></script>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/progress.css?v=2">
+<script src="/progress.js?v=2" defer></script>
 </head>
 <body><main>
   <header><a class="logo" href="/jp/">MISE</a><h1 data-ja="収集・掲載の進捗" data-en="Collection and publishing progress">Collection and publishing progress</h1>
   <p data-ja="URL ごとの処理状況です。右端の公開が完了していれば掲載済みです。" data-en="Processing status by URL. A completed Published cell means the site is live in the directory.">Processing status by URL. A completed Published cell means the site is live in the directory.</p>
   <p id="summary" aria-live="polite"></p></header>
+  <form id="filters" class="filters">
+    <label><span data-ja="検索" data-en="Search">Search</span><input id="query" type="search" maxlength="100" placeholder="URL, name, or description" data-ja-placeholder="URL・サイト名・説明" data-en-placeholder="URL, name, or description"></label>
+    <label><span data-ja="発見元" data-en="Source">Source</span><select id="source"><option value="all" data-ja="すべて" data-en="All">All</option><option value="discovered" data-ja="自動発見" data-en="Discovered">Discovered</option><option value="request" data-ja="ユーザー申請" data-en="User request">User request</option></select></label>
+    <label><span data-ja="段階" data-en="Stage">Stage</span><select id="state">
+      <option value="all" data-ja="すべて" data-en="All">All</option><option value="discovered" data-ja="発見" data-en="Discovered">Discovered</option><option value="queued" data-ja="待機中" data-en="Queued">Queued</option><option value="fetched" data-ja="取得済み" data-en="Fetched">Fetched</option><option value="candidate" data-ja="候補" data-en="Candidate">Candidate</option><option value="reviewing" data-ja="審査中" data-en="Reviewing">Reviewing</option><option value="approved" data-ja="承認" data-en="Approved">Approved</option><option value="rejected" data-ja="却下" data-en="Rejected">Rejected</option><option value="failed" data-ja="失敗" data-en="Failed">Failed</option><option value="blocked" data-ja="ブロック" data-en="Blocked">Blocked</option><option value="published" data-ja="公開済み" data-en="Published">Published</option>
+    </select></label>
+    <label><span data-ja="画像" data-en="Media">Media</span><select id="missing"><option value="all" data-ja="すべて" data-en="All">All</option><option value="favicon" data-ja="ファビコン未収集" data-en="Missing favicon">Missing favicon</option><option value="thumbnail" data-ja="サムネイル未収集" data-en="Missing thumbnail">Missing thumbnail</option><option value="media" data-ja="画像どちらか未収集" data-en="Missing either">Missing either</option></select></label>
+    <button type="submit" data-ja="絞り込む" data-en="Filter">Filter</button><button id="clear-filters" type="button" class="quiet" data-ja="クリア" data-en="Clear">Clear</button>
+  </form>
+  <div id="summary" class="summary" aria-live="polite"></div>
+  <nav class="pager" data-ja-label="ページ移動" data-en-label="Page navigation"><button type="button" data-page-action="first" data-ja-label="最初のページ" data-en-label="First page">«</button><button type="button" data-page-action="prev" data-ja-label="前のページ" data-en-label="Previous page">‹</button><label><span data-ja="ページ" data-en="Page">Page</span> <input class="page-input" type="number" min="1" value="1" inputmode="numeric" data-ja-label="ページ番号" data-en-label="Page number"> <span data-ja="/" data-en="of">of</span> <span class="page-count">1</span></label><button type="button" data-page-action="go" data-ja="移動" data-en="Go">Go</button><button type="button" data-page-action="next" data-ja-label="次のページ" data-en-label="Next page">›</button><button type="button" data-page-action="last" data-ja-label="最後のページ" data-en-label="Last page">»</button><label class="page-size"><span data-ja="表示件数" data-en="Rows">Rows</span> <select class="page-size-select"><option>25</option><option selected>50</option><option>100</option></select></label></nav>
   <div class="table-wrap"><table><thead><tr>
     <th data-ja="URL" data-en="URL">URL</th><th data-ja="発見元" data-en="Source">Source</th>
     <th data-ja="取得" data-en="Fetched">Fetched</th><th data-ja="審査" data-en="Reviewed">Reviewed</th>
@@ -18,7 +29,7 @@
     <th data-ja="カテゴリ" data-en="Categories">Categories</th><th data-ja="利用者申請" data-en="User request">User request</th><th>Favicon</th><th>Thumbnail</th>
     <th data-ja="公開" data-en="Published">Published</th>
   </tr></thead><tbody id="rows"><tr><td colspan="12">Loading…</td></tr></tbody></table></div>
-  <nav class="pager"><button id="prev" disabled>←</button><span id="page"></span><button id="next">→</button></nav>
-  <p class="note" data-ja="この表は、発見元を問わず URL ごとの同じ進捗レコードを表示します。" data-en="Every URL uses the same progress record, regardless of how it was discovered.">Every URL uses the same progress record, regardless of how it was discovered.</p>
+  <nav class="pager" data-ja-label="ページ移動" data-en-label="Page navigation"><button type="button" data-page-action="first" data-ja-label="最初のページ" data-en-label="First page">«</button><button type="button" data-page-action="prev" data-ja-label="前のページ" data-en-label="Previous page">‹</button><label><span data-ja="ページ" data-en="Page">Page</span> <input class="page-input" type="number" min="1" value="1" inputmode="numeric" data-ja-label="ページ番号" data-en-label="Page number"> <span data-ja="/" data-en="of">of</span> <span class="page-count">1</span></label><button type="button" data-page-action="go" data-ja="移動" data-en="Go">Go</button><button type="button" data-page-action="next" data-ja-label="次のページ" data-en-label="Next page">›</button><button type="button" data-page-action="last" data-ja-label="最後のページ" data-en-label="Last page">»</button><label class="page-size"><span data-ja="表示件数" data-en="Rows">Rows</span> <select class="page-size-select"><option>25</option><option selected>50</option><option>100</option></select></label></nav>
+  <p class="note" data-ja="この表は発見元にかかわらず、URLごとの処理状況をまとめています。" data-en="Every URL uses one shared processing record, regardless of its source.">Every URL uses one shared processing record, regardless of its source.</p>
   <p><a href="/jp/" data-ja="MISE に戻る" data-en="Back to MISE">Back to MISE</a></p>
 </main></body></html>
