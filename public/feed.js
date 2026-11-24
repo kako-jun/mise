@@ -405,6 +405,7 @@
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;
     root.append(bar, scroller, nav, hint, panel); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
+    scroller.addEventListener('scroll', () => window.dispatchEvent(new Event('mise-globe-busy')), { passive: true }); // スクロール中は背面の地球の描画を休ませる(#196)
     observer = new IntersectionObserver(entries => {
       for (const e of entries) if (e.isIntersecting) {
         const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null;
