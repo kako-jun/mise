@@ -262,3 +262,12 @@ export async function renderAbout(assetResponse) {
   for (const [k, v] of Object.entries(securityHeaders(csp))) res.headers.set(k, v);
   return res;
 }
+
+// Progress page loads its table from a same-origin script and API. Give it the page CSP rather than
+// the static response CSP (default-src 'none'), which would block both the script and fetch.
+export async function renderProgress(assetResponse) {
+  const html = await assetResponse.text();
+  const res = new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=0, must-revalidate, s-maxage=60' } });
+  for (const [k, v] of Object.entries(securityHeaders(pageCsp([])))) res.headers.set(k, v);
+  return res;
+}

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { renderAbout, loadCategories, loadScopes, parseScope, scopePath, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
+import { renderAbout, renderProgress, loadCategories, loadScopes, parseScope, scopePath, renderIndex, sitemapXml, DEFAULT_SCOPE } from './seo.js';
 import { securityHeaders } from './security.js';
 import { receiveRequest } from './intake.js';
 import { serveMedia } from './media.js';
@@ -84,7 +84,7 @@ app.get('/', async c => page(c, DEFAULT_SCOPE, await loadScopes(c.env.DB)));
 app.get('/about', c => { const u = new URL(c.req.url); u.pathname = '/about/'; return c.redirect(u.toString(), 301); });
 app.get('/about/', async c => renderAbout(await c.env.ASSETS.fetch(new Request(new URL('/about.html', c.req.url)))));
 app.get('/progress', c => c.redirect('/progress/', 301));
-app.get('/progress/', async c => c.html(await (await c.env.ASSETS.fetch(new Request(new URL('/progress.html', c.req.url)))).text()));
+app.get('/progress/', async c => renderProgress(await c.env.ASSETS.fetch(new Request(new URL('/progress.html', c.req.url)))));
 // /jp/ /us/ /all/。大文字は小文字へ 301。サイトが 1 件も無い国・不正な値は 404（sitemap にも載せない）。
 // 末尾スラッシュなし（/jp）は存在する範囲だけ /jp/ へ 301（クエリは維持）。run_worker_first の拡張子なしパターンで Worker に届く。
 // 区画（都道府県・州）は /jp/13/ /us/ca/（範囲名 jp-13 の「-」を「/」にした形）。区画にサイトが 1 件も無いとき・不正な値は 404、大文字は小文字へ 301。
