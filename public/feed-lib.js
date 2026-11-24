@@ -53,6 +53,14 @@
 
   // 件数の桁区切り（表示言語に合わせる）。数でない値は NaN と出さず空文字
   const fmtCount = (n, lang) => Number.isFinite(Number(n)) && n !== null && n !== '' ? Number(n).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US') : '';
+  // 縦フィードの現在位置(#204)。current は 0 始まりのカード番号(終了カードは list 件数と同じ値)、loaded は読み込み済み件数、more は続きがある/読み込みに失敗した(=分母が確定しない)か。
+  // 0 件は null(出さない)。分子は 1〜loaded に丸め、more のときは分母に + を付けて「3 / 500+」とする。
+  const navPosition = (current, loaded, more, lang) => {
+    const n = Math.floor(Number(loaded));
+    if (!Number.isFinite(n) || n < 1) return null;
+    const cur = Math.max(1, Math.min(n, Math.floor(Number(current) || 0) + 1));
+    return { cur, total: n, more: !!more, text: `${fmtCount(cur, lang)} / ${fmtCount(n, lang)}${more ? '+' : ''}` };
+  };
   // 要求した範囲 want のデータがまだ揃っていない（絞り込み・描画を保留する）か
   const isPending = (loaded, complete, want) => !covers(loaded, complete, want);
 
@@ -66,5 +74,5 @@
     return over >= PAN_MIN_OVER ? { w, px: over / 2 } : null;
   };
 
-  g.MiseFeedLib = { panGeometry, fmtCount, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
+  g.MiseFeedLib = { panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
 })(globalThis);

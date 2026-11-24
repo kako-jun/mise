@@ -18,9 +18,9 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { searchLabel: 'サイトを検索', clearSearch: '検索語を消去', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
+      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', position: (c, n) => `${n}件中 ${c}件目`, checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
     en: { searchLabel: 'Search sites', clearSearch: 'Clear search', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
+      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', position: (c, n) => `${c} of ${n}`, checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
@@ -401,7 +401,15 @@
   // 連打でも取りこぼさないよう、スクロールが落ち着く前は「向かっている先」を基準にする
   let navTarget = null, navTimer = 0;
   function step(d, focus) { const base = navTarget ?? current; navTarget = Math.max(0, Math.min(totalCards() - 1, base + d)); clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(navTarget); if (c && focus) c.focus({ preventScroll: true }); }
-  function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; p.disabled = current <= 0; n.disabled = !cards.length || !list.length || current >= totalCards() - 1; }
+  function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; updatePosition(); p.disabled = current <= 0; n.disabled = !cards.length || !list.length || current >= totalCards() - 1; }
+
+  // 上下ボタンの間の「現在位置/読み込み済み件数」(#204)。続きがある・読み込み失敗のときは分母に + を付ける。aria-live=off(スクロールの度に読み上げない)
+  function updatePosition() {
+    const el = $('.f-pos'); if (!el) return;
+    const v = L.navPosition(current, list.length, hasMore || loadFailed, language);
+    el.hidden = !v; if (!v) return;
+    el.textContent = v.text; el.title = t('position')(fmt(v.cur), fmt(v.total) + (v.more ? '+' : ''));
+  }
 
   // ---- 地球連動 ----
   function fly(site) {
@@ -429,7 +437,8 @@
     const prev = mk('button', '', { type: 'button', id: 'f-prev', 'aria-label': t('prev'), title: `${t('prev')} (k)` }), next = mk('button', '', { type: 'button', id: 'f-next', 'aria-label': t('next'), title: `${t('next')} (j)` });
     prev.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg>'; next.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2"/></svg>';
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
-    nav.append(prev, next);
+    const pos = mk('div', 'f-pos', { 'aria-live': 'off' }); pos.hidden = true;
+    nav.append(prev, pos, next);
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;
