@@ -28,6 +28,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 for _p in ("scripts/requests", "scripts/llm"):
     sys.path.insert(0, os.path.join(ROOT, _p))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from progress_identity import progress_identity_key  # noqa: E402
 import import_requests  # noqa: E402  (key_of / match_path / block_candidates: the same keys as the intake)
 import judge  # noqa: E402  (category tree, old->new ids, canonical form)
 
@@ -113,7 +115,11 @@ def plan(row):
     """Validate one joined row and build everything the batch needs. Raises Gate(reason)."""
     key = row.get("frontier_key") or row["identity_key"]
     url = (row.get("final_url") or row.get("url") or "").strip()
-    if not re.match(r"https?://", url, re.I):
+    if not re.match(r"https?://", url, re.I) or re.search(r"[\x00-\x20\x7f]", url):
+        raise Gate("gate:no_url")
+    try:
+        pkey = progress_identity_key(url)   # rejects userinfo / bad authority; the same identity the sites trigger gives
+    except ValueError:
         raise Gate("gate:no_url")
     host = (row.get("host") or urllib.parse.urlsplit(url).hostname or "").strip().lower()
     if not host:
@@ -141,7 +147,7 @@ def plan(row):
     cands = list(dict.fromkeys([url, (row.get("url") or "").strip() or url, "https://" + key]))
     return {"identity_key": row["identity_key"], "id": site_id(key), "url": url, "name": name, "dja": dja, "den": den, "cc": cc, "rc": rc,
             "adult": adult_value(row), "crawled": crawled_at(row), "cats": cats, "tags": clean_tags(raw_tags), "cands": cands,
-            "keys": url_keys(cands)}
+            "keys": url_keys(cands), "pkey": pkey}
 
 
 def blocked_sql(urls, params):
@@ -171,17 +177,23 @@ def publish_statements(p):
     params = [p["id"], p["url"], p["name"], p["dja"], p["den"], p["cc"], p["rc"], p["adult"], p["crawled"]] + p["keys"]
     bl = blocked_sql(p["cands"], params)
     ro = requested_off_sql(p["keys"], params)
-    params.append(p["id"])
+    params += [p["id"], p["pkey"]]
     out = [(f"INSERT INTO sites (id,url,name,description_ja,description_en,country_code,region_code,adult_content,last_crawled_at) "
             f"SELECT ?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM sites WHERE {norm_sql('url')} IN ({kin})) AND NOT {bl} AND NOT {ro} "
-            f"AND NOT EXISTS (SELECT 1 FROM sites WHERE id=?) ON CONFLICT DO NOTHING", params)]
-    sel_c = " UNION ALL ".join("SELECT ? AS site_id,? AS category_id" if i == 0 else "SELECT ?,?" for i in range(len(p["cats"])))
-    out.append((f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT * FROM ({sel_c}) "
-                "WHERE changes()>0 AND category_id IN (SELECT id FROM categories)", [x for c in p["cats"] for x in (p["id"], c)]))
+            f"AND NOT EXISTS (SELECT 1 FROM sites WHERE id=?) AND NOT EXISTS (SELECT 1 FROM sites WHERE progress_key=?) ON CONFLICT DO NOTHING", params)]
+    # no changes(): a site without categories exists only inside this transaction, so "exists and has none yet" is exact
     if p["tags"]:
         sel_t = " UNION ALL ".join("SELECT ?,?,?" for _ in p["tags"])
-        out.append((f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel_t}) WHERE changes()>0",
-                    [x for t in p["tags"] for x in (p["id"], t, t)]))
+        out.append((f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel_t}) "
+                    "WHERE EXISTS (SELECT 1 FROM sites WHERE id=?) AND NOT EXISTS (SELECT 1 FROM site_tags WHERE site_id=?)",
+                    [x for t in p["tags"] for x in (p["id"], t, t)] + [p["id"], p["id"]]))
+    sel_c = " UNION ALL ".join("SELECT ? AS site_id,? AS category_id" if i == 0 else "SELECT ?,?" for i in range(len(p["cats"])))
+    out.append((f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT * FROM ({sel_c}) "
+                "WHERE EXISTS (SELECT 1 FROM sites WHERE id=?) AND NOT EXISTS (SELECT 1 FROM site_categories WHERE site_id=?) "
+                "AND category_id IN (SELECT id FROM categories)", [x for c in p["cats"] for x in (p["id"], c)] + [p["id"], p["id"]]))
+    # fail-safe: a sites row without any category aborts (NOT NULL violation) and rolls the whole batch back
+    out.append(("INSERT INTO site_media_jobs(identity_key,site_id,kind) SELECT NULL,id,'favicon' FROM sites "
+                "WHERE id=? AND NOT EXISTS (SELECT 1 FROM site_categories WHERE site_id=?)", [p["id"], p["id"]]))
     return out + media_and_state(p)
 
 
@@ -196,20 +208,27 @@ def media_and_state(p, new_site=True):
                     "SELECT progress_key,id,'thumbnail',CASE WHEN adult_content=1 THEN 'excluded' ELSE 'pending' END,NULL,CASE WHEN adult_content=1 THEN 0 ELSE 1 END "
                     "FROM sites WHERE id=? AND progress_key IS NOT NULL AND thumb_path IS NULL", [p["id"]]))
     kin = ",".join("?" * len(p["keys"]))
+    match = f"(id=? OR progress_key=? OR {norm_sql('url')} IN ({kin}))"
+    mparams = [p["id"], p["pkey"]] + p["keys"]
+    if not new_site and p["adult"] is not None:
+        # same as the old export: classify a listed site only while its flag is unknown (NULL); a set value is never overwritten.
+        # The sites_media_adult_au trigger (0035) keeps the thumbnail job (eligible / excluded) in step.
+        out.append((f"UPDATE sites SET adult_content=? WHERE adult_content IS NULL AND {match}", [p["adult"]] + mparams))
     out.append((f"UPDATE url_progress SET state='published',updated_at=datetime('now') WHERE identity_key=? AND state='approved' "
-                f"AND EXISTS (SELECT 1 FROM sites WHERE id=? OR {norm_sql('url')} IN ({kin}))", [p["identity_key"], p["id"]] + p["keys"]))
+                f"AND EXISTS (SELECT 1 FROM sites WHERE {match})", [p["identity_key"]] + mparams))
     return out
 
 
 def hold_statements(identity_key, reason):
     """Back to 'candidate' with a reason; review_state goes to 'pending' so the approve step does not re-approve it unseen."""
-    return [("UPDATE url_progress SET state='candidate',updated_at=datetime('now') WHERE identity_key=? AND state='approved'", [identity_key]),
-            ("UPDATE url_candidates SET review_reason=?,review_state='pending',updated_at=datetime('now') WHERE identity_key=?", [reason, identity_key])]
+    return [("UPDATE url_candidates SET review_reason=?,review_state='pending',updated_at=datetime('now') WHERE identity_key=? "
+             "AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state='approved')", [reason, identity_key, identity_key]),
+            ("UPDATE url_progress SET state='candidate',updated_at=datetime('now') WHERE identity_key=? AND state='approved'", [identity_key])]
 
 
 def existing_site(client, p):
     kin = ",".join("?" * len(p["keys"]))
-    rows = client.query(f"SELECT id FROM sites WHERE id=? OR {norm_sql('url')} IN ({kin}) LIMIT 1", [p["id"]] + p["keys"])
+    rows = client.query(f"SELECT id FROM sites WHERE id=? OR progress_key=? OR {norm_sql('url')} IN ({kin}) LIMIT 1", [p["id"], p["pkey"]] + p["keys"])
     return rows[0]["id"] if rows else None
 
 
@@ -281,12 +300,21 @@ def post_check(client, ids):
 
 
 # --- runner -------------------------------------------------------------------------------------------------------------
+def guards_pass(client, p):
+    """The blocked-host / rejected-request guards of the INSERT, as a read (dry-run uses it so would_publish matches the real run)."""
+    params = []
+    bl = blocked_sql(p["cands"], params)
+    ro = requested_off_sql(p["keys"], params)
+    return bool(client.query(f"SELECT 1 WHERE NOT {bl} AND NOT {ro}", params))
+
+
 def run(client, *, limit, apply, log=print):
+    # oldest url_progress.updated_at first: a row whose batch keeps failing is touched below, so it goes to the back of the queue
     rows = client.query(
         "SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
-        "WHERE p.state='approved' ORDER BY p.identity_key LIMIT ?", [int(limit)])
+        "WHERE p.state='approved' ORDER BY p.updated_at,p.identity_key LIMIT ?", [int(limit)])
     res = {"selected": len(rows), "published": 0, "already_listed": 0, "held": 0, "errors": 0, "dry_run": not apply,
-           "would_publish": 0, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": []}
+           "would_publish": 0, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
     touched = []
 
     def hold(identity_key, reason):
@@ -296,41 +324,65 @@ def run(client, *, limit, apply, log=print):
         if apply:
             client.batch(hold_statements(identity_key, reason))
 
+    def failed(identity_key, e):
+        res["errors"] += 1
+        log(f"error {identity_key}: {e}")
+        try:
+            client.query("UPDATE url_progress SET updated_at=datetime('now') WHERE identity_key=? AND state='approved'", [identity_key])
+        except Exception:
+            pass
+
     for row in rows:
         try:
             p = plan(dict(row))
-        except Gate as g:
-            hold(row["identity_key"], str(g))
-            continue
-        try:
+            have_cats = {r["id"] for r in client.query(f"SELECT id FROM categories WHERE id IN ({','.join('?' * len(p['cats']))})", p["cats"])}
+            p["cats"] = [c for c in p["cats"] if c in have_cats]
+            if not p["cats"]:
+                raise Gate("gate:no_category")   # in categories.csv but not in this D1: never publish a site without a category
             stmts = publish_statements(p)
             if max(len(s[1]) for s in stmts) > MAX_PARAMS:
                 raise Gate("gate:too_many_params")
             if existing_site(client, p):
                 res["already_listed"] += 1
                 if apply:
-                    client.batch(media_and_state(p, new_site=False))   # the existing sites row is never altered
+                    client.batch(media_and_state(p, new_site=False))   # the existing sites row is never altered (adult_content only NULL -> 0/1)
                 continue
             if not apply:
-                res["would_publish"] += 1
+                if guards_pass(client, p):
+                    res["would_publish"] += 1
+                else:
+                    res["held"] += 1
+                    res["held_reasons"]["gate:not_inserted_blocked_or_rejected_request"] = res["held_reasons"].get("gate:not_inserted_blocked_or_rejected_request", 0) + 1
                 continue
             client.batch(stmts)
         except Gate as g:
-            hold(p["identity_key"], str(g))
+            hold(row["identity_key"], str(g))
             continue
-        except Exception as e:   # the batch is atomic: nothing of this site was written; the row stays 'approved' and is retried next run
-            res["errors"] += 1
-            log(f"error {p['identity_key']}: {e}")
+        except Exception as e:   # the batch is atomic: nothing of this site was written; the row stays 'approved' and is retried later
+            if "NOT NULL" in str(e) and "site_media_jobs" in str(e):   # the no-category fail-safe fired (a category vanished between check and batch)
+                try:
+                    hold(row["identity_key"], "gate:no_category")
+                    continue
+                except Exception as e2:
+                    e = e2
+            failed(row["identity_key"], e)
             continue
         problems = verify(client, p)
         if problems:
             st = client.query("SELECT state FROM url_progress WHERE identity_key=?", [p["identity_key"]])
-            if not client.query("SELECT 1 FROM sites WHERE id=?", [p["id"]]) and st and st[0]["state"] == "approved":
-                hold(p["identity_key"], "gate:not_inserted_blocked_or_rejected_request")   # skipped by a SQL guard (blocked host / request / race)
-            else:
-                res["verify_problems"][p["id"]] = problems
-                log(f"verify {p['id']}: {problems}")
-            continue
+            state = st[0]["state"] if st else None
+            if not client.query("SELECT 1 FROM sites WHERE id=?", [p["id"]]):
+                if state == "approved":
+                    hold(p["identity_key"], "gate:not_inserted_blocked_or_rejected_request")   # skipped by a SQL guard (blocked host / request)
+                    continue
+                if state == "published":   # another writer listed the same URL between the check and the batch: the guard skipped our insert
+                    res["already_listed"] += 1
+                    continue
+            res["verify_problems"][p["id"]] = problems
+            touched.append(p["id"])
+            log(f"verify {p['id']}: {problems}; stopping (this stage writes public data)")
+            res["stopped"] = True
+            break
         res["published"] += 1
         res["ids"].append(p["id"])
         touched.append(p["id"])

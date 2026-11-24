@@ -28,7 +28,9 @@ class FakeD1:
         mem = _BASE = _BASE or export_sites.load_db(str(ROOT))
         self.db = sqlite3.connect(':memory:', isolation_level=None)
         mem.backup(self.db)
+        self.db.execute('PRAGMA foreign_keys=ON')
         self.db.row_factory = sqlite3.Row
+        self.before_batch = None
         self.max_params = 0
         self.writes = 0
 
@@ -49,6 +51,9 @@ class FakeD1:
 
     def batch(self, statements):
         self.writes += 1
+        if self.before_batch:
+            hook, self.before_batch = self.before_batch, None
+            hook(self.db)
         self.db.execute('BEGIN')
         try:
             out = [self._exec(s, p) for s, p in statements]
@@ -225,6 +230,105 @@ class Publish(unittest.TestCase):
                 os.chdir(cwd)
         src = (ROOT / 'scripts' / 'enrich' / 'publish_stage.py').read_text(encoding='utf-8')
         self.assertNotRegex(src, r'\bopen\(|sqlite3\.connect|subprocess|tempfile')
+
+    def test_rejected_request_and_path_prefix_block(self):
+        add_candidate(self.d1)
+        add_candidate(self.d1, 'beta.example.jp', url='https://beta.example.jp/sub/', final_url='https://beta.example.jp/sub/')
+        self.d1.db.execute("INSERT INTO requests(type,status,url,host,normalized_key) VALUES('add','rejected','https://alpha.example.jp/','alpha.example.jp','alpha.example.jp')")
+        self.d1.db.execute("INSERT INTO blocked_hosts(host,path_prefix,reason) VALUES('beta.example.jp','/sub','test')")
+        res = self.run_stage()
+        self.assertEqual((res['published'], res['held']), (0, 2))
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], self.base_sites)
+
+    def test_dry_run_matches_guards(self):
+        add_candidate(self.d1)
+        self.d1.db.execute("INSERT INTO blocked_hosts(host,path_prefix,reason) VALUES('alpha.example.jp','','test')")
+        res = self.run_stage(apply=False)
+        self.assertEqual((res['would_publish'], res['held']), (0, 1))
+
+    def test_race_same_url_listed_between_check_and_batch(self):
+        add_candidate(self.d1)
+        def other(db):
+            db.execute("INSERT INTO sites(id,url,name,description_ja,description_en) VALUES('raced','https://alpha.example.jp/','Raced','競合','Raced')")
+            db.execute("INSERT INTO site_categories VALUES('raced','arts')")
+        self.d1.before_batch = other
+        res = self.run_stage()
+        self.assertEqual((res['published'], res['already_listed'], res['errors']), (0, 1, 0))
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], self.base_sites + 1)
+        self.assertIsNone(self.d1.one('SELECT 1 FROM sites WHERE id=?', (ps.site_id('alpha.example.jp'),)))
+
+    def test_published_row_not_reprocessed(self):
+        add_candidate(self.d1)
+        self.run_stage()
+        n = self.d1.one('SELECT COUNT(*) FROM sites')[0]
+        res = self.run_stage()
+        self.assertEqual(res['selected'], 0)
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], n)
+
+    def test_category_missing_in_d1_never_publishes_without_category(self):
+        ps.VALID_CATEGORIES.add('ghost-cat')
+        self.addCleanup(ps.VALID_CATEGORIES.discard, 'ghost-cat')
+        add_candidate(self.d1, categories=json.dumps(['ghost-cat']))
+        res = self.run_stage()
+        self.assertEqual((res['held'], res['published']), (1, 0))
+        self.assertEqual(self.d1.one('SELECT review_reason FROM url_candidates')[0], 'gate:no_category')
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], self.base_sites)
+        # the in-batch fail-safe alone also rolls everything back
+        p = ps.plan(dict(self.d1.one('SELECT * FROM url_candidates')))
+        with self.assertRaises(RuntimeError):
+            self.d1.batch(ps.publish_statements(p))
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], self.base_sites)
+
+    def test_port_443_duplicate_by_progress_key(self):
+        self.d1.db.execute("INSERT INTO sites(id,url,name,description_ja,description_en) VALUES('manual-2','https://alpha.example.jp:443/','Hand','手書き','Hand')")
+        self.d1.db.execute("INSERT INTO site_categories VALUES('manual-2','arts')")
+        add_candidate(self.d1)
+        res = self.run_stage()
+        self.assertEqual((res['already_listed'], res['published']), (1, 0))
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM sites')[0], self.base_sites + 1)
+
+    def test_bad_urls_are_gated(self):
+        for i, u in enumerate(['https://user:pw@a.example.jp/', 'https://a.example.jp/ x', 'https://a.example.jp/\tx', 'ftp://a.example.jp/']):
+            add_candidate(self.d1, f'bad{i}.example.jp', url=u, final_url=u)
+        res = self.run_stage()
+        self.assertEqual((res['held'], res['held_reasons']), (4, {'gate:no_url': 4}))
+
+    def test_existing_site_adult_sync_only_from_null(self):
+        self.d1.db.execute("INSERT INTO sites(id,url,name,description_ja,description_en,adult_content) VALUES('m-null','https://alpha.example.jp/','n','d','d',NULL)")
+        self.d1.db.execute("INSERT INTO sites(id,url,name,description_ja,description_en,adult_content) VALUES('m-set','https://beta.example.jp/','n','d','d',0)")
+        add_candidate(self.d1, adult='yes')
+        add_candidate(self.d1, 'beta.example.jp', adult='yes')
+        self.run_stage()
+        self.assertEqual(self.d1.one("SELECT adult_content FROM sites WHERE id='m-null'")[0], 1)
+        self.assertEqual(tuple(self.d1.one("SELECT state,eligible FROM site_media_jobs WHERE site_id='m-null' AND kind='thumbnail'")), ('excluded', 0))
+        self.assertEqual(self.d1.one("SELECT adult_content FROM sites WHERE id='m-set'")[0], 0)   # never overwritten
+        self.assertEqual(tuple(self.d1.one("SELECT state,eligible FROM site_media_jobs WHERE site_id='m-set' AND kind='thumbnail'")), ('pending', 1))
+
+    def test_verify_failure_stops_the_loop(self):
+        add_candidate(self.d1, 'a.example.jp')
+        add_candidate(self.d1, 'b.example.jp')
+        self.d1.db.execute("CREATE TRIGGER breakjobs AFTER INSERT ON site_media_jobs BEGIN DELETE FROM site_media_jobs WHERE rowid=NEW.rowid AND NEW.kind='favicon'; END")
+        res = self.run_stage()
+        self.assertTrue(res['stopped'])
+        self.assertEqual(res['published'], 0)
+        self.assertEqual(len(res['verify_problems']), 1)
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 1)   # the second one was not touched
+
+    def test_failing_row_goes_to_back_of_queue(self):
+        add_candidate(self.d1, 'a.example.jp', tags=json.dumps(['boom']))
+        add_candidate(self.d1, 'b.example.jp')
+        self.d1.db.execute("UPDATE url_progress SET updated_at='2000-01-01 00:00:00' WHERE identity_key='a.example.jp/'")
+        self.d1.db.execute("UPDATE url_progress SET updated_at='2001-01-01 00:00:00' WHERE identity_key='b.example.jp/'")
+        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='boom' BEGIN SELECT RAISE(ABORT,'poison'); END")
+        self.run_stage(limit=1)
+        self.assertGreater(self.d1.one("SELECT updated_at FROM url_progress WHERE identity_key='a.example.jp/'")[0], '2000')
+        res = self.run_stage(limit=1)
+        self.assertEqual(res['published'], 1)   # b is now first
+
+    def test_hold_does_not_touch_candidate_that_moved_on(self):
+        add_candidate(self.d1, state='published', categories='[]')
+        self.d1.batch(ps.hold_statements('alpha.example.jp/', 'gate:x'))
+        self.assertIsNone(self.d1.one("SELECT review_reason FROM url_candidates WHERE identity_key='alpha.example.jp/'")[0])
 
 
 if __name__ == '__main__':
