@@ -319,3 +319,12 @@ test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は�
   const c = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300, gap: 1000 });
   c.tick(0, run); assert.notEqual(c.tick(1000, run).state, 'quiet');
 });
+
+test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は保留して quiet)(#199)', () => {
+  const run = { enabled: true, held: false, atEnd: false };
+  const mk = () => lib.makeAutoAdvance({ interval: 5000, resumeDelay: 400, gap: 1000 });
+  const a = mk(); a.tick(0, run); assert.equal(a.tick(999, run).state, 'running');
+  const b = mk(); b.tick(0, run); const r = b.tick(1001, run);
+  assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
+  assert.equal(b.tick(1001 + 399, run).state, 'quiet'); assert.equal(b.tick(1001 + 400, run).state, 'running');
+});
