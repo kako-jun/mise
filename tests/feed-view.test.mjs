@@ -302,3 +302,20 @@ test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止ま
   // 長い空白(タブ復帰)でも 1 フレームは 100ms までしか進めない
   a.tick(now += 60000, run); assert.equal(adv, 0);
 });
+
+test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は即進まず、4秒待って数え直す・時間ぴったりで進む(#199)', () => {
+  const run = { enabled: true, held: false, atEnd: false };
+  const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
+  let now = 0; a.tick(now, run);
+  for (let i = 0; i < 10; i++) { now += 50; a.tick(now, run); } // 500ms 進む
+  now += 60000; let r = a.tick(now, run); // 隙間
+  assert.equal(r.advance, false); assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
+  let adv = 0; for (let i = 0; i < 40; i++) { now += 50; r = a.tick(now, run); if (r.advance) adv++; }
+  assert.equal(adv, 1, '隙間の 2000ms 後(待ち 300ms + 1000ms 経過)に 1 回だけ'); // 300ms 待ち→1000ms で進む
+  // 時間ぴったり(>=)
+  const b = lib.makeAutoAdvance({ interval: 100, resumeDelay: 0 });
+  b.tick(0, run); assert.equal(b.tick(50, run).advance, false); assert.equal(b.tick(100, run).advance, true);
+  // 隙間が gap ちょうどなら保留しない
+  const c = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300, gap: 1000 });
+  c.tick(0, run); assert.notEqual(c.tick(1000, run).state, 'quiet');
+});
