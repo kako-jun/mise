@@ -38,6 +38,12 @@
 
 ### 実行と排他
 
+**初回実行前の前提**: 旧 `export_sql.py` の写像は `deferred` や `review_state='pending'` を `reviewing` にしうる。次の件数が 0 であること。
+
+`SELECT COUNT(*) FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state='reviewing' AND (c.review_state IS NULL OR c.review_state='')`
+
+0 でない時、判定段はそれらを「判定を持たない古い `reviewing`」として取り直し、旧データを LLM に送ってしまう。先に中身を確認する。`review_state` を既に持つ行は claim せず、`fetched` のまま決定的に移すだけ（途中で落ちても次回の実行が拾う）。
+
 **ランナーは 1 つだけ動かすのを推奨**。それでも二重に動いた時のために、行を取る前に `url_progress.state` を `fetched`→`reviewing`（条件付き UPDATE。取れた行だけ処理）にして取り合いを避ける。判定を持たないまま 30 分を超えた `reviewing` は取り直せる（落ちたランナーの跡）。人の審査待ち（`review_state` あり）の `reviewing` は触らない。書き込み後に状態を読み戻し、他が動かした行は成功に数えない。
 
 ### 失敗の扱い

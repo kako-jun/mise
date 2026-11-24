@@ -5,7 +5,7 @@
 -- 戻し方: DROP TABLE llm_ledger;（他から参照されない）
 CREATE TABLE IF NOT EXISTS llm_ledger (
   id TEXT PRIMARY KEY,
-  ts TEXT NOT NULL,                       -- UTC ISO8601 (YYYY-MM-DDTHH:MM:SSZ)。月の集計は substr(ts,1,7)
+  ts TEXT NOT NULL,                       -- UTC ISO8601 (YYYY-MM-DDTHH:MM:SSZ)。月の集計は ts の範囲（月初 <= ts < 翌月初、D1 の時計）で、idx_llm_ledger_ts を使う
   run TEXT,
   kind TEXT NOT NULL CHECK (kind IN ('reserve','call','release')),
   model TEXT,

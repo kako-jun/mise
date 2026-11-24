@@ -358,17 +358,22 @@ def unclaim_statements(row):
     return [(PROGRESS_SQL, ["fetched", row["identity_key"]])]
 
 
+# A row that already carries a review_state is NOT claimed: its move is deterministic and idempotent, guarded by 'fetched' only,
+# so a run that dies half way leaves it 'fetched' (never a 'reviewing' nobody picks up).
+MOVE_SQL = "UPDATE url_progress SET state=?, updated_at=datetime('now') WHERE identity_key=? AND state='fetched'"
+
+
 def transition_statements(row):
     """A row that already carries a review_state: no LLM, only the move (pending goes through the policy again)."""
     rs = row["review_state"]
     if rs in ("approved", "rejected"):
-        return [(PROGRESS_SQL, [rs, row["identity_key"]])]
+        return [(MOVE_SQL, [rs, row["identity_key"]])]
     nrs, why, ps = decide(dict(row, key=row["identity_key"]))
     stmts = []
     if nrs != "pending":
         stmts.append(("UPDATE url_candidates SET review_state=?, reviewed_at=?, review_reason=?, updated_at=datetime('now') "
                       "WHERE identity_key=? AND review_state='pending'", [nrs, now_iso(), why, row["identity_key"]]))
-    stmts.append((PROGRESS_SQL, [ps, row["identity_key"]]))
+    stmts.append((MOVE_SQL, [ps, row["identity_key"]]))
     return stmts
 
 
@@ -434,22 +439,32 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
         except Exception as e:  # noqa: BLE001 - the claim then expires by itself after CLAIM_MINUTES
             log(f"judge: cleanup write failed ({type(e).__name__})")
 
-    moved = [r for r in claim(client, [r for r in rows if r.get("review_state")])]
-    for r in moved:
+    for r in rows:
+        if not r.get("review_state"):
+            continue
         try:
             write(client, transition_statements(r))
             count("moved_without_llm")
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - the row stays 'fetched' and is moved by the next run
             log(f"judge: move of {r['identity_key']} failed ({type(e).__name__})")
             count("write_failed")
-            best_effort(unclaim_statements(r))
 
     def do_chunk(chunk):
         if ctx.stop or ctx.consecutive_failures >= 3:
             return
-        chunk = claim(client, chunk)
-        if not chunk:
-            return
+        claimed = []
+        try:
+            claimed = claim(client, chunk)
+            if claimed:
+                _judge_and_write(claimed)
+        except LedgerSettleError:
+            raise
+        except Exception as e:  # noqa: BLE001 - a D1 error around reserve/claim/read-back: give the claim back, stop, report
+            ctx.stop = ctx.stop or f"D1 error ({type(e).__name__})"
+            log(f"judge: stopping on {type(e).__name__}; rows given back")
+            best_effort([s for r in claimed for s in unclaim_statements(r)])
+
+    def _judge_and_write(chunk):
         cands = [candidate_from_row(r) for r in chunk]
         try:
             results = judge_chunk(ctx, cands)
@@ -479,9 +494,10 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             write(client, stmts)
         except Exception as e:  # noqa: BLE001 - the cost is already settled; count the attempt, rows stay 'fetched'
             log(f"judge: write of {len(chunk)} rows failed ({type(e).__name__}); counting an attempt")
-            for r in chunk:
+            for r, (kind, _ps) in zip(chunk, kinds):
                 count("write_failed")
-                best_effort(failure_statements(r, "write failed")[0])
+                # only rows that were really judged (or failed on their own) count an attempt; rows left undone by a stop do not
+                best_effort(unclaim_statements(r) if kind == "stopped" else failure_statements(r, "write failed")[0])
             return
         want = {r["identity_key"]: {"judged": ps, "failed": "failed", "candidate": "candidate"}.get(k, "fetched")
                 for r, (k, ps) in zip(chunk, kinds)}
@@ -506,8 +522,10 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
         for c in chunks:
             do_chunk(c)
     stats["cost_usd"] = round(ledger.spent, 6)
+    if not ctx.stop and ctx.consecutive_failures >= 3:
+        ctx.stop = "3 consecutive requests without a usable result"
     stats["stopped"] = ctx.stop
-    stats["budget_stopped"] = bool(ctx.stop)
+    stats["budget_stopped"] = bool(ctx.stop) and ctx.stop.startswith("monthly cap")
     log(f"judge: {stats}")
     if fatal:
         raise fatal[0]

@@ -221,6 +221,44 @@ class JudgeStageTest(unittest.TestCase):
         self.assertEqual(self.d1.state('good.example'), 'failed')              # the other runner's state is kept
         self.assertEqual((s['judged'], s['approved'], s['lost_claim']), (0, 0, 1))
 
+    def test_interrupted_move_of_reviewed_rows_is_picked_up_later(self):
+        self.d1.add('p.example', review_state='pending', description_ja='a')
+        self.d1.add('a.example', review_state='approved', description_ja='a')
+        orig = self.d1.batch
+        calls = []
+
+        def dies(statements):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError('process died')
+            return orig(statements)
+        self.d1.batch = dies
+        self.run_stage()
+        self.d1.batch = orig
+        states = {k: self.d1.state(k) for k in ('p.example', 'a.example')}
+        self.assertNotIn('reviewing', states.values())                          # never left claimed
+        self.d1.query("UPDATE url_progress SET updated_at=datetime('now','-2 days')")
+        self.run_stage()                                                        # two days later
+        self.assertEqual(self.d1.state('a.example'), 'approved')
+        self.assertEqual(self.d1.state('p.example'), 'candidate')
+        self.assertEqual(self.llm.calls, [])
+
+    def test_d1_error_around_reserve_gives_claim_back_and_reports(self):
+        self.d1.add('good.example')
+        orig = self.d1.query
+
+        def flaky(sql, params=()):
+            if sql.startswith('INSERT INTO llm_ledger'):
+                raise RuntimeError('d1 down')
+            return orig(sql, params)
+        self.d1.query = flaky
+        s = self.run_stage()
+        self.d1.query = orig
+        self.assertIn('D1 error', s['stopped'])
+        self.assertFalse(s['budget_stopped'])
+        self.assertEqual(self.d1.state('good.example'), 'fetched')
+        self.assertFalse(self.d1.cand('good.example')['notes'])
+
     def test_second_runner_gets_nothing(self):
         self.d1.add('good.example', state='reviewing')                         # runner A holds it
         s = self.run_stage()
