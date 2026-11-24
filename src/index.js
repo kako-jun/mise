@@ -57,7 +57,10 @@ app.get('/api/progress', async c => {
   const source = c.req.query('source') ?? 'all', state = c.req.query('state') ?? 'all', missing = c.req.query('missing') ?? 'all';
   const states = ['discovered','queued','fetched','candidate','reviewing','approved','rejected','failed','blocked','published'];
   if (q.length > 100 || !['all','discovered','request'].includes(source) || !['all', ...states].includes(state) || !['all','favicon','thumbnail','media'].includes(missing)) return c.json({ error: 'invalid filter' }, 400);
-  const where = [], values = [];
+  // Migration collision fallbacks preserve legacy rows losslessly; their canonical summary
+  // row is what the public one-row-per-URL table exposes.
+  const where = ["p.identity_key NOT LIKE '#collision#%'"];
+  const values = [];
   if (q) {
     const escaped = `%${q.replace(/[\\%_]/g, c => `\\${c}`)}%`;
     where.push("(p.url LIKE ? ESCAPE '\\' OR COALESCE(s.name,'') LIKE ? ESCAPE '\\' OR COALESCE(s.description_ja,'') LIKE ? ESCAPE '\\' OR COALESCE(s.description_en,'') LIKE ? ESCAPE '\\')");
@@ -76,8 +79,8 @@ app.get('/api/progress', async c => {
       (SELECT COUNT(*) FROM site_categories sc WHERE sc.site_id=s.id) AS categories_count,
       CASE WHEN s.favicon_path IS NOT NULL THEN 1 ELSE 0 END AS favicon,
       CASE WHEN s.thumb_path IS NOT NULL THEN 1 ELSE 0 END AS thumbnail,
-      (SELECT state FROM site_media_jobs mj WHERE mj.identity_key=p.identity_key AND mj.kind='favicon') AS favicon_state,
-      (SELECT state FROM site_media_jobs mj WHERE mj.identity_key=p.identity_key AND mj.kind='thumbnail') AS thumbnail_state,
+      (SELECT state FROM site_media_jobs mj WHERE mj.site_id=s.id AND mj.kind='favicon') AS favicon_state,
+      (SELECT state FROM site_media_jobs mj WHERE mj.site_id=s.id AND mj.kind='thumbnail') AS thumbnail_state,
       CASE WHEN s.id IS NOT NULL THEN 'published' ELSE p.state END AS state,
       p.source AS source, p.request_type AS request_type, p.request_status AS request_status, p.updated_at AS updated_at
     ${from}${filterSql}
