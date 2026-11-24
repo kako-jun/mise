@@ -289,6 +289,9 @@ class Guards(Runner):
         self.assertEqual(code, 4)
         self.assertLessEqual(len(inner.calls), 2)   # the first chunk only (triage + describe); no further chunk after the loss
         self.assertEqual(d1.one("SELECT COUNT(*) FROM url_progress WHERE state='reviewing'")[0], 0)   # the claim was given back
+        done = d1.db.execute("SELECT COUNT(*) FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state<>'fetched' AND p.state<>'discovered' "
+                             "AND c.review_state IN ('approved','pending','rejected') AND c.identity_key LIKE 'site%-home.jp/'").fetchone()[0]
+        self.assertGreaterEqual(done, 1)   # the first chunk's paid result was written before the claim was given back
         # restart 31 minutes later (the thief is gone): not blocked by the pre-flight, finishes
         d1.db.execute("DELETE FROM discovery_cursors")
         d1.db.execute("UPDATE url_progress SET updated_at=datetime('now','-31 minutes') WHERE state IN ('fetched','reviewing','approved','candidate')")
