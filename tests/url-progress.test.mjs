@@ -63,6 +63,19 @@ test('site insert creates the canonical discovered row and marks it published in
   assert.equal(db.prepare("SELECT identity_key FROM url_progress").get().identity_key, 'pub.example/');
 });
 
+test('progress API shows the canonical collision summary and hides preserved fallback copies', async () => {
+  const db = fixture(); site(db, 'pub', 'https://pub.example/');
+  db.prepare(`INSERT INTO url_progress(identity_key,url,source,state,updated_at)
+    VALUES('#collision#legacy-pub','https://pub.example/','discovered','fetched','2026-11-24 01:00:00')`).run();
+  const body = await (await api(db, '/api/progress')).json();
+  assert.equal(body.total, 1);
+  assert.equal(body.results.length, 1);
+  assert.equal(body.results[0].url, 'https://pub.example/');
+  assert.equal(body.results[0].state, 'published');
+  assert.equal(body.results[0].favicon_state, 'pending');
+  assert.equal(body.results[0].thumbnail_state, 'pending');
+});
+
 test('GET /api/progress keeps request source/status on an already published site', async () => {
   const db = fixture(); site(db, 'pub', 'https://pub.example/');
   db.prepare("UPDATE url_progress SET source='request',request_type='remove',request_status='pending' WHERE identity_key='pub.example/'").run();
