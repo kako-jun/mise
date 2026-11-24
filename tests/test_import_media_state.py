@@ -2,17 +2,31 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import contextlib
+import io
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'scripts' / 'favicon'))
 import favicon
+import import_media_state
 from import_media_state import import_ledger
 
 
 class ImportMediaStateTest(unittest.TestCase):
+    def test_cli_defaults_to_read_only_dry_run(self):
+        client = Mock()
+        with patch.object(import_media_state, 'Cloudflare', return_value=client), \
+             patch.object(import_media_state, 'import_ledger', return_value={'verified': [], 'ineligible': []}) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            result = import_media_state.main(['--kind', 'favicon', '--source', 'local.sqlite=assets'])
+        self.assertEqual(result, 0)
+        self.assertIs(run.call_args.kwargs['apply'], False)
+        client.put_r2.assert_not_called()
+        client.query.assert_not_called()
+
     def make_ledger(self, path, site_id, icon_hash, changed_at):
         db = favicon.connect(path)
         favicon.import_sites(db, [(site_id, 'https://example.org/')])
@@ -33,6 +47,27 @@ class ImportMediaStateTest(unittest.TestCase):
             ]
             client.get_r2.return_value = content
             result = import_ledger(client, 'favicon', [(ledger, Path(tmp))], apply=False)
+        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True}])
+        self.assertFalse(result['ineligible'])
+        client.put_r2.assert_not_called()
+        client.query.assert_not_called()
+
+    def test_dry_run_reports_local_only_asset_as_would_upload_without_writing(self):
+        content = b'local-only-webp'
+        content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ledger, assets = root / 'favicons.sqlite', root / 'assets'
+            assets.mkdir()
+            (assets / favicon.site_name('site-1')).write_bytes(content)
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            client = Mock()
+            client.batch.return_value = [
+                [{'progress_key': 'example.org/', 'favicon_path': None, 'thumb_path': None}],
+                [{'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None, 'updated_at': 'old'}],
+            ]
+            client.get_r2.return_value = None
+            result = import_ledger(client, 'favicon', [(ledger, assets)], apply=False)
         self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': False, 'would_import': True}])
         self.assertFalse(result['ineligible'])
         client.put_r2.assert_not_called()

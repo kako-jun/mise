@@ -129,22 +129,31 @@ def import_ledger(client, kind, sources, apply=False):
                         if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
                         outcomes['ineligible'].append({'site_id': sid, 'reason': 'existing R2 object differs; refusing overwrite'})
                         continue
-                elif not apply or data is None:
+                elif not apply and data is None:
+                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
+                    continue
+                elif not apply:
+                    # Dry-run can validate the local bytes/hash and report the upload
+                    # that --apply would perform without treating the absent remote
+                    # object as a failure or attempting a write.
+                    remote = None
+                elif data is None:
                     if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
                     outcomes['ineligible'].append({'site_id': sid, 'reason': 'asset missing locally and in R2'})
                     continue
                 else:
                     client.put_r2(prefix + key_name, data)
                     remote = client.get_r2(prefix + key_name)
-                if remote is None:
+                if apply and remote is None:
                     if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
                     outcomes['ineligible'].append({'site_id': sid, 'reason': 'R2 readback failed after upload'})
                     continue
-                actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
-                if actual != content_hash:
-                    if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
-                    outcomes['ineligible'].append({'site_id': sid, 'reason': 'remote R2 asset hash mismatch'})
-                    continue
+                if remote is not None:
+                    actual = favicon.icon_name(remote) if kind == 'favicon' else thumbnail.content_hash(remote)
+                    if actual != content_hash:
+                        if apply: client.query('UPDATE site_media_jobs SET lease_owner=NULL,lease_until=NULL WHERE site_id=? AND kind=? AND lease_owner=?', (sid, kind, owner))
+                        outcomes['ineligible'].append({'site_id': sid, 'reason': 'remote R2 asset hash mismatch'})
+                        continue
             meta = {k: v for k, v in row.items() if k != 'site_id'}
             checked = row.get('last_checked_at')
             retry = row.get('next_check_at')
