@@ -52,7 +52,7 @@ class Filters(unittest.TestCase):
 
     def test_only_entrances_and_safety_rejects_removed(self):
         got = dlc.extract_outbound(TOP, 'https://example-site.jp/')
-        for bad in ['twitter.com', 't.co', 'apple.com', 'cloudfront.net', '192.168', '127.0.0.1', 'secret.example.jp', '8080', 'www.hatenablog.com', 'sub.example-site.jp']:
+        for bad in ['twitter.com', 't.co', 'apple.com', 'cloudfront.net', '192.168', '127.0.0.1', 'secret.example.jp', '8080', 'www.hatenablog.com']:
             self.assertFalse(any(bad in u for u in got), bad)
 
     def test_cc_host_filter_same(self):
@@ -66,6 +66,20 @@ class Filters(unittest.TestCase):
         for token in ['priority(', 'rank', 'popular', 'pagerank', 'harmonic', 'indegree']:
             self.assertNotIn(token, code, token)
         self.assertIn('ORDER BY id', code)   # links の順序は sites.id(機械的)
+
+
+class SiteIdentity(unittest.TestCase):
+    def test_same_site_is_same_host_only(self):
+        self.assertTrue(dlc.same_site('www.a.jp', 'a.jp'))
+        self.assertFalse(dlc.same_site('a.sakura.ne.jp', 'b.sakura.ne.jp'))
+        self.assertFalse(dlc.same_site('example-site.jp', 'sub.example-site.jp'))
+        got = dlc.extract_outbound('<a href="https://b.sakura.ne.jp/">x</a><a href="https://www.a.sakura.ne.jp/">y</a>', 'https://a.sakura.ne.jp/')
+        self.assertEqual(got, ['https://b.sakura.ne.jp/'])
+
+    def test_medium_apex_is_entrance_but_user_blog_passes(self):
+        self.assertEqual(dlc.entrance_reason('medium.com'), 'platform_apex')
+        self.assertEqual(dlc.entrance_reason('www.medium.com'), 'platform_apex')
+        self.assertIsNone(dlc.entrance_reason('alice.medium.com'))
 
 
 class LinksTest(unittest.TestCase):
@@ -101,6 +115,14 @@ class LinksTest(unittest.TestCase):
         self.assertIn('https://zzz.example.org/', urls(self.d1))
         self.assertEqual(stats.mismatch, 0)
 
+    def test_tilde_path_reaches_url_progress_and_cc_arg_validated(self):
+        self.run_links(True)
+        self.assertIn('https://uni.ac.jp/~sato/', urls(self.d1))
+        self.assertNotIn('https://uni.ac.jp/', urls(self.d1))
+        self.assertIn('https://sub.example-site.jp/', urls(self.d1))
+        with self.assertRaises(SystemExit):
+            do.main(['--source', 'cc', '--cc-sample-every', '0'])
+
     def test_order_is_by_id_not_popularity(self):
         order = []
         real = do.PoliteFetcher.get
@@ -118,7 +140,7 @@ class LinksTest(unittest.TestCase):
         self.assertEqual(len(urls(self.d1)), 2)
         self.assertIsNone(cursor(self.d1, 'links', 'sites_id'))   # 上限で捨てた候補があるサイトはカーソルを進めない
         self.run_links(True)
-        self.assertEqual(len(urls(self.d1)), 6)
+        self.assertEqual(len(urls(self.d1)), 7)
 
     def test_unfetchable_site_still_advances(self):
         self.pages.pop('https://second.example.jp/')

@@ -511,6 +511,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.limit is not None and a.limit < 1:
         ap.error('--limit は 1 以上')
+    if a.cc_sample_every < 1:
+        ap.error('--cc-sample-every は 1 以上')
     import media_online
     client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
     sources = SOURCES if a.source == 'all' else (a.source,)

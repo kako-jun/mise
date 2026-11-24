@@ -15,7 +15,7 @@ import urllib.parse
 import zlib
 
 import fetcher
-from hostnames import blocklist, from_reversed, host_key, normalize_host, registrable
+from hostnames import blocklist, from_reversed, host_key, normalize_host
 
 CC_BASE = 'https://data.commoncrawl.org/'
 CC_GRAPH = 'cc-main-2026-jul-aug-sep'   # pipeline/discover.py と同じリリース
@@ -39,11 +39,15 @@ ENTRANCE_TREE = (
     'amzn.asia', 'rebrand.ly', 'cutt.ly',
     # アプリストア・大手ポータル・EC・百科事典・コード置き場の本体
     'apple.com', 'microsoft.com', 'amazon.co.jp', 'amazon.com', 'rakuten.co.jp', 'wikipedia.org', 'wikimedia.org', 'wikidata.org',
-    'github.com', 'crates.io', 'npmjs.com', 'pypi.org', 'zenn.dev', 'qiita.com', 'dev.to', 'medium.com', 'readspeaker.com', 'tabelog.com', 'gurunavi.com', 'gnavi.co.jp', 'hotpepper.jp', 'retty.me',
+    'github.com', 'crates.io', 'npmjs.com', 'pypi.org', 'zenn.dev', 'qiita.com', 'dev.to', 'readspeaker.com', 'tabelog.com', 'gurunavi.com', 'gnavi.co.jp', 'hotpepper.jp', 'retty.me',
     # CDN・インフラ
     'cloudfront.net', 'akamaized.net', 'akamai.net', 'fastly.net', 'cloudflare.com', 'amazonaws.com', 'azureedge.net',
     'googleapis.com', 'gstatic.com', 'googleusercontent.com', 'doubleclick.net', 'googletagmanager.com', 'google-analytics.com',
 )
+
+
+# 本体(apex・www)だけ入口。配下の利用者サブドメイン(alice.medium.com 等)は小さなサイトなので通す(platforms.txt と同じ扱い)
+ENTRANCE_APEX = ('medium.com',)
 
 
 def _platforms():
@@ -58,7 +62,7 @@ def entrance_reason(host):
         return 'invalid_host'
     if any(host == e or host.endswith('.' + e) for e in ENTRANCE_TREE):
         return 'entrance'
-    if host_key(host) in _platforms():
+    if host_key(host) in _platforms() or host_key(host) in ENTRANCE_APEX:
         return 'platform_apex'
     return None
 
@@ -84,14 +88,8 @@ def site_level_url(href, base=None):
 
 
 def same_site(a, b):
-    """同じサイトか。同じ登録ドメインでも、共有サービス(xxx.hatenablog.com 同士)は別サイト。"""
-    a, b = host_key(a), host_key(b)
-    if a == b:
-        return True
-    reg = registrable(a)
-    if reg != registrable(b):
-        return False
-    return not any(reg == e or reg.endswith('.' + e) for e in _platforms())
+    """同じサイトか。同一ホスト(www. を無視)だけ。サブドメインは別サイト(a.sakura.ne.jp と b.sakura.ne.jp は別。既知のものは後段で落ちる)。"""
+    return host_key(a) == host_key(b)
 
 
 HREF = re.compile(r'''<a\b[^>]*?\bhref=["']([^"']+)["']''', re.I)
@@ -135,7 +133,7 @@ def run_links(sink, cursors, pf, client, max_sites=DEFAULT_MAX_SITES):
             else:
                 fetched_ok += 1
                 for u in extract_outbound(html, row['url']):
-                    sink.offer('links', 'outbound-link', u)
+                    sink.offer('links', 'outbound-link', u, keep_path=urllib.parse.urlsplit(u).path != '/')   # /~user/ はパスが 1 サイト
             sink.flush()   # 入れて検証してからカーソルを進める
             if st['over_limit'] > before or sink.stats.mismatch:
                 ended = True   # 上限で捨てた候補がある。このサイトは次回やり直す(既知は除かれる)
