@@ -6,7 +6,7 @@
 順序は機械的: links は sites.id の昇順、cc は CC ファイル内の並び順とホスト名ハッシュ(crc32)の 1/N。
 
 ローカルに状態を持たない(ファイル・キャッシュ・SQLite を作らない)。続きの位置は D1 の discovery_cursors:
-  links / sites_id                      = 最後に処理し終えた sites.id(続きは id > この値)
+  links / sites_id                      = 最後に処理し終えた sites.id(TEXT。続きは id > この値の文字列比較)
   cc    / <graph>/part<N>/every<M>      = .jp ホスト行を何行読み終えたか('done' = 最後まで読み終えた)
 """
 import re
@@ -114,7 +114,7 @@ def extract_outbound(html, page_url):
 def run_links(sink, cursors, pf, client, max_sites=DEFAULT_MAX_SITES):
     """公開済みサイト(sites)を id 昇順に、続きから max_sites 件ずつ。トップを取り、外部リンク先を候補にする。"""
     st = sink.stats.rows['links']
-    last = int(cursors.get('links', 'sites_id') or 0)
+    last = cursors.get('links', 'sites_id') or ''   # sites.id は TEXT(例 fr-3goo-co-jp-2f725017)。文字列のまま keyset 比較する
     fetched_ok, reasons, processed, ended = 0, {}, 0, False
     while processed < max_sites and sink.room('links') and not sink.stats.mismatch and not ended:
         rows = client.query('SELECT id, url FROM sites WHERE id > ? ORDER BY id LIMIT ?', (last, min(LINKS_PAGE, max_sites - processed)))
@@ -138,10 +138,10 @@ def run_links(sink, cursors, pf, client, max_sites=DEFAULT_MAX_SITES):
             if st['over_limit'] > before or sink.stats.mismatch:
                 ended = True   # 上限で捨てた候補がある。このサイトは次回やり直す(既知は除かれる)
                 break
-            last = row['id']
+            last = str(row['id'])
             cursors.set('links', 'sites_id', last)
             processed += 1
-    sink.stats.notes.append(f'links: 処理 {processed} サイト(取得できた {fetched_ok} / 取得できず {sum(reasons.values())} {dict(sorted(reasons.items()))}) カーソル id={last}')
+    sink.stats.notes.append(f'links: 処理 {processed} サイト(取得できた {fetched_ok} / 取得できず {sum(reasons.values())} {dict(sorted(reasons.items()))}) カーソル id={last}')   # 「処理 0 サイト」は終端判定に使われる。書式を変えない
 
 
 # ------------------------------------------------------------------ cc
