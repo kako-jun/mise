@@ -390,8 +390,8 @@ html[data-theme="dark"] .back-to-top { background: #1a1f22; border-color: #4e8e9
 .feed-entry:hover { border-color: currentColor; }
 .feed-entry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 html[data-theme="dark"] .feed-entry, html[data-theme="dark"] .feed-entry:visited { border-color: #4e8e9b; color: #82ddea; }
-/* 英語の文言は長く、幅の狭い画面ではインストール案内（左半分）と重なる。その幅だけ英語はアイコンのみ（名前は文字のまま読み上げ・title に出る） */
-@media (max-width: 480px) { html[lang="en"] .feed-entry > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } html[lang="en"] .feed-entry, html[lang="en"] .feed-entry:visited { width: 44px; padding: 0; } }
+/* 英語の文言は長く、幅の狭い画面ではインストール案内（左半分）と重なる。その幅だけ英語は 44px の高さの中で 2 行（Vertical / feed）に折り返す */
+@media (max-width: 480px) { html[lang="en"] .feed-entry > span { white-space: normal; width: min-content; line-height: 1.15; text-align: left; } }
 @media (max-width: 380px) { .feed-entry, .feed-entry:visited { padding: 0 8px; gap: 4px; font-size: 12px; } }
 .category-recent .site-head { flex-wrap: wrap; }
 /* 縦フィードの入口（#183）: 高さは 44px 固定の flex 中央寄せ。対応ブラウザだけ文字を text-box で大文字高〜ベースラインにして、アイコンと文字の中心を揃える。 */
