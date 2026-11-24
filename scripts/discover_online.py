@@ -4,7 +4,7 @@
 ローカルに状態を持たない(SQLite の frontier・CSV・JSONL・キャッシュ・チェックポイントを作らない)。
 続きの位置とリースは D1 の discovery_cursors(migration 0037)に置く。標準出力のレポートだけが出力。
 
-  uv run python scripts/discover_online.py --source wikidata|official|links|all [--limit N] [--dry-run | --apply]
+  uv run python scripts/discover_online.py --source wikidata|official|links|cc|all [--limit N] [--dry-run | --apply]
 
 既定は --dry-run(D1 を読み、供給元を取得し、入れるはずの件数をカテゴリ別に出す。何も書かない)。
 Cloudflare REST は scripts/media_online.py の Cloudflare クライアント(CLOUDFLARE_API_TOKEN 必須)。
@@ -40,7 +40,7 @@ REQUEST_INTERVAL = 0.3        # D1 へのリクエスト間隔(秒)
 DIRECTORY_WAIT = 2.0          # 公式ディレクトリのページ取得間隔(秒)
 WDQS_ABORT_EXIT = 3
 LEASE_LOST_EXIT = 4
-SOURCES = ('wikidata', 'official', 'links')
+SOURCES = ('wikidata', 'official', 'links', 'cc')
 
 INTERNAL_SUFFIXES = ('.local', '.localhost', '.internal', '.intranet', '.lan', '.home', '.corp', '.test', '.example', '.invalid', '.onion')
 # 会員一覧から出る外部リンクのうち、会員の公式サイトではないもの(SNS・検索・動画・共有)
@@ -456,7 +456,7 @@ def report(stats, apply, out=print):
         out(f'!! verify mismatch: {stats.mismatch} 件')
 
 
-def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None):
+def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None, extra=None):
     stats = Stats()
     lease = lease or Lease(client)
     if apply and not lease.acquire():
@@ -477,8 +477,9 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
                 stats.notes.append('official: 照合不一致のため書き込みを止めた')
             else:
                 run_official(sink, pf or PoliteFetcher())
-        if 'links' in sources:
-            stats.notes.append('links: 未実装(既掲載サイトからの外部リンク発見はこのランナーでは扱わない)')
+        if 'links' in sources or 'cc' in sources:   # scripts/discover_links_cc.py(links: 公開済みサイトの外部リンク / cc: Common Crawl ホストグラフ)
+            import discover_links_cc
+            discover_links_cc.run_sources(sink, cursors, sources, client, pf or PoliteFetcher(), extra)
         sink.flush()
     except LeaseLost as e:
         lost = True
@@ -499,19 +500,23 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--source', choices=['wikidata', 'official', 'links', 'all'], default='all')
+    ap.add_argument('--source', choices=['wikidata', 'official', 'links', 'cc', 'all'], default='all')
     ap.add_argument('--limit', type=int, default=None, help='供給元ごとの追加(予定)件数の上限')
     ap.add_argument('--max-rows', type=int, default=1000, help='wikidata: 1 回に取る SPARQL 行数の合計の上限')
+    ap.add_argument('--max-sites', type=int, default=100, help='links: 1 回に処理する公開済みサイト数の上限(sites.id 昇順で続きから)')
+    ap.add_argument('--cc-sample-every', type=int, default=1000, help='cc: ホスト名ハッシュで 1/N を決定論的に抽出')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かない')
     mode.add_argument('--apply', action='store_true', help='url_progress へ書く')
     a = ap.parse_args(argv)
     if a.limit is not None and a.limit < 1:
         ap.error('--limit は 1 以上')
+    if a.cc_sample_every < 1:
+        ap.error('--cc-sample-every は 1 以上')
     import media_online
     client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
     sources = SOURCES if a.source == 'all' else (a.source,)
-    code, _ = run(client, sources, a.apply, a.limit, a.max_rows)
+    code, _ = run(client, sources, a.apply, a.limit, a.max_rows, extra={'max_sites': a.max_sites, 'cc_sample_every': a.cc_sample_every})
     return code
 
 
