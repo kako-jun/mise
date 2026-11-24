@@ -42,10 +42,18 @@ FROM (
   )
 );
 
+-- Materialize the expensive URL parser once, then use indexed lookups below. Correlated
+-- lookups against the view repeat its sites/requests UNION for every row and exceed D1
+-- CPU limits at production scale.
+CREATE TABLE _migration_0034_identity_urls AS
+SELECT entity,id,url,identity_key FROM progress_identity_urls;
+CREATE INDEX _migration_0034_identity_entity_id ON _migration_0034_identity_urls(entity,id);
+CREATE INDEX _migration_0034_identity_url ON _migration_0034_identity_urls(url);
+
 ALTER TABLE requests ADD COLUMN progress_identity_key TEXT;
-UPDATE requests SET progress_identity_key=(SELECT identity_key FROM progress_identity_urls WHERE entity='request' AND progress_identity_urls.id=requests.id);
+UPDATE requests SET progress_identity_key=(SELECT identity_key FROM _migration_0034_identity_urls WHERE entity='request' AND _migration_0034_identity_urls.id=requests.id);
 CREATE INDEX IF NOT EXISTS idx_requests_progress_identity ON requests(progress_identity_key,id);
-UPDATE sites SET progress_key=(SELECT identity_key FROM progress_identity_urls WHERE entity='site' AND progress_identity_urls.id=sites.id);
+UPDATE sites SET progress_key=(SELECT identity_key FROM _migration_0034_identity_urls WHERE entity='site' AND _migration_0034_identity_urls.id=sites.id);
 CREATE INDEX IF NOT EXISTS idx_sites_progress_key ON sites(progress_key);
 
 -- D1's SQL authorizer rejects TEMP schema objects (`SQLITE_AUTH`). These short-lived
@@ -75,7 +83,7 @@ WITH ranked AS (
     ROW_NUMBER() OVER (PARTITION BY v.identity_key ORDER BY (p.state='published') DESC, datetime(p.updated_at) DESC, p.identity_key) AS rn,
     MIN(datetime(p.discovered_at)) OVER (PARTITION BY v.identity_key) AS first_seen,
     MAX(datetime(p.updated_at)) OVER (PARTITION BY v.identity_key) AS last_seen
-  FROM url_progress p JOIN progress_identity_urls v ON v.url=p.url
+  FROM url_progress p JOIN _migration_0034_identity_urls v ON v.url=p.url
 ), latest_request AS (
   SELECT progress_identity_key, type, status, created_at,
     ROW_NUMBER() OVER (PARTITION BY progress_identity_key ORDER BY id DESC) AS rn
@@ -92,6 +100,7 @@ DELETE FROM url_progress;
 INSERT INTO url_progress(identity_key,url,source,state,request_type,request_status,discovered_at,updated_at)
 SELECT identity_key,url,source,state,request_type,request_status,discovered_at,updated_at FROM _migration_0034_progress_identity_rekey;
 DROP TABLE _migration_0034_progress_identity_rekey;
+DROP TABLE _migration_0034_identity_urls;
 
 DROP TRIGGER IF EXISTS requests_progress_ai;
 DROP TRIGGER IF EXISTS requests_progress_au;

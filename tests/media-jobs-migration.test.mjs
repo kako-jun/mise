@@ -132,6 +132,10 @@ test('0034 rekeys old fragment collisions and preserves the newest request overl
 test('0034 stages rekey data without SQLite TEMP schema objects rejected by D1', () => {
   const sql = readFileSync(new URL('../migrations/0034_progress_identity_rekey.sql', import.meta.url), 'utf8');
   assert.doesNotMatch(sql, /\bCREATE\s+TEMP(?:ORARY)?\b/i);
+  assert.match(sql, /CREATE INDEX _migration_0034_identity_entity_id/);
+  assert.match(sql, /CREATE INDEX _migration_0034_identity_url/);
+  assert.match(sql, /progress_identity_urls WHERE entity=/);
+  assert.match(sql, /_migration_0034_identity_urls WHERE entity=/);
   assert.match(sql, /CREATE TABLE _migration_0034_media_jobs_rekey AS/);
   assert.match(sql, /CREATE TABLE _migration_0034_progress_identity_rekey AS/);
   assert.match(sql, /DROP TABLE _migration_0034_media_jobs_rekey/);
