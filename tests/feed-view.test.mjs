@@ -278,3 +278,53 @@ test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照す
   for (const f of ['feed.css', 'feed-lib.js', 'feed.js']) assert.match(html, new RegExp('/' + f.replace('.', '\\.') + '\\?v=\\d+'));
   assert.equal(lib.navPosition(0, 500, true, 'en').denom, '500+');
 });
+
+test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止まり、再開は数え直す(#199)', () => {
+  const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
+  const run = { enabled: true, held: false, atEnd: false };
+  let now = 0, adv = 0, last;
+  const frames = (ms, ctx = run) => { for (let i = 0; i < ms / 50; i++) { now += 50; last = a.tick(now, ctx); if (last.advance) adv++; } };
+  a.tick(now, run);
+  frames(950); assert.equal(adv, 0); assert.ok(last.progress > .9 && last.state === 'running');
+  frames(100); assert.equal(adv, 1); // 1000ms で 1 回
+  frames(850); assert.equal(adv, 1); frames(100); assert.equal(adv, 2); // 続けて進む
+  // 手動操作: 進行を捨て、resumeDelay のあいだ進めない。その後 interval 数え直す
+  adv = 0; frames(500); a.poke(now); frames(250); assert.equal(last.state, 'quiet'); assert.equal(last.progress, 0);
+  frames(950); assert.equal(adv, 0); frames(300); assert.equal(adv, 1);
+  // held: 進めず進行を保つ。解けたら resumeDelay 待って最初から
+  adv = 0; frames(500); const p = last.progress; frames(5000, { ...run, held: true }); assert.equal(adv, 0); assert.equal(last.state, 'held'); assert.equal(last.progress, p);
+  frames(250); assert.equal(last.state, 'quiet'); frames(950); assert.equal(adv, 0); frames(350); assert.equal(adv, 1);
+  // オフ・終了カードでは進まず 0。巻き戻しの合図も出さない
+  adv = 0; frames(5000, { ...run, enabled: false }); assert.equal(adv, 0); assert.equal(last.progress, 0);
+  frames(5000, { ...run, atEnd: true }); assert.equal(adv, 0); assert.equal(last.state, 'off');
+  // reset(カード切替)で進行だけ 0 に
+  frames(500); a.reset(); frames(600); assert.equal(adv, 0);
+  // 長い空白(タブ復帰)でも 1 フレームは 100ms までしか進めない
+  a.tick(now += 60000, run); assert.equal(adv, 0);
+});
+
+test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は即進まず、4秒待って数え直す・時間ぴったりで進む(#199)', () => {
+  const run = { enabled: true, held: false, atEnd: false };
+  const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
+  let now = 0; a.tick(now, run);
+  for (let i = 0; i < 10; i++) { now += 50; a.tick(now, run); } // 500ms 進む
+  now += 60000; let r = a.tick(now, run); // 隙間
+  assert.equal(r.advance, false); assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
+  let adv = 0; for (let i = 0; i < 40; i++) { now += 50; r = a.tick(now, run); if (r.advance) adv++; }
+  assert.equal(adv, 1, '隙間の 2000ms 後(待ち 300ms + 1000ms 経過)に 1 回だけ'); // 300ms 待ち→1000ms で進む
+  // 時間ぴったり(>=)
+  const b = lib.makeAutoAdvance({ interval: 100, resumeDelay: 0 });
+  b.tick(0, run); assert.equal(b.tick(50, run).advance, false); assert.equal(b.tick(100, run).advance, true);
+  // 隙間が gap ちょうどなら保留しない
+  const c = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300, gap: 1000 });
+  c.tick(0, run); assert.notEqual(c.tick(1000, run).state, 'quiet');
+});
+
+test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は保留して quiet)(#199)', () => {
+  const run = { enabled: true, held: false, atEnd: false };
+  const mk = () => lib.makeAutoAdvance({ interval: 5000, resumeDelay: 400, gap: 1000 });
+  const a = mk(); a.tick(0, run); assert.equal(a.tick(999, run).state, 'running');
+  const b = mk(); b.tick(0, run); const r = b.tick(1001, run);
+  assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
+  assert.equal(b.tick(1001 + 399, run).state, 'quiet'); assert.equal(b.tick(1001 + 400, run).state, 'running');
+});

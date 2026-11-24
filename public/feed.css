@@ -193,3 +193,15 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
   #feed .f-end-actions button { padding: 1.07em 20px; text-box: trim-both cap alphabetic; }
   #feed .f-panel-acts button, #feed .f-panel-acts button:hover { padding: 0 10px; text-box: trim-both cap alphabetic; }
 }
+
+/* 自動送り(#199): 上下ボタン群の下のオン/オフ(文字だけ・周囲と同じ丸ボタン。大きさ・枠・色は `.f-nav button` が決める)と、画面下端の進行バー(高さ 4px・transform だけ更新) */
+#feed .f-nav .f-auto { position: absolute; top: 100%; left: 50%; margin: 22px 0 0 -22px; display: flex; flex-direction: column; align-items: center; justify-content: center; font: 600 11px/1.15 system-ui, sans-serif; }
+#feed .f-nav .f-auto[hidden] { display: none; }
+#feed .f-nav .f-auto[aria-pressed="false"] { opacity: .6; }
+#feed .f-nav .f-auto[aria-pressed="true"] .f-auto-state { font-weight: 800; text-decoration: underline; text-underline-offset: 2px; }
+#feed .f-progress { position: fixed; z-index: 3; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.22); pointer-events: none; transition: opacity .2s; }
+@media (min-width: 700px) { #feed .f-progress { left: 50%; right: auto; width: 520px; margin-left: -260px; } } /* PC はカード列の幅(白い余白の上に出さない) */
+#feed .f-progress i { display: block; width: 100%; height: 100%; background: #ffb27a; transform: scaleX(0); transform-origin: left center; will-change: transform; }
+#feed .f-progress[data-state="off"], #feed .f-progress:not([data-state]) { opacity: 0; }
+#feed .f-progress[data-state="held"] { opacity: .45; }
+#feed .f-progress[data-state="quiet"] { opacity: .7; }
