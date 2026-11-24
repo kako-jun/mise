@@ -23,3 +23,8 @@ test('公開コード（src/）は url_candidates を参照しない', () => {
   const walk = d => readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(new URL(`${e.name}/`, d)) : [new URL(e.name, d)]);
   for (const f of walk(new URL('../src/', import.meta.url))) assert.ok(!readFileSync(f, 'utf8').includes('url_candidates'), f.pathname);
 });
+
+test('公開コード（src/）は llm_ledger を参照しない（0038、非公開）', () => {
+  const walk = d => readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(new URL(`${e.name}/`, d)) : [new URL(e.name, d)]);
+  for (const f of walk(new URL('../src/', import.meta.url))) assert.ok(!readFileSync(f, 'utf8').includes('llm_ledger'), f.pathname);
+});
