@@ -77,7 +77,32 @@ class MediaOnlineTest(unittest.TestCase):
         self.assertEqual(seen[0].method, 'PUT')
         self.assertEqual(seen[0].data, b'webp bytes')
         self.assertEqual(seen[0].get_header('Content-type'), 'image/webp')
-        self.assertIn('/objects/thumb/abc.webp', seen[0].full_url)
+        self.assertEqual(seen[0].full_url,
+                         'https://api.cloudflare.com/client/v4/accounts/account/r2/buckets/mise-media/objects/thumb/abc.webp')
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer secret')
+
+    def test_r2_get_uses_cloudflare_rest_object_endpoint_and_bearer_auth(self):
+        seen = []
+        def opener(req, timeout):
+            seen.append(req)
+            return Response(b'webp bytes')
+        client = media_online.Cloudflare('account', 'secret', 'database', 'mise-media', opener=opener)
+        self.assertEqual(client.get_r2('icon/site-id.webp'), b'webp bytes')
+        self.assertEqual(seen[0].get_method(), 'GET')
+        self.assertEqual(seen[0].full_url,
+                         'https://api.cloudflare.com/client/v4/accounts/account/r2/buckets/mise-media/objects/icon/site-id.webp')
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer secret')
+
+    def test_cloudflare_account_id_can_be_discovered_with_account_list_permission(self):
+        seen = []
+        def opener(req, timeout):
+            seen.append(req)
+            return Response(json.dumps({'success': True, 'result': [{'id': 'discovered-account'}]}).encode())
+        with patch.dict(media_online.os.environ, {}, clear=True):
+            client = media_online.Cloudflare(token='secret', database='database', bucket='mise-media', opener=opener)
+        self.assertEqual(client.account, 'discovered-account')
+        self.assertEqual(seen[0].full_url, 'https://api.cloudflare.com/client/v4/accounts?per_page=1')
+        self.assertEqual(seen[0].get_header('Authorization'), 'Bearer secret')
 
     def test_memory_store_uploads_to_the_configured_prefix(self):
         client = Mock()
