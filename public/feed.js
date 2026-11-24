@@ -17,9 +17,9 @@
     sget(k) { try { return sessionStorage.getItem(k); } catch (_) { return null; } }, sset(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} } };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
-    ja: { searchLabel: 'サイトを検索', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
+    ja: { searchLabel: 'サイトを検索', clearSearch: '検索語を消去', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
       directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', updated: '更新', added: '登録', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
-    en: { searchLabel: 'Search sites', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
+    en: { searchLabel: 'Search sites', clearSearch: 'Clear search', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
       directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', updated: 'Updated', added: 'Added', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
@@ -229,7 +229,7 @@
   function markSeen(site) {
     if (!site || seen.sites[site.id]) return;
     seen.sites[site.id] = new Date().toISOString(); storage.set(SEEN_KEY, JSON.stringify(seen));
-    const n = seenCount(); updateSeenBadge();
+    const n = seenCount(); updateSeenBadge(); surfHop();
     if (!reduced.matches) { const num = $('.f-seen-num'); num && num.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.35)' }, { transform: 'scale(1)' }], { duration: 380, easing: 'ease-out' }); }
     if (MILESTONES.includes(n)) { const kit = $('.f-kittens'); if (kit) { kit.innerHTML = kittensHtml(); const last = kit.lastElementChild;
       if (last && !reduced.matches) { const a = last.animate([{ opacity: 0, transform: 'translateY(-14px) rotate(-20deg)' }, { opacity: 1, transform: 'translateY(2px)' }, { transform: 'translateY(0)' }], { duration: 700, easing: 'ease-out' }); addEventListener('pointerdown', () => a.finish(), { once: true }); } } }
@@ -239,6 +239,7 @@
   // 節目に届いた数だけ子猫が並ぶ(10件で1匹、50件で2匹…)。保存データからの導出なので別管理しない
   const kittensHtml = () => MILESTONES.filter(m => m <= seenCount()).map((m, i) => kittenSvg(i)).join('');
   function updateSeenBadge() {
+    const surf = $('.f-surf'); if (surf) { const sn = seenCount(); $('.f-surf-num', surf).textContent = String(sn).padStart(6, '0'); surf.title = surf.ariaLabel = t('seenTitle')(fmt(sn)); }
     const btn = $('.f-seen'); if (!btn) return; const n = seenCount(), m = nextMilestone(n);
     $('.f-seen-num', btn).textContent = String(n).padStart(6, '0'); btn.title = btn.ariaLabel = t('seenTitle')(fmt(n));
     const bar = $('.f-seen-bar i', btn); if (bar) { const prev = [0, ...MILESTONES].filter(x => x <= n).pop(); bar.style.width = m ? `${Math.round((n - prev) / (m - prev) * 100)}%` : '100%'; }
@@ -323,10 +324,34 @@
         event.preventDefault(); history.back();
       }
     });
+    // 検索欄は通常画面(#search-form)と同じ作り: 虫眼鏡・空白の placeholder(見える文言なし)・隠しラベル・クリアボタン(#214)
     const search = mk('form', 'f-search', { role: 'search', method: 'get', action: globalThis.MiseFeedEntry.directoryHref(scope) });
-    const input = mk('input', '', { type: 'search', name: 'q', placeholder: t('searchLabel'), 'aria-label': t('searchLabel'), autocomplete: 'off', required: '' });
-    search.append(input);
-    bar.append(back, search);
+    const label = mk('label', 'visually-hidden', { for: 'f-query' }); label.textContent = t('searchLabel');
+    const icon = mk('span', 'f-search-icon', { 'aria-hidden': 'true' });
+    icon.innerHTML = '<svg viewBox="0 -1.1 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>';
+    const input = mk('input', '', { id: 'f-query', type: 'search', name: 'q', size: '25', autocomplete: 'off', placeholder: ' ', required: '' });
+    const clear = mk('button', 'f-search-clear', { type: 'button', 'aria-label': t('clearSearch') });
+    clear.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    clear.addEventListener('click', () => { input.value = ''; input.focus(); });
+    search.append(label, icon, input, clear);
+    bar.append(back, search, surfCounter());
+    updateSeenBadge();
+  }
+
+  // ---- 右上の猫サーフィンと「見たサイト」数(#198)。数字は #58 の累計(markSeen)と同じ値。押すと詳細パネル ----
+  const surfSvg = '<svg class="f-surf-cat" viewBox="0 0 40 28" width="40" height="28" aria-hidden="true"><path d="M3 24c3-2 6-2 9 0s6 2 9 0 6-2 9 0 4 1 6 0" fill="none" stroke="#7fd6e6" stroke-width="2" stroke-linecap="round"/><g class="f-surf-rig"><path d="M6 21h28c0 2-2 3-4 3H10c-2 0-4-1-4-3z" fill="#e8b44a"/><path d="M11 9 14 4l3 4z" fill="#df7f3e"/><path d="M25 9 22 4l-3 4z" fill="#252c30"/><path d="M11 8h14v10c0 2-3 3-7 3s-7-1-7-3z" fill="#fff3df"/><path d="M11 8h7l-2 6h-5z" fill="#df7f3e"/><path d="M18 8h7v5h-4z" fill="#252c30"/><circle cx="15" cy="14" r="1.1" fill="#17252b"/><circle cx="22" cy="14" r="1.1" fill="#17252b"/><path d="M29 14c3-1 5 1 4 4" fill="none" stroke="#df7f3e" stroke-width="2" stroke-linecap="round"/></g></svg>';
+  function surfCounter() {
+    const b = mk('button', 'f-surf', { type: 'button', 'aria-expanded': 'false', 'aria-controls': 'f-panel' });
+    b.innerHTML = surfSvg + '<span class="f-surf-text"><span class="f-surf-label"></span><span class="f-surf-num"></span></span>';
+    $('.f-surf-label', b).textContent = t('seen');
+    b.addEventListener('click', () => ($('.f-panel').hidden ? openPanel(b) : closePanel()));
+    for (const el of [$('.f-surf-rig', b), $('.f-surf-num', b)]) el.addEventListener('animationend', () => el.classList.remove('is-hop'));
+    return b;
+  }
+  // 増えるたびに猫が板の上で跳ね、数字がふくらむ。reduced-motion では何もしない(数字の更新だけ)
+  function surfHop() {
+    if (reduced.matches) return;
+    for (const el of [$('.f-surf-rig'), $('.f-surf-num')]) { if (!el) continue; el.classList.remove('is-hop'); void el.getBoundingClientRect(); el.classList.add('is-hop'); }
   }
 
   // 描画は最初の FIRST_BATCH 枚だけ先に行い、残りは少しずつ足す(1,000 枚を一度に描かない)。終了カードは常に最後に置く
