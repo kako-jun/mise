@@ -187,13 +187,17 @@
     if (href) {
       const actions = document.createElement('div'); actions.className = 'f-open-actions';
       const a = document.createElement('a'); a.className = 'f-open'; a.href = href;
-      const icon = document.createElement('span'); icon.className = 'f-open-icon'; icon.setAttribute('aria-hidden', 'true'); icon.textContent = '→';
+      const SVG_NS = 'http://www.w3.org/2000/svg';
+      const svgIcon = (cls, shapes) => { const svg = document.createElementNS(SVG_NS, 'svg'); svg.setAttribute('class', cls); svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false'); for (const [tag, attrs] of shapes) { const el = document.createElementNS(SVG_NS, tag); for (const k in attrs) el.setAttribute(k, attrs[k]); svg.append(el); } return svg; };
+      // 地球アイコン(一覧の範囲切替 .scope-globe と同じ形)。「サイトを開く」の左
+      const icon = svgIcon('f-open-icon', [['circle', { cx: 8, cy: 8, r: 6.2 }], ['ellipse', { cx: 8, cy: 8, rx: 2.8, ry: 6.2 }], ['path', { d: 'M1.8 8h12.4' }]]);
       const text = document.createElement('span'); text.textContent = t('open'); a.append(icon, text);
       a.setAttribute('aria-label', `${t('open')}: ${siteName(s)}`); configureLink(a);
       const external = document.createElement('a'); external.className = 'f-open-new'; external.href = href;
       external.target = '_blank'; external.rel = 'noopener noreferrer';
       const label = `${t('openNew')}: ${siteName(s)}`; external.setAttribute('aria-label', label); external.title = label;
-      const arrow = document.createElement('span'); arrow.setAttribute('aria-hidden', 'true'); arrow.textContent = '↗'; external.append(arrow);
+      // 一覧の .site-newtab（app.js newTabButton）と同じ別タブアイコン。枠なし
+      external.append(svgIcon('f-open-new-icon', [['path', { d: globalThis.MiseFeedEntry.NEWTAB_ICON_PATH }]]));
       actions.append(a, external); foot.append(actions);
     }
     body.append(foot);

@@ -82,13 +82,25 @@ await scenario('localStorage が使えなくてもバナーは出て閉じられ
   await ready(page); await fire(page); await untilShown(page, true);
   await page.click('#install-later'); await untilShown(page, false);
 });
-await scenario('日本語表示・ダーク・モバイル幅（375px）で崩れず、下部に収まる', async (page) => {
+await scenario('日本語表示・ダーク・モバイル幅（375px）で崩れず、下部の左半分に収まる', async (page) => {
   await page.addInitScript(() => { try { localStorage.setItem('mise-language', 'ja'); localStorage.setItem('mise-theme', 'dark'); } catch (_) {} });
   await ready(page); await fire(page); await untilShown(page, true);
   assert.equal(await page.textContent('#install-later'), 'あとで'); assert.equal(await page.textContent('#install-add'), 'インストール');
   const g = await page.evaluate(() => { const b = document.querySelector('#install-banner').getBoundingClientRect(); return { l: b.left, r: b.right, bb: b.bottom, h: b.height, vw: innerWidth, vh: innerHeight, sw: document.documentElement.scrollWidth }; });
-  assert.ok(g.l >= 0 && g.r <= g.vw && g.bb <= g.vh && g.sw <= g.vw, JSON.stringify(g)); assert.ok(g.h < 130, `高さ ${g.h}`); await shot(page, 'banner-mobile-ja-dark');
+  assert.ok(g.l >= 0 && g.r <= g.vw && g.bb <= g.vh && g.sw <= g.vw, JSON.stringify(g)); assert.ok(g.r <= g.vw / 2, `画面左半分に収まる ${JSON.stringify(g)}`); assert.ok(g.h < 220, `高さ ${g.h}`); await shot(page, 'banner-mobile-ja-dark');
 }, { width: 375, height: 667 });
+// #227: 案内（左半分）と右下の縦フィード入口・検索ボタンが、フォルダページのスクロール後（両方出た状態）でも重ならない
+for (const [w, h] of [[320, 640], [390, 844]]) for (const [loc, lang] of [['ja-JP', 'ja'], ['en-US', 'en']]) {
+  await scenario(`右下の2ボタンと案内が重ならない（${w}px・${lang}・スクロール後）`, async (page) => {
+    await page.addInitScript((l) => { try { localStorage.setItem('mise-language', l); } catch (_) {} }, lang);
+    await page.goto(BASE + '/jp/?category=recent'); await page.waitForFunction(() => window.__miseBooted === true && !!window.MiseInstall, null, { timeout: T });
+    await fire(page); await untilShown(page, true);
+    await page.evaluate(() => { const d = document.createElement('div'); d.style.height = '3000px'; document.body.append(d); scrollTo(0, 1500); });
+    await page.waitForFunction(() => !document.querySelector('#back-to-top').hidden && !document.querySelector('#feed-entry').hidden, null, { timeout: T });
+    const g = await page.evaluate(() => { const r = (s) => document.querySelector(s).getBoundingClientRect(); const b = r('#install-banner'), f = r('#feed-entry'), q = r('#back-to-top'); return { bannerRight: b.right, bannerTop: b.top, feedLeft: f.left, feedRight: f.right, searchLeft: q.left, feedH: f.height, vw: innerWidth }; });
+    assert.ok(g.bannerRight <= g.feedLeft, JSON.stringify(g)); assert.ok(g.feedRight <= g.searchLeft && g.feedH >= 44, JSON.stringify(g)); assert.ok(g.bannerRight <= g.vw / 2, JSON.stringify(g));
+  }, { width: w, height: h }, loc);
+}
 await scenario('回帰: 起動処理が最後まで走る（日本語カテゴリ・?category= / ?q= の復元。バナー関連の宣言順で止まらない）', async (page) => {
   await bootRegression(page, '/');
   await page.waitForSelector('#categories a');

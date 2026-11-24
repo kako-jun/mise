@@ -35,8 +35,8 @@ try{
  const entryUrl=new URL(await entry.getAttribute('href'),base);assert.equal(entryUrl.searchParams.get('q'),'cat');assert.equal(entryUrl.searchParams.get('tag'),'art');assert.equal(entryUrl.searchParams.get('view'),'feed');
  await page.evaluate(()=>{const spacer=document.createElement('div');spacer.style.height='3000px';document.body.append(spacer);window.scrollTo(0,1500);});
  await page.waitForFunction(()=>!document.querySelector('#back-to-top').hidden);
- const rects=await page.evaluate(()=>{const a=document.querySelector('#feed-entry').getBoundingClientRect(),b=document.querySelector('#back-to-top').getBoundingClientRect();return {entryTop:a.top,backBottom:b.bottom,entryRight:a.right,backRight:b.right};});
- assert.ok(rects.backBottom<=rects.entryTop,'右下の2ボタンが重ならない');assert.equal(rects.entryRight,rects.backRight);
+ const rects=await page.evaluate(()=>{const a=document.querySelector('#feed-entry').getBoundingClientRect(),b=document.querySelector('#back-to-top').getBoundingClientRect();return {entryBottom:a.bottom,backBottom:b.bottom,entryRight:a.right,backLeft:b.left};});
+ assert.ok(rects.entryRight<=rects.backLeft,'縦フィードは検索ボタンの左隣（横並び）');assert.equal(rects.entryBottom,rects.backBottom,'同じ行の下端が揃う');
  await page.locator('#back-to-top').click();await page.waitForFunction(()=>scrollY===0);assert.equal(await page.evaluate(()=>document.activeElement.id),'query');
  console.log('feed navigation browser regression: passed');
 }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve));}

@@ -24,7 +24,7 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; document.documentElement.lang = l; } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=42">
+<link rel="stylesheet" href="/style.css?v=44">
 <link rel="stylesheet" href="/about.css?v=2">
 <script src="/about.js?v=1" defer></script>
 </head>
@@ -56,7 +56,7 @@
       <li><strong>Scope:</strong> the row of globe and flag icons under the logo limits everything to one country, or shows the whole world.</li>
       <li><strong>Search:</strong> type in the search box to match names, descriptions, URLs and tags.</li>
       <li><strong>Tags:</strong> press a tag on a site to narrow the list by it.</li>
-      <li><strong>Feed:</strong> the “Feed” button next to the search box opens the sites as a vertical, swipeable feed (beta; not indexed by search engines). It keeps the scope and the top-level category you are in; search words, tags and deeper categories are not carried over (a short note under the search box says so while any of them is active). “Directory” in the feed brings you back.</li>
+      <li><strong>Vertical feed:</strong> the “Vertical feed” button at the bottom right opens the sites as a vertical, swipeable feed (beta; not indexed by search engines). It keeps the scope, the categories, and any search words and tags you are using. The back arrow at the top left of the feed (“Back to list view”) brings you back.</li>
       <li><strong>Recommend it:</strong> to propose a site, ask for removal of your own site, or correct a listing, use the request form. A request is only a request; nothing changes until an administrator has reviewed it.</li>
     </ul>
 
@@ -88,7 +88,7 @@
       <li><strong>範囲:</strong> ロゴの下の地球儀と国旗のアイコンで、表示を 1 つの国に絞るか、全世界にします。</li>
       <li><strong>検索:</strong> 検索ボックスで、名前・紹介文・URL・タグを探せます。</li>
       <li><strong>タグ:</strong> サイトのタグを押すと、そのタグで絞り込みます。</li>
-      <li><strong>縦で見る:</strong> 検索ボックスの横の「縦で見る」ボタンで、サイトを縦にスワイプして眺めるフィードに入ります（試作。検索エンジンには載りません）。いまの範囲と最上位のカテゴリは引き継ぎますが、検索語・タグ・2 段目以降のカテゴリは引き継ぎません（それらが有効なあいだは、検索ボックスの下にその旨を表示します）。フィードの「一覧表示」で戻れます。</li>
+      <li><strong>縦フィード:</strong> 画面右下の「縦フィード」ボタンで、サイトを縦にスワイプして眺めるフィードに入ります（試作。検索エンジンには載りません）。いまの範囲・カテゴリ・検索語・タグは引き継ぎます。フィード左上の戻る矢印（「箇条書きに戻る」）で戻れます。</li>
       <li><strong>推薦:</strong> サイトの追加、ご自分のサイトの掲載取り下げ、掲載内容の訂正は、申請フォームから送れます。申請はあくまで申請で、管理者が確認するまで何も変わりません。</li>
     </ul>
 

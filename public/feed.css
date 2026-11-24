@@ -110,8 +110,9 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 #feed .f-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 4px; }
 #feed .f-date { font-size: 12px; opacity: .8; }
 #feed .f-open-actions { display: flex; align-items: stretch; gap: 6px; margin-left: auto; }
-#feed .f-open-icon { font-size: 18px; line-height: 1; }
-#feed .f-open-new, #feed .f-open-new:visited { min-width: 44px; min-height: 44px; display: grid; place-items: center; box-sizing: border-box; border: 1px solid #fff3df; border-radius: 6px; color: #fff3df; text-decoration: none; text-shadow: none; font-size: 20px; }
+#feed .f-open-icon { flex: none; display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+#feed .f-open-new-icon { display: block; width: 22px; height: 22px; fill: currentColor; }
+#feed .f-open-new, #feed .f-open-new:visited { min-width: 44px; min-height: 44px; display: grid; place-items: center; box-sizing: border-box; border: 0; border-radius: 6px; color: #fff3df; text-decoration: none; text-shadow: none; }
 #feed .f-open-new:hover { background: #fff3df; color: #17252b; }
 #feed .f-open-new:focus-visible, #feed .f-open:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
 #feed .f-open, #feed .f-open:visited { padding: 10px 18px; border-radius: 6px; background: #fff3df; color: #17252b; font-size: 14px; font-weight: 650; text-decoration: none; text-shadow: none; }
