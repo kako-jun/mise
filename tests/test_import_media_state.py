@@ -15,6 +15,73 @@ import import_media_state
 from import_media_state import import_ledger
 
 
+class FakeD1:
+    """Tiny stand-in for Cloudflare D1/R2 that honours the importer's updated_at/lease guards."""
+
+    def __init__(self, site_ids):
+        self.sites = {s: {'progress_key': f'{s}.example/', 'favicon_path': None, 'thumb_path': None} for s in site_ids}
+        self.jobs = {s: {'state': 'pending', 'content_hash': None, 'asset_key': None, 'metadata_json': None,
+                         'updated_at': '2026-11-20 10:00:00', 'lease_owner': None} for s in site_ids}
+        self.r2 = {}
+        self.bump_after = None
+
+    def get_r2(self, key):
+        return self.r2.get(key)
+
+    def put_r2(self, key, data, content_type='image/webp', before_attempt=None):
+        if before_attempt:
+            before_attempt()
+        self.r2[key] = data
+
+    def query(self, sql, params=()):
+        if 'SET lease_owner=NULL' in sql:
+            job = self.jobs[params[0]]
+            if job['lease_owner'] == params[2]:
+                job['lease_owner'] = None
+            return []
+        if 'SET lease_owner=?,lease_until=?' in sql:
+            owner, _until, _key, sid, _kind = params
+            self.jobs[sid]['lease_owner'] = owner
+            if self.bump_after == 'lease':
+                self.jobs[sid]['updated_at'] = '2026-11-24 09:00:00'
+            return [{'site_id': sid}]
+        if 'SELECT j.site_id' in sql:
+            _key, sid, _kind, owner, h, a, upd, ptr = params
+            job = self.jobs[sid]
+            ok = (job['lease_owner'] == owner and job['content_hash'] == h and job['asset_key'] == a
+                  and job['updated_at'] == upd and self.sites[sid]['favicon_path'] == ptr)
+            return [{'site_id': sid}] if ok else []
+        raise AssertionError(sql)
+
+    def batch(self, statements):
+        if statements[0][0].startswith('SELECT progress_key'):
+            out = []
+            for site_stmt, job_stmt in zip(statements[0::2], statements[1::2]):
+                sid = job_stmt[1][0]
+                cols = job_stmt[0].split(' FROM')[0].replace('SELECT ', '').split(',')
+                out.append([dict(self.sites[sid])])
+                out.append([{k: self.jobs[sid][k] for k in cols}])
+            return out
+        job_sql, jp = statements[0]
+        site_sql, sp = statements[1]
+        (state, _att, _cf, _err, _chk, _retry, _exc, h, a, meta, _key, sid, _kind, owner, g_h, g_a, g_upd) = jp
+        job = self.jobs[sid]
+        job_hit = job['lease_owner'] == owner and job['content_hash'] == g_h and job['asset_key'] == g_a and job['updated_at'] == g_upd
+        if job_hit:
+            job.update(state=state, content_hash=h, asset_key=a, metadata_json=meta, updated_at='2026-11-24 12:00:00')
+        site_hit = False
+        if job_hit:
+            site = self.sites[sid]
+            if site['favicon_path'] == sp[3]:
+                site['favicon_path'] = sp[0]
+                site_hit = True
+        verify = {k: job[k] for k in ('state', 'content_hash', 'asset_key', 'metadata_json', 'lease_owner')}
+        if job['lease_owner'] == owner:
+            job['lease_owner'] = None
+        return [[{'site_id': sid}] if job_hit else [], [{'id': sid}] if site_hit else [], [verify],
+                [{'pointer': self.sites[sid]['favicon_path']}], []]
+
+
 class ImportMediaStateTest(unittest.TestCase):
     def test_cli_defaults_to_read_only_dry_run(self):
         client = Mock()
@@ -164,7 +231,7 @@ class ImportMediaStateTest(unittest.TestCase):
         self.assertIn("julianday(j.lease_until)>julianday('now','+2 minutes')", client.query.call_args_list[1].args[0])
         self.assertTrue(any('lease_owner=NULL' in c.args[0] for c in client.query.call_args_list))
 
-    def test_unexpected_r2_error_releases_owned_lease_without_masking_original(self):
+    def test_unexpected_r2_error_releases_owned_lease_and_row_is_ineligible(self):
         content = b'r2-error-webp'; content_hash = favicon.icon_name(content)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
@@ -181,11 +248,65 @@ class ImportMediaStateTest(unittest.TestCase):
                 raise RuntimeError('lease release network error')
             client.query.side_effect = query
             client.get_r2.side_effect = RuntimeError('original R2 read error')
-            with self.assertRaisesRegex(RuntimeError, 'original R2 read error'):
-                import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
-        self.assertEqual(client.query.call_count, 3)  # row finally retries failed lease cleanup
+            result = import_ledger(client, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual(result['verified'], [])
+        self.assertEqual(result['ineligible'], [{'site_id': 'site-1', 'reason': 'R2/D1 transport error: original R2 read error'}])
         self.assertTrue(any('lease_owner=NULL' in c.args[0] for c in client.query.call_args_list))
         client.put_r2.assert_not_called()
+
+    def test_transport_error_on_one_row_does_not_stop_other_rows(self):
+        content = b'multi-row-webp'; content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            for sid in ('site-1', 'site-2'):
+                (assets / favicon.site_name(sid)).write_bytes(content)
+            db = favicon.connect(ledger)
+            favicon.import_sites(db, [('site-1', 'https://a.example/'), ('site-2', 'https://b.example/')])
+            db.execute("UPDATE favicons SET status='ok',icon_hash=?,changed_at='2026-11-24T00:00:00Z'", (content_hash,))
+            db.commit(); db.close()
+            fake = FakeD1(['site-1', 'site-2'])
+            real_get = fake.get_r2
+            def get_r2(key):
+                if favicon.site_name('site-1') in key:
+                    raise RuntimeError('R2 verify failed (400)')
+                return real_get(key)
+            fake.get_r2 = get_r2
+            result = import_ledger(fake, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual([r['site_id'] for r in result['verified']], ['site-2'])
+        self.assertEqual(result['ineligible'][0]['site_id'], 'site-1')
+        self.assertTrue(result['ineligible'][0]['reason'].startswith('R2/D1 transport error: R2 verify failed (400)'))
+        self.assertIsNone(fake.jobs['site-1']['lease_owner'])
+
+    def test_apply_succeeds_when_production_row_has_non_null_updated_at(self):
+        content = b'prod-row-webp'; content_hash = favicon.icon_name(content)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+            (assets / favicon.site_name('site-1')).write_bytes(content)
+            self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+            fake = FakeD1(['site-1'])
+            self.assertIsNotNone(fake.jobs['site-1']['updated_at'])
+            result = import_ledger(fake, 'favicon', [(ledger, assets)], apply=True)
+        self.assertEqual(result['ineligible'], [])
+        self.assertEqual(result['verified'], [{'site_id': 'site-1', 'eligible_for_cleanup': True, 'action': 'uploaded-and-readback-verified'}])
+        self.assertEqual(fake.jobs['site-1']['content_hash'], content_hash)
+        self.assertEqual(fake.sites['site-1']['favicon_path'], favicon.site_name('site-1'))
+
+    def test_row_whose_updated_at_changes_after_prefetch_is_still_refused(self):
+        content = b'raced-row-webp'; content_hash = favicon.icon_name(content)
+        for existing_r2 in (False, True):
+            with self.subTest(existing_r2=existing_r2), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); ledger = root / 'favicons.sqlite'; assets = root / 'assets'; assets.mkdir()
+                (assets / favicon.site_name('site-1')).write_bytes(content)
+                self.make_ledger(ledger, 'site-1', content_hash, '2026-11-24T00:00:00Z')
+                fake = FakeD1(['site-1'])
+                if existing_r2:
+                    fake.r2[('icon/' + favicon.site_name('site-1'))] = content
+                fake.bump_after = 'lease'  # concurrent writer lands after the lease, before the guarded write
+                result = import_ledger(fake, 'favicon', [(ledger, assets)], apply=True)
+                self.assertEqual(result['verified'], [])
+                self.assertEqual(len(result['ineligible']), 1)
+                self.assertIsNone(fake.jobs['site-1']['content_hash'])
+                self.assertEqual(fake.jobs['site-1']['state'], 'pending')
 
     def test_local_asset_read_error_releases_owned_lease(self):
         content = b'read-error-webp'; content_hash = favicon.icon_name(content)
