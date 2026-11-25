@@ -21,8 +21,8 @@ const MISE_COUNTRY_POS = { JP:[36,138], US:[39,-98], GB:[54,-2], DE:[51,10], FR:
 // SSR は英語固定（日本語表示でも JS 起動前の一瞬だけ英語が出る既存仕様）。
 globalThis.MISE_SCOPE_DD_MIN = 2;
 globalThis.MISE_SCOPE_DD_WORDS = {
-  ja: { pick: '国を選ぶ', search: '国を検索', none: '該当なし', btn: (l, n) => `${l} ${n}件、国を選ぶ`, row: (l, n) => `${l} ${n}件` },
-  en: { pick: 'Choose a country', search: 'Search countries', none: 'No match', btn: (l, n) => `${l}, ${n} ${Number(n) === 1 ? 'site' : 'sites'}. Choose a country`, row: (l, n) => `${l}, ${n} ${Number(n) === 1 ? 'site' : 'sites'}` },
+  ja: { pick: '国を選ぶ', search: '国を検索', none: '該当なし', note: '所在国が未設定のサイトを含む', btn: (l, n) => `${l} ${n}件、国を選ぶ`, row: (l, n) => `${l} ${n}件` },
+  en: { pick: 'Choose a country', search: 'Search countries', none: 'No match', note: 'Includes sites with no country set', btn: (l, n) => `${l}, ${n} ${Number(n) === 1 ? 'site' : 'sites'}. Choose a country`, row: (l, n) => `${l}, ${n} ${Number(n) === 1 ? 'site' : 'sites'}` },
 };
 globalThis.MISE_COUNTRIES = (() => {
   const names = lang => {

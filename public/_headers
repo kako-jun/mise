@@ -10,6 +10,10 @@
   Cache-Control: no-cache
   Content-Type: application/manifest+json
 
+# 国旗はファイル名が内容ハッシュでない（国コード名）ので immutable にせず 1 日。差し替えても最長 1 日で反映される
+/flags/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
 # ファイル名にバージョンを含む(-v1)ので長期キャッシュ。書体を替えるときは名前を変える
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable

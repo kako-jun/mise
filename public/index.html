@@ -34,13 +34,13 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=65">
-<script src="/countries.js?v=7" defer></script>
+<link rel="stylesheet" href="/style.css?v=66">
+<script src="/countries.js?v=8" defer></script>
 <script src="/regions.js?v=2" defer></script>
 <script src="/install.js?v=2" defer></script>
 <script src="/site-host.js?v=1" defer></script>
 <script src="/vertical-link.js?v=4" defer></script>
-<script src="/app.js?v=67" defer></script>
+<script src="/app.js?v=68" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=14").catch(() => {})));

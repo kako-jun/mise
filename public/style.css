@@ -373,6 +373,8 @@ html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); col
 .scope-dd-list li[hidden] { display: none; }
 .scope-dd-opt, .scope-dd-opt:visited { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 4px 8px; box-sizing: border-box; color: inherit; text-decoration: none; border: 0; border-radius: 6px; }
 .scope-dd-opt .scope-dd-name { flex: 1 1 auto; }
+.scope-dd-note { display: block; margin-top: 1px; font-size: 11px; line-height: 1.3; font-weight: 400; color: #3b565c; }
+html[data-theme="dark"] .scope-dd-note { color: #b4d3d9; }
 .scope-dd-opt .scope-count { flex: none; margin-left: 0; font-size: 12px; }
 .scope-dd-opt:hover, .scope-dd-opt.is-active { background: #e3f4f7; }
 .scope-dd-opt[aria-selected="true"] { font-weight: 700; box-shadow: inset 3px 0 0 #cc6f32; }

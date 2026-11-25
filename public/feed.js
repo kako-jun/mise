@@ -90,7 +90,7 @@
     const c = s.region_code;
     return window.MISE_REGIONS && /^[A-Z]{2}-[A-Z0-9]{1,3}$/.test(c || '') && c.slice(0, 2) === s.country_code ? window.MISE_REGIONS[c] || null : null;
   }
-  // 一覧(app.js countryFlag)と同じ規則: 国名テキストは出さず「国旗 + 区画名(分かるときだけ)」。旗が無い国は出さない。
+  // 一覧(app.js countryFlag)と同じ規則: 国名テキストは出さず「国旗 + 区画名(分かるときだけ)」。旗が無いコードは国コードのバッジ（MiseCountry）。
   function place(s) {
     const info = window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(s.country_code || '') ? (window.MISE_COUNTRIES[s.country_code] ?? { ja: s.country_code, en: s.country_code }) : null; // 旗の無いコードは国コードのバッジ（MiseCountry）
     if (!info) return null;

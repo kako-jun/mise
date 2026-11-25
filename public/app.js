@@ -682,7 +682,7 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !e.defaultPreven
 // 範囲切替。国は通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
 const SCOPE_CARET = '<svg class="scope-dd-caret" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 6.5 8 10.5 12 6.5"/></svg>';
-// 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
+// 国名は Intl.DisplayNames（countries.js の MiseCountry.name）。全 ISO コードが国名になり、ISO に無いコードはコードのまま。
 const countryLabel = (code,lang=language) => MiseCountry.name(code,lang); // 国名は Intl.DisplayNames（countries.js）。表に無いコードはコードのまま
 const ddWords = () => window.MISE_SCOPE_DD_WORDS[language];
 const scopeIcon = code => MiseCountry.el(code); // 旗が無い・読めない国は国コードのバッジ（countries.js の MiseCountry に集約）
@@ -692,7 +692,8 @@ function scopeItem(code, label, count, icon) { // 地球の項目と、国が 1 
   const li=document.createElement('li'), a=document.createElement('a');
   a.className='scope-item'; a.href=scopePath(code); if(code===currentScope) a.setAttribute('aria-current','page'); else if(currentScope.includes('-') && code===scopeCountry(currentScope)) a.setAttribute('aria-current','true'); // 区画の範囲では、その国を「いま居る国」として示す
   a.append(iconNode(icon));
-  a.setAttribute('aria-label',ddWords().row(label,count)); a.title=label;
+  const note=code==='all' ? ddWords().note : ''; // 全世界の件数には所在国が未設定のサイトも入る（国の合計と一致しない。#229）
+  a.setAttribute('aria-label',ddWords().row(label,count)+(note?`, ${note}`:'')); a.title=label+(note?` — ${note}`:'');
   const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
   a.append(c);
   a.addEventListener('click',e=>{ if(!scopeClickable(e)) return; e.preventDefault(); chooseScope(code); });
@@ -750,8 +751,10 @@ function buildScopeDropdown() {
   const row=(code,label,count,icon,selected,hay)=>{
     const li=document.createElement('li'); li.setAttribute('role','presentation');
     const a=document.createElement('a'); a.className='scope-dd-opt'; a.setAttribute('role','option'); a.id=`scope-opt-${code}`; a.href=scopePath(code);
-    a.setAttribute('aria-label',W.row(label,count)); a.title=label; a.setAttribute('aria-selected',String(selected));
+    const note=code==='all' ? W.note : '';
+    a.setAttribute('aria-label',W.row(label,count)+(note?`, ${note}`:'')); a.title=label+(note?` — ${note}`:''); a.setAttribute('aria-selected',String(selected));
     const n=document.createElement('span'); n.className='scope-dd-name'; n.textContent=label;
+    if(note) { const sm=document.createElement('small'); sm.className='scope-dd-note'; sm.textContent=note; n.append(sm); }
     const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
     a.append(iconNode(icon),n,c);
     a.addEventListener('click',e=>{ if(!scopeClickable(e)) return; e.preventDefault(); ddSelect(a); });

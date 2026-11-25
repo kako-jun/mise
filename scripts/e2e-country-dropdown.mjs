@@ -64,8 +64,11 @@ for (const view of ['phone', 'pc']) {
     assert.equal(await p.$$eval('.scope-dd-opt[role=option]', (a) => a.length), ids.length);
     assert.equal(await p.$eval('.scope-dd-opt[aria-selected=true]', (a) => a.id), 'scope-opt-jp');
     const first = await p.$eval('#scope-opt-all', (a) => a.innerText.replace(/\s+/g, ' '));
-    assert.match(first, /^全世界 \d+$/);
+    assert.match(first, /^全世界 所在国が未設定のサイトを含む \d+$/, first); // #229: 全世界の件数は国の合計と一致しない
+    assert.match(await p.getAttribute('#scope-opt-all', 'title'), /所在国が未設定/);
+    assert.match(await p.getAttribute('.scope-list .scope-item', 'title'), /所在国が未設定/);
     const row = await p.$eval('#scope-opt-us', (a) => a.innerText.replace(/\s+/g, ' ')); assert.match(row, /^アメリカ合衆国 \d+$/, row);
+    await p.evaluate(() => Promise.all(document.querySelector('.scope-dd-panel').getAnimations().map((a) => a.finished))); // スライドの終了を待ってから位置を測る
     const r = await p.evaluate(() => { const pn = document.querySelector('.scope-dd-panel').getBoundingClientRect(), b = document.querySelector('.scope-dd-btn').getBoundingClientRect(); return { pn, b, h: innerHeight, w: innerWidth, back: getComputedStyle(document.querySelector('.scope-dd-backdrop')).display }; });
     if (view === 'phone') { assert.ok(Math.abs(r.pn.bottom - r.h) < 1 && r.pn.left < 1 && r.pn.right > r.w - 1, `ボトムシート ${JSON.stringify(r.pn)}`); assert.equal(r.back, 'block'); }
     else { assert.ok(r.pn.top >= r.b.bottom && r.pn.left >= 0 && r.pn.right <= r.w, `ボタンの下のポップオーバー ${JSON.stringify(r.pn)}`); assert.equal(r.back, 'none'); }
@@ -78,13 +81,15 @@ for (const view of ['phone', 'pc']) {
   await scenario('検索: 日本語名・英語名・国コード', view, async (p) => {
     await loadTop(p); await open(p);
     const q = async (v) => { await p.fill('.scope-dd-search', v); return visibleIds(p); };
-    assert.deepEqual(await q('ドイツ'), ['de']);
-    assert.deepEqual(await q('united'), ['gb', 'us']);
+    // 期待は「含むべきコードを含む・含まないべきコードを含まない」形（国の数・シードに依存しない）
+    const has = async (v, yes, no = []) => { const ids = await q(v); for (const c of yes) assert.ok(ids.includes(c), `${v}: ${c} を含む（${ids.slice(0, 8)}）`); for (const c of no) assert.ok(!ids.includes(c), `${v}: ${c} を含まない`); return ids; };
+    await has('ドイツ', ['de'], ['fr', 'jp', 'us']);
+    await has('united', ['gb', 'us'], ['de', 'jp']);
     assert.deepEqual(await q('FR'), (await q('fr')));
-    assert.ok((await q('fr')).includes('fr'));
-    assert.deepEqual(await q('jp'), ['jp']);
-    assert.deepEqual(await q('germany'), ['de']);
-    assert.deepEqual(await q('全世界'), ['all']);
+    await has('fr', ['fr'], ['de', 'jp']);
+    await has('jp', ['jp'], ['de', 'us']);
+    await has('germany', ['de'], ['fr', 'jp']);
+    await has('全世界', ['all'], ['de', 'jp']);
     assert.deepEqual(await q('zzzz'), []);
     assert.equal(await shown(p, '.scope-dd-empty'), true);
     assert.deepEqual((await q('')).length, (await rowIds(p)).length);

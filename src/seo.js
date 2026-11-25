@@ -1,6 +1,6 @@
 import { securityHeaders, pageCsp, inlineScriptHashes } from './security.js';
 import { querySites, parsePage, cleanTags, PAGE_SIZE, ALL_SCOPE } from './sites.js';
-// 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_FLAGS が定義される。
+// 国名の表（ブラウザの app.js・globe.js と共有する単一の表）。読み込むと globalThis.MISE_COUNTRIES / MISE_ISO / MiseCountry が定義される。
 import '../public/countries.js';
 // 区画（都道府県・州）の名前の表（ブラウザの app.js・globe.js と共有）。読み込むと globalThis.MISE_REGIONS が定義される。
 import '../public/regions.js';
@@ -123,12 +123,12 @@ export function scopeNavHtml(scopes, scope) {
   const globe = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
   const flagIcon = code => globalThis.MiseCountry.html(code); // 旗が無いコードは国コードのバッジ（countries.js に集約）
   // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。ドロップダウンの行は国名も見せる。
-  const item = (code, label, count, icon) => `<li><a class="scope-item" href="/${esc(code)}/" aria-label="${esc(W.row(label, count))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : scope.includes('-') && code === scope.split('-')[0] ? ' aria-current="true"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
+  const item = (code, label, count, icon) => `<li><a class="scope-item" href="/${esc(code)}/" aria-label="${esc(W.row(label, count) + (code === 'all' ? ', ' + W.note : ''))}" title="${esc(label + (code === 'all' ? ' — ' + W.note : ''))}"${code === scope ? ' aria-current="page"' : scope.includes('-') && code === scope.split('-')[0] ? ' aria-current="true"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
   const countries = [...scopes.countries].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
   if (countries.length < globalThis.MISE_SCOPE_DD_MIN) {
     return `<ul class="scope-list">${[item('all', 'All world', scopes.total, globe), ...countries.map(r => item(r.code.toLowerCase(), countryName(r.code), r.count, flagIcon(r.code)))].join('')}</ul>${regionRowHtml(scopes, scope)}`;
   }
-  const opt = (code, label, count, icon, selected) => `<li role="presentation"><a class="scope-dd-opt" role="option" id="scope-opt-${esc(code)}" href="/${esc(code)}/" aria-label="${esc(W.row(label, count))}" title="${esc(label)}" aria-selected="${selected}">${icon}<span class="scope-dd-name">${esc(label)}</span><span class="scope-count">${count}</span></a></li>`;
+  const opt = (code, label, count, icon, selected) => `<li role="presentation"><a class="scope-dd-opt" role="option" id="scope-opt-${esc(code)}" href="/${esc(code)}/" aria-label="${esc(W.row(label, count) + (code === 'all' ? ', ' + W.note : ''))}" title="${esc(label + (code === 'all' ? ' — ' + W.note : ''))}" aria-selected="${selected}">${icon}<span class="scope-dd-name">${esc(label)}${code === 'all' ? `<small class="scope-dd-note">${esc(W.note)}</small>` : ''}</span><span class="scope-count">${count}</span></a></li>`;
   const cur = countries.find(r => r.code === cc);
   const caret = '<svg class="scope-dd-caret" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 6.5 8 10.5 12 6.5"/></svg>';
   const btn = cur
