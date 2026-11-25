@@ -41,7 +41,7 @@ def collapse(s):
 # ------------------------------------------------------------------------------------------------------------------ names
 # Separators between clauses of a <title>: full-width bar, bar, dashes with spaces around them, slash with spaces (or a slash right
 # after a closing bracket, as in 「…（JLPA）/…」), full-width slash. A hyphen or slash inside a word (AC/DC, e-mail) is not a separator.
-SEP = re.compile(r"\s*[｜|／]\s*|\s+[–—―\-−]\s+|\s+/\s+|(?<=[）)」』】])/\s*|\s*[–—―]\s*")
+SEP = re.compile(r"\s*[｜|│┃／]\s*|\s+[–—―\-−:：・]\s+|\s+/\s+|(?<=[）)」』】])/\s*|\s*[–—―]\s*")
 # Promotional / sales phrases. Only signals: a promo marker counts as a violation only together with a separator or a long name.
 PROMO = ("公式通販", "オンラインショップ", "オンラインストア", "通販サイト", "ネットショップ", "を提案", "をご提案", "をお届け", "新感覚",
          "送料無料", "最安値", "激安", "おすすめ", "お役立ち", "official online store", "online shop", "free shipping")
@@ -261,7 +261,7 @@ def name_acceptable_long(title):
 
 # ---- Anchors: what shows that a clause is the site's NAME (and not a place, a product description or a catch-phrase) (#273)
 # A suffix that names the kind of page; with it, the clause in front is the owner's name (the suffix is cut off).
-ANCHOR_SUFFIX = SITE_TYPE + ("公式通販サイト", "公式オンラインショップ", "公式オンラインストア", "公式通販", "オンラインショップ", "オンラインストア", "通販サイト",
+ANCHOR_SUFFIX = SITE_TYPE + ("ウェブサイト", "webサイト", "web site", "website", "公式通販サイト", "公式オンラインショップ", "公式オンラインストア", "公式通販", "オンラインショップ", "オンラインストア", "通販サイト",
                              "公式ブログ", "official online shop", "official online store", "official shop")
 # Words that end an organisation's / a facility's name.
 ORG_END = ("協会", "学会", "大学", "大学院", "学園", "学院", "学校", "高校", "高等学校", "中学校", "小学校", "幼稚園", "保育園", "病院", "医院", "クリニック", "神社",
@@ -294,6 +294,27 @@ def _strip_anchor_suffix(s):
             rest = s[:m.start()].strip(" -–—|｜/・:：")
             return ("" if (not rest or is_fragment(rest)) else rest), True
     return s, False
+
+
+# A phone / fax number, postal code, URL, opening hours or a long digit run is never part of a name (#273).
+_CONTACT = re.compile(r"〒|\d{2,5}-\d{1,4}-\d{3,4}|\d{3}-\d{4}|\d{5,}|https?://|www\.|\d{1,2}[:：]\d{2}|(?:tel|fax|電話)\s*[:：]?\s*\d", re.I)
+# "Official Site", "Official Dealer Site", "Dealer Site", "Website", "Homepage" ... (with or without a brand word in front): a kind of page, not a name.
+_GEN_SITE = re.compile(r"(?:^|\s)(?:official\s+(?:dealer\s+)?|dealer\s+)(?:web\s*site|site|homepage|home\s*page)$|^(?:web\s*site|website|homepage|home\s*page|official)$")
+
+
+def contact_like(s):
+    return bool(_CONTACT.search(unicodedata.normalize("NFKC", s or "")))
+
+
+def generic_clause(clause, shared=False):
+    """A clause that says nothing about the owner: empty, a page-kind word / suffix only (トップページ・ホーム・TOP・公式サイト・ウェブサイト), an error /
+    default page, a service name on a shared host, or a Latin 'Official (Dealer) Site' phrase."""
+    c = collapse(clause)
+    f = unicodedata.normalize("NFKC", c).casefold().strip(" .!-_|:/")
+    if not f or f in _SITE_TYPE_ONLY or generic_page(c) or (shared and service_name_clause(c)) or _GEN_SITE.search(f):
+        return True
+    rest, had = _strip_anchor_suffix(c)
+    return had and not rest
 
 
 def suggest_name(title, host=""):

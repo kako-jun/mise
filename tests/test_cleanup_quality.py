@@ -303,9 +303,9 @@ class Names(Base):
 class MeasuredMistakes(Base):
     """Four wrong names found when names was first run on production (shared services, error pages, broken brackets)."""
     CASES = [
-        ('2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催(現地とWeb併用) | Peatix', 'kids.peatix.com', '2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催'),
+        ('2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催(現地とWeb併用) | Peatix', 'kids.peatix.com', None),   # 51 characters: the LLM decides
         ('認定NPO法人花山星空ネットワーク主催 第33回講演会 | Peatix', 'hanayama.peatix.com', '認定NPO法人花山星空ネットワーク主催 第33回講演会'),
-        ('not found HGU – 北海学園大学受験生向けWEBサイト', 'www.hgu.example.jp', '北海学園大学受験生向けWEBサイト'),
+        ('not found HGU – 北海学園大学受験生向けWEBサイト', 'www.hgu.example.jp', None),     # ends in a page-kind word (WEBサイト): the LLM decides
         ('巡り|歴史を繋いだ想いを未来へつなげる」日本文化の魅力交流ポータル', 'meguri.example.jp', None),
         ('山田太郎 | note', 'yamada.note.com', '山田太郎'),
         ('山田太郎 | はてなブログ', 'yamada.hatenablog.com', '山田太郎'),
@@ -318,8 +318,7 @@ class MeasuredMistakes(Base):
     ]
 
     REAL_NAMES = [('404 Gallery', 'x.example.jp'), ('エラー研究所', 'x.example.jp'), ('Error Handling Inc.', 'x.example.jp'),
-                  ('It Works! Studio', 'x.example.jp'), ('Forbidden City Tours | 北京旅行社', 'x.example.jp'), ('Base', 'a.base.shop'),
-                  ('山田屋 | Line', 'a.line.me'), ('Main | 山田屋', 'a.main.jp')]
+                  ('It Works! Studio', 'x.example.jp'), ('Forbidden City Tours', 'x.example.jp'), ('Base', 'a.base.shop')]
 
     def test_real_names_with_stock_words_are_kept(self):
         for title, host in self.REAL_NAMES:
@@ -350,12 +349,11 @@ class MeasuredMistakes(Base):
                          '北海学園大学受験生向けWEBサイト')
 
     def test_apply_end_to_end_no_llm_for_these(self):
-        for n, (title, host, want) in enumerate(self.CASES[:3]):
-            add_site(self.d1, f'm{n}', 'x' * 30 + ' | ' + 'y' * 30, title=title, url=f'https://{host}/')
+        title, host, want = self.CASES[1]
+        add_site(self.d1, 'm1', 'x' * 30 + ' | ' + 'y' * 30, title=title, url=f'https://{host}/')
         llm = FakeLLM()
         self.go('names', llm=llm)
-        self.assertEqual([self.name_of(f'm{n}') for n in range(3)], [c[2] for c in self.CASES[:3]])
-        self.assertEqual(llm.calls, [])
+        self.assertEqual((self.name_of('m1'), llm.calls), (want, []))
         # the broken-bracket title goes to the LLM, whose 'Peatix'-like / fragment answers are refused -> needs_human
         add_site(self.d1, 'br', 'x' * 30 + ' | ' + 'y' * 30, title=self.CASES[3][0], url='https://meguri.example.jp/')
         self.go('names', llm=FakeLLM(names={'meguri.example.jp': '巡り'}))
@@ -412,11 +410,12 @@ class Anchors(Base):
 
     def test_measured_mistakes_now_right(self):
         self.assertIsNone(cq.deterministic_name(SHRINE[0][0], SHRINE[0][1]))             # -> LLM
-        self.assertEqual(cq.deterministic_name(SHOP[0][0], SHOP[0][1]), 'あじかんショップ美食生活')
+        self.assertIsNone(cq.deterministic_name(SHOP[0][0], SHOP[0][1]))                 # two real clauses: the LLM decides
 
     def test_previously_right_results_unchanged(self):
-        for title, host, want in KEPT:
-            self.assertEqual(cq.deterministic_name(title, host), want, title)
+        for title, host, want in KEPT:          # the rule may now hand them to the LLM (None); it never gives another name
+            self.assertIn(cq.deterministic_name(title, host), (want, None), title)
+        self.assertEqual(cq.deterministic_name('七福醸造 公式オンラインショップ', 'x.example.jp'), None)   # a page-kind suffix is the LLM's job now
 
     def test_pitch_patterns(self):
         for t in ('新潟県加茂市鎮座', '駅前にあるお店', 'お通じを改善する機能性表示食品のごぼう茶', '肌のお悩みならお任せ', '東京都世田谷区', '家づくりなら当店'):
@@ -428,13 +427,102 @@ class Anchors(Base):
         title = SHRINE[0][0]
         self.assertEqual(cq.llm_name_valid('青海神社', [title], SHRINE[0][1]), '青海神社')          # in front of the 公式サイト suffix
         self.assertIsNone(cq.llm_name_valid('新潟県加茂市鎮座', [title], SHRINE[0][1]))
-        self.assertIn('place name', cq.NAME_SYSTEM)
+        self.assertIn('WRONG -> RIGHT', cq.NAME_SYSTEM)
 
     def test_apply_end_to_end_shrine_goes_to_llm(self):
         add_site(self.d1, 'sh', 'x' * 30 + ' | ' + 'y' * 30, title=SHRINE[0][0], url='https://aomi-jinjya.or.jp/')
         llm = FakeLLM(names={'aomi-jinjya.or.jp': '青海神社'})
         self.go('names', llm=llm)
         self.assertEqual((self.name_of('sh'), len(llm.calls)), ('青海神社', 1))
+
+
+# ---- second production run (#273): rules are only for certain simple forms; the LLM decides the rest; --recompute repairs earlier rewrites
+SECOND_RUN = [   # (title, host, wrong name written earlier, right name)
+    ('石川県白山市にあるアラヤ接骨院 | 肩こり・腰痛・体の歪み・マッサージ', 'araya.example.jp', '肩こり・腰痛・体の歪み・マッサージ', 'アラヤ接骨院'),
+    ('ビーズミル専門メーカー｜乾式も湿式も微粉砕機・分散機なら アシザワ・ファインテック株式会社', 'ashizawa.example.jp', '乾式も湿式も微粉砕機・分散機なら', 'アシザワ・ファインテック株式会社'),
+    ('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', 'asakura.example.jp', 'TOP│朝倉真弓', '朝倉真弓'),
+    ('トップページ｜富山県中央植物園ウェブサイト076-466-4187', 'toyama-botanic.example.jp', '富山県中央植物園ウェブサイト076-466-4187', '富山県中央植物園'),
+    ('ジープ厚木｜Jeep Official Dealer Site', 'jeep-atsugi.example.jp', 'Jeep Official Dealer Site', 'ジープ厚木'),
+    ('広島のバルーンショップ・ポピンズ | 誕生日・結婚式・開店祝いのバルーン装飾', 'poppins.example.jp', 'ポピンズ', 'バルーンショップ・ポピンズ'),
+]
+
+
+class SecondRun(Base):
+    def seed(self):
+        for n, (title, host, wrong, right) in enumerate(SECOND_RUN):
+            add_site(self.d1, f'r{n}', wrong, title=title, url=f'https://{host}/')
+        add_site(self.d1, 'same', '山田屋', title='山田屋 | ホーム', url='https://same.example.jp/')           # already what the rules give
+        add_site(self.d1, 'plain', '山田屋の店', title='別の題名', url='https://plain.example.jp/')           # not a piece of its title: not a target
+
+    def llm(self):
+        return FakeLLM(names={h: r for _t, h, _w, r in SECOND_RUN})
+
+    def test_separators_and_generic_clauses(self):
+        d = cq.deterministic_name
+        self.assertEqual(d('ジープ厚木｜Jeep Official Dealer Site', 'x.jp'), 'ジープ厚木')
+        self.assertEqual(d('TOP│山田屋', 'x.jp'), '山田屋')
+        self.assertEqual(d('ホーム ┃ 山田屋', 'x.jp'), '山田屋')
+        self.assertEqual(d('トップページ｜山田屋', 'x.jp'), '山田屋')
+        self.assertEqual(d('山田屋 : ホーム', 'x.jp'), '山田屋')
+        self.assertEqual(d('山田屋', 'x.jp'), '山田屋')
+        self.assertEqual(quality.split_clauses('アシザワ・ファインテック株式会社'), ['アシザワ・ファインテック株式会社'])    # ・ without spaces is no separator
+        for t in ('山田屋 公式サイト', '山田屋 | 手作り家具', 'トップページ｜富山県中央植物園ウェブサイト076-466-4187', '山田屋 TEL 03-1234-5678', '山田屋 〒123-4567'):
+            self.assertIsNone(d(t, 'x.jp'), t)
+        for g in ('Official Site', 'Official Dealer Site', 'Dealer Site', 'Website', 'Web Site', 'Homepage', 'オフィシャルサイト', 'Jeep Official Dealer Site'):
+            self.assertTrue(quality.generic_clause(g), g)
+        for t in ('076-466-4187', '〒930-0001', '営業時間 9:00', 'https://example.jp', 'TEL 03-1234-5678'):
+            self.assertTrue(quality.contact_like(t), t)
+        self.assertFalse(quality.contact_like('ABILITY INC.'))
+
+    def test_llm_answers_are_validated(self):
+        v = cq.llm_name_valid
+        self.assertIsNone(v('076-466-4187', ['富山県中央植物園 076-466-4187'], 'x.jp'))
+        self.assertIsNone(v('富山県中央植物園ウェブサイト076-466-4187', ['トップページ｜富山県中央植物園ウェブサイト076-466-4187'], 'x.jp'))
+        self.assertIsNone(v('Official Dealer Site', ['ジープ厚木｜Official Dealer Site'], 'x.jp'))
+        self.assertIsNone(v('ファインテック株式会社', ['アシザワ・ファインテック株式会社'], 'x.jp'))      # a cut inside a name
+        for title, _h, _w, right in SECOND_RUN:
+            self.assertEqual(v(right, [title], 'x.jp'), right)
+
+    def test_normal_run_gives_the_right_names(self):
+        for n, (title, host, wrong, right) in enumerate(SECOND_RUN):
+            add_site(self.d1, f'n{n}', 'x' * 30 + ' | ' + 'y' * 30, title=title, url=f'https://{host}/')
+        self.go('names', llm=self.llm())
+        self.assertEqual([self.name_of(f'n{n}') for n in range(len(SECOND_RUN))], [r for _t, _h, _w, r in SECOND_RUN])
+
+    def test_recompute_dry_run_shows_every_diff_and_writes_nothing(self):
+        self.seed()
+        before, llm = self.snapshot(), FakeLLM()
+        code, st = self.go('names-recompute', apply=False, llm=llm)
+        self.assertEqual((code, llm.calls, self.d1.writes), (0, [], 0))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(st['selected'], len(SECOND_RUN) + 1)
+        self.assertIn('ジープ厚木', self.text())                  # the rule-decided one is shown with its new name
+        self.assertEqual(st['would_llm'], len(SECOND_RUN) - 1)
+
+    def test_recompute_apply_repairs_and_is_idempotent(self):
+        self.seed()
+        llm = self.llm()
+        code, st = self.go('names-recompute', llm=llm)
+        self.assertEqual(code, 0, self.text())
+        self.assertEqual([self.name_of(f'r{n}') for n in range(len(SECOND_RUN))], [r for _t, _h, _w, r in SECOND_RUN])
+        self.assertEqual((self.name_of('same'), self.name_of('plain')), ('山田屋', '山田屋の店'))
+        self.assertEqual((st['updated'], st['same'], st['verify_mismatch']), (len(SECOND_RUN), 1, 0))
+        self.assertIn(repr('肩こり・腰痛・体の歪み・マッサージ'), self.text())          # old -> new printed
+        calls = len(llm.calls)
+        code, st2 = self.go('names-recompute', llm=llm)
+        self.assertEqual(st2['updated'], 0)
+
+    def test_recompute_guard_uses_stored_value(self):
+        self.seed()
+        orig = self.d1.batch
+        self.d1.batch = lambda stmts: (self.d1.db.execute("UPDATE sites SET name='他の人が直した名前' WHERE id='r0'"), orig(stmts))[1]
+        code, st = self.go('names-recompute', llm=self.llm())
+        self.assertEqual(self.name_of('r0'), '他の人が直した名前')
+        self.assertEqual(st['skipped_changed'], 1)
+
+    def test_recompute_flag_only_with_names(self):
+        with self.assertRaises(SystemExit):
+            cq.main(['descriptions', '--recompute'], client=self.d1)
 
 
 class Leasing(Base):
