@@ -109,7 +109,7 @@ Windows worker は `scripts/cron/mise-media.cmd` から起動し、既定で fav
 `scripts/discover_online.py`（#235 / #39 / #128）。見つけた URL を本番 D1 の `url_progress`（`source='discovered'`, `state='discovered'`）へ **直接** 入れる。ローカルに SQLite frontier・CSV・JSONL・キャッシュ・チェックポイントを作らない（メモリのみ。出力は標準出力のレポートだけ）。続きの位置（Wikidata の OFFSET）と実行リースは D1 の `discovery_cursors`（migration 0037、非公開）に置く。**事前に 0037 を本番へ適用する**（未適用でも dry-run は動くが、カーソルは先頭扱い）。
 
 ```
-uv run python scripts/discover_online.py --source wikidata|wikidata-classes|official|links|cc|all [--limit N] [--max-rows N] [--max-sites N] [--cc-sample-every N]   # 既定 = dry-run(何も書かない)
+uv run python scripts/discover_online.py --source wikidata|wikidata-classes|wikidata-leaves|official|links|cc|all [--limit N] [--max-rows N] [--max-sites N] [--cc-sample-every N] [--no-leaf-seeds] [--report-unmapped]   # 既定 = dry-run(何も書かない)
 uv run python scripts/discover_online.py --source official --limit 200 --apply                                  # 書く
 ```
 
@@ -123,6 +123,12 @@ uv run python scripts/discover_online.py --source official --limit 200 --apply  
 - links（`scripts/discover_links_cc.py`）: 公開済みサイト（`sites.url`）を **`sites.id` 昇順**（機械的。人気・規模では並べない）に、続きから `--max-sites`（既定 100）件ずつ処理する。各サイトのトップを robots.txt を守り 2 秒間隔・本文 512 KB 上限・SSRF 検査つき（`PoliteFetcher`）で取り、外部リンクを **サイト単位（`scheme://host/`。パスは捨てる。`/~user/` の個人ページだけ残す）** にして候補にする。同じサイト内は除く（`xxx.hatenablog.com` 同士のような共有サービス配下は別サイト）。除外は入口（SNS・ポータル・検索・URL 短縮・アプリストア・CDN/インフラ。`ENTRANCE_TREE` と `platforms.txt` の本体）と安全上の拒否（IP・内部名・認証情報つき URL・80/443 以外のポート）だけ。個人名ドメイン・個人ブログ・共有サービス配下の小さなサイトは通る。カーソルは `discovery_cursors` の `links/sites_id`（最後に処理し終えた id）。上限（`--limit`）で候補を捨てたサイトはカーソルを進めず次回やり直す。取れなかったサイト（robots 不許可・HTTP エラー等）は理由別の件数をレポートに出してカーソルは進める。
 - cc（`scripts/discover_links_cc.py`）: Common Crawl ホストグラフの vertices（`pipeline/discover.py` と同じ `.jp` ホストのパート）を **curl でストリームのまま** 読む（ファイル・キャッシュを作らない）。`crc32(ホスト名) % --cc-sample-every(既定 1000) == 0` のホストだけを抽出する（日本に絞るのは従来どおり `.jp` のみ。人気順位は使わない）。カーソルは `cc/<graph>/part37/every<N>`（読み終えた `.jp` 行数。続きは先頭から読み飛ばす＝毎回約 40 MB のダウンロード。`done` なら何もダウンロードしない）。`--limit` は追加件数の上限で、上限の行より前を入れて検証してからカーソルを進める。
 - `--source all` は 4 供給元すべて。links / cc は 1 回あたりの量を `--max-sites` / `--limit` で小さく切って回す。
+- **葉狙いの発見（#181、2026-11-25 方針）**: 盲目的にリンクをたどらず、公開サイトが **100 件未満（FLOOR）の葉**（子を持たないカテゴリ。不足 = 100 − `site_categories` の行数）へ向けて URL を探し、見つけた URL ごとに狙った葉を `url_candidates.hint_leaf` に残す（`scripts/discover_leaf_directed.py`）。人気・規模では選ばない・並べない（葉は不足の大きい順、同数は葉 id 順の機械的な順序）。
+  - `--source wikidata-leaves`: `wikidata-leaf-map.csv` にある不足の葉について、対応表の行ごとに P856 を項目 ID の文字列順キーセットで取る（`max_rows` は 1 行 1 回あたりの上限、WDQS は 5 秒間隔、429/503 は終了コード 3）。カーソルは `discovery_cursors` の `wikidata-leaves/<leaf>:<rel>:<qid>`（最後に取った項目 ID か `done`）。**公開 + hint つきで取り込み中（discovered〜approved）+ このランの追加 が FLOOR の 3 倍（300）に達した葉は止める**（過剰収集の防止。行き過ぎは最大 1 ページ未満）。
+  - `--source links`（既定は `--leaf-seeds`）: 不足の大きい葉から順に、その葉の公開済みサイト（`sites.id` 昇順）のトップを取り、外部リンク先に `hint_leaf` = そのシードの葉を付ける。不足 0 の葉はシードにしない。カーソルは `links-leaf/<leaf>`（最後に処理した `sites.id`）。従来の id 昇順は `--no-leaf-seeds`（カーソルは従来の `links/sites_id`）。
+  - `hint_leaf` の書き方: `INSERT ... ON CONFLICT(identity_key) DO UPDATE SET hint_leaf=COALESCE(url_candidates.hint_leaf, excluded.hint_leaf)`。既存の hint・取得・判定の列は上書きしない。既知の行でも、`url_progress` が `discovered` で hint が無ければ今回の葉を付ける（レポートの `tagged`。新規の `added` とは別）。書いたあとは読み戻して検証する。
+  - レポートは葉ごとに `deficit / fetched / known / added / tagged`（dry-run の `added` は追加予定）。dry-run は何も書かない。
+  - `--report-unmapped`: Wikidata の対応が無く不足のある葉（詩・哲学・民俗・地理など個人のテキスト系）を件数つきで一覧する（何も書かない。URL は推測しない。探し先の目安はリンク集・ウェブリング・その分野の公式の一覧。人が見る報告）。
 - 入った `discovered` 行は、従来どおり後段（取得・判定・審査）が進める。このランナーは `sites` へは何も入れない。
 
 ## cron の登録（kako-jun が行う）（Linux の例）

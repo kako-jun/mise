@@ -236,6 +236,10 @@ def run_sources(sink, cursors, sources, client, pf, extra=None):
     """discover_online.run() の登録フック。extra: max_sites / cc_sample_every / cc_open(テスト用)。"""
     extra = extra or {}
     if 'links' in sources and not sink.stats.mismatch:
-        run_links(sink, cursors, pf, client, extra.get('max_sites', DEFAULT_MAX_SITES))
+        if extra.get('leaf_seeds'):   # 公開が少ない葉のサイトから順に(hint_leaf つき)。既定は main の --leaf-seeds
+            import discover_leaf_directed
+            discover_leaf_directed.run_links_leaf(sink, cursors, pf, client, extra.get('max_sites', DEFAULT_MAX_SITES))
+        else:
+            run_links(sink, cursors, pf, client, extra.get('max_sites', DEFAULT_MAX_SITES))
     if 'cc' in sources and not sink.stats.mismatch:
         run_cc(sink, cursors, extra.get('cc_open', curl_lines), extra.get('cc_sample_every', CC_SAMPLE_EVERY))
