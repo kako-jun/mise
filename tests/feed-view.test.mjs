@@ -228,10 +228,20 @@ test('feed(#277): 「見た」は 60% 以上のカードが現在になった瞬
   assert.match(appJs, /IN_VIEW_THRESHOLD = 0\.6;/); assert.ok(!/SEEN_DWELL_MS|dwell/.test(appJs), '滞在待ちを置かない');
   assert.match(appJs, /settled = navTarget === current;/, '即時はキー・ボタンの送り先に着いたときだけ');
   assert.match(appJs, /if \(settled\) countSeen\(\); else scheduleSeen\(\);/);
-  assert.match(appJs, /scroller\.addEventListener\('scrollend', \(\) => seenIfSettled\(\)\)/, 'scrollend で即確定');
+  assert.match(appJs, /scroller\.addEventListener\('scrollend', \(\) => \{ lastScrollAt = -1e9; seenIfSettled\(\); \}\)/, 'scrollend で即確定');
   assert.match(appJs, /Math\.abs\(c\.offsetTop - scroller\.scrollTop\) > 2\) return false/, '境界に揃っていなければ数えない');
   assert.match(appJs, /scroller\.scrollTop === y\) seenIfSettled\(\); else scheduleSeen\(\)/, '位置が動いている間は待つ');
   assert.match(appJs, /function markSeen\(site\) \{\s*if \(!site \|\| seen\.sites\[site\.id\]\) return;/, '二重に数えない');
+});
+
+test('feed(#292): 「自動」ボタンはなく自動送りは常に有効・保存値は読まない・手動操作の待ちを入れずバーは止まった瞬間に始まる', () => {
+  assert.ok(!/f-auto\b|autoOn|setAuto|autoLabel|autoName|AUTO_KEY|mise-feed-auto/.test(appJs), 'feed.js にボタン・オン/オフ・保存キーを残さない');
+  assert.ok(!/f-auto\b/.test(feedCss), 'CSS にも残さない');
+  assert.ok(!/auto(Label|Name|On|Off|Title)/.test(appJs), '全言語の文言から外す');
+  assert.ok(!/addEventListener\(ev, poke/.test(appJs), 'wheel/touch/pointerdown/keydown で待ちを入れない(遅れの原因)');
+  assert.match(appJs, /addEventListener\('visibilitychange', poke\)/, 'タブ復帰は従来どおり保留');
+  assert.match(appJs, /moving: !atEnd && autoMoving\(now\)/); assert.match(appJs, /!!touch \|\| !!settleRaf \|\| now - lastScrollAt < 150/);
+  assert.match(feedCss, /\.f-progress\[data-state="moving"\]/);
 });
 
 test('feed(#276): 戻る矢印(.f-directory)とスコア(.f-surf)に枠・輪郭・背景の枠を付けない', () => {
@@ -274,22 +284,24 @@ test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照す
 
 test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止まり、再開は数え直す(#199)', () => {
   const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
-  const run = { enabled: true, held: false, atEnd: false };
+  const run = { held: false, moving: false, atEnd: false };
   let now = 0, adv = 0, last;
   const frames = (ms, ctx = run) => { for (let i = 0; i < ms / 50; i++) { now += 50; last = a.tick(now, ctx); if (last.advance) adv++; } };
   a.tick(now, run);
   frames(950); assert.equal(adv, 0); assert.ok(last.progress > .9 && last.state === 'running');
   frames(100); assert.equal(adv, 1); // 1000ms で 1 回
   frames(850); assert.equal(adv, 1); frames(100); assert.equal(adv, 2); // 続けて進む
-  // 手動操作: 進行を捨て、resumeDelay のあいだ進めない。その後 interval 数え直す
+  // poke(タブ復帰): 進行を捨て、resumeDelay のあいだ進めない。その後 interval 数え直す
   adv = 0; frames(500); a.poke(now); frames(250); assert.equal(last.state, 'quiet'); assert.equal(last.progress, 0);
   frames(950); assert.equal(adv, 0); frames(300); assert.equal(adv, 1);
+  // moving(指・スクロール・寄せ中, #292): 進行を 0 に捨てて待ち、止まった瞬間に待ち無しで 0 から数え直す(resumeDelay を挟まない)
+  adv = 0; frames(500); frames(5000, { ...run, moving: true }); assert.equal(adv, 0); assert.equal(last.state, 'moving'); assert.equal(last.progress, 0);
+  frames(50); assert.equal(last.state, 'running'); assert.ok(last.progress > 0 && last.progress <= .06, '止まった次のフレームから伸びる'); frames(900); assert.equal(adv, 0); frames(100); assert.equal(adv, 1);
   // held: 進めず進行を保つ。解けたら resumeDelay 待って最初から
   adv = 0; frames(500); const p = last.progress; frames(5000, { ...run, held: true }); assert.equal(adv, 0); assert.equal(last.state, 'held'); assert.equal(last.progress, p);
   frames(250); assert.equal(last.state, 'quiet'); frames(950); assert.equal(adv, 0); frames(350); assert.equal(adv, 1);
   // オフ・終了カードでは進まず 0。巻き戻しの合図も出さない
-  adv = 0; frames(5000, { ...run, enabled: false }); assert.equal(adv, 0); assert.equal(last.progress, 0);
-  frames(5000, { ...run, atEnd: true }); assert.equal(adv, 0); assert.equal(last.state, 'off');
+  adv = 0; frames(5000, { ...run, atEnd: true }); assert.equal(adv, 0); assert.equal(last.state, 'off');
   // reset(カード切替)で進行だけ 0 に
   frames(500); a.reset(); frames(600); assert.equal(adv, 0);
   // 長い空白(タブ復帰)でも 1 フレームは 100ms までしか進めない
@@ -297,7 +309,7 @@ test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止ま
 });
 
 test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は即進まず、4秒待って数え直す・時間ぴったりで進む(#199)', () => {
-  const run = { enabled: true, held: false, atEnd: false };
+  const run = { held: false, moving: false, atEnd: false };
   const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
   let now = 0; a.tick(now, run);
   for (let i = 0; i < 10; i++) { now += 50; a.tick(now, run); } // 500ms 進む
@@ -314,7 +326,7 @@ test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は�
 });
 
 test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は保留して quiet)(#199)', () => {
-  const run = { enabled: true, held: false, atEnd: false };
+  const run = { held: false, moving: false, atEnd: false };
   const mk = () => lib.makeAutoAdvance({ interval: 5000, resumeDelay: 400, gap: 1000 });
   const a = mk(); a.tick(0, run); assert.equal(a.tick(999, run).state, 'running');
   const b = mk(); b.tick(0, run); const r = b.tick(1001, run);

@@ -22,6 +22,7 @@ const browser = await chromium.launch({ executablePath: chromiumPath(), args: ['
 try {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await ctx.newPage();
+  await page.route('**/feed.js*', async r => { const res = await r.fetch(); await r.fulfill({ response: res, body: (await res.text()).replace('const AUTO_ADVANCE_MS = 12000;', 'const AUTO_ADVANCE_MS = 1e9;') }); }); // 自動送り(12 秒)は常に有効でオフにできない: 計測に混ざらないよう、この検証だけ間隔を実質無限にする
   await page.goto(BASE + '/all/?category=recent&view=feed');
   await page.waitForSelector('.f-card.is-active'); await page.waitForTimeout(500);
   const styles = await page.evaluate(() => Object.fromEntries([['back', '.f-directory'], ['score', '.f-surf']].map(([k, s]) => {
@@ -32,7 +33,6 @@ try {
     assert.ok(v.bw.every(w => w === '0px'), k + ' border'); assert.equal(v.shadow, 'none', k + ' box-shadow'); assert.equal(v.backdrop, 'none', k + ' backdrop');
     assert.ok(v.w >= 36 && v.h >= 36, k + ' tap target');
   }
-  const auto = page.locator('.f-auto'); if (await auto.getAttribute('aria-pressed') === 'true') await auto.click(); // 自動送り(12 秒)が数えを混ぜないように切る
   // 切り替え→スコア更新(#277): キー送りから 100ms 以内。連続送りは通過点を数えず送り先の 1 件だけ
   const num = () => page.locator('.f-surf-num').textContent();
   const n0 = Number(await num());
