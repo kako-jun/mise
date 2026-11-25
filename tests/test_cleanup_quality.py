@@ -300,6 +300,51 @@ class Names(Base):
         self.assertEqual((code, st['skipped_changed'], st['verify_mismatch']), (0, 1, 0))
 
 
+class MeasuredMistakes(Base):
+    """Four wrong names found when names was first run on production (shared services, error pages, broken brackets)."""
+    CASES = [
+        ('2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催(現地とWeb併用) | Peatix', 'kids.peatix.com', '2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催'),
+        ('認定NPO法人花山星空ネットワーク主催 第33回講演会 | Peatix', 'hanayama.peatix.com', '認定NPO法人花山星空ネットワーク主催 第33回講演会'),
+        ('not found HGU – 北海学園大学受験生向けWEBサイト', 'www.hgu.example.jp', '北海学園大学受験生向けWEBサイト'),
+        ('巡り|歴史を繋いだ想いを未来へつなげる」日本文化の魅力交流ポータル', 'meguri.example.jp', None),
+        ('山田太郎 | note', 'yamada.note.com', '山田太郎'),
+        ('山田太郎 | はてなブログ', 'yamada.hatenablog.com', '山田太郎'),
+        ('山田屋 - Wix.com', 'yamada.wixsite.com', '山田屋'),
+        ('山田屋｜ジモティー', 'jmty.jp', '山田屋'),
+        ('山田屋 | Facebook', 'facebook.com', '山田屋'),
+        ('404 Not Found', 'x.example.jp', None), ('Index of /', 'x.example.jp', None), ('Welcome to nginx!', 'x.example.jp', None),
+        ('Apache2 Default Page', 'x.example.jp', None), ('It works!', 'x.example.jp', None), ('Under Construction | 山田屋', 'x.example.jp', '山田屋'),
+        ('Home | 山田屋', 'x.example.jp', '山田屋'), ('Peatix', 'a.peatix.com', None), ('note', 'a.note.com', None),
+    ]
+
+    def test_rule(self):
+        for title, host, want in self.CASES:
+            self.assertEqual(cq.deterministic_name(title, host), want, (title, host))
+
+    def test_shared_host_label_is_not_a_decider(self):
+        title = 'peatix イベント名その一 ハイブリッド開催 | 講演会のご案内 第二部 | 会場案内'
+        self.assertIsNone(quality.suggest_name(title, 'a.peatix.com'))
+        self.assertIsNone(quality.suggest_name('Peatix講演会のご案内 第二部について | イベント名その一ハイブリッド開催', 'a.peatix.com'))
+
+    def test_llm_answer_cannot_be_a_service_or_error_page(self):
+        self.assertIsNone(cq.llm_name_valid('Peatix', ['イベント | Peatix'], 'a.peatix.com'))
+        self.assertIsNone(cq.llm_name_valid('not found HGU', ['not found HGU – 北海学園大学'], 'www.hgu.example.jp'))
+        self.assertEqual(cq.llm_name_valid('北海学園大学受験生向けWEBサイト', ['not found HGU – 北海学園大学受験生向けWEBサイト'], 'www.hgu.example.jp'),
+                         '北海学園大学受験生向けWEBサイト')
+
+    def test_apply_end_to_end_no_llm_for_these(self):
+        for n, (title, host, want) in enumerate(self.CASES[:3]):
+            add_site(self.d1, f'm{n}', 'x' * 30 + ' | ' + 'y' * 30, title=title, url=f'https://{host}/')
+        llm = FakeLLM()
+        self.go('names', llm=llm)
+        self.assertEqual([self.name_of(f'm{n}') for n in range(3)], [c[2] for c in self.CASES[:3]])
+        self.assertEqual(llm.calls, [])
+        # the broken-bracket title goes to the LLM, whose 'Peatix'-like / fragment answers are refused -> needs_human
+        add_site(self.d1, 'br', 'x' * 30 + ' | ' + 'y' * 30, title=self.CASES[3][0], url='https://meguri.example.jp/')
+        self.go('names', llm=FakeLLM(names={'meguri.example.jp': '巡り'}))
+        self.assertNotEqual(self.name_of('br'), '巡り')
+
+
 class Leasing(Base):
     def test_lease_held_by_other_exits_2_and_writes_nothing(self):
         add_site(self.d1, 'a', LONG_TITLE, title=LONG_TITLE)

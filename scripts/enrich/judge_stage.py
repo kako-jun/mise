@@ -445,7 +445,7 @@ EMPTY_CAND_SQL = ("UPDATE url_candidates SET review_state='rejected', review_rea
 PLACEHOLDER_TITLES_EXACT = ("無題", "untitled", "no title", "notitle", "welcome", "home", "index", "top", "トップ", "トップページ",
                             "ホーム", "ようこそ", "new page", "my site", "test", "テスト")
 PLACEHOLDER_TITLE_PARTS = ("index of", "まだ記事がありません", "記事がありません", "準備中", "coming soon", "under construction",
-                           "工事中", "default web site page", "it works", "welcome to nginx", "apache2 default")
+                           "工事中", "page not found", "404 not found", "403 forbidden", "ページが見つかりません", "default web site page", "it works", "welcome to nginx", "apache2 default")
 
 
 def placeholder_title(title):

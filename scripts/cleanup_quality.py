@@ -182,7 +182,8 @@ def deterministic_name(title, host):
     """suggest_name, then the long single-clause title as it is (publish_stage.site_name's order). None = not decidable by rule."""
     t = collapse(title)
     new = quality.suggest_name(t, host)
-    if new is None and quality.name_acceptable_long(t):
+    if (new is None and quality.name_acceptable_long(t) and quality.brackets_balanced(t)
+            and not quality.not_a_name_clause(t, quality.shared_service_host(host))):
         new = t
     if new and name_ok(new) and not quality.is_fragment(new) and not predicate_like(new):
         return new
@@ -222,15 +223,17 @@ def name_in_source(n, src):
     return False
 
 
-def llm_name_valid(new, sources):
+def llm_name_valid(new, sources, host=''):
     """The LLM's site_name: <= NAME_MAX, passes check_name, no separator inside, not a fragment / bare corporate form, and a whole piece of
     ONE of the sources (title / current name / text excerpt, each looked at alone)."""
     n = collapse(new) if isinstance(new, str) else ''
     if not n or len(n) > quality.NAME_MAX or quality.check_name(n) or quality.is_fragment(n) or n in quality.CORP_FORMS or predicate_like(n):
         return None
+    if not quality.brackets_balanced(n) or quality.not_a_name_clause(n, quality.shared_service_host(host)):
+        return None                       # an error-page title / a shared service's own name is not this site's name
     if any(sep in n for sep in _NAME_SEPARATORS):
         return None
-    return n if any(name_in_source(n, s) for s in sources if s) else None
+    return n if any(name_in_source(n, s) for s in sources if s and quality.brackets_balanced(s)) else None   # a broken title is no source
 
 
 def scan(client, table_sql, keep, after, limit, beat=None):
@@ -324,7 +327,8 @@ def plan_names(ctx, rows):
         else:
             new = deterministic_name(title, host)
             stored = collapse(r.get('cand_site_name'))
-            if new is None and stored and not quality.check_name(stored) and not quality.is_fragment(stored) and not predicate_like(stored):
+            if new is None and stored and not quality.check_name(stored) and not quality.is_fragment(stored) and not predicate_like(stored) \
+                    and not quality.not_a_name_clause(stored, quality.shared_service_host(host)):
                 new, how = stored, 'stored'         # 判定段が支払い済みの site_name(publish_stage.site_name と同じ採用条件)
         if new is None and how != 'adult_host':
             if not apply:
@@ -342,7 +346,7 @@ def plan_names(ctx, rows):
                 return True
             if obj is not None:
                 st['llm_calls'] += 1
-                new = llm_name_valid(obj.get('site_name'), [title, cur, snip])
+                new = llm_name_valid(obj.get('site_name'), [title, cur, snip], host)
                 how = 'llm'
         if new is None or new == cur:
             human(ctx, 'names', r['id'], 'no_name')

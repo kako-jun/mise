@@ -54,6 +54,77 @@ CORP_FORMS = ("一般社団法人", "一般財団法人", "公益社団法人", 
 _SITE_TYPE_ONLY = {"home", "top", "トップ", "ホーム", "index", "welcome", "ようこそ", "メニュー"}
 
 
+# ---- Titles that are not a site's name: error / default pages, shared-service names, broken brackets (#273)
+# Long phrases are shared with the judge's placeholder_title (judge_stage.PLACEHOLDER_TITLE_PARTS); the short words only as a whole clause.
+GENERIC_PAGE_PHRASES = ("not found", "404", "403", "forbidden", "error", "index of", "welcome to nginx", "apache2", "default page",
+                        "it works", "under construction", "untitled", "ページが見つかりません", "見つかりません", "エラー")
+GENERIC_PAGE_EXACT = frozenset(["home", "top", "トップ", "トップページ", "ホーム", "ホームページ", "ようこそ", "index", "welcome", "無題", "no title"])
+_GENERIC_RE = re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in GENERIC_PAGE_PHRASES if w.isascii()) + r")(?![a-z0-9])")
+
+
+def generic_page(clause):
+    """A clause that names an error / default / placeholder page (not found HGU, 404, Index of /, Welcome to nginx, Untitled, ホーム ...)."""
+    f = unicodedata.normalize("NFKC", clause or "").casefold().strip(" .!-_|:/")
+    return (not f or f in GENERIC_PAGE_EXACT or bool(_GENERIC_RE.search(f))
+            or any(w in f for w in GENERIC_PAGE_PHRASES if not w.isascii()))
+
+
+_PAIRS = {"「": "」", "『": "』", "（": "）", "(": ")", "【": "】", "[": "]", "［": "］", "〈": "〉", "《": "》", "<": ">", "＜": "＞"}
+
+
+def brackets_balanced(t):
+    """False when a bracket / quote is left open or closed without an opening (a broken title: its clauses are not trustworthy)."""
+    stack = []
+    for ch in t or "":
+        if ch in _PAIRS:
+            stack.append(_PAIRS[ch])
+        elif ch in _PAIRS.values():
+            if not stack or stack.pop() != ch:
+                return False
+    return not stack
+
+
+# Domains whose pages belong to many different owners (blogs, event / shop / classified services, SNS): the blocklists the discovery uses
+# (platforms.txt, platform_pages.txt [host]) plus the services below. A host under one of them says nothing about the site's own name.
+SHARED_EXTRA = ("peatix.com", "jmty.jp", "wix.com", "kokucheese.com", "connpass.com", "doorkeeper.jp", "eventbrite.com", "tumblr.com",
+                "medium.com", "qiita.com", "zenn.dev", "youtube.com", "ameba.jp", "rakuten.co.jp", "booth.pm", "mercari.com", "linkedin.com")
+SERVICE_ALIASES = ("はてなブログ", "はてなダイアリー", "hatena blog", "ジモティー", "アメブロ", "アメーバブログ", "ameba", "ライブドアブログ", "livedoor blog",
+                   "楽天ブログ", "楽天市場", "wix.com", "ピーティックス", "こくチーズ", "twitter", "github pages", "google サイト", "google sites", "x")
+_SHARED = {}
+
+
+def _service_tables():
+    if "domains" not in _SHARED:
+        import os
+        import sys
+        d = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pipeline")
+        if d not in sys.path:
+            sys.path.insert(0, d)
+        import hostnames
+        doms = set(hostnames.blocklist("platforms.txt")[""]) | set(hostnames.blocklist("platform_pages.txt")["host"]) | set(SHARED_EXTRA)
+        fold = lambda s: re.sub(r"[\s.]", "", unicodedata.normalize("NFKC", s).casefold())
+        brands = {fold(x.split(".")[0]) for x in doms} | {fold(a) for a in SERVICE_ALIASES} | {fold(x) for x in doms}
+        _SHARED["domains"], _SHARED["brands"] = frozenset(doms), frozenset(b for b in brands if b)
+    return _SHARED["domains"], _SHARED["brands"]
+
+
+def shared_service_host(host):
+    """The host is (under) a domain shared by many owners (blog / event / shop / SNS service)."""
+    h = (host or "").lower().strip(".")
+    return any(h == d or h.endswith("." + d) for d in _service_tables()[0])
+
+
+def service_name_clause(clause):
+    """A clause that is only the name of such a service (Peatix, note, はてなブログ, Wix.com, ジモティー, Facebook ...)."""
+    f = re.sub(r"[\s.]", "", unicodedata.normalize("NFKC", clause or "").casefold())
+    brands = _service_tables()[1]
+    return f in brands or re.sub(r"(blog|ブログ|公式|official|com|jp)$", "", f) in brands
+
+
+def not_a_name_clause(clause, shared):
+    return generic_page(clause) or (shared and service_name_clause(clause))
+
+
 def split_clauses(title):
     return [c.strip() for c in SEP.split(collapse(title)) if c.strip()]
 
@@ -183,24 +254,29 @@ def suggest_name(title, host=""):
     t = collapse(title)
     if not t:
         return None
+    if not brackets_balanced(t):      # a bracket left open / closed without an opening: the title is broken, its clauses cannot be trusted
+        return None
+    shared = shared_service_host(host)
     clauses = split_clauses(t)
     if not check_name(t):
         if len(clauses) > 1:
-            rest = [c for c in (_strip_site_type(c) for c in clauses) if c and c.casefold() not in _SITE_TYPE_ONLY]
-            return rest[0] if len(rest) == 1 and not check_name(rest[0]) else t
+            rest = [c for c in (_strip_site_type(c) for c in clauses) if c and c.casefold() not in _SITE_TYPE_ONLY and not not_a_name_clause(c, shared)]
+            if len(rest) == 1:
+                return rest[0] if not check_name(rest[0]) else None
+            return t if len(rest) == len(clauses) else None
         clean = _strip_site_type(t)
-        return clean if clean and not check_name(clean) else None
+        return clean if clean and not check_name(clean) and not not_a_name_clause(clean, shared) else None
     cands = []
     for c in clauses:
         c = _strip_site_type(c)
-        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c):
+        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c) or not_a_name_clause(c, shared):
             continue
         if c in CORP_FORMS:        # a corporate form alone is not a name
             continue
         cands.append(c)
     if not cands:
         return None
-    toks = _brand_tokens(host)
+    toks = [] if shared else _brand_tokens(host)     # a shared service's own label says nothing about this site
     folded = lambda c: unicodedata.normalize("NFKC", c).casefold()
     corp = [c for c in cands if _corp_form(c)]
     brand = [c for c in cands if any(_has_token(folded(c), tk) for tk in toks)]
