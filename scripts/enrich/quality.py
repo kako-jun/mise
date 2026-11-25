@@ -632,6 +632,29 @@ def proper_nouns():
 ADMIN_ONLY = frozenset(["市", "町", "村", "県", "区", "都", "府", "道", "郡", "市町村", "都道府県"])
 
 
+_LATIN_TOKEN = re.compile(r"[.#]?[A-Za-z0-9][A-Za-z0-9.+#&_\-]*")
+
+
+def latin_token_ok(label):
+    """A label that needs no Japanese version: Latin letters / digits / symbols only, at most TAG_JA_MAX characters, no space (so never a
+    sentence or a phrase), and recognisably an abbreviation, a number or a name rather than an ordinary English word: it holds a digit
+    (5G, 4K, 3D, A24, 1920s, 12-step), one of . + # & (.NET, C++, C#, Node.js, R&B), or is written in capitals / with an inner capital (AA, NASA,
+    iOS). A plain lower-case word (university) or a capitalised one (Music) is NOT: it gets a Japanese label."""
+    t = unicodedata.normalize("NFKC", label or "").strip()
+    if not t or len(t) > TAG_JA_MAX or has_japanese(t) or not _LATIN_TOKEN.fullmatch(t):
+        return False
+    letters = re.sub(r"[^A-Za-z]", "", t)
+    if re.search(r"\d", t) or re.search(r"[.+#&]", t.rstrip(".")):
+        return bool(letters or re.search(r"\d", t))
+    return len(letters) >= 2 and (letters.isupper() or bool(re.search(r"[a-z][A-Z]", letters)))
+
+
+def ja_label_ok(label, proper=None):
+    """label_ja stands as it is: kana / kanji, a Latin-script token that needs no translation (latin_token_ok), or a listed proper noun."""
+    proper = proper_nouns() if proper is None else proper
+    return has_japanese(label) or latin_token_ok(label) or unicodedata.normalize("NFKC", label or "").casefold() in proper
+
+
 def parse_tag(t):
     """A tag as stored -> (label_ja, label_en). Accepts 'ja|en', a dict (label_ja/label_en or ja/en) or a plain string (both labels the
     same, which check_tags then rejects when it is not Japanese). None for anything else."""
@@ -668,7 +691,7 @@ def check_tags(tags, synonyms=None, proper=None):
             continue
         if ja in ADMIN_ONLY:
             out.append("tag_admin_only")
-        if not has_japanese(ja) and unicodedata.normalize("NFKC", ja).casefold() not in proper:
+        if not ja_label_ok(ja, proper):
             out.append("tag_label_ja_not_japanese")
         if not en or has_japanese(en):
             out.append("tag_label_en_not_english")
