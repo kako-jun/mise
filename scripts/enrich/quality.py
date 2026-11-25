@@ -351,6 +351,19 @@ def _cut_long(seg):
     return out if out else None
 
 
+def _drop_concatenations(items):
+    """A segment that is the plain concatenation of two OTHER segments (A + B, either order) is a repeat: dropped (個人のお客様｜ダイキン工業株式会社個人の
+    お客様｜ダイキン工業株式会社). Compared on NFKC + casefold with spaces removed."""
+    key = lambda x: re.sub(r"\s+", "", _fold_seg(x))
+    items = list(items)
+    for i in range(len(items)):
+        ki = key(items[i][0])
+        others = [key(x[0]) for j, x in enumerate(items) if j != i]
+        if any(a and b and (a + b == ki or b + a == ki) for n, a in enumerate(others) for m, b in enumerate(others) if n != m):
+            return _drop_concatenations(items[:i] + items[i + 1:])
+    return items
+
+
 def derive_name(title, host=""):
     """-> {'name', 'name_ja', 'name_en'} or None (nothing usable: the row is left alone and listed as needs_human).
     Segments (split_segments) -> drop boilerplate (boilerplate_segment) -> drop repeats (NFKC + casefold) -> keep in order, each kept segment
@@ -367,6 +380,7 @@ def derive_name(title, host=""):
             continue
         seen.add(k)
         keep.append((s, sep or " | "))
+    keep = _drop_concatenations(keep)
     if not keep:
         return None
     first = keep[0][0]

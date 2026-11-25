@@ -150,7 +150,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 掲載済みのサイトを、上の規則（`quality.py`）に合わせて本番 D1 で直接直す。`names`（サイト名）と `descriptions`（日本語の説明の文体）。`tags` / `categories` は次の PR。
 
 ```
-uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute] [--llm-fallback] [--restart] [--retry-skipped]
+uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute | --ids FILE|-] [--llm-fallback] [--restart] [--retry-skipped]
 uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
 ```
 
@@ -167,7 +167,7 @@ uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | -
 1. **元の文**: 同じ `progress_key` の `url_candidates.title`（元のタイトル）。無ければ今の `name`。
 2. **節に分ける**: `｜` `│` `┃` `|` `／` `/` は常に区切り。` – ` ` — ` ` - ` ` ― ` ` : ` ` · ` は**前後に空白があるときだけ**区切り（`アシザワ・ファインテック` `20th-Century` `Adobe: …` のように語の中・空白なしの記号は区切りにしない）。電話番号・FAX・郵便番号・営業時間・URL は節の中からも取り除く（それだけの節は消える）。`【公式】` `[Official]` のようなラベル飾りは、ラベルだけ外して残りを使う（片側だけ空白の区切り `X ｜Y` は空白なしに整える）。**節の端の定型句**: 末尾（後ろに `！` `？` `。` などが付いていてもよい。ただし取ると空になるときは取らない）の `へようこそ` `ようこそ` `トップページ` `TOPページ` `Top Page` `Official Web Site` `オフィシャルサイト` `公式サイト` `無題ドキュメント` `Untitled Document`、先頭（独立した語のとき）の `トップページ` `TOPページ` `Top Page` `無題ドキュメント` `Untitled Document` を外す（名前の途中のもの・語の一部（`トップページデザイン研究会` `Topology`）は外さない）。title の先頭／末尾に残る裸の ` - ` ` – ` も落とす（`京都府建築士会 - TOPページ - ` → `京都府建築士会`）。綴りだけが違う重複（カンボジア／カンボディア）はそのまま残す。
 3. **定型の節を落とす（節全体が一致したときだけ。節の端の定型句は 2 で外す）**: トップページ・ホーム・TOP・Home・Welcome・ようこそ（…へ）・公式サイト・公式ホームページ・オフィシャルサイト・ウェブサイト・Official Site / Website / Web Site / Homepage / Dealer Site（`Official Dealer Site`）、エラーページの題名（`404 Not Found`・`Index of`・`Welcome to nginx` …。`404 Gallery` や `Home Sweet Home Bakery` は残る）、ホストが共有サービスのときそのサービス名だけの節（Peatix・note・はてなブログ・Ameba・FC2・Wix・Jimdo・ココログ・Facebook …。`data/platforms.txt` / `platform_pages.txt` / `quality.SHARED_EXTRA`）。節の**一部**に定型語が付いているもの（`Jeep Official Dealer Site`・`not found HGU`）は、2 の端の定型句でなければ節全体ではないので**残す**（言い換えない・推測しない）。
-4. **重複を落とす**: 同じ節（NFKC + 大小無視）は最初の 1 つだけ。**並べ替え・言い換え・翻訳・追記はしない**。
+4. **重複を落とす**: 同じ節（NFKC + 大小無視）は最初の 1 つだけ。ほかの 2 節をつないだもの（A+B、どちらの順でも。`個人のお客様｜ダイキン工業株式会社個人のお客様｜ダイキン工業株式会社`）の節も捨てる。**並べ替え・言い換え・翻訳・追記はしない**。
 5. **残りを順に、60 字（`NAME_SOFT_MAX`）に収まる節の境界まで**、title が使っていた区切り（既定 ` | `）でつなぐ。最初の節は必ず残し、80 字（`NAME_LONG_MAX`）以内ならそのまま全部（長い正式名称）。80 字超なら 80 字より前の最後の `、` `。` `）` `」` か空白で切り、境界が無ければ `None`（変更せず `needs_human`）。収まらない節に当たったらそこで終わり（飛ばして後ろを足さない）。
 6. **言語別の名前**: 残った節を、かな・漢字を含む = `ja`、ラテン文字だけ = `en`（数字・記号だけの節はどちらでもない）に分け、**`ja` が 1 つ・`en` が 1 つ**で、しかも両方が**短い名前**のときだけ（`ja` は 18 字以内・`、。！？「」『』〜…・` `なら` `を` と説明語（販売 購入 予約 情報 サイト 通販 サービス ポータル サポート ご案内）を含まず・ラテン文字を内包しない。`en` は 50 字以内で文でない。「ブランド＋キャッチコピー」は翻訳対ではないので割らない） `name_ja` = ja の節をつないだもの・`name_en` = en の節をつないだもの を入れる（`name` は 5 の結果なのでどの画面経路でも表示できる）。片方だけなら `name` だけ（`name_ja` / `name_en` に写さない）。**既に値がある `name_ja` / `name_en` は上書きしない**（UPDATE 文の中で `CASE WHEN COALESCE(name_ja,'')=''` と保護）。
 
@@ -177,7 +177,8 @@ uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | -
 
 **選ぶ行**:
 - `names`: 今の `name` が `check_name` に違反し（かつ区切りの無い 80 字以内の 1 節ではなく）、規則の結果が今と違う（または結果なし）行。
-- `names --recompute`: **stored name が title より短い行はすべて再計算の対象になる（説明的な語を残す方針と一致）。dry-run で差分を確認してから `--apply`**。上に加えて、(b) 以前の実行で書き換えた行（`url_candidates.title` があり、`name` が title の一部（真部分）、または規則の結果と違って title より短い）。規則の結果が今と同じ行（`name_ja` / `name_en` の補完も無い）は触らない。
+- `names --recompute`: 既定の対象は `names` と同じ（**今の名前が長さ/品質の検査に違反する行だけ**。検査を通る良い短い名前は、長い title に置き換えない）。
+- `names --ids <file|->`: 指定した site id（1 行 1 件、`-` は標準入力、最大 2,000 件。重複は 1 件に、存在しない id は無視して `ids_unknown` に数える）の行**だけ**を、`url_candidates.title` から `derive_name` で取り直す。検査を通る名前でも対象。結果が今と同じ行は触らない。`name_ja` / `name_en` が空でない行は上書きしない。dry-run 既定（全行の `(id, 旧, 新, name_ja, name_en)` を表示）、`--apply` は bookmark・保存値ガード・読み戻し・20 件ごと。位置（カーソル）も `needs_human` の印も使わない。旧ツールが書き換えた行を取り直すのに使う。`--recompute` とは併用しない。
 - 結果が出ない行（定型だけ・境界の無い 80 字超）は**変更せず** `needs_human`（件数と id を出し、D1 に印を付ける。`--retry-skipped` で再び対象）。ホスト名そのもの（`100s.jp`）になる結果も名前にしない（`needs_human`）。成人向け（`adult_content=1`）は掲載段（`publish_stage.site_name`）と同じくホスト名。
 
 **dry-run（既定）**: 何も書かず LLM も呼ばない。`names --recompute` は選ばれた**全行**の `(id, 旧, 新, name_ja, name_en)` を出す。`--apply` は D1 リース・bookmark（取れなければ中止）・保存値とのガード・読み戻し（`name` `name_ja` `name_en`）・20 件ごとの書き込み。旧名は `url_candidates.title` に残す（title があれば上書きしない・無ければ旧名で作る）。
