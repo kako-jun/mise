@@ -63,10 +63,18 @@ Message Batches（半額）は未対応。同期呼び出し、`concurrency` は
 判定段の審査（`approve_policy`）で決まらず `url_progress.state='candidate'` / `url_candidates.review_state='pending'` に残った行（`review_reason` が空・`not_pass`・`stale_individual_*`・`no_description` など）を、3 匹の猫が投票して終点へ進める。`run(client, *, limit, apply, log, llm, budget_month, concurrency, heartbeat, llm_enabled)`。ランナーでは判定段と掲載段の間（`--stages fetch,judge,deliberate,publish`、既定は全段、`--deliberate-limit` 既定 20・上限 200）。
 
 - 3 匹（性格は Issue #53 で確定、指示文は `PROMPTS`）: **白猫** = 用心深い番猫（安全と法。なりすまし・著作権・個人情報・マルウェア/誘導。厳しめ、迷えば保留/却下。モデル sonnet）/ **黒猫** = 潔癖な審査員（独立性と質。広告中心・量産・パーキング・更新停止。中庸。haiku）/ **よもぎ猫** = 好奇心旺盛な探検家（手作り感・個性・ニッチ・長続き。寛容、迷えば承認。haiku）。各猫は `{vote: approve|hold|reject, reason, evidence_quote?}` を返す。理由は事実の短い日本語 1 文（「スパム」などのレッテルは検証で弾く）。成人向けは属性にすぎず、それだけで reject しない（指示文に明記。成人向けの行への reject で理由が成人向けを挙げていれば無効票として 1 回再試行）。人気・流入・規模・フォロワー・被リンクは基準にしない（各指示文に明記）。入力は取得・判定段が保存した材料（`<candidate>` と `<judge_notes>`）を「信用できないデータ」として渡す。LLM にツールは無い。`evidence_quote` はサイト本文の逐語であること（`judge.quote_source` で検査）。
+- 追加の歯止め（すべて自動決定を止めて人へ回す向き。#53 の素の 2/3 多数決からの変更）:
+  - **白猫の拒否権（`SAFETY_VETO = True`）**: 白猫が reject の行は、他の 2 匹が承認でも自動承認せず会議中にする。黒猫・よもぎ猫は安全面を見ない指示なので、その 2 票は安全の情報を含まないため。安全側に倒す変更で、元に戻すなら定数 1 つ（`False`）。reject 多数による却下は従来どおり。
+  - **成人向けは自動却下しない**: `adult` / `fetch_adult` が `yes` の行は、reject 多数でも却下せず会議中にする（承認多数はそのまま通す）。さらに、reject の理由に成人向けを示す語（成人・アダルト・R18・性的・わいせつ・大人向け・sexual・explicit 等）があれば、属性のフラグの有無にかかわらず無効票（1 回再試行し、なお直らなければその猫は失敗 = 会議中）。判定段が属性を付け損ねた行（`judge_refused` など）の言い換えも同じ網にかかる。
+  - **reject には根拠の引用が必須**（`evidence_quote`。サイト本文の逐語）。無い reject は無効票で 1 回再試行、なお無ければその猫は hold 扱い。理由は 80 字以内、「スパム」「詐欺サイト」「悪質」などの断定語は無効。
+  - **説明文または有効カテゴリが無い行は承認しない**: 承認多数でも会議中にし `review_reason='deliberation:needs_description'` を付ける（選択からは外さず、猫の意見は記録に残す。掲載段の `gate:no_description` 保留を作らないため）。
+  - **公的機関は投票しない**: 選択後に `approve_policy.public_looking` を決定論で当て、該当行は LLM を呼ばず `review_reason='public_body'` に付け替える（以後の選択に出ない。`LIMIT` の窓を占有しない）。dry-run は書かず、対象から外すだけ。
+  - **本文の山括弧を無害化**: サイト本文と `<judge_notes>` の値の `<` `>` は全角にして、本文でタグを閉じて偽の指示を差し込めないようにする（system には user メッセージ全体がデータだと明記）。
+  - 黒猫の基準: 「量産・使い回し（同一内容の大量ページ）」に絞り、共通のブログテーマ・無料ホスティング・既製テンプレートの利用は該当しない。放置は決定論の日付証拠がある場合のみ reject、無ければ hold まで。
 - 決定: 承認 2 以上 → `review_state='approved'`・`review_reason='deliberation:approve'`・`url_progress.state='approved'`（掲載段が拾う）/ 却下 2 以上 → `rejected` / `deliberation:reject` / それ以外（保留多数・1/1/1・1 匹でも 1 回の再試行後に失敗）→ `candidate`/`pending` のまま `deliberations.status='meeting'`（会議中。人の判断待ち）。書き込みは claim（`deliberations` の `running` 行と `lease_until` 30 分）を条件にした 1 行 1 バッチで、読み戻して検証する。再実行しても同じ入力（`input_hash`）の `decided`/`meeting` 行は選ばれない。
 - 対象外: `review_reason` が `public_body` と `gate:*`（掲載段の保留。データの修復が要るので投票しない）。並びは `identity_key` の機械順。
 - 費用: 1 行 3 呼び出し。判定段の `Ledger`（`llm_ledger` への reserve → settle、月の上限）をそのまま使い、月の上限は判定段と共有。上限に達したら claim を戻して `budget_stopped` で止まる（ランナーは合議段だけ外して続ける、exit 0）。API 全体のエラー（認証・課金・過負荷）は reserve を release して止まる（行の試行回数は動かさない）。応答が曖昧（通信断）な呼び出しは再送せず reserve を残し、その猫は失敗扱い（その行は会議中）。ランナーの停止・終了コード・費用ガード・リースは判定段と同じ（合議段も `judge_unapproved_window` が立てば LLM を呼ばない）。異常ガード: 選んだ行が 10 件以上で猫の失敗が半分を超えたら exit 1。
-- 概算費用: 1,000 行で約 US$8（白猫 sonnet が 1 行約 US$0.007、黒猫・よもぎ猫 haiku が各約 US$0.0004。本文は 4,000 文字まで送る）。
+- 概算費用: 1,000 行で約 US$8（歯止めは追加の呼び出しを増やさない。無効票の再試行が増えた分だけ上振れ）（白猫 sonnet が 1 行約 US$0.007、黒猫・よもぎ猫 haiku が各約 US$0.0004。本文は 4,000 文字まで送る）。
 
 ### 会議中の行を人が決める
 
@@ -82,7 +90,7 @@ UPDATE url_progress SET state='approved', updated_at=datetime('now') WHERE ident
 DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 ```
 
-人が決めた行は `review_state` が `pending` でなくなるので、合議段はもう選ばない（`deliberations` の `meeting` 行は記録として残す）。
+合議の最中に人が先に決めた行は、行の移動（`review_state` / `url_progress`）は claim と `pending`/`candidate` の条件で効かず、票だけが `deliberations` に残る（実行の統計では `lost_claim`）。人が決めた行は `review_state` が `pending` でなくなるので、合議段はもう選ばない（`deliberations` の `meeting` 行は記録として残す）。
 
 テスト: `tests/test_enrich_deliberate_stage.py`（実 migration の in-memory SQLite と偽 LLM）。
 

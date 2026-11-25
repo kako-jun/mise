@@ -5,7 +5,7 @@
 -- 戻し方: DROP TABLE deliberations;（他から参照されない）
 CREATE TABLE IF NOT EXISTS deliberations (
   identity_key TEXT PRIMARY KEY,
-  status TEXT CHECK (status IN ('running','decided','meeting')),
+  status TEXT NOT NULL CHECK (status IN ('running','decided','meeting')),
   decision TEXT CHECK (decision IS NULL OR decision IN ('approve','reject')),
   input_hash TEXT,                  -- この票が見た入力(合議の版・モデル・url_candidates.input_hash・review_reason)。変われば再合議
   shiro_vote TEXT, shiro_reason TEXT, shiro_model TEXT,
