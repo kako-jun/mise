@@ -259,6 +259,43 @@ def name_acceptable_long(title):
     return True
 
 
+# ---- Anchors: what shows that a clause is the site's NAME (and not a place, a product description or a catch-phrase) (#273)
+# A suffix that names the kind of page; with it, the clause in front is the owner's name (the suffix is cut off).
+ANCHOR_SUFFIX = SITE_TYPE + ("公式通販サイト", "公式オンラインショップ", "公式オンラインストア", "公式通販", "オンラインショップ", "オンラインストア", "通販サイト",
+                             "公式ブログ", "official online shop", "official online store", "official shop")
+# Words that end an organisation's / a facility's name.
+ORG_END = ("協会", "学会", "大学", "大学院", "学園", "学院", "学校", "高校", "高等学校", "中学校", "小学校", "幼稚園", "保育園", "病院", "医院", "クリニック", "神社",
+           "寺", "院", "教会", "組合", "財団", "研究所", "研究会", "センター", "美術館", "博物館", "図書館", "ホテル", "旅館", "商店街", "市役所", "役場", "協議会")
+# A clause that is a location line, a product / service description or a catch-phrase: never a name candidate.
+_PITCH = tuple(re.compile(p) for p in (
+    r"(鎮座|所在|所在地|にあります|にあるお店|にある)$", r"(都|道|府|県|市|区|町|村)[^\s、。]{0,8}(にある|にあります|鎮座|に所在)",                                       # 新潟県加茂市鎮座 / 駅前にあります
+    r"^[぀-ヿ一-鿿]{1,8}(都|道|府|県)[぀-ヿ一-鿿]{0,8}(市|区|町|村|郡)[぀-ヿ一-鿿]{0,4}$",   # a bare prefecture + city
+    r"(を|で|に)(改善|解決|サポート|応援|支援|提供|販売|お届け|実現|創造|目指)(する|します|している|いたします|し)?",   # 〜を改善する 機能性表示食品
+    r"なら(ここ|当店|当社|当院|私たち)$", r"なら(お任せ|おまかせ)", r"[A-Za-z0-9一-鿿ァ-ヶ]ならば?[A-Za-z0-9一-鿿ァ-ヶ]{1,6}(へ|におまかせ)?$"))
+
+
+def pitch_like(clause):
+    """A clause that describes a place, a product or a service, or is a catch-phrase (〜ならXX・〜を改善する・〇〇県〇〇市鎮座), not a name."""
+    t = collapse(clause)
+    return bool(t) and any(p.search(t) for p in _PITCH)
+
+
+def org_name(clause):
+    t = collapse(clause).rstrip("）)」』】 ")
+    return bool(_corp_form(t)) or t.endswith(ORG_END)
+
+
+def _strip_anchor_suffix(s):
+    """-> (rest, had_suffix). Like _strip_site_type with the longer ANCHOR_SUFFIX list; rest == '' when nothing usable is left (a fragment)."""
+    s = s.strip()
+    for w in sorted(ANCHOR_SUFFIX, key=len, reverse=True):
+        m = re.search(r"[\s\-–—|｜/・:：]*" + re.escape(w) + r"\s*$", s, re.I)
+        if m:
+            rest = s[:m.start()].strip(" -–—|｜/・:：")
+            return ("" if (not rest or is_fragment(rest)) else rest), True
+    return s, False
+
+
 def suggest_name(title, host=""):
     """The site's own name out of a <title>, or None (the LLM / a human must supply one). Deterministic. It only picks a whole clause:
     a corporate-form clause (one only), else the clause that matches the host's brand, else the single clause left; with several clauses
@@ -278,14 +315,18 @@ def suggest_name(title, host=""):
             return t if len(rest) == len(clauses) else None
         clean = _strip_site_type(t)
         return clean if clean and not check_name(clean) and not not_a_name_clause(clean, shared) else None
-    cands = []
+    cands, suffixed = [], set()
     for c in clauses:
-        c = _strip_site_type(c)
-        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c) or not_a_name_clause(c, shared):
+        c, had = _strip_anchor_suffix(c)
+        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c) or not_a_name_clause(c, shared) or pitch_like(c):
             continue
         if c in CORP_FORMS:        # a corporate form alone is not a name
             continue
+        if had and "・" in c and re.search(r"の\s", c):     # 安産祈願・厄除けの 明星寺: a list of wishes in front of the name
+            continue
         cands.append(c)
+        if had:
+            suffixed.add(c)
     if not cands:
         return None
     toks = [] if shared else _brand_tokens(host)     # a shared service's own label says nothing about this site
@@ -294,12 +335,24 @@ def suggest_name(title, host=""):
     brand = [c for c in cands if any(_has_token(folded(c), tk) for tk in toks)]
     if len(brand) == 1:
         pick = brand[0]
-    elif len(corp) == 1 and not brand:
+    elif len(brand) > 1:
+        return None
+    elif len(corp) == 1:
         pick = corp[0]
     elif len(cands) == 1:
         pick = cands[0]
     else:
-        return None
+        # several clauses, no brand / corporate sign: only a clause with an anchor may be the name (the page-kind suffix first, then an
+        # organisation word); two clauses with the same kind of anchor, or none -> None (the LLM, with validation, decides)
+        pick = None
+        for group in ([c for c in cands if c in suffixed], [c for c in cands if org_name(c)]):
+            if len(group) == 1:
+                pick = group[0]
+                break
+            if len(group) > 1:
+                return None
+        if pick is None:
+            return None
     # the corporate form is part of the formal name: dropped only when the name would not fit in NAME_MAX otherwise (S9)
     if len(pick) > NAME_MAX and _strip_corp(pick) != pick:
         pick = _strip_corp(pick)
