@@ -4,7 +4,7 @@
 ローカルに状態を持たない(ファイル・チェックポイント・ログを作らない)。出力は標準出力だけ。
 続きの位置は url_progress の状態そのもの、排他は D1 discovery_cursors のリース(source='lease', cursor_key='enrich')。
 
-  uv run python scripts/enrich_online.py [--stages fetch,judge,deliberate,publish] [--limit N | --fetch-limit/--judge-limit/--deliberate-limit/--publish-limit N]
+  uv run python scripts/enrich_online.py [--stages fetch,judge,deliberate,requalify,publish] [--limit N | --fetch-limit/--judge-limit/--deliberate-limit/--publish-limit N]
                                          [--rounds N] [--max-seconds S] [--budget-month USD] [--judge-concurrency 1..4] [--priority leaf|none] [--dry-run | --apply]
 
 既定は --dry-run(読むだけ。1 回だけ回し、各段の対象件数を出す)。--apply で書く。--rounds 0 は「残りが無くなるか停止条件まで」。
@@ -24,8 +24,8 @@ sys.path.insert(0, str(HERE))
 import discover_online as do
 from enrich import deliberate_stage, fetch_stage, judge_stage, priority as prio, publish_stage
 
-STAGES = ('fetch', 'judge', 'deliberate', 'publish')
-DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'deliberate': 20, 'publish': 60}
+STAGES = ('fetch', 'judge', 'deliberate', 'requalify', 'publish')
+DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'deliberate': 20, 'requalify': 20, 'publish': 60}
 STATES = ('discovered', 'queued', 'fetched', 'reviewing', 'candidate', 'approved', 'rejected', 'failed', 'blocked', 'published')
 LEASE_KEY = 'enrich'
 LEASE_TTL = 1800
@@ -257,6 +257,15 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
             raise Stop(3 if is_rate_limit(RuntimeError(str(d['stopped']))) else 1, f'deliberate が止まった: {d["stopped"]}')
         if apply and d.get('selected', 0) >= DELIB_GUARD_MIN_ROWS and d.get('cat_failed', 0) / d['selected'] > DELIB_GUARD_FAIL_RATIO:
             raise Stop(1, f'deliberate: 猫の失敗が異常({d.get("cat_failed")}/{d["selected"]})。ログの理由を確認')
+    if 'requalify' in active:
+        guard_lease()
+        rq = judge_stage.requalify(client, limit=limits['requalify'], apply=apply, log=out, llm=llm, budget_month=budget_month, heartbeat=beat, llm_enabled=llm_on)
+        res['requalify'] = rq
+        if rq.get('budget_stopped'):
+            active.discard('requalify')
+            out(f'requalify: 予算上限に達したため再資格化を止める({rq.get("stopped")})。他の段は続ける')
+        elif rq.get('stopped'):
+            raise Stop(3 if is_rate_limit(RuntimeError(str(rq['stopped']))) else 1, f'requalify が止まった: {rq["stopped"]}')
     if 'publish' in active:
         guard_lease()
         limit = limits['publish']
@@ -317,7 +326,7 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
     state = {'final': 0, 'daily_cap': False, 'delib_progress': False, 'sel': {s: prio.Selector(priority) for s in ('fetch', 'judge')}}
     hb = Heartbeat(lease, clock)
     try:
-        start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active, llm_active=bool({'judge', 'deliberate'} & active))
+        start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active, llm_active=bool({'judge', 'deliberate', 'requalify'} & active))
         n, prev = 0, start
         while True:
             n += 1
@@ -396,7 +405,7 @@ def one_shot(fn, client, apply, lease=None, out=print):
 
 def main(argv=None, *, client=None, **inject):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--stages', default=','.join(STAGES), help='fetch,judge,deliberate,publish のうち回す段(カンマ区切り)')
+    ap.add_argument('--stages', default=','.join(STAGES), help='fetch,judge,deliberate,requalify,publish のうち回す段(カンマ区切り)')
     ap.add_argument('--limit', type=int, default=None, help='全段共通の 1 回あたりの件数(段別指定が優先)')
     for s in STAGES:
         ap.add_argument(f'--{s}-limit', type=int, default=None, help=f'{s} 段の 1 回あたりの件数(既定 {DEFAULT_LIMITS[s]})')

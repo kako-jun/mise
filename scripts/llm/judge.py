@@ -94,6 +94,7 @@ def load_tree(root=ROOT):
     Retreat ids = the new_id of every fallback row of data/category-map.csv (business / society / business-services / community):
     where 0021 parked the old company / organisation ids. They are ALSO ordinary categories the LLM may choose (assign=llm), so the
     canonical form does not drop them; the set is used only to report a coexistence as information (integrity check retreat_with_real).
+    (The online enrichment pipeline is stricter: only LEAF ids pass its quality gate, so the parent retreat ids business / society are refused there; #273.)
     The csv files are the single source (#137)."""
     with open(os.path.join(root, "data", "categories.csv"), encoding="utf-8", newline="") as f:
         parent = {r["id"]: r["parent_id"] or None for r in csv.DictReader(f)}

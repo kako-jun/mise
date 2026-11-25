@@ -26,14 +26,14 @@ import quality  # noqa: E402  (the same rules the judge and the publish gate use
 # when a count is above it, so a regression is noticed. The goal after the cleanup is 0 (then lower the baseline to 0).
 QUALITY_BASELINE = {"name_too_long": 2603, "description_style": 4232, "tag_label_ja_not_japanese": 58543, "category_non_leaf_only": 1836}
 QUALITY_SQL = {
-    "name_too_long": f"SELECT id, COALESCE(NULLIF(name_ja,''), name) FROM sites WHERE length(COALESCE(NULLIF(name_ja,''), name)) > {quality.NAME_MAX}",
+    "name_too_long": f"SELECT id, name FROM sites WHERE length(name) > {quality.NAME_MAX}",
     "description_style": "SELECT id, description_ja FROM sites WHERE description_ja IS NOT NULL AND description_ja<>''",
     "tag_label_ja_not_japanese": "SELECT site_id, label_ja FROM site_tags",
     "category_non_leaf_only": ("SELECT s.id FROM sites s WHERE EXISTS (SELECT 1 FROM site_categories a WHERE a.site_id=s.id) AND NOT EXISTS "
                               "(SELECT 1 FROM site_categories x WHERE x.site_id=s.id AND NOT EXISTS (SELECT 1 FROM categories c WHERE c.parent_id=x.category_id))"),
 }
 QUALITY_WHY = {
-    "name_too_long": f"the displayed site name is longer than {quality.NAME_MAX} characters",
+    "name_too_long": f"sites.name (what the publish stage writes) is longer than {quality.NAME_MAX} characters",
     "description_style": "description_ja ends in the plain (常体) form instead of 体言止め / です・ます",
     "tag_label_ja_not_japanese": "a tag whose label_ja has no kana / kanji",
     "category_non_leaf_only": "a site that has only non-leaf (parent) categories",

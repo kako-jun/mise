@@ -13,6 +13,7 @@ import unicodedata
 
 NAME_MAX = 40                # a site's own name, in characters
 NAME_SUBTITLE_MAX = 12       # with exactly two clauses the shorter one (the subtitle) may be at most this long ...
+NAME_LONG_MAX = 80           # a SINGLE-clause title (a long formal name) up to this length is kept as it is (name_acceptable_long)
 NAME_PAIR_MAX = 24           # ... and the longer one at most this long, and neither may read as a sentence
 TAG_JA_MAX = 20
 TAG_EN_MAX = 40
@@ -29,7 +30,8 @@ def which(code):
 
 
 def has_japanese(s):
-    return bool(_JA.search(s or ""))
+    """Kana / kanji present (half-width kana are folded by NFKC first)."""
+    return bool(_JA.search(unicodedata.normalize("NFKC", s or "")))
 
 
 def collapse(s):
@@ -87,16 +89,35 @@ def check_name(name):
     return out
 
 
+_PARTICLES = "のとでにをはがもやへ"
+_EN_FUNCTION_WORDS = {"a", "an", "the", "of", "and", "or", "for", "in", "on", "at", "to", "with", "by", "from", "as", "&", "·", "-", "|", "is",
+                      "our", "your", "my"}
+
+
+def is_fragment(s):
+    """A cut-off piece: ends in a Japanese particle, an English preposition / article, an open bracket or a separator."""
+    t = collapse(s).rstrip(" ,;:、，")
+    if not t:
+        return True
+    if t[-1] in _PARTICLES or t[-1] in "（([「『【":
+        return True
+    last = re.split(r"\s+", t)[-1].casefold()
+    return last in _EN_FUNCTION_WORDS or t.count("(") != t.count(")") or t.count("（") != t.count("）")
+
+
 def _strip_site_type(s):
+    """Removes a trailing site-type word. '' when the whole clause was only that word OR what is left is a fragment (山田太郎の|ホームページ)."""
     s = s.strip()
     for w in sorted(SITE_TYPE, key=len, reverse=True):
         m = re.search(r"[\s\-–—|｜/・:：]*" + re.escape(w) + r"\s*$", s, re.I)
         if m:
             rest = s[:m.start()].strip(" -–—|｜/・:：")
-            if rest:
-                return rest
-            return ""      # the whole clause was only the site type
+            return "" if (not rest or is_fragment(rest)) else rest
     return s
+
+
+def _corp_form(s):
+    return next((w for w in CORP_FORMS if s.startswith(w) or s.endswith(w)), None)
 
 
 def _strip_corp(s):
@@ -118,47 +139,64 @@ def _brand_tokens(host):
     return toks
 
 
-def _cut_at_word(s):
-    """> NAME_MAX: cut at a space (whole words only); None when that leaves too little or the text has no word boundary."""
+def _shorten(s):
+    """> NAME_MAX: only at a clause boundary (a trailing bracket group, or the first sentence stop). Never in the middle of a word / phrase."""
     if len(s) <= NAME_MAX:
         return s
-    words, out = s.split(" "), ""
-    if len(words) < 2:
-        return None
-    for w in words:
-        nxt = (out + " " + w).strip()
-        if len(nxt) > NAME_MAX:
-            break
-        out = nxt
-    if len(out) < 8 or out.count("(") != out.count(")") or out.count("（") != out.count("）"):
-        return None
-    return out
+    for pat in (r"\s*[（(][^）)]*[）)]\s*$", r"。.*$"):
+        t = re.sub(pat, "", s).strip()
+        if t and t != s and len(t) <= NAME_MAX and not is_fragment(t):
+            return t
+    return None
+
+
+def name_acceptable_long(title):
+    """A single-clause title (a long formal name) up to NAME_LONG_MAX characters, no promo phrase, not a sentence: kept as the name."""
+    t = collapse(title)
+    return bool(t) and len(t) <= NAME_LONG_MAX and len(split_clauses(t)) == 1 and not promo_hit(t) and not sentence_like(t) and not is_fragment(t)
 
 
 def suggest_name(title, host=""):
-    """The site's own name out of a <title>, or None (the LLM / a human must supply one). Deterministic; never cuts a word in two."""
+    """The site's own name out of a <title>, or None (the LLM / a human must supply one). Deterministic. It only picks a whole clause:
+    a corporate-form clause (one only), else the clause that matches the host's brand, else the single clause left; with several clauses
+    left and no such sign it returns None rather than guess. Never cuts inside a clause; a result that is a fragment is refused."""
     t = collapse(title)
     if not t:
         return None
+    clauses = split_clauses(t)
     if not check_name(t):
-        if len(split_clauses(t)) > 1:
-            rest = [c for c in (_strip_site_type(c) for c in split_clauses(t)) if c and c.casefold() not in _SITE_TYPE_ONLY]
+        if len(clauses) > 1:
+            rest = [c for c in (_strip_site_type(c) for c in clauses) if c and c.casefold() not in _SITE_TYPE_ONLY]
             return rest[0] if len(rest) == 1 and not check_name(rest[0]) else t
         clean = _strip_site_type(t)
         return clean if clean and not check_name(clean) else None
     cands = []
-    for c in split_clauses(t):
+    for c in clauses:
         c = _strip_site_type(c)
-        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c):
+        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c):
             continue
-        c2 = _strip_corp(c)
-        cands.append(c2 if c2 else c)
+        if c in CORP_FORMS:        # a corporate form alone is not a name
+            continue
+        cands.append(c)
     if not cands:
         return None
     toks = _brand_tokens(host)
-    pick = next((c for c in cands if any(tk in unicodedata.normalize("NFKC", c).casefold() for tk in toks)), cands[0])
-    pick = _cut_at_word(pick)
-    if pick is None or check_name(pick):
+    folded = lambda c: unicodedata.normalize("NFKC", c).casefold()
+    corp = [c for c in cands if _corp_form(c)]
+    brand = [c for c in cands if any(tk in folded(c) for tk in toks)]
+    if len(brand) == 1:
+        pick = brand[0]
+    elif len(corp) == 1 and not brand:
+        pick = corp[0]
+    elif len(cands) == 1:
+        pick = cands[0]
+    else:
+        return None
+    # the corporate form is part of the formal name: dropped only when the name would not fit in NAME_MAX otherwise (S9)
+    if len(pick) > NAME_MAX and _strip_corp(pick) != pick:
+        pick = _strip_corp(pick)
+    pick = _shorten(pick)
+    if pick is None or check_name(pick) or is_fragment(pick) or pick in CORP_FORMS:
         return None
     return pick
 
@@ -167,7 +205,17 @@ def suggest_name(title, host=""):
 _PLAIN_END = re.compile(
     r"(であった|だった|である|でいる|でいた|ている|ていた|ておる|いる|ある|する|される|された|した|れる|れた|った|んだ|いた|えた|けた|めた|"
     r"できる|ならない|ない|なる|いく|くる|たい|だ)$")
+# A terminated (。) sentence that ends in a hiragana dictionary form (う く ぐ す つ ぬ ぶ む る) or a past た / だ is plain (行う・描く・届ける・載せた・集めてきた);
+# hiragana nouns that happen to end like that are listed (a noun ending needs no 。-less test: the plain list above covers the common forms).
+_DICT_END = re.compile(r"[ぁ-んァ-ヶ一-龥][うくぐすつぬぶむる]$|[ぁ-んァ-ヶ一-龥][たダだ]$")
+_NOUN_EXCEPT = ("ふくろう", "こころ", "くつ", "からだ", "あなた", "ひなた", "ただ", "いただ", "からくる", "うるう", "おもう")
 _POLITE_END = re.compile(r"(です|ます|でした|ました|ません|でしょう|ください)$")
+
+
+def _plain(core, terminated):
+    if _POLITE_END.search(core) or core.endswith(_NOUN_EXCEPT):
+        return False
+    return bool(_PLAIN_END.search(core)) or (terminated and bool(_DICT_END.search(core)))
 
 
 def _sentences(text):
@@ -180,6 +228,10 @@ def _core(sentence):
     return sentence.rstrip("。！？!? ")
 
 
+def _terminated(sentence):
+    return sentence.rstrip().endswith(("。", "！", "？", "!", "?"))
+
+
 def check_description_style(text):
     """Japanese description: 体言止め (a noun, with or without 「。」) or 「です・ます・でした・ました」. -> ['description_style'] when a sentence
     ends in the 常体 (である/だ/ている/する/れる/った/ない ...). Not a Japanese text -> []."""
@@ -187,9 +239,7 @@ def check_description_style(text):
         return []
     for s in _sentences(text):
         core = _core(s)
-        if not core or _POLITE_END.search(core):
-            continue
-        if _PLAIN_END.search(core):
+        if core and _plain(core, _terminated(s)):
             return ["description_style"]
     return []
 
@@ -198,13 +248,13 @@ _POLITE_RULES = (  # (regex on the sentence core, replacement); first match wins
     (r"であった$", "でした"), (r"だった$", "でした"), (r"である$", "です"), 
     (r"ていた$", "ていました"), (r"ている$", "ています"), (r"ではない$", "ではありません"), (r"がない$", "がありません"),
     (r"される$", "されます"), (r"された$", "されました"), (r"します$", "します"), (r"する$", "します"), (r"した$", "しました"),
-    (r"れる$", "れます"), (r"れた$", "れました"), (r"できる$", "できます"), (r"ある$", "あります"), (r"いる$", "います"), (r"なる$", "なります"),
+    (r"れる$", "れます"), (r"れた$", "れました"), (r"できる$", "できます"), (r"(?<=[えけせてねへめべげぜでぺ])る$", "ます"), (r"ある$", "あります"), (r"なる$", "なります"),
 )
 _DA_OK_PREV = re.compile(r"[^ぁ-ゖ]$|[のめろとこ]$")
 
 
 def _polite_sentence(core):
-    if not core or _POLITE_END.search(core) or not _PLAIN_END.search(core):
+    if not core or not _plain(core, True):
         return core
     # 体言止め or a verb we do not convert for sure: None
     if core.endswith("だ") and not core.endswith(("だった", "んだ")):
@@ -250,8 +300,8 @@ def _stem_word(w):
     if len(w) > 4 and re.search(r"(ss|x|ch|sh|z)es$", w):
         return w[:-2]
     if len(w) > 3 and w.endswith("s") and not w.endswith(("ss", "us", "is")):
-        return w[:-1]
-    return w
+        w = w[:-1]
+    return w[:-2] + "y" if len(w) > 3 and w.endswith("ie") else w
 
 
 def normalize_tag_key(label):
@@ -298,8 +348,6 @@ def load_synonyms(path):
                 errs.append(f"line {n}: canonical_ja {ja!r} has no Japanese")
             if not en or has_japanese(en):
                 errs.append(f"line {n}: canonical_en {en!r} must be a non-Japanese label")
-            if not variants:
-                errs.append(f"line {n}: no variants")
             for v in [ja, en] + variants:
                 k = normalize_tag_key(v)
                 if not k:
@@ -312,6 +360,43 @@ def load_synonyms(path):
     if errs:
         raise ValueError("; ".join(errs))
     return TagSynonyms(rows)
+
+
+_DEFAULT = {}
+DATA = __import__("os").path.join(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.dirname(__import__("os").path.abspath(__file__)))), "data")
+
+
+def default_synonyms():
+    """data/tag-synonyms.csv, loaded once (the judge and the publish gate must use the same table)."""
+    if "syn" not in _DEFAULT:
+        _DEFAULT["syn"] = load_synonyms(__import__("os").path.join(DATA, "tag-synonyms.csv"))
+    return _DEFAULT["syn"]
+
+
+def load_proper_nouns(path):
+    """data/tag-proper-nouns.csv (column term): Latin-script proper nouns that may stand as label_ja (FPGA, iOS, Linux). Validated."""
+    errs, out = [], set()
+    with open(path, encoding="utf-8", newline="") as f:
+        for n, r in enumerate(csv.DictReader(f), 2):
+            t = (r.get("term") or "").strip()
+            k = unicodedata.normalize("NFKC", t).casefold()
+            if not t or has_japanese(t) or not re.search(r"[A-Za-z]", t):
+                errs.append(f"line {n}: {t!r} must be a Latin-script term")
+            elif k in out:
+                errs.append(f"line {n}: duplicate {t!r}")
+            out.add(k)
+    if errs:
+        raise ValueError("; ".join(errs))
+    return frozenset(out)
+
+
+def proper_nouns():
+    if "pn" not in _DEFAULT:
+        _DEFAULT["pn"] = load_proper_nouns(__import__("os").path.join(DATA, "tag-proper-nouns.csv"))
+    return _DEFAULT["pn"]
+
+
+ADMIN_ONLY = frozenset(["市", "町", "村", "県", "区", "都", "府", "道", "郡", "市町村", "都道府県"])
 
 
 def parse_tag(t):
@@ -329,11 +414,13 @@ def parse_tag(t):
     return collapse(ja), collapse(en)
 
 
-def check_tags(tags, synonyms=None):
+def check_tags(tags, synonyms=None, proper=None):
     """-> codes: tag_malformed, tag_count, tag_empty, tag_label_ja_not_japanese (label_ja needs kana/kanji), tag_label_en_not_english
     (label_en empty or Japanese), tag_too_long, tag_duplicate (after normalize_tag_key / the synonym table)."""
     if not isinstance(tags, list):
         return ["tag_malformed"]
+    synonyms = synonyms or default_synonyms()
+    proper = proper_nouns() if proper is None else proper
     out, keys = [], set()
     if len(tags) > TAG_COUNT_MAX:
         out.append("tag_count")
@@ -346,14 +433,15 @@ def check_tags(tags, synonyms=None):
         if not ja:
             out.append("tag_empty")
             continue
-        if not has_japanese(ja):
+        if ja in ADMIN_ONLY:
+            out.append("tag_admin_only")
+        if not has_japanese(ja) and unicodedata.normalize("NFKC", ja).casefold() not in proper:
             out.append("tag_label_ja_not_japanese")
         if not en or has_japanese(en):
             out.append("tag_label_en_not_english")
         if len(ja) > TAG_JA_MAX or len(en) > TAG_EN_MAX:
             out.append("tag_too_long")
-        k = synonyms.key(ja) if synonyms else normalize_tag_key(ja)
-        k2 = synonyms.key(en) if synonyms and en else normalize_tag_key(en)
+        k, k2 = synonyms.key(ja), (synonyms.key(en) if en else "")
         if k in keys or (k2 and k2 in keys):
             out.append("tag_duplicate")
         keys.update({k, k2} - {""})
@@ -375,13 +463,28 @@ def check_categories(ids, leaf_ids):
 
 
 # ------------------------------------------------------------------------------------------------------------------- prompts
-PROMPT_NAME_RULE = ("Site name (never output a name field; this is the rule the title is held to): the site's OWN name only, at most 40 characters; "
-                    "no slogans, product lists, prefecture lists or text after a separator.")
 PROMPT_DESCRIBE_RULES = (
     "STYLE RULES (violations are rejected and you must redo them): dj must end as a noun phrase (体言止め, e.g. 「小さな工房の紹介サイト。」) or in "
-    "「です・ます」 form (e.g. 「作品を紹介しています。」); never the plain form (である・だ・している・する・された・った・ない). "
+    "「です・ます」 form (e.g. 「作品を紹介しています。」); never the plain form (である・だ・している・する・行う・描く・された・った・ない). "
     "Each tag in tg is ONE string \"日本語ラベル|english label\" (e.g. \"動画|video\"): the part before | is a Japanese noun label written in kana/kanji "
-    "(at most 20 characters), the part after | is a short lowercase English label; no duplicates or near duplicates (video / videos / 動画), "
-    "and no administrative words such as 市・町・県 alone.")
-PROMPT_TRIAGE_RULES = ("CATEGORY RULE: give LEAF category ids only (an id that has a deeper, indented child below it is NOT allowed); "
-                       "when no leaf fits, give the closest leaf, never a top-level or parent id.")
+    "(at most 20 characters; a Latin-script proper noun such as FPGA or Linux may stand there as it is), the part after | is a short lowercase "
+    "English label; no duplicates or near duplicates (video / videos / 動画), and no administrative word such as 市・町・県 alone. "
+    "sn = the site's OWN name, at most 40 characters, copied verbatim from the title or the text: no slogan, no list of services or places, "
+    "nothing after a separator, no company-form noise unless it is part of the formal name; null when the text does not show it.")
+PROMPT_TRIAGE_RULES = ("CATEGORY RULE (overrides any earlier remark about parent or fallback categories such as business or society): give LEAF "
+                       "category ids only (an id that has a deeper, indented child below it is NOT allowed); when no leaf fits, give the "
+                       "closest leaf, never a top-level or parent id.")
+
+
+def _fold(s):
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or "")).casefold()
+
+
+def check_site_name(name, source):
+    """The LLM's `sn` (None is allowed = not shown): check_name rules, and it must be copied from the source text (nothing invented)."""
+    if name is None:
+        return []
+    errs = check_name(name)
+    if not errs and _fold(name) not in _fold(source):
+        errs = ["name_not_in_source"]
+    return errs

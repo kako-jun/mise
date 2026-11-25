@@ -27,7 +27,7 @@ class FakeD1:
         self.lock = threading.RLock()
         self.log = []
         self.fail_settle = False
-        for f in ('0036_url_candidates.sql', '0038_llm_ledger.sql'):
+        for f in ('0036_url_candidates.sql', '0040_url_candidates_site_name.sql', '0038_llm_ledger.sql'):
             self.db.executescript((ROOT / 'migrations' / f).read_text(encoding='utf-8'))
         self.db.execute("CREATE TABLE url_progress (identity_key TEXT PRIMARY KEY, url TEXT NOT NULL, state TEXT NOT NULL, "
                         "updated_at TEXT NOT NULL DEFAULT (datetime('now')))")

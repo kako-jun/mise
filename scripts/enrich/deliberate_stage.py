@@ -245,14 +245,16 @@ def ask(ctx, cat, src, user_text, row):
 NEEDS_REVIEW = "deliberation:needs_review:"
 APPROVE_DESCRIBED = "deliberation:approve+described"
 # publish gates a describe call can repair; gate:verdict_* (spam verdict) and the rest stay a human's
-DESCRIBABLE = {"gate:no_description", "gate:no_valid_category", "gate:bad_categories_json", "gate:bad_tags_json"}
+DESCRIBABLE = {"gate:no_description", "gate:no_valid_category", "gate:bad_categories_json", "gate:bad_tags_json",
+               "gate:quality_name", "gate:quality_description", "gate:quality_tags", "gate:quality_categories"}   # the quality ones: same path as judge_stage.requalify
 
 
 def categories_usable(full):
     """Whether the STORED categories pass the publish gate's own test (decides if a triage call is needed, not the first gate reason)."""
     raw = publish_stage._json_list(full.get("categories"))
-    return raw is not None and bool(judge.modernize_categories([c for c in raw if isinstance(c, str)], publish_stage.VALID_CATEGORIES,
-                                                               publish_stage.LEGACY_CATEGORIES))
+    cats = judge.modernize_categories([c for c in raw if isinstance(c, str)], publish_stage.VALID_CATEGORIES, publish_stage.LEGACY_CATEGORIES) \
+        if raw is not None else []
+    return bool(cats) and not publish_stage.quality.check_categories(cats, publish_stage.LEAF_CATEGORIES)
 
 
 def decide(votes, row=None, gate=None):
@@ -473,7 +475,9 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
                 jctx.stop = ctx.stop
             spent = dledger.spent
             try:
-                out, problem = js.describe_row(jctx, full, need_categories=need_cat)
+                jctx.need_name = gate == "gate:quality_name"
+                out, problem = js.describe_row(jctx, full, need_categories=need_cat,
+                                               note=js.requalify_note(gate, full) if gate.startswith("gate:quality_") else None)
             except js.BudgetExceeded as e:
                 out, problem = None, str(e)
             finally:
