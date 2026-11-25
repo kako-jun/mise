@@ -60,7 +60,6 @@ const countryName = code => {
 const regionName = code => globalThis.MISE_REGIONS?.[code]?.en ?? code;
 // 範囲の表示名（英語）。区画は「区画名, 国名」。
 const placeName = ({ cc, region }) => region ? `${regionName(region)}, ${countryName(cc)}` : cc ? countryName(cc) : null;
-const flagUrl = code => (globalThis.MISE_FLAGS ?? []).includes(code) ? `/flags/${code.toLowerCase()}.svg` : null;
 
 // `q` か `tag` が付いた URL は検索結果扱い（noindex）。tag は不正（6 個以上・101 文字以上で cleanTags が null）でも、付いた時点で対象にする。
 export const isSearchQuery = sp => !!sp.get('q')?.trim() || sp.has('tag');
@@ -116,23 +115,27 @@ export async function sitemapXml(db, maxUrls = SITEMAP_MAX_URLS) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${body}</urlset>\n`;
 }
 
-// 範囲切替の HTML（SSR。JS が起動すると app.js が同じ内容に描き直す）。現在の範囲は aria-current="page"。
+// 範囲切替の HTML（SSR。JS が起動すると app.js が同じ内容に描き直す。構造は app.js の renderScopeNav と同じ）。現在の範囲は aria-current="page"（地球の項目）／aria-selected（ドロップダウンの行）。
+// 国が MISE_SCOPE_DD_MIN 個以上のとき: 地球アイコン+全世界の件数の右に「いま選んでいる範囲」1 つだけのボタン（国旗+国名+件数+▾）と、国コード順の一覧（全世界が先頭）を持つパネル（#291）。
+// パネルは hidden で閉じておく（JS なしでは style.css の scripting: none が開いたままの一覧にし、全部の国へ辿れる）。国が 1 つ以下なら従来どおり、地球と国旗の並びだけでドロップダウンは出さない。
 export function scopeNavHtml(scopes, scope) {
-  // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。
-  const item = (code, href, label, count, icon) => `<li><a class="scope-item" href="${esc(href)}" aria-label="${esc(label + ", " + count + (count === 1 ? " site" : " sites"))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : scope.includes('-') && code === scope.split('-')[0] ? ' aria-current="true"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
+  const W = globalThis.MISE_SCOPE_DD_WORDS.en, cc = parseScope(scope)?.cc;
   const globe = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
-  const items = [item('all', '/all/', 'All world', scopes.total, globe)];
-  // 構造は app.js の renderScopeNav と同じ: 先頭 MISE_INLINE_SCOPES 件だけ並べ、残りは hidden にして「もっと見る」ボタンの後ろへ（現在の国が残りにあれば全部開く）。
-  // JS なしでは hidden を解いてボタンを隠し、全部の国へ辿れる（style.css の scripting: none）。
-  const inline = globalThis.MISE_INLINE_SCOPES, W = globalThis.MISE_SCOPE_MORE_WORDS.en, curCc = parseScope(scope)?.cc;
-  const expanded = scopes.countries.some((r, i) => i >= inline && r.code === curCc);
-  scopes.countries.forEach((r, i) => {
-    const flag = flagUrl(r.code);
-    const li = item(r.code.toLowerCase(), `/${r.code.toLowerCase()}/`, countryName(r.code), r.count, flag ? `<img class="scope-flag" src="${esc(flag)}" alt="" width="16" height="12">` : `<span class="scope-code" aria-hidden="true">${esc(r.code)}</span>`);
-    items.push(i >= inline && !expanded ? li.replace('<li>', '<li hidden>') : li);
-  });
-  const more = scopes.countries.length > inline ? `<button type="button" class="scope-more" aria-expanded="${expanded}" aria-label="${expanded ? W.less : W.more}" title="${expanded ? W.less : W.more}">${expanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>'}</button>` : '';
-  return `<ul class="scope-list">${items.join('')}</ul>${more}${regionRowHtml(scopes, scope)}`;
+  const flagIcon = code => globalThis.MiseCountry.html(code); // 旗が無いコードは国コードのバッジ（countries.js に集約）
+  // 国名は見える文字にせず aria-label と title にだけ置く（アイコンで識別する。#76）。ドロップダウンの行は国名も見せる。
+  const item = (code, label, count, icon) => `<li><a class="scope-item" href="/${esc(code)}/" aria-label="${esc(W.row(label, count))}" title="${esc(label)}"${code === scope ? ' aria-current="page"' : scope.includes('-') && code === scope.split('-')[0] ? ' aria-current="true"' : ''}>${icon}<span class="scope-count">${count}</span></a></li>`;
+  const countries = [...scopes.countries].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  if (countries.length < globalThis.MISE_SCOPE_DD_MIN) {
+    return `<ul class="scope-list">${[item('all', 'All world', scopes.total, globe), ...countries.map(r => item(r.code.toLowerCase(), countryName(r.code), r.count, flagIcon(r.code)))].join('')}</ul>${regionRowHtml(scopes, scope)}`;
+  }
+  const opt = (code, label, count, icon, selected) => `<li role="presentation"><a class="scope-dd-opt" role="option" id="scope-opt-${esc(code)}" href="/${esc(code)}/" aria-label="${esc(W.row(label, count))}" title="${esc(label)}" aria-selected="${selected}">${icon}<span class="scope-dd-name">${esc(label)}</span><span class="scope-count">${count}</span></a></li>`;
+  const cur = countries.find(r => r.code === cc);
+  const caret = '<svg class="scope-dd-caret" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 6.5 8 10.5 12 6.5"/></svg>';
+  const btn = cur
+    ? `<button type="button" class="scope-dd-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="scope-dd-panel" aria-label="${esc(W.btn(countryName(cur.code), cur.count))}" title="${esc(countryName(cur.code))}">${flagIcon(cur.code)}<span class="scope-dd-name">${esc(countryName(cur.code))}</span><span class="scope-count">${cur.count}</span>${caret}</button>`
+    : `<button type="button" class="scope-dd-btn is-placeholder" aria-haspopup="listbox" aria-expanded="false" aria-controls="scope-dd-panel" aria-label="${esc(W.pick)}" title="${esc(W.pick)}"><span class="scope-dd-name">${esc(W.pick)}</span>${caret}</button>`;
+  const rows = [opt('all', 'All world', scopes.total, globe, scope === 'all'), ...countries.map(r => opt(r.code.toLowerCase(), countryName(r.code), r.count, flagIcon(r.code), r.code === cc))];
+  return `<ul class="scope-list">${item('all', 'All world', scopes.total, globe)}</ul><div class="scope-dd">${btn}<div class="scope-dd-backdrop" hidden></div><div class="scope-dd-panel" id="scope-dd-panel" hidden><input class="scope-dd-search" id="scope-dd-search" type="text" role="combobox" aria-expanded="true" aria-controls="scope-dd-list" aria-autocomplete="list" aria-label="${esc(W.search)}" placeholder="${esc(W.search)}" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go"><ul class="scope-dd-list" id="scope-dd-list" role="listbox" aria-label="${esc(W.pick)}">${rows.join('')}</ul><p class="scope-dd-empty" role="status" hidden>${esc(W.none)}</p></div></div>${regionRowHtml(scopes, scope)}`;
 }
 // JS なしでも・クローラも区画のページへ辿れるよう、同じ区画を通常のリンク（/jp/13/ 形式）で並べた折りたたみ。サイトのある区画だけ（無い区画は 404 なので出さない）。
 // JS が起動すると app.js が範囲ナビごと描き直し、このリンクは消える（プルダウンは #177 で撤去）。

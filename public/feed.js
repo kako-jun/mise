@@ -92,14 +92,13 @@
   }
   // 一覧(app.js countryFlag)と同じ規則: 国名テキストは出さず「国旗 + 区画名(分かるときだけ)」。旗が無い国は出さない。
   function place(s) {
-    const info = window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(s.country_code || '') ? window.MISE_COUNTRIES[s.country_code] : null;
-    if (!info || !(window.MISE_FLAGS || []).includes(s.country_code)) return null;
+    const info = window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(s.country_code || '') ? (window.MISE_COUNTRIES[s.country_code] ?? { ja: s.country_code, en: s.country_code }) : null; // 旗の無いコードは国コードのバッジ（MiseCountry）
+    if (!info) return null;
     const region = regionInfo(s), wrap = document.createElement('p'); wrap.className = 'f-place';
     const label = region ? `${info.ja} ${region.ja} / ${info.en} ${region.en}` : `${info.ja} / ${info.en}`;
     wrap.setAttribute('role', 'img'); wrap.setAttribute('aria-label', label); wrap.title = label; wrap.dataset.country = s.country_code;
     if (region) wrap.dataset.region = s.region_code;
-    const img = document.createElement('img'); img.alt = ''; img.width = 18; img.height = 14; img.src = `/flags/${s.country_code.toLowerCase()}.svg`; img.loading = 'lazy'; img.decoding = 'async';
-    img.addEventListener('error', () => { wrap.hidden = true; }); wrap.append(img);
+    wrap.append(MiseCountry.el(s.country_code, { className: '', width: 18, height: 14, lazy: true }));
     if (region) { const name = document.createElement('span'); name.className = 'f-region'; name.textContent = region[language]; wrap.append(name); }
     return wrap;
   }
@@ -527,7 +526,7 @@
     clearTimeout(globeTimer);
     globeTimer = setTimeout(() => {
       const country = site && window.MISE_COUNTRIES && window.MISE_COUNTRIES[site.country_code];
-      if (!country) { if (lastPlace) { lastPlace = ''; window.dispatchEvent(new CustomEvent('mise-fly-release')); } return; }
+      if (!country || !Number.isFinite((regionInfo(site) || country).lat)) { if (lastPlace) { lastPlace = ''; window.dispatchEvent(new CustomEvent('mise-fly-release')); } return; }
       const region = regionInfo(site), target = region || country, key = region ? site.region_code : site.country_code;
       lastPlace = key;
       window.dispatchEvent(new CustomEvent('mise-fly-country', { detail: { lat: target.lat, lon: target.lon, hold: true, level: region ? 'region' : 'country' } }));
