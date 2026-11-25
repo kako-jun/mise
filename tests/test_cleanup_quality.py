@@ -362,6 +362,81 @@ class MeasuredMistakes(Base):
         self.assertNotEqual(self.name_of('br'), '巡り')
 
 
+# ---- anchor rule (#273): with several clauses left, only a clause with a sign of being a NAME is taken; else None (the LLM decides)
+SHRINE = [  # (title, host, right name, wrong name)
+    ('子授、安産、子守、青海神社公式サイト｜ホーム｜新潟県加茂市鎮座', 'aomi-jinjya.or.jp', '青海神社', '新潟県加茂市鎮座'),
+    ('八幡神社 公式サイト｜縁結び・厄除け・初詣のご案内｜大阪府堺市の由緒ある神社', 'hachiman.example.jp', '八幡神社', '縁結び・厄除け・初詣のご案内'),
+    ('安産祈願・厄除けの 明星寺 公式ホームページ｜京都府宇治市にあるお寺 初詣・写経体験のご案内', 'myojoji.example.jp', '明星寺', '京都府宇治市にあるお寺 初詣・写経体験のご案内'),
+    ('桜山神社 オフィシャルサイト | 七五三・お宮参り・結婚式のご予約はこちら | 静岡県浜松市鎮座', 'sakurayama.example.jp', '桜山神社', '静岡県浜松市鎮座'),
+    ('高野山 金剛院 公式サイト - 宿坊で心静かに過ごす 精進料理と朝のお勤め体験', 'kongoin.example.jp', '高野山 金剛院', '宿坊で心静かに過ごす 精進料理と朝のお勤め体験'),
+]
+SHOP = [
+    ('あじかんショップ美食生活 公式通販サイト - お通じを改善する機能性表示食品のごぼう茶', 'ajikan.example.jp', 'あじかんショップ美食生活', 'お通じを改善する機能性表示食品のごぼう茶'),
+    ('こだわり農園 公式オンラインショップ | 無農薬で育てたお米を産地から直送でお届けします', 'kodawari.example.jp', 'こだわり農園', '無農薬で育てたお米を産地から直送でお届けします'),
+    ('茶房かりん 公式通販 - 疲れた体を整える国産ハーブティーのブレンド専門店', 'karin.example.jp', '茶房かりん', '疲れた体を整える国産ハーブティーのブレンド専門店'),
+    ('海の幸屋 公式通販サイト｜新鮮な魚介を毎日をもっと豊かにする海の恵みセット', 'umi.example.jp', '海の幸屋', '新鮮な魚介を毎日をもっと豊かにする海の恵みセット'),
+    ('Green Leaf Organics オンラインショップ - 肌荒れを改善するオーガニックコスメの通販', 'greenleaf.example.jp', 'Green Leaf Organics', '肌荒れを改善するオーガニックコスメの通販'),
+]
+SCHOOL = [
+    ('青葉学園｜子どもたちの未来を育てる教育をこれからも一人ひとりの個性とともに', 'aoba.example.jp', '青葉学園', '子どもたちの未来を育てる教育をこれからも一人ひとりの個性とともに'),
+    ('東山大学 | 世界に開かれた学びの場 国際交流とキャリア支援に力を入れる総合大学', 'higashiyama.example.jp', '東山大学', '世界に開かれた学びの場 国際交流とキャリア支援に力を入れる総合大学'),
+    ('みなみ幼稚園 | のびのび遊んで心も体も大きく育つ 自然豊かな園庭で過ごす毎日', 'minami.example.jp', 'みなみ幼稚園', 'のびのび遊んで心も体も大きく育つ 自然豊かな園庭で過ごす毎日'),
+    ('学校法人北斗学院 | 一人ひとりの夢を応援する 中高一貫の進学校 公式サイト', 'hokuto.example.jp', '学校法人北斗学院', '一人ひとりの夢を応援する 中高一貫の進学校'),
+    ('白鳥看護専門学校 - 地域医療を支える看護師を育てる 卒業生の活躍と入試情報のご案内', 'hakucho.example.jp', '白鳥看護専門学校', '地域医療を支える看護師を育てる 卒業生の活躍と入試情報のご案内'),
+]
+PLACE_SHOP = [
+    ('パン工房ムギ | 福岡県糸島市の海沿いにある小さなパン屋 天然酵母のパンを毎日焼いています', 'mugi.example.jp', 'パン工房ムギ', '福岡県糸島市の海沿いにある小さなパン屋'),
+    ('Cafe Hinata – 京都市左京区にあるカフェ 自家焙煎珈琲と手作りケーキでほっと一息', 'hinata.example.jp', 'Cafe Hinata', '京都市左京区にあるカフェ'),
+    ('美容室 Lino | 東京都世田谷区で髪のお悩みならお任せ 経験豊富なスタッフが対応します', 'lino.example.jp', '美容室 Lino', '東京都世田谷区で髪のお悩みならお任せ'),
+    ('整体院ここから | 札幌市中央区の腰痛・肩こり専門 つらい痛みを根本から改善する整体', 'kokokara.example.jp', '整体院ここから', '札幌市中央区の腰痛・肩こり専門'),
+    ('山田工務店 | 愛知県岡崎市で家づくりなら当店へ 地元の木を使った注文住宅を手がけます', 'yamada-koumuten.example.jp', '山田工務店', '愛知県岡崎市で家づくりなら当店へ'),
+]
+# results that were right before the anchor rule (production sample of 300): must not change
+KEPT = [
+    ('ANAクラウンプラザホテル成田 | 成田空港から無料シャトルバスで約10分。ご宿泊のご予約はこちらから | 公式サイト', 'anacpnarita.example.jp', 'ANAクラウンプラザホテル成田'),
+    ('七福醸造 公式オンラインショップ', 'shichifuku.example.jp', '七福醸造 公式オンラインショップ'),
+    ('アマダ | 板金加工機械のトップメーカーとして、金属加工の最新情報をお届けします。', 'amada.example.jp', 'アマダ'),
+    ('AKIBA LOST | 秋葉原で遊べる体験型イベント、ゲーム、アニメの最新情報はこちら。', 'akiba-lost.example.jp', 'AKIBA LOST'),
+    ('ABILITY INC. | 障害のある方の就労支援、生活支援、グループホームを運営しています。お問い合わせください', 'ability.example.jp', 'ABILITY INC.'),
+    ('株式会社アマダ | 板金加工機械のトップメーカー 金属加工機械・工作機械の最新情報', 'amada.example.jp', '株式会社アマダ'),
+]
+
+
+class Anchors(Base):
+    def test_never_the_place_or_the_product_description(self):
+        for group in (SHRINE, SHOP, SCHOOL, PLACE_SHOP):
+            for title, host, right, wrong in group:
+                got = cq.deterministic_name(title, host)
+                self.assertIn(got, (right, None), (title, got))
+                self.assertNotEqual(got, wrong, title)
+
+    def test_measured_mistakes_now_right(self):
+        self.assertIsNone(cq.deterministic_name(SHRINE[0][0], SHRINE[0][1]))             # -> LLM
+        self.assertEqual(cq.deterministic_name(SHOP[0][0], SHOP[0][1]), 'あじかんショップ美食生活')
+
+    def test_previously_right_results_unchanged(self):
+        for title, host, want in KEPT:
+            self.assertEqual(cq.deterministic_name(title, host), want, title)
+
+    def test_pitch_patterns(self):
+        for t in ('新潟県加茂市鎮座', '駅前にあるお店', 'お通じを改善する機能性表示食品のごぼう茶', '肌のお悩みならお任せ', '東京都世田谷区', '家づくりなら当店'):
+            self.assertTrue(quality.pitch_like(t), t)
+        for t in ('青海神社', '奈良ならまち工房', '山田屋', 'ABILITY INC.', 'パン工房ムギ', '京都府立大学'):
+            self.assertFalse(quality.pitch_like(t), t)
+
+    def test_llm_gets_the_shrine_name_and_not_the_place(self):
+        title = SHRINE[0][0]
+        self.assertEqual(cq.llm_name_valid('青海神社', [title], SHRINE[0][1]), '青海神社')          # in front of the 公式サイト suffix
+        self.assertIsNone(cq.llm_name_valid('新潟県加茂市鎮座', [title], SHRINE[0][1]))
+        self.assertIn('place name', cq.NAME_SYSTEM)
+
+    def test_apply_end_to_end_shrine_goes_to_llm(self):
+        add_site(self.d1, 'sh', 'x' * 30 + ' | ' + 'y' * 30, title=SHRINE[0][0], url='https://aomi-jinjya.or.jp/')
+        llm = FakeLLM(names={'aomi-jinjya.or.jp': '青海神社'})
+        self.go('names', llm=llm)
+        self.assertEqual((self.name_of('sh'), len(llm.calls)), ('青海神社', 1))
+
+
 class Leasing(Base):
     def test_lease_held_by_other_exits_2_and_writes_nothing(self):
         add_site(self.d1, 'a', LONG_TITLE, title=LONG_TITLE)

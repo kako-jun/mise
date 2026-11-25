@@ -119,7 +119,8 @@ NAME_SYSTEM = (
     "Answer JSON {\"site_name\": <string or null>}. site_name = the name of the site / organisation / shop itself, at most 40 characters, "
     "copied VERBATIM (one contiguous piece) from the title, the current name or the text. No slogan, no list of services or places, nothing "
     "after a separator, no promotional wording, no trailing 'official site / homepage' words. Never cut in the middle of a word or phrase. "
-    "Add no fact and translate nothing. null when the text does not show the name.")
+    "Never take a place name or address (…県…市鎮座), a product / service description (…を改善する), a catch-phrase or a 〇〇ならXX phrase as the name: "
+    "the name is the owner's own proper name (a shop, shrine, school, company ...). Add no fact and translate nothing. null when the text does not show the name.")
 NAME_SCHEMA = {'type': 'object', 'properties': {'site_name': {'anyOf': [{'type': 'string'}, {'type': 'null'}]}},
                'required': ['site_name'], 'additionalProperties': False}
 REWRITE_SYSTEM = (
@@ -199,12 +200,18 @@ def _fold_keep(s):
     return re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', s or '')).casefold().strip()
 
 
+_SUFFIX_FOLDED = tuple(re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', w)).casefold() for w in quality.ANCHOR_SUFFIX)
+
+
 def _boundary_ok(src, i, j):
-    """src[i:j] stands as a whole word / clause in src: at the start / end or next to a separator / bracket / space; never inside an ASCII word."""
-    for k, edge in ((i - 1, i), (j, j - 1)):
+    """src[i:j] stands as a whole word / clause in src: at the start / end or next to a separator / bracket / space, or directly in front of a
+    page-kind suffix (青海神社|公式サイト); never inside an ASCII word."""
+    for k, right in ((i - 1, False), (j, True)):
         if k < 0 or k >= len(src):
             continue
         if src[k] in _SEP_CH:
+            continue
+        if right and any(src.startswith(w, j) for w in _SUFFIX_FOLDED):
             continue
         return False           # a letter / kanji / kana continues on that side: a cut inside a word or phrase
     return True
@@ -229,7 +236,7 @@ def llm_name_valid(new, sources, host=''):
     n = collapse(new) if isinstance(new, str) else ''
     if not n or len(n) > quality.NAME_MAX or quality.check_name(n) or quality.is_fragment(n) or n in quality.CORP_FORMS or predicate_like(n):
         return None
-    if not quality.brackets_balanced(n) or quality.not_a_name_clause(n, quality.shared_service_host(host)):
+    if not quality.brackets_balanced(n) or quality.not_a_name_clause(n, quality.shared_service_host(host)) or quality.pitch_like(n):
         return None                       # an error-page title / a shared service's own name is not this site's name
     if any(sep in n for sep in _NAME_SEPARATORS):
         return None
