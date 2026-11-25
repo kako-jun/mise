@@ -35,7 +35,7 @@ QUALITY_SQL = {
 QUALITY_WHY = {
     "name_too_long": f"sites.name (what the publish stage writes) is longer than {quality.NAME_LONG_MAX} characters (a derived name is at most that: the first segment is kept whole up to there)",
     "description_style": "description_ja ends in the plain (常体) form instead of 体言止め / です・ます",
-    "tag_label_ja_not_japanese": "a tag whose label_ja has no kana / kanji",
+    "tag_label_ja_not_japanese": "a tag whose label_ja has no kana / kanji and is not an abbreviation / number / name written in Latin letters (5G, .NET, A24) or an allowlisted proper noun",
     "category_non_leaf_only": "a site that has only non-leaf (parent) categories",
 }
 
@@ -48,7 +48,7 @@ def quality_checks(execute):
         if name == "description_style":
             rows = [r for r in rows if quality.check_description_style(r[1])]
         elif name == "tag_label_ja_not_japanese":
-            rows = [r for r in rows if not quality.has_japanese(r[1] or "")]
+            rows = [r for r in rows if not quality.ja_label_ok(r[1] or "")]
         out[name] = rows
     return out
 

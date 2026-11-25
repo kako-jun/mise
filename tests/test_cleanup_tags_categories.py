@@ -23,21 +23,27 @@ from test_cleanup_quality import Base, add_site
 
 class FakeLLM:
     """tags: script[label_ja] = (ja, en) | None. categories: script[site name] = [ids]. Records every call."""
-    def __init__(self, tags=None, cats=None, same=None, drop_verify=()):
+    def __init__(self, tags=None, cats=None, same=None, drop_verify=(), whys=None, tag_nulls=()):
         self.calls, self.tags, self.cats = [], tags or {}, cats or {}
+        self.models, self.whys, self.tag_nulls = [], whys or {}, set(tag_nulls)
+        self.bad_verify = 0                                              # the next N verification calls answer with text that is no JSON
         self.same, self.drop_verify = same or {}, set(drop_verify)        # verification answers by the Japanese label (default: yes)
 
     def __call__(self, params):
         sysm, text = params['system'][0]['text'], params['messages'][0]['content']
         items = json.loads(re.search(r'<source>\n(.*)\n</source>', text, re.S).group(1))
         self.calls.append((sysm[:20], items))
+        self.models.append(params['model'])
+        if 'translations of English tag labels' in sysm and self.bad_verify > 0:
+            self.bad_verify -= 1
+            return {'content': [{'type': 'text', 'text': 'not json'}], 'stop_reason': 'end_turn', 'usage': {'input_tokens': 900, 'output_tokens': 80}}
         if 'translations of English tag labels' in sysm:
             out = {'r': [{'i': it['i'], 'same': self.same.get(it['ja'], True)} for it in items if it['ja'] not in self.drop_verify]}
         elif 'tag labels' in sysm:
             out = {'r': [{'i': it['i'], 'ja': (self.tags.get(it['ja']) or (None, it['en']))[0], 'en': (self.tags.get(it['ja']) or (None, it['en']))[1]}
                          for it in items]}
         else:
-            out = {'r': [{'i': it['i'], 'ids': self.cats.get(it['name'], [])} for it in items]}
+            out = {'r': [{'i': it['i'], 'ids': self.cats.get(it['name'], []), 'why': self.whys.get(it['name'], it['name'][:2])} for it in items]}
         return {'content': [{'type': 'text', 'text': json.dumps(out, ensure_ascii=False)}], 'stop_reason': 'end_turn',
                 'usage': {'input_tokens': 900, 'output_tokens': 80}}
 
@@ -318,6 +324,86 @@ class Tags(TagsBase):
             cq.main(['names', '--allow-large-llm-mapping'], client=self.d1)
         self.assertEqual(cq.main(['tags', '--chunk', '100'], client=self.d1), 0)
 
+    # ---- LLM path on real-looking labels (production run: 290 labels, all needs_human)
+    REAL = {'3d printing': ('3Dプリント', '3d printing'), '24-hour service': ('24時間対応', '24-hour service'), 'academic conference': ('学術大会', 'academic conference'),
+            'abashiri': ('網走', 'abashiri'), 'aa': ('AA', 'aa'), '3d cad': ('3DCAD', '3d cad'), 'accessibility': ('アクセシビリティ', 'accessibility'),
+            'action figures': ('アクションフィギュア', 'action figure'), 'adventure games': ('アドベンチャーゲーム', 'adventure game'),
+            'amateur radio': ('アマチュア無線', 'amateur radio'), 'bird watching': ('バードウォッチング', 'bird watching'), 'craft beer': ('クラフトビール', 'craft beer')}
+
+    def test_real_labels_are_adopted_on_the_llm_path(self):
+        self.one_site(*[(k, k) for k in self.REAL][:5])
+        for i, k in enumerate(list(self.REAL)[5:]):
+            add_site(self.d1, f'x{i}', '山田屋')
+            add_tags(self.d1, f'x{i}', (k, k))
+        llm = FakeLLM(tags=self.REAL)
+        code, st = self.go('tags', llm=llm)
+        self.assertEqual((code, st['by_llm'], st['needs_human'], st['verify_calls']), (0, len(self.REAL), 0, 1), self.text())
+        got = {r[0] for r in self.d1.db.execute('SELECT label_ja FROM site_tags')}
+        self.assertEqual(got, {v[0] for v in self.REAL.values()})
+        self.assertEqual(self.d1.one("SELECT label_en FROM site_tags WHERE label_ja='アクションフィギュア'")[0], 'action figure')   # singular
+        self.assertEqual(set(llm.models), {cq.CHEAP_MODEL})                                           # tags stay on the cheap model
+        self.assertEqual(sorted(x for x in got if not quality.has_japanese(x)), ['3DCAD', 'AA'])            # Latin tokens that need no translation (digit / capitals)
+
+    def test_latin_tokens_need_no_translation_and_are_not_selected(self):
+        self.one_site(*[(k, k) for k in ('5g', '4k', '3d', '.net', 'a24', '12-step', '1920s', 'c++', 'FPGA')], ('university', 'university'))
+        llm = FakeLLM()
+        _c, st = self.go('tags', apply=False, llm=llm)
+        self.assertEqual((st['latin_ok_labels'], st['foreign_labels'], st['selected']), (9, 1, 1))
+        for t in ('5G|5g', '.NET|.net', 'A24|a24', '12-step|12-step', '1920s|1920s', '3D|3d', 'FPGA|fpga'):
+            self.assertEqual(quality.check_tags([t]), [], t)
+        for t in ('university|university', 'Music|music', 'open-source|open-source', 'web components|web components', 'aa|aa', 'nostr|nostr'):
+            self.assertEqual(quality.check_tags([t]), ['tag_label_ja_not_japanese'], t)
+
+    def test_answers_for_digit_and_abbreviation_labels(self):
+        syn, pr = quality.default_synonyms(), quality.proper_nouns()
+        ok = [('12-step', '12ステップ'), ('1920s', '1920年代'), ('5g', '5G'), ('4k', '4K'), ('.net', '.NET'), ('a24', 'A24'), ('aa', 'AA'),
+              ('3d printing', '3Dプリント'), ('24-hour service', '24時間対応'), ('abashiri', '網走')]
+        for en, ja in ok:
+            self.assertEqual(cq.check_tag_answer({'ja': en, 'en': en, 'n': 1}, ja, en, syn, pr), ((ja, en), None), (en, ja))
+        bad = [('nostr', 'Nostr', 'nostr', 'not_japanese'), ('university', 'University', 'university', 'not_japanese'),
+               ('bank', 'bank', 'bank', 'same_as_old'), ('3d printing', None, '3d printing', 'llm_null'),
+               ('3d printing', '3Dプリントとは何ですか。', '3d printing', 'sentence_like'), ('3d printing', '3Dプリント', '3D printing', 'label_en_invalid'),
+               ('3d printing', '3Dプリント', 'printing', 'label_en_changed'), ('3d printing', '3D/プリント', '3d printing', 'junk_chars'),
+               ('3d printing', 'あ' * 21, '3d printing', 'too_long'), ('3d printing', '市', '3d printing', 'admin_only')]
+        for en, ja, new_en, why in bad:
+            self.assertEqual(cq.check_tag_answer({'ja': en, 'en': en, 'n': 1}, ja, new_en, syn, pr), (None, why), (en, ja))
+        self.assertEqual(cq.check_tag_answer({'ja': 'x', 'en': 'x', 'n': 1}, '果物', cq.KEY_MISSING, syn, pr), (None, 'llm_missing_key'))
+
+    def test_reason_codes_are_reported_and_explain_lists_every_label(self):
+        self.one_site(('zzcode', 'zzcode'), ('nostr', 'nostr'), ('bank', 'bank'))
+        llm = FakeLLM(tags={'nostr': ('Nostr', 'nostr'), 'bank': ('土手', 'bank')}, same={'土手': False})
+        _c, st = self.go('tags', llm=llm)
+        reasons = dict(st['needs_human_reasons'])
+        self.assertEqual(reasons, {'zzcode': 'llm_null', 'nostr': 'not_japanese', 'bank': 'not_same_meaning'})
+        self.assertIn('needs_human by reason:', self.text())
+        self.assertIn('llm_null: 1', self.text())
+        self.assertNotIn('\n    zzcode', self.text())                                                # the default shows counts and a few examples only
+        self.out.clear()
+        _c, st = self.go('tags', llm=llm, retry_skipped=True, explain=True)
+        self.assertIn('\n    zzcode', self.text())
+
+    def test_explain_in_main(self):
+        self.assertEqual(cq.main(['tags', '--explain'], client=self.d1), 0)
+
+    def test_verification_is_retried_once_and_a_failure_is_a_reason(self):
+        self.one_site(('bank', 'bank'))
+        llm = FakeLLM(tags={'bank': ('銀行', 'bank')})
+        llm.bad_verify = 1
+        _c, st = self.go('tags', llm=llm)
+        self.assertEqual((st['by_llm'], st['verify_calls']), (1, 1))                                  # the second attempt answered
+        add_site(self.d1, 'w', '山田屋')
+        add_tags(self.d1, 'w', ('banker', 'banker'))
+        llm = FakeLLM(tags={'banker': ('銀行員', 'banker')})
+        llm.bad_verify = 2
+        _c, st = self.go('tags', llm=llm)
+        self.assertEqual(dict(st['needs_human_reasons']), {'banker': 'verify_no_answer'})
+        self.assertGreater(cq.verify_max_tokens(100), 4000)                                           # room for 100 answers
+
+    def test_prompt_tells_the_model_not_to_null_short_or_digit_labels(self):
+        self.assertIn('never null just because', cq.TAG_SYSTEM)
+        self.assertNotIn('an abbreviation you are unsure of', cq.TAG_SYSTEM)
+
+
     def test_main_default_is_dry_run(self):
         self.seed()
         before = self.d1.db.execute('SELECT * FROM site_tags ORDER BY 1,2').fetchall()
@@ -474,6 +560,59 @@ class Categories(Base):
         _c, st = self.run_apply(FakeLLM(cats={'山田大学': ['universities']}), restart=True, retry_skipped=True)
         self.assertEqual(cats_of(self.d1, 'u'), ['universities'])
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM discovery_cursors WHERE source='cleanup-skip' AND cursor_key='categories:u'")[0], 0)
+
+    # ---- model and evidence
+    def test_categories_default_to_sonnet_and_estimate_with_it(self):
+        self.seed()
+        self.assertEqual(cq.CAT_MODEL, cq.judge.MODELS['sonnet'])
+        _c, st = self.go('categories', apply=False)
+        self.assertEqual(st['model'], cq.CAT_MODEL)
+        _c, st_h = self.go('categories', apply=False, model='haiku')
+        self.assertEqual(st_h['model'], cq.CHEAP_MODEL)
+        self.assertGreater(st['est_cost_usd_max'], st_h['est_cost_usd_max'] * 5)                      # sonnet is priced well above haiku
+        llm = FakeLLM(cats={'山田大学': ['universities']})
+        self.run_apply(llm)
+        self.assertEqual(set(llm.models), {cq.CAT_MODEL})
+        llm2 = FakeLLM(cats={})
+        self.run_apply(llm2, model='haiku', restart=True, retry_skipped=True)
+        self.assertEqual(set(llm2.models), {cq.CHEAP_MODEL})
+        self.assertEqual(cq.main(['categories', '--model', 'haiku'], client=self.d1), 0)
+        with self.assertRaises(SystemExit):
+            cq.main(['names', '--model', 'haiku'], client=self.d1)
+
+    def test_hesitation_is_an_empty_answer_and_the_categories_stay(self):
+        self.seed()
+        llm = FakeLLM(cats={})                                                                        # empty ids everywhere
+        _c, st = self.run_apply(llm)
+        self.assertEqual((cats_of(self.d1, 'u'), cats_of(self.d1, 'two')), (['education'], ['education', 'science']))
+        reasons = dict(st['needs_human_reasons'])
+        self.assertEqual((reasons['u'], reasons['two'], reasons['gov']), ('llm_empty', 'llm_empty', 'no_candidates'))
+        self.assertEqual(st['updated'], 0)
+
+    def test_evidence_must_be_words_of_the_name_or_description(self):
+        self.seed()
+        llm = FakeLLM(cats={'山田大学': ['universities'], '山田研究所': ['physics']}, whys={'山田大学': '神社|寺', '山田研究所': ''})
+        _c, st = self.run_apply(llm)
+        self.assertEqual((cats_of(self.d1, 'u'), cats_of(self.d1, 'two')), (['education'], ['education', 'science']))
+        reasons = dict(st['needs_human_reasons'])
+        self.assertEqual((reasons['u'], reasons['two']), ('evidence_not_in_text', 'no_evidence'))
+        llm = FakeLLM(cats={'山田大学': ['universities']}, whys={'山田大学': '山田|公式サイト'})                  # every word is in the name / description
+        self.run_apply(llm, restart=True, retry_skipped=True)
+        self.assertEqual(cats_of(self.d1, 'u'), ['universities'])
+
+    def test_evidence_check_function(self):
+        site = {'name': 'Internet Sacred Text Archive', 'd': '世界の宗教の聖典を集めた電子図書館。', 'cand_ids': {'religion-x', 'shrines'}}
+        self.assertEqual(cq.cat_validate(site, ['religion-x'], '聖典|宗教'), (['religion-x'], None))
+        self.assertEqual(cq.cat_validate(site, ['religion-x'], 'sacred text'), (['religion-x'], None))   # case / spaces ignored
+        self.assertEqual(cq.cat_validate(site, ['shrines'], '神社')[1], 'evidence_not_in_text')
+        self.assertEqual(cq.cat_validate(site, ['shrines'], '聖|宗教')[1], 'evidence_not_in_text')       # one-character pieces do not count
+        self.assertEqual(cq.cat_validate(site, ['temples'], '聖典')[1], 'outside_candidates')
+        self.assertEqual(cq.cat_validate(site, [], '聖典')[1], 'llm_empty')
+        self.assertEqual(cq.cat_validate(site, ['religion-x'], None)[1], 'no_evidence')
+
+    def test_prompt_demands_clear_fit_and_evidence(self):
+        for w in ('CLEARLY', 'EMPTY', 'why', 'subject', 'VERBATIM'):
+            self.assertIn(w, cq.CAT_SYSTEM)
 
     def test_limit_and_cursor_resume(self):
         for n in range(5):
