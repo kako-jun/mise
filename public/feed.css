@@ -37,7 +37,7 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 #feed .f-surf:hover { background: transparent; opacity: .8; }
 #feed .f-surf-cat { display: block; flex: none; overflow: visible; }
 #feed .f-surf-text { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
-#feed .f-surf-label { font-size: 10px; line-height: 1; letter-spacing: .04em; color: #ffe9c4; text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; }
+#feed .f-surf-label { font-size: 10px; line-height: 1; letter-spacing: .04em; color: #ffe9c4; text-shadow: 0 0 3px rgba(0,0,0,.9), 0 1px 2px rgba(0,0,0,.9); white-space: nowrap; }
 #feed .f-surf-num { display: block; font: 12px/1 "MISE Dot Digits", ui-monospace, monospace; letter-spacing: 0; color: #ffd24a; text-shadow: 0 1px 0 #7a3c00, 0 0 8px rgba(255,170,40,.45); font-variant-numeric: tabular-nums; transform-origin: right center; }
 @keyframes f-surf-bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-1.5px) rotate(-2deg); } }
 @keyframes f-surf-hop { 0% { transform: translateY(0) rotate(0); } 30% { transform: translateY(-9px) rotate(-10deg); } 60% { transform: translateY(1px) rotate(4deg); } 100% { transform: translateY(0) rotate(0); } }
@@ -61,6 +61,14 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
   #feed .f-search-clear { width: 32px; }
   #feed .f-surf { gap: 3px; padding: 2px 6px 2px 2px; }
   #feed .f-surf-num { font-size: 10px; }
+}
+/* 広い画面(700px 以上)は左右の端がカード列の外(ページの地)に乗るので、ページの明暗に合わせた文字色にする(#276。影は付けない) */
+@media (min-width: 700px) {
+  #feed .f-directory, #feed .f-surf { filter: none; }
+  #feed .f-directory { color: var(--bar-fg); }
+  #feed .f-surf-label { color: var(--bar-fg); text-shadow: none; }
+  #feed .f-surf-num { color: #8a3d00; text-shadow: none; }
+  html[data-theme="dark"] #feed .f-surf-num { color: #ffd24a; text-shadow: 0 1px 0 #7a3c00, 0 0 8px rgba(255,170,40,.45); }
 }
 #feed .f-bar a:focus-visible, #feed .f-search input:focus-visible, #feed .f-search-clear:focus-visible, #feed .f-surf:focus-visible, #feed .f-card a:focus-visible, #feed .f-card button:focus-visible, #feed .f-long:focus-visible, #feed .f-nav button:focus-visible { outline: 2px solid #ffb27a; outline-offset: 2px; }
 
@@ -90,7 +98,7 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 #feed .f-img.is-in { opacity: 1; }
 /* 黒の重ね: 全体にごく薄い黒で画像を締め、下ほど濃い黒へ(灰色・ぼかしは使わない) */
 #feed .f-scrim { position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(to bottom, rgba(0,0,0,.5) 0%, rgba(0,0,0,.22) 14%, rgba(0,0,0,.08) 26%, rgba(0,0,0,0) calc(100% - var(--scrim-height)), rgba(0,0,0,calc(var(--scrim-alpha) * .8)) calc(100% - var(--scrim-height) * .55), rgba(0,0,0,var(--scrim-alpha)) 100%); }
+  background: linear-gradient(to bottom, rgba(0,0,0,.72) 0%, rgba(0,0,0,.64) 8%, rgba(0,0,0,.3) 16%, rgba(0,0,0,.08) 26%, rgba(0,0,0,0) calc(100% - var(--scrim-height)), rgba(0,0,0,calc(var(--scrim-alpha) * .8)) calc(100% - var(--scrim-height) * .55), rgba(0,0,0,var(--scrim-alpha)) 100%); }
 #feed .f-body { position: absolute; left: 0; right: 0; bottom: 0; box-sizing: border-box; padding: 0 18px 18px; display: flex; flex-direction: column; gap: 8px; max-height: 78%; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
 @media (orientation: landscape) and (max-height: 500px) { #feed .f-body { text-shadow: 0 1px 2px rgba(0,0,0,.6), 0 0 10px rgba(0,0,0,.45); } }
 #feed .f-name { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 650; overflow-wrap: anywhere; }

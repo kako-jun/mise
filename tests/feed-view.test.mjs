@@ -224,10 +224,13 @@ test('feed(#198): ヘッダーに帯(背景・ぼかし・下線)がなく、検
   assert.ok(existsSync(new URL('../public/fonts/mise-dot-digits-v1.woff2', import.meta.url)) && existsSync(new URL('../public/licenses/PressStart2P-OFL.txt', import.meta.url)), 'フォントとライセンスを同梱');
 });
 
-test('feed(#277): 「見た」は 60% 以上で切り替わった瞬間に数え、連続送りの通過点は数えず、同じサイトは 1 回', () => {
+test('feed(#277): 「見た」は 60% 以上のカードが現在になった瞬間(キー・ボタン)か、止まって境界に揃った瞬間(指・ホイール)に数え、通過点・二重は数えない', () => {
   assert.match(appJs, /IN_VIEW_THRESHOLD = 0\.6;/); assert.ok(!/SEEN_DWELL_MS|dwell/.test(appJs), '滞在待ちを置かない');
-  assert.match(appJs, /settled = navTarget === null \|\| navTarget === current/, '送り先に着いたときだけ');
-  assert.match(appJs, /e\.isIntersecting && settled && Number\(idx\) === current && !document\.hidden\) markSeen\(list\[current\]\)/);
+  assert.match(appJs, /settled = navTarget === current;/, '即時はキー・ボタンの送り先に着いたときだけ');
+  assert.match(appJs, /if \(settled\) countSeen\(\); else scheduleSeen\(\);/);
+  assert.match(appJs, /scroller\.addEventListener\('scrollend', \(\) => seenIfSettled\(\)\)/, 'scrollend で即確定');
+  assert.match(appJs, /Math\.abs\(c\.offsetTop - scroller\.scrollTop\) > 2\) return false/, '境界に揃っていなければ数えない');
+  assert.match(appJs, /scroller\.scrollTop === y\) seenIfSettled\(\); else scheduleSeen\(\)/, '位置が動いている間は待つ');
   assert.match(appJs, /function markSeen\(site\) \{\s*if \(!site \|\| seen\.sites\[site\.id\]\) return;/, '二重に数えない');
 });
 
