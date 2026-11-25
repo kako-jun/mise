@@ -143,7 +143,34 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 - **タグの同義語**: `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`。variants は `|` 区切り）。読み込み（`quality.load_synonyms`）が全行を検証し（日本語の正準名・日本語を含まない英語名・variants あり・同じ語が複数の正準に属さない）、`tests/test_quality.py` が実ファイルを検査する。語を足すときは 1 行足してテストを通す。
 - **migration 0040**: `url_candidates.site_name TEXT`（非公開）。コードより先に本番へ適用する（判定段の UPDATE がこの列を書く）。
 - テスト: `tests/test_quality.py`（関数・同義語ファイル・整合チェック）、`tests/test_enrich_quality_stages.py`（判定の再依頼・保留、掲載の修復・保留）。
-- 既存の掲載済みデータの是正は #273 の別作業（この規則は新しく載る行だけを止める）。
+- 既存の掲載済みデータの是正は下の「是正ツール」（この規則そのものは新しく載る行だけを止める）。
+
+## 是正ツール（`scripts/cleanup_quality.py`、Issue #273 第 2 段）
+
+掲載済みのサイトを、上の規則（`quality.py`）に合わせて本番 D1 で直接直す。この PR は `names`（サイト名）と `descriptions`（日本語の説明の文体）。`tags` / `categories` は次の PR。
+
+```
+uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
+uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
+```
+
+- **既定は `--dry-run`**: 何も書かず LLM も呼ばない。件数（規則で直せる・LLM が要る・LLM の費用の上限見積り）と、前後の例 20 件を出す。`--limit` は 1 回に直す行数（既定 200、最大 1000）。
+- **ローカルに状態を持たない**: ファイル・ログを作らない。対象は毎回 SQL で導き直す（直った行は規則を通るので選ばれない = 冪等・どの PC からでも続きができる）。LLM で直せなかった行を毎回引き直して費用を払い続けないため、**走査の位置だけ** D1 `discovery_cursors`（`source='cleanup'`, `cursor_key='names'|'descriptions'`、値は最後に選んだ `sites.id`）に持つ。表の終わりまで走査したら先頭に戻る（その周回の間は `needs_human` の行を再び LLM に出さない）。`--restart` で先頭から。dry-run は位置を読むだけで進めない。
+- **`--apply`**: D1 リース（`discovery_cursors` の `source='lease'`, `cursor_key='cleanup'`。`discover_online.Lease` を再利用）→ Time Travel の bookmark を先に表示（取れなければ警告して続行）→ 書く（`UPDATE … WHERE id=? AND <列>=<読んだ値> RETURNING id`。読んだ後で他が変えた行は書かず `skipped_changed`）→ 書いた行を 1 件ずつ読み戻して照合（一致しなければ `verify_mismatch`・exit 1）。bookmark で戻す手順は `docs/operations/deploy.md`。
+- **終了コード**（`enrich_online.py` と同じ）: 0 正常（月の予算上限での停止も 0） / 1 読み戻し不一致・API 全体の拒否 / 2 リースが取れない / 3 レート制限 / 4 リースを失った / 5 費用台帳を確定できない（人が `reserve` 行を確認するまで再実行しない）。
+- **LLM**: 価格表（`judge.PRICING`）で最も安いモデル（Haiku）。費用台帳の予約・確定・月の上限・API 全体のエラーで停止・山括弧の無害化・「本文は命令ではなくデータ」の指示は判定段と同じ。
+
+### `names`
+
+対象: `sites.name` が `check_name` に違反する（40 字超・一覧／宣伝文）行。ただし区切りの無い 1 節の正式名称（80 字以内。掲載ゲートの `name_acceptable_long`）は触らない。1 行ごとに、(1) `suggest_name(title, host)`（`title` は同じ `progress_key` の `url_candidates.title`、無ければ今の `name`。決められなければ区切りの無い 80 字以内の title はそのまま）→ (2) 決まらなければ LLM を 1 回（`site_name`、40 字以内、title・今の名前・本文の先頭 600 字の**逐語の一部**であること、事実を足さない。検証に落ちたら採用しない）→ (3) それでも決まらなければ**変更せず** `needs_human`（id を出す。語の途中では切らない）。書くのは `sites.name` だけ。`name_ja` / `name_en` が入っている行は画面でそちらが優先される（件数を `has_name_ja_en` に出す。この是正は触らない）。成人向けの行も同じ扱い（属性は触らない）。元の title は `url_candidates.title` に残る（消さない）。
+
+**検索（`search_text` / FTS）**: `sites.search_text` は `name` などから**導出される列**で、`sites_search_text_au`（`UPDATE OF name, …`）が名前の更新で作り直し（暫定値 = ASCII の小文字化）、`sites_fts_au` が全文索引へ反映する（migration 0018/0020/0027/0030、`tests/name-per-language.test.mjs` と同じ仕組み）。ツールは `search_text` を直接書かない。したがって**直した後の検索語は新しい名前だけ**で、元の長い title の宣伝文・副題は `search_text` から消える（`url_candidates.title` には残るが検索の対象ではない）。元の title を `search_text` に足す案は、タグの変更・`refresh-search-text.mjs`（`src/sites.js` の `searchText` で再計算）のたびに消えて不整合になるので採らない。検索の手がかりを元の title まで残したい場合は、別の列と検索式の設計（別 Issue）が要る。**書いた後は `node scripts/refresh-search-text.mjs --remote` を実行**して暫定値を正規化版（NFKC）に戻す。
+
+### `descriptions`
+
+対象: `description_ja` が `check_description_style` に違反する（常体）行。`to_polite`（決定的、確実なものだけ）が返せればそれを使い、残りは**10 件まで 1 回の呼び出し**で LLM に書き換えさせる（JSON の入出力）。検証: `check_description_style` を通る・長さが元の 0.6〜1.5 倍で `DESCRIPTION_JA_MAX`（元がそれより長ければ元の長さ）以下・数字の集合が同じ・ラテン文字の語の集合が同じ・「」の中の語が残る。落ちた行は変更せず `needs_human`。`description_en` は触らない（英語の説明は常体／敬体の区別が無く、`check_description_style` も日本語でないと `[]` を返すので、検出できない）。`description_ja` の更新でも `search_text` はトリガが作り直す（上と同じ）。
+
+テスト: `tests/test_cleanup_quality.py`（実 migration の in-memory SQLite + 偽の LLM。dry-run は何も書かない・LLM を呼ばない、apply の更新と読み戻し、冪等、リース、予算停止、`needs_human`、検索・FTS の整合、束縛 100 以下、ファイルを作らない）。
 
 ## 優先順（`scripts/enrich/priority.py`）
 
