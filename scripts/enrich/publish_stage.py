@@ -64,18 +64,17 @@ def site_id(key):
 
 
 def site_name(row, host):
-    """-> (name, repaired). The <title> as the site's name when it passes quality.check_name, or when it is ONE clause of at most
-    quality.NAME_LONG_MAX characters (a long formal name is kept); else quality.suggest_name (a deterministic repair, repaired=True); else the
-    name the LLM supplied (url_candidates.site_name, only if it passes check_name); else None (the caller holds the row: gate:quality_name).
-    Never cut at a fixed length."""
+    """-> (name, repaired). The name as it appears in the <title> (quality.derive_name: boilerplate segments and repeats dropped, the rest kept
+    in order up to quality.NAME_SOFT_MAX characters at segment boundaries; no choosing between segments; repaired=True when that differs from
+    the title); a title with nothing usable falls back to the name the LLM supplied (url_candidates.site_name, only if it passes
+    check_name); else None (the caller holds the row: gate:quality_name). Adult / no title: the host. name_ja / name_en are set by
+    scripts/cleanup_quality.py names, not here."""
     title = re.sub(r"\s+", " ", row.get("title") or "").strip()
     if row.get("adult") == "yes" or not title:
         return host, False
-    if not quality.check_name(title) or quality.name_acceptable_long(title):
-        return title, False
     fixed = quality.suggest_name(title, host)
-    if fixed and not quality.check_name(fixed):
-        return fixed, True
+    if fixed:
+        return fixed, fixed != title
     llm = re.sub(r"\s+", " ", row.get("site_name") or "").strip()
     return (llm, False) if llm and not quality.check_name(llm) else (None, False)
 

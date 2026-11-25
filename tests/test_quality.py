@@ -46,72 +46,152 @@ class NameTests(unittest.TestCase):
     def test_sentence(self):
         self.assertIn('name_sentence', q.check_name('私たちは地域の暮らしを支える会社です。'))
 
-    def test_suggest_real_looking_titles(self):
-        self.assertEqual(q.suggest_name(INFIGO, 'infigo.jp'), 'Infigo online')
-        self.assertEqual(q.suggest_name(JLPA, 'jlpa.or.jp'), '一般社団法人日本エルピーガスプラント協会（JLPA）')   # the form stays when the whole name fits
-        self.assertEqual(q.suggest_name(UBUGOE, 'ubugoe-navi.jp'), 'うぶごえナビ')
-        self.assertEqual(q.suggest_name('ことほむ｜時代考証・コンテンツプロデュース – 歴史に学び、未来へ', 'kotohomu.com'), None)   # 3 clauses, no sign: no guess
-
-    def test_suggest_prefers_the_host_brand_and_strips_site_type(self):
-        self.assertEqual(q.suggest_name('新作情報のお知らせ｜Mochi Bakery 公式サイト｜焼きたてを毎朝お届け', 'mochi-bakery.jp'), 'Mochi Bakery')
-        self.assertEqual(q.suggest_name('たろう工房 公式ホームページ', 'taro.jp'), 'たろう工房')
-        self.assertEqual(q.suggest_name('Foo Bar - Official Site', 'foo.com'), 'Foo Bar')
-
-    def test_corporate_form_is_kept_when_it_fits_and_dropped_only_to_fit(self):
-        self.assertEqual(q.suggest_name('株式会社ミライ｜採用情報｜お問い合わせ・会社概要・アクセス・プライバシー', 'mirai.co.jp'), '株式会社ミライ')
-        long_corp = '一般社団法人日本' + 'あいうえお' * 6 + '協会'      # 6+2+30+2 = 40 -> fits; add one char to force the drop
-        self.assertEqual(q.suggest_name(long_corp + '｜採用情報｜お知らせと案内ページ一覧', 'x.jp'), long_corp)
-        too_long = '一般社団法人' + long_corp
-        self.assertEqual(q.suggest_name(too_long + '｜採用情報｜お知らせと案内ページ一覧', 'x.jp'), long_corp)      # 46 chars: the form is dropped to fit
-        self.assertIsNone(q.suggest_name('株式会社｜採用情報｜お問い合わせ', 'x.jp'))      # a corporate form alone is not a name
-
-    def test_several_clauses_without_a_sign_give_none_not_the_first(self):
-        self.assertEqual(q.suggest_name('金属加工 | 精密部品 | 株式会社山田製作所', 'yamada.co.jp'), '株式会社山田製作所')    # the one clause with a corporate form
-        self.assertIsNone(q.suggest_name('ニュース - 天気 - スポーツ - 北陸新聞', 'hokuriku.jp'))
-        self.assertIsNone(q.suggest_name('株式会社 | 山田製作所 | 金属加工', 'y.jp'))
-        self.assertEqual(q.suggest_name('Mochi Bakery｜パン｜ケーキ｜クッキー', 'mochi-bakery.jp'), 'Mochi Bakery')   # the host's brand
-
-    def test_long_single_clause_is_kept_by_the_publish_rule(self):
-        name52 = 'あ' * 52
-        self.assertTrue(q.name_acceptable_long(name52))
+    def test_name_acceptable_long(self):
+        self.assertTrue(q.name_acceptable_long('あ' * 52))
         self.assertFalse(q.name_acceptable_long('あ' * 81))
         self.assertFalse(q.name_acceptable_long('私たちは地域を支える会社です。'))
         self.assertFalse(q.name_acceptable_long('A｜B'))
-
-    def test_generic_subdomain_words_are_not_brands(self):
-        self.assertIsNone(q.suggest_name('Blog | 山田の部屋 | 鉄道模型', 'blog.example.jp'))
-        self.assertIsNone(q.suggest_name('Shop | 山田の部屋 | 鉄道模型', 'shop.example.jp'))
-        self.assertIsNone(q.suggest_name('News | 山田の部屋 | 鉄道模型', 'news.example.co.jp'))
-        self.assertEqual(q.registrable_label('blog.example.co.jp'), 'example')
-        self.assertEqual(q.registrable_label('www.foo-bar.com'), 'foo-bar')
-        self.assertEqual(q.suggest_name('Blog | Yamada Room | 鉄道模型', 'blog.yamada.jp'), 'Yamada Room')     # the registrable label matches
-        self.assertIsNone(q.suggest_name('Smart | 山田の部屋 | 鉄道模型', 'art.example.jp'))                       # art is not Smart (whole word)
-
-    def test_long_slogans_are_not_names(self):
-        for t in ('GitHub · Build and ship software on a single, collaborative platform', 'Yamada Tools: the best place to buy tools for you',
-                  '私たちは地域の暮らしを支える会社です', '山田製作所は精密部品の製造に取り組んでいます毎日更新中のページ', 'みなさんの毎日を少しだけ楽しくするためのお手伝いをしてきた'):
-            self.assertFalse(q.name_acceptable_long(t) and len(t) > 40, t)
         self.assertTrue(q.name_acceptable_long('一般社団法人日本' + 'あ' * 40 + '協会'))
+        for t in ('GitHub · Build and ship software on a single, collaborative platform', 'Yamada Tools: the best place to buy tools for you',
+                  '私たちは地域の暮らしを支える会社です', '山田製作所は精密部品の製造に取り組んでいます毎日更新中のページ'):
+            self.assertFalse(q.name_acceptable_long(t) and len(t) > 40, t)
 
-    def test_fragments_are_never_returned(self):
-        self.assertIsNone(q.suggest_name('山田太郎のホームページ | 鉄道模型 | 写真', 't.jp'))
-        for t in ('GitHub · Build and ship software on a single, collaborative platform', 'Homepage of the Springfield Model Railroad Club Association',
-                  'Yamada Laboratory, Department of Mechanical Engineering and Robotics Systems'):
-            self.assertIsNone(q.suggest_name(t, 'x.example'), t)
+    def test_is_fragment(self):
         for f in ('山田太郎の', 'Department of', 'Build and ship software on a', 'Foo (Bar'):
             self.assertTrue(q.is_fragment(f), f)
         self.assertFalse(q.is_fragment('Springfield Model Railroad Club'))
-        self.assertEqual(q.suggest_name('Acme Robotics (Research Division of the Long Named Institute for Sciences)', 'acme.example'), 'Acme Robotics')
 
-    def test_suggest_never_cuts_inside_a_clause(self):
-        self.assertIsNone(q.suggest_name('あ' * 60, 'x.jp'))
+
+def derive(title, host=''):
+    d = q.derive_name(title, host)
+    return None if d is None else (d['name'], d['name_ja'], d['name_en'])
+
+
+class DeriveNameTests(unittest.TestCase):
+    """The plain rule (owner direction 2026-11-25): split, drop boilerplate segments, drop repeats, keep the rest in order up to NAME_SOFT_MAX.
+    Every assertion is the literal result of the rules; where that result is not pretty it is said so."""
+
+    def test_constants(self):
+        self.assertEqual((q.NAME_SOFT_MAX, q.NAME_LONG_MAX), (60, 80))
+
+    def test_leading_segments_up_to_sixty_characters(self):
+        t = '木更津市の不動産会社｜アクアエステート木更津｜千葉県袖ケ浦・木更津・君津・富津の不動産・住宅情報'
+        self.assertEqual(derive(t), (t, None, None))                       # 10 + 1 + 11 + 1 + 26 = 49: all three fit
+        longer = t + '｜' + 'あ' * 20                                         # a 4th segment would make it 70 > 60: only the whole segments that fit stay
+        self.assertEqual(derive(longer), (t, None, None))
+        self.assertEqual(derive('あ' * 30 + '｜' + 'い' * 29 + '｜' + 'う'), ('あ' * 30 + '｜' + 'い' * 29, None, None))   # 60 exactly; the next does not fit
+
+    def test_both_kept_in_order(self):
+        t = '石川県白山市にあるアラヤ接骨院 | 肩こり・腰痛・体の歪み・マッサージ'
+        self.assertEqual(derive(t), (t, None, None))
+
+    def test_top_label_dropped_company_site_word_stays(self):
+        # TOP is a whole boilerplate segment. 「朝倉真弓公式サイト」 is NOT one (the page-kind word is only part of that segment): kept as written.
+        self.assertEqual(derive('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家'), ('朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', None, None))
+
+    def test_phone_number_removed_and_toppage_dropped(self):
+        self.assertEqual(derive('トップページ｜富山県中央植物園ウェブサイト076-466-4187'), ('富山県中央植物園ウェブサイト', None, None))
+        self.assertEqual(derive('山田屋｜TEL 03-1234-5678｜〒100-0001 東京都千代田区'), ('山田屋｜東京都千代田区', None, None))
+        self.assertEqual(derive('山田屋｜営業時間 9:00-18:00｜https://example.com/'), ('山田屋', None, None))
+
+    def test_official_dealer_site_with_a_brand_is_not_boilerplate(self):
+        # 'Official Dealer Site' alone is boilerplate; 'Jeep Official Dealer Site' is a whole segment of its own and stays (literal rule).
+        self.assertEqual(derive('ジープ厚木｜Jeep Official Dealer Site'), ('ジープ厚木｜Jeep Official Dealer Site', 'ジープ厚木', 'Jeep Official Dealer Site'))
+        self.assertEqual(derive('ジープ厚木｜Official Dealer Site'), ('ジープ厚木', None, None))
+
+    def test_dot_inside_a_name_is_not_a_separator(self):
+        t = 'ビーズミル専門メーカー｜乾式も湿式も微粉砕機・分散機なら アシザワ・ファインテック株式会社'
+        self.assertEqual(derive(t), (t, None, None))                       # 63 chars would not matter: 22 + 1 + 37 = 60 fits
+        self.assertEqual(derive('20th-Century Fox - Studio'), ('20th-Century Fox - Studio', None, None))
+
+    def test_doubled_title_keeps_the_first_segment_only(self):
+        t = '100s [Hyaku-Shiki] Official site – 100s.jp100s [Hyaku-Shiki] Official site - 100'
+        # 32 + 3 + 37 = 72 > 60: the second segment does not fit, so only the first stays (a page-kind word at the END of a segment is not removed)
+        self.assertEqual(derive(t), ('100s [Hyaku-Shiki] Official site', None, None))
+
+    def test_ja_en_pair_sets_both_names(self):
+        self.assertEqual(derive('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY'),
+                         ('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', '愛知工業大学', 'AICHI INSTITUTE OF TECHNOLOGY'))
+        self.assertEqual(derive('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine'),
+                         ('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine', '日本抗加齢医学会', 'Japanese Society of Anti-aging Medicine'))
+        self.assertEqual(derive('愛知 | AICHI | 日本'), ('愛知 | AICHI | 日本', '愛知 | 日本', 'AICHI'))      # in order, each joined with its own separator
+        self.assertEqual(derive('山田屋 | 2024'), ('山田屋 | 2024', None, None))                          # a digit-only segment is neither language
+
+    def test_one_language_leaves_ja_en_empty(self):
+        for t in ('Yahoo! JAPAN', 'ぼくの日記', 'Foo Bar | Baz Inc.'):
+            d = q.derive_name(t)
+            self.assertEqual((d['name_ja'], d['name_en']), (None, None), t)
+
+    def test_service_name_on_a_shared_host_is_dropped(self):
+        t = '2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催(現地とWeb併用) | Peatix'
+        # the slash always splits (AA / MDS); the name is rejoined with the very separator the title had
+        self.assertEqual(derive(t, 'a.peatix.com'), ('2023年度 小児AA/MDS治療研究会学術集会 ハイブリッド開催(現地とWeb併用)', None, None))
+        self.assertEqual(derive('山田屋 | Peatix', 'yamada.example.jp'), ('山田屋 | Peatix', '山田屋', 'Peatix'))      # not a shared host: not a service clause
+
+    def test_error_placeholder_is_a_whole_segment_rule(self):
+        # 'not found HGU' is NOT the whole placeholder, so by the literal rule it stays (the owner prefers verbose-but-correct to clever-but-wrong)
+        self.assertEqual(derive('not found HGU – 北海学園大学受験生向けWEBサイト'),
+                         ('not found HGU – 北海学園大学受験生向けWEBサイト', '北海学園大学受験生向けWEBサイト', 'not found HGU'))
+        self.assertEqual(derive('404 Not Found | 山田屋'), ('山田屋', None, None))
+        self.assertEqual(derive('404 Gallery'), ('404 Gallery', None, None))
+        self.assertEqual(derive('Home Sweet Home Bakery'), ('Home Sweet Home Bakery', None, None))
+        self.assertEqual(derive('Index of | 山田屋'), ('山田屋', None, None))
+        self.assertIsNone(derive('トップページ'))
+        self.assertIsNone(derive('Welcome to nginx!'))
+
+    def test_boilerplate_words_between_separators(self):
+        self.assertEqual(derive('山田屋｜ホーム'), ('山田屋', None, None))
+        self.assertEqual(derive('Home | Yamada Shop'), ('Yamada Shop', None, None))
+        self.assertEqual(derive('山田屋 - 公式サイト'), ('山田屋', None, None))
+        self.assertEqual(derive('【公式】山田屋｜公式ホームページ'), ('山田屋', None, None))
+        self.assertEqual(derive('ようこそ｜山田屋'), ('山田屋', None, None))
+        self.assertEqual(derive('山田屋 | ウェブサイト | Official Website'), ('山田屋', None, None))
+
+    def test_repeated_segments_are_dropped_once(self):
+        self.assertEqual(derive('山田屋｜山田屋｜ＹＡＭＡＤＡ'), ('山田屋｜ＹＡＭＡＤＡ', '山田屋', 'ＹＡＭＡＤＡ'))
+        self.assertEqual(derive('Yamada | YAMADA'), ('Yamada', None, None))
+
+    def test_separator_rules(self):
+        self.assertEqual(derive('Foo-Bar Baz'), ('Foo-Bar Baz', None, None))                       # a hyphen inside a word
+        self.assertEqual(derive('Foo - Bar'), ('Foo - Bar', None, None))
+        self.assertEqual(derive('Adobe: Creative, marketing and document management solutions'),
+                         ('Adobe: Creative, marketing and document management solutions', None, None))   # a colon without spaces is no separator: one segment, kept whole
+        self.assertEqual(derive('Adobe : Creative'), ('Adobe : Creative', None, None))
+        self.assertEqual(derive('神田明神1300年事業 - 文化の鼓動を生む。'), ('神田明神1300年事業 - 文化の鼓動を生む。', None, None))
+
+    def test_never_rewrites_reorders_or_adds(self):
+        for t in ('山田屋｜Yamada Shop｜ヤマダ', 'A / B / C', 'x｜' * 3 + 'y'):
+            d = q.derive_name(t)
+            for seg in d['name'].replace('｜', '|').replace(' / ', '|').split('|'):
+                self.assertIn(seg.strip(), t.replace('｜', '|').replace(' / ', '|'))
+
+    def test_first_segment_up_to_eighty_is_kept_whole(self):
+        one = '一般社団法人日本' + 'あ' * 60 + '協会'                       # 70 chars
+        self.assertEqual(derive(one + '｜お知らせ'), (one, None, None))
+        self.assertEqual(derive(one), (one, None, None))
+
+    def test_ninety_character_single_clause(self):
+        t = 'あ' * 50 + '、' + 'い' * 39                                     # 90 chars, a 、 inside: cut at the last 、 before 80
+        self.assertEqual(derive(t), ('あ' * 50, None, None))
+        self.assertIsNone(derive('あ' * 90))                                 # no boundary at all: nothing is guessed (needs_human)
+        t2 = 'あ' * 40 + '）' + 'い' * 49
+        self.assertEqual(derive(t2), ('あ' * 40 + '）', None, None))
+        t3 = 'a ' * 20 + 'b' * 50
+        self.assertEqual(derive(t3), ('a ' * 19 + 'a', None, None))
+
+    def test_empty_and_only_boilerplate(self):
+        for t in ('', '   ', '公式サイト', 'ホーム | TOP', '|||'):
+            self.assertIsNone(derive(t), t)
+
+    def test_suggest_name_is_the_name_of_derive_name(self):
+        self.assertEqual(q.suggest_name('ジープ厚木｜Jeep Official Dealer Site', 'x.jp'), 'ジープ厚木｜Jeep Official Dealer Site')
         self.assertIsNone(q.suggest_name('', 'x.jp'))
-        self.assertIsNone(q.suggest_name('公式サイト', 'x.jp'))
 
-    def test_suggest_result_always_passes_check_name(self):
-        for t in (INFIGO, JLPA, UBUGOE, 'Foo', 'a b c d e f g h i j k l m n o p q r s t u v w x y z a b c d e f g'):
-            r = q.suggest_name(t, 'x.jp')
-            self.assertTrue(r is None or q.check_name(r) == [], (t, r))
+    def test_deterministic_and_idempotent(self):
+        t = 'TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家'
+        a = q.derive_name(t)
+        self.assertEqual(a, q.derive_name(t))
+        self.assertEqual(q.derive_name(a['name']), a)                         # deriving from a derived name changes nothing
 
 
 class DescriptionTests(unittest.TestCase):
@@ -289,7 +369,7 @@ class IntegrityReportTests(unittest.TestCase):
             for t in tags:
                 con.execute('INSERT INTO site_tags (site_id,label_ja,label_en) VALUES (?,?,?)', (i, *t))
         add('good', 'Good', '小さな工房の紹介サイト。', ['libraries'], [('動画', 'video')])
-        add('bad', 'x' * 41, '作品を紹介している。', ['reference'], [('video', 'video')])
+        add('bad', 'x' * 81, '作品を紹介している。', ['reference'], [('video', 'video')])
         res = cdi.quality_checks(lambda sql: con.execute(sql).fetchall())
         self.assertEqual({k: [r[0] for r in v] for k, v in res.items()},
                          {'name_too_long': ['bad'], 'description_style': ['bad'], 'tag_label_ja_not_japanese': ['bad'], 'category_non_leaf_only': ['bad']})
