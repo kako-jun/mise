@@ -148,12 +148,14 @@ class PublishGate(unittest.TestCase):
         res = self.run_stage()
         self.assertEqual((res['published'], res['repaired']), (1, {'name': 0, 'description': 0}))
 
-    def test_long_title_is_repaired_deterministically(self):
+    def test_long_title_keeps_the_leading_segments_that_fit(self):
         cand(self.d1, 'infigo.example.jp', host='infigo.example.jp',
              title='Infigo online｜新感覚アートブランドが提案する、美しい発色のグラフィックアイテム｜インフィゴのオンラインショップ')
         res = self.run_stage()
         self.assertEqual((res['published'], res['held'], res['repaired']['name']), (1, 0, 1))
-        self.assertEqual(self.d1.one('SELECT name FROM sites WHERE id=?', (ps.site_id('infigo.example.jp'),))[0], 'Infigo online')
+        # no choosing between segments: the leading segments that fit in 60 characters, in order (the shop-name segment does not fit)
+        self.assertEqual(self.d1.one('SELECT name FROM sites WHERE id=?', (ps.site_id('infigo.example.jp'),))[0],
+                         'Infigo online｜新感覚アートブランドが提案する、美しい発色のグラフィックアイテム')
 
     def test_long_single_clause_name_is_kept(self):
         cand(self.d1, title='あ' * 52)
@@ -162,11 +164,11 @@ class PublishGate(unittest.TestCase):
         self.assertEqual(self.d1.one('SELECT name FROM sites WHERE id=?', (ps.site_id('alpha.example.jp'),))[0], 'あ' * 52)
 
     def test_llm_site_name_is_used_when_the_title_cannot_be_repaired(self):
-        cand(self.d1, title='ホーム｜新着情報｜お問い合わせ｜アクセス', site_name='あおぞら工房')
+        cand(self.d1, title='ホーム｜トップページ', site_name='あおぞら工房')
         res = self.run_stage()
         self.assertEqual(res['published'], 1)
         self.assertEqual(self.d1.one('SELECT name FROM sites WHERE id=?', (ps.site_id('alpha.example.jp'),))[0], 'あおぞら工房')
-        cand(self.d1, 'beta.example.jp', title='ホーム｜新着情報｜お問い合わせ｜アクセス', site_name='あ' * 41)       # an invalid LLM name is not used
+        cand(self.d1, 'beta.example.jp', title='ホーム｜トップページ', site_name='あ' * 41)       # an invalid LLM name is not used
         self.assertEqual(self.run_stage()['held_reasons'], {'gate:quality_name': 1})
 
     def test_unrepairable_name_is_held_never_cut(self):
@@ -284,7 +286,7 @@ class Requalify(unittest.TestCase):
         self.assertNotEqual(r['why'], 'quality:description')
 
     def test_name_that_cannot_be_repaired_gets_the_llm_name(self):
-        cand(self.d1, 'name.example.jp', title='ホーム｜新着情報｜お問い合わせ｜アクセス', text_head='あおぞら工房へようこそ。木の家具を作っています。')
+        cand(self.d1, 'name.example.jp', title='ホーム｜トップページ', text_head='あおぞら工房へようこそ。木の家具を作っています。')
         s = self.rq()
         self.assertEqual(s['requalified'], 1, self.logs)
         self.assertEqual(self.row('name.example.jp')['sn'], 'あおぞら工房')

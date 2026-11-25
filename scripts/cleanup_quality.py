@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """公開済みサイトの品質是正ツール(本番 D1 を直接読み書きする。Issue #273 第 2 段 / 既存データの是正)。
 
-  uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply]    サイト名(sites.name)
+  uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute] [--llm-fallback]    サイト名(sites.name / name_ja / name_en)
   uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply]    説明文(sites.description_ja)の文体
 
-規則は scripts/enrich/quality.py(判定・掲載と同じ 1 か所)。ローカルに状態・ファイル・ログを作らない(出力は標準出力だけ)。
+規則は scripts/enrich/quality.py(判定・掲載と同じ 1 か所)。names は quality.derive_name(title の節を選ばず、定型の節と重複だけ外して順に 60 字まで。LLM を通らない)。
+LLM は --llm-fallback を付けたときだけ、規則で決まらない行に使う。ローカルに状態・ファイル・ログを作らない(出力は標準出力だけ)。
 対象は毎回 D1 から SQL で導き直す(直った行は規則を通るので次回は選ばれない = 冪等。どの PC から再開してもよい)。
 LLM に回して直せなかった行(needs_human)は D1 discovery_cursors(source='cleanup-skip', cursor_key='<kind>:<site_id>', 値は理由と日付。サイトの
 データではない)に印を付け、以後の走査で飛ばす(--retry-skipped で再び対象)。走査の位置も同じ表
@@ -188,9 +189,6 @@ def predicate_like(n):
 
 
 _DOMAIN_FORM = re.compile(r'[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+')
-_SPACED_SEP = re.compile(r'\s[・/\-–—:：]\s|[│┃｜|]')
-_LEAD_WORD = re.compile(r'^(?:top|home|ホーム|トップ|トップページ)(?:$|[\s│┃｜|:：\-])', re.I)
-_GENERIC_WORDS = re.compile(r'official\s+(?:dealer\s+)?(?:web\s*site|site|homepage)|dealer\s+site|web\s*site|website|homepage|オフィシャルサイト|公式サイト|公式ホームページ|ウェブサイト', re.I)
 
 
 def domain_like(n, host=''):
@@ -201,48 +199,26 @@ def domain_like(n, host=''):
     return bool(f) and (bool(_DOMAIN_FORM.fullmatch(f)) or f in (h, bare))
 
 
-def suspicious_name(name, title='', host=''):
-    """The CURRENT name looks wrong, so --recompute may try again (a name that does not match here is never touched): (a) a separator left in it or a
-    leading TOP / ホーム, (b) a phone number / postal code / URL / hours, (c) a page-kind word (Official Site, Dealer Site, Website, Homepage,
-    オフィシャルサイト), (d) a sentence / call / catch-phrase (〜なら, 〜をお探し, 〜専門), (e) a list of three or more ・ parts (symptoms, trades),
-    (f) a fragment (ends in a particle / 、), (g) an unclosed bracket, (h) the host name itself, (i) cut out of a ・ compound of the title."""
-    n = collapse(name)
-    if not n:
-        return True
-    f = unicodedata.normalize('NFKC', n).casefold()
-    if _SPACED_SEP.search(n) or _LEAD_WORD.match(f) or quality.contact_like(n) or _GENERIC_WORDS.search(f):
-        return True
-    if (predicate_like(n) or quality.pitch_like(n) or f.endswith(('なら', '専門', '、')) or 'をお探し' in n or quality.is_fragment(n)
-            or not quality.brackets_balanced(n) or domain_like(n, host) or len([x for x in n.split('・') if x.strip()]) >= 3):
-        return True
-    if name_needs_fix(n):
-        return True
-    t = collapse(title)
-    k = t.find(n) if t else -1
-    while k != -1:
-        if (k > 0 and t[k - 1] == '・') or (k + len(n) < len(t) and t[k + len(n)] == '・'):
-            return True
-        k = t.find(n, k + 1)
-    return False
+def derive_for(r):
+    """What the row's name should be by the plain rule (quality.derive_name; the SAME function the publish stage uses): {'name','name_ja','name_en'}
+    or None. Source = the ORIGINAL title (url_candidates.title for the site's progress key) when present, else the current name. Adult rows: the host
+    (as publish_stage.site_name). A result that is the host name itself (100s.jp) is no name here: None (the row stays and is listed)."""
+    cur, host = collapse(r['name']), host_of(r['url'])
+    if r.get('adult_content') == 1:
+        return {'name': host, 'name_ja': None, 'name_en': None} if host and name_ok(host) else None
+    title = collapse(r.get('title')) if r.get('title') and not js.placeholder_title(r['title']) else ''
+    d = quality.derive_name(title or cur, host)
+    return None if d is None or domain_like(d['name'], host) else d
 
 
-def deterministic_name(title, host):
-    """Only the certain simple forms are decided by rule (everything else goes to the LLM, with validation):
-    drop the generic clauses (トップページ / ホーム / TOP / 公式サイト / Official Dealer Site / a shared service's name / an error page); when exactly ONE
-    clause is left and it is a plain name (no page-kind suffix, no phone number / postal code, not a sentence / place line / description) it is the
-    name. None = not a simple form."""
-    t = collapse(title)
-    if not t or not quality.brackets_balanced(t) or quality.contact_like(t):
-        return None
-    shared = quality.shared_service_host(host)
-    keep = [c for c in quality.split_clauses(t) if not quality.generic_clause(c, shared)]
-    if len(keep) != 1:
-        return None
-    n = keep[0]
-    if (quality._strip_anchor_suffix(n)[1] or not name_ok(n) or len(n) > quality.NAME_MAX or quality.is_fragment(n) or predicate_like(n) or quality.pitch_like(n)
-            or quality.promo_hit(n) or quality.sentence_like(n) or n in quality.CORP_FORMS or domain_like(n, host)):
-        return None
-    return n
+def effective_ja_en(r, d):
+    """name_ja / name_en after the change: an existing non-empty value is NEVER overwritten; else the derived one (None = leave empty)."""
+    return (collapse(r.get('name_ja')) or d['name_ja'] or None, collapse(r.get('name_en')) or d['name_en'] or None)
+
+
+def would_change(r, d):
+    ja, en = effective_ja_en(r, d)
+    return d['name'] != collapse(r['name']) or ja != (collapse(r.get('name_ja')) or None) or en != (collapse(r.get('name_en')) or None)
 
 
 _SEP_CH = frozenset('｜|│┃/／–—―-:：,，、。.!！?？;；()（）[]【】「」『』<>＜＞"“”\'’ \t\n')
@@ -318,10 +294,6 @@ def scan(client, table_sql, keep, after, limit, beat=None):
             beat()
 
 
-RECOMPUTE_SQL = ("SELECT s.id AS id, s.name AS name, s.name_ja AS name_ja, s.name_en AS name_en, s.url AS url, s.adult_content AS adult_content, "
-                 "s.progress_key AS progress_key, c.identity_key AS identity_key, c.title AS title, c.site_name AS cand_site_name "
-                 "FROM sites s JOIN url_candidates c ON c.identity_key=s.progress_key WHERE s.id > ? AND c.title IS NOT NULL AND c.title<>'' "
-                 "AND s.name<>'' AND s.name<>c.title AND instr(c.title, s.name)>0 ORDER BY s.id LIMIT ?")
 NAMES_SQL = ("SELECT s.id AS id, s.name AS name, s.name_ja AS name_ja, s.name_en AS name_en, s.url AS url, s.adult_content AS adult_content, "
              "s.progress_key AS progress_key, c.identity_key AS identity_key, c.title AS title, c.site_name AS cand_site_name "
              "FROM sites s LEFT JOIN url_candidates c ON c.identity_key=s.progress_key WHERE s.id > ? ORDER BY s.id LIMIT ?")
@@ -360,8 +332,9 @@ def human(ctx, kind, sid, why):
 
 class Ctx:
     """Everything a planner needs: D1 client, asker, mode, stats, samples, and emit(chunk) which writes a chunk and verifies it."""
-    def __init__(self, client, asker, apply, st, samples, emit):
+    def __init__(self, client, asker, apply, st, samples, emit, llm_fallback=False):
         self.client, self.asker, self.apply, self.st, self.samples, self.emit = client, asker, apply, st, samples, emit
+        self.llm_fallback = llm_fallback
         self.buf = []
         self.sample_max = SAMPLES        # None = keep every before/after pair (names --recompute dry-run shows them all)
 
@@ -382,56 +355,46 @@ def sample(ctx, sid, old, new):
 
 
 def plan_names(ctx, rows, recompute=False):
-    """Plans and writes by chunks. recompute: rows already rewritten earlier (the stored name is a piece of the original title) are decided again with
-    the current rules and changed only when the result differs; no result = the stored name stays. A change = (id, stored old name, new name, extra statements to run first). In dry-run no LLM is called."""
+    """Plans and writes by chunks. Each row: derive_for (plain rule, no LLM) -> only when --llm-fallback and the rule gave nothing: the stored
+    site_name / the LLM (validated). A row with no result is left unchanged and listed as needs_human. A row whose result equals what it has is
+    untouched. A change = (id, stored old name, (name, name_ja, name_en), extra statements to run first). Dry-run calls no LLM."""
     st, client, asker, apply = ctx.st, ctx.client, ctx.asker, ctx.apply
+    label = 'names-recompute' if recompute else 'names'
     for r in rows:
         raw = r['name'] or ''
         cur, host = collapse(raw), host_of(r['url'])
         title = collapse(r['title']) if r.get('title') and not js.placeholder_title(r['title']) else cur
-        label = 'names-recompute' if recompute else 'names'
-        if r.get('name_ja') or r.get('name_en'):
-            st['has_name_ja_en'] += 1               # 画面は name_ja / name_en を優先する: この是正は name だけを書く(報告)
-        how, new = 'rule', None
-        if r.get('adult_content') == 1:             # publish_stage.site_name と同じ: 成人向けは title を使わずホスト名
-            new, how = (host if host and name_ok(host) else None), 'adult_host'
-        else:
-            new = deterministic_name(title, host)
+        how, d = ('adult_host' if r.get('adult_content') == 1 else 'rule'), derive_for(r)
+        if d is None and how == 'rule' and ctx.llm_fallback:
             stored = collapse(r.get('cand_site_name'))
-            if new is None and stored and not quality.check_name(stored) and not quality.is_fragment(stored) and not predicate_like(stored) \
+            if stored and not quality.check_name(stored) and not quality.is_fragment(stored) and not predicate_like(stored) \
                     and not quality.not_a_name_clause(stored, quality.shared_service_host(host)):
-                new, how = stored, 'stored'         # 判定段が支払い済みの site_name(publish_stage.site_name と同じ採用条件)
-        if new is None and how != 'adult_host':
-            if not apply:
+                d, how = {'name': stored, 'name_ja': None, 'name_en': None}, 'stored'      # 判定段が支払い済みの site_name
+            elif not apply:
                 st['would_llm'] += 1
                 st['est_cost_usd_max'] += judge.worst_case(CHEAP_MODEL, NAME_SYSTEM + json.dumps(NAME_SCHEMA),
                                                            name_user(title, cur, host, 'x' * SNIPPET_MAX), name_max_tokens())[0]
                 sample(ctx, r['id'], cur, '(LLM)')
                 continue
-            snip = snippet_of(client, r.get('identity_key'))
-            obj, problem = asker.ask(NAME_SYSTEM, NAME_SCHEMA, name_user(title, cur, host, snip), name_max_tokens(), 'cleanup-name')
-            if problem == STOP:
-                st['not_reached'] += len(rows) - rows.index(r)
-                st['stopped'] = asker.stop
-                ctx.flush()
-                return True
-            if obj is not None:
-                st['llm_calls'] += 1
-                new = llm_name_valid(obj.get('site_name'), [title, cur, snip], host)
-                how = 'llm'
-        if new is not None and how != 'adult_host' and domain_like(new, host):
-            new = None                              # the host name is not the site's name
-        if new is not None and new == cur:
-            st['same'] += 1                         # recompute: already what the current rules give
-            continue
-        if new is None:
-            if recompute:
-                st['undecided'] += 1                # the stored name stays
-                if apply:
-                    mark_skip(client, label, r['id'], 'undecided')
             else:
-                human(ctx, 'names', r['id'], 'no_name')
+                snip = snippet_of(client, r.get('identity_key'))
+                obj, problem = asker.ask(NAME_SYSTEM, NAME_SCHEMA, name_user(title, cur, host, snip), name_max_tokens(), 'cleanup-name')
+                if problem == STOP:
+                    st['not_reached'] += len(rows) - rows.index(r)
+                    st['stopped'] = asker.stop
+                    ctx.flush()
+                    return True
+                if obj is not None:
+                    st['llm_calls'] += 1
+                    n = llm_name_valid(obj.get('site_name'), [title, cur, snip], host)
+                    d, how = ({'name': n, 'name_ja': None, 'name_en': None} if n and not domain_like(n, host) else None), 'llm'
+        if d is None:
+            human(ctx, label, r['id'], 'no_name')
             continue
+        if not would_change(r, d):
+            st['same'] += 1                         # already what the rule gives
+            continue
+        ja, en = effective_ja_en(r, d)
         st['by_' + how] += 1
         pre = []
         if r.get('progress_key') and apply:        # 旧名は検索の手がかりとして url_candidates.title に残す(既存の title は上書きしない)
@@ -439,36 +402,39 @@ def plan_names(ctx, rows, recompute=False):
                 pre.append(("UPDATE url_candidates SET title=? WHERE identity_key=? AND (title IS NULL OR title='')", [cur, r['identity_key']]))
             else:
                 pre.append(("INSERT INTO url_candidates (identity_key,url,title) VALUES (?,?,?) ON CONFLICT DO NOTHING", [r['progress_key'], r['url'], cur]))
-        ctx.add((r['id'], raw, new, pre))
-        sample(ctx, r['id'], cur, new)
+        ctx.add((r['id'], raw, (d['name'], ja, en), pre))
+        sample(ctx, r['id'], cur, d['name'] + (f'   [ja={ja!r} en={en!r}]' if (ja or en) else ''))
     ctx.flush()
     return False
 
 
-UPDATE_NAME = 'UPDATE sites SET name=? WHERE id=? AND name=? RETURNING id'
+# name_ja / name_en: an existing non-empty value is never overwritten (the same condition is in the statement, not only in the planner)
+UPDATE_NAME = ("UPDATE sites SET name=?, name_ja=CASE WHEN COALESCE(name_ja,'')='' THEN ? ELSE name_ja END, "
+               "name_en=CASE WHEN COALESCE(name_en,'')='' THEN ? ELSE name_en END WHERE id=? AND name=? RETURNING id")
 UPDATE_DESC = 'UPDATE sites SET description_ja=? WHERE id=? AND description_ja=? RETURNING id'
 
 
 def write_and_verify(client, column, changes, st, beat):
     """One batch for a chunk: [extra statements,] UPDATE ... WHERE id=? AND <column>=<the stored value as read> RETURNING id (a row changed
     meanwhile matches nothing and is skipped); then every matched row is read back. -> number of matched rows not holding the new value."""
-    sql = UPDATE_NAME if column == 'name' else UPDATE_DESC
+    sql = UPDATE_NAME if column == 'name' else UPDATE_DESC     # for names `new` is (name, name_ja, name_en)
     beat()
     stmts, idx = [], []
     for sid, old, new, pre in changes:
         stmts.extend(pre)
         idx.append(len(stmts))
-        stmts.append((sql, [new, sid, old]))
+        stmts.append((sql, [*new, sid, old]) if column == 'name' else (sql, [new, sid, old]))
     res = client.batch(stmts)
     matched = [c for c, k in zip(changes, idx) if res[k]]
     st['skipped_changed'] += len(changes) - len(matched)      # 読んだ後で他の書き込みが変えた行。書かない
     bad = 0
     for j in range(0, len(matched), READ_CHUNK):
         sub = matched[j:j + READ_CHUNK]
-        got = {r['id']: r['v'] for r in client.query(
-            f"SELECT id, {column} AS v FROM sites WHERE id IN ({','.join('?' * len(sub))})", [c[0] for c in sub])}
+        cols = 'name, name_ja, name_en' if column == 'name' else column
+        got = {r['id']: ((collapse(r['name']), collapse(r['name_ja']), collapse(r['name_en'])) if column == 'name' else r[column])
+               for r in client.query(f"SELECT id, {cols} FROM sites WHERE id IN ({','.join('?' * len(sub))})", [c[0] for c in sub])}
         for sid, _old, new, _pre in sub:
-            if got.get(sid) == new:
+            if got.get(sid) == ((new[0], new[1] or '', new[2] or '') if column == 'name' else new):
                 st['updated'] += 1
             else:
                 bad += 1
@@ -629,12 +595,26 @@ def plan_descriptions(ctx, rows):
 
 
 # -------------------------------------------------------------------------------------------------------------- run
-def keep_recompute(r):
-    return suspicious_name(r['name'], r.get('title'), host_of(r['url']))
+def changes_name(r):
+    """The plain rule gives this row something different from what it has (or nothing at all: needs_human). Used by both selections."""
+    d = derive_for(r)
+    return d is None or would_change(r, d)
 
 
 def keep_names(r):
-    return name_needs_fix(r['name'] or '')
+    """(a) the stored name still fails the length / quality check and the rule would change it (or has no answer)."""
+    return name_needs_fix(r['name'] or '') and changes_name(r)
+
+
+def keep_recompute(r):
+    """(a) plus (b) rows an earlier run rewrote: the original title is known, and the stored name is a strict substring of it, or differs from
+    what the rule gives while being shorter than the title."""
+    if keep_names(r):
+        return True
+    t, n = collapse(r.get('title')), collapse(r['name'])
+    if not t or not n or n == t or js.placeholder_title(t):
+        return False
+    return (n in t or len(n) < len(t)) and changes_name(r)
 
 
 def keep_descriptions(r):
@@ -643,7 +623,7 @@ def keep_descriptions(r):
 
 KINDS = {
     'names': dict(sql=NAMES_SQL, column='name', keep=keep_names, plan=plan_names),
-    'names-recompute': dict(sql=RECOMPUTE_SQL, column='name', keep=keep_recompute, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
+    'names-recompute': dict(sql=NAMES_SQL, column='name', keep=keep_recompute, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
     'descriptions': dict(sql=DESC_SQL, column='description_ja', keep=keep_descriptions, plan=plan_descriptions),
 }
 
@@ -660,12 +640,13 @@ def set_cursor(client, kind, value):
 
 def new_stats(apply):
     return {'mode': 'apply' if apply else 'dry-run', 'scanned': 0, 'selected': 0, 'by_rule': 0, 'by_adult_host': 0, 'by_stored': 0, 'by_llm': 0,
-            'would_llm': 0, 'llm_calls': 0, 'needs_human': 0, 'skip_listed': 0, 'long_name_kept': 0, 'updated': 0, 'skipped_changed': 0,
-            'verify_mismatch': 0, 'not_reached': 0, 'same': 0, 'undecided': 0, 'has_name_ja_en': 0, 'est_cost_usd_max': 0.0, 'cost_usd': 0.0, 'stopped': None,
+            'would_llm': 0, 'llm_calls': 0, 'needs_human': 0, 'skip_listed': 0, 'updated': 0, 'skipped_changed': 0,
+            'verify_mismatch': 0, 'not_reached': 0, 'same': 0, 'est_cost_usd_max': 0.0, 'cost_usd': 0.0, 'stopped': None,
             'needs_human_ids': [], 'verify_mismatch_ids': []}
 
 
-def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_month, hb, run_id, retry_skipped=False, allow_no_bookmark=False):
+def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_month, hb, run_id, retry_skipped=False, allow_no_bookmark=False,
+              llm_fallback=False):
     """One run of `names` / `descriptions`. -> (exit code, stats)."""
     spec = KINDS[kind]
     st, samples, code = new_stats(apply), [], 0
@@ -696,16 +677,6 @@ def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_mo
             return False
         return True
 
-    def observe(r):
-        if kind == 'names':
-            n = collapse(r['name'])
-            if len(n) > quality.NAME_MAX and name_ok(n):
-                st['long_name_kept'] += 1          # 41〜80 字の 1 節の正式名称: 触らない
-
-    def keep_observe(r):
-        observe(r)
-        return keep(r)
-
     def emit(chunk):
         nonlocal code
         for sid, old, new, _pre in chunk:
@@ -718,9 +689,9 @@ def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_mo
 
     after = '' if restart else get_cursor(client, kind)
     out(f'cleanup {kind}: {st["mode"]}, limit={limit}, cursor={after!r}, model={CHEAP_MODEL}, month spend ${eo.month_spent(client):.4f} (cap ${budget_month:.2f})')
-    rows, end, st['scanned'] = scan(client, spec['sql'], keep_observe, after, limit, beat)
+    rows, end, st['scanned'] = scan(client, spec['sql'], keep, after, limit, beat)
     st['selected'] = len(rows)
-    ctx = Ctx(client, asker, apply, st, samples, emit if apply else (lambda chunk: None))
+    ctx = Ctx(client, asker, apply, st, samples, emit if apply else (lambda chunk: None), llm_fallback)
     if kind == 'names-recompute' and not apply:
         ctx.sample_max = None
     stopped = False
@@ -761,7 +732,7 @@ def report(kind, st, samples, apply, out):
 
 
 def run(client, kind, *, limit=DEFAULT_LIMIT, apply=False, restart=False, out=print, llm=None, lease=None, budget_month=js.MONTHLY_CAP_USD,
-        clock=time.monotonic, retry_skipped=False, allow_no_bookmark=False):
+        clock=time.monotonic, retry_skipped=False, allow_no_bookmark=False, llm_fallback=False):
     """-> (exit code, stats | None). Tests inject llm / lease / clock."""
     if not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f'limit は 1〜{MAX_LIMIT}')
@@ -773,7 +744,8 @@ def run(client, kind, *, limit=DEFAULT_LIMIT, apply=False, restart=False, out=pr
     try:
         hb = eo.Heartbeat(lease, clock) if apply else None
         code, st = clean_one(client, kind, limit=limit, apply=apply, restart=restart, out=out, llm=llm, lease=lease, budget_month=budget_month,
-                             hb=hb, run_id='cleanup-' + uuid.uuid4().hex[:12], retry_skipped=retry_skipped, allow_no_bookmark=allow_no_bookmark)
+                             hb=hb, run_id='cleanup-' + uuid.uuid4().hex[:12], retry_skipped=retry_skipped, allow_no_bookmark=allow_no_bookmark,
+                             llm_fallback=llm_fallback)
     except do.LeaseLost as e:
         out(f'lease lost: {e}')
         code = do.LEASE_LOST_EXIT
@@ -798,7 +770,8 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--limit', type=int, default=DEFAULT_LIMIT, help=f'1 回に直す行数(既定 {DEFAULT_LIMIT}、最大 {MAX_LIMIT})')
     ap.add_argument('--budget-month', type=float, default=js.MONTHLY_CAP_USD, help='月の LLM 費用の上限(USD)')
     ap.add_argument('--restart', action='store_true', help='走査の位置を無視して先頭から(--apply なら位置も先頭に戻す)')
-    ap.add_argument('--recompute', action='store_true', help='names のみ: 書き換え済みの行(今の名前が元の title の一部)を今の規則で決め直し、結果が違う行だけ直す')
+    ap.add_argument('--recompute', action='store_true', help='names のみ: 書き換え済みの行(今の名前が元の title の一部・規則の結果より短い)も含めて今の規則で決め直し、結果が違う行だけ直す')
+    ap.add_argument('--llm-fallback', action='store_true', help='names のみ: 規則で決まらず needs_human になる行だけ、LLM(検証つき)に回す。既定はオフ(LLM を呼ばない)')
     ap.add_argument('--retry-skipped', action='store_true', help='needs_human として印を付けた行(source=cleanup-skip)も再び対象にする')
     ap.add_argument('--allow-no-bookmark', action='store_true', help='Time Travel の bookmark が取れなくても --apply を続ける(既定は中止)')
     mode = ap.add_mutually_exclusive_group()
@@ -810,10 +783,10 @@ def main(argv=None, *, client=None, **inject):
     if client is None:
         import media_online
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
-    if a.recompute and a.kind != 'names':
-        ap.error('--recompute は names だけ')
+    if (a.recompute or a.llm_fallback) and a.kind != 'names':
+        ap.error('--recompute / --llm-fallback は names だけ')
     code, _ = run(client, 'names-recompute' if a.recompute else a.kind, limit=a.limit, apply=a.apply, restart=a.restart, budget_month=a.budget_month,
-                  retry_skipped=a.retry_skipped, allow_no_bookmark=a.allow_no_bookmark, **inject)
+                  retry_skipped=a.retry_skipped, allow_no_bookmark=a.allow_no_bookmark, llm_fallback=a.llm_fallback, **inject)
     return code
 
 

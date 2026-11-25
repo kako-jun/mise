@@ -14,6 +14,7 @@ import unicodedata
 NAME_MAX = 40                # a site's own name, in characters
 NAME_SUBTITLE_MAX = 12       # with exactly two clauses the shorter one (the subtitle) may be at most this long ...
 NAME_LONG_MAX = 80           # a SINGLE-clause title (a long formal name) up to this length is kept as it is (name_acceptable_long)
+NAME_SOFT_MAX = 60           # a derived name (derive_name): as many whole segments as fit in this many characters (the first segment always stays)
 NAME_PAIR_MAX = 24           # ... and the longer one at most this long, and neither may read as a sentence
 TAG_JA_MAX = 20
 TAG_EN_MAX = 40
@@ -188,67 +189,6 @@ def is_fragment(s):
     return last in _EN_FUNCTION_WORDS or t.count("(") != t.count(")") or t.count("（") != t.count("）")
 
 
-def _strip_site_type(s):
-    """Removes a trailing site-type word. '' when the whole clause was only that word OR what is left is a fragment (山田太郎の|ホームページ)."""
-    s = s.strip()
-    for w in sorted(SITE_TYPE, key=len, reverse=True):
-        m = re.search(r"[\s\-–—|｜/・:：]*" + re.escape(w) + r"\s*$", s, re.I)
-        if m:
-            rest = s[:m.start()].strip(" -–—|｜/・:：")
-            return "" if (not rest or is_fragment(rest)) else rest
-    return s
-
-
-def _corp_form(s):
-    return next((w for w in CORP_FORMS if s.startswith(w) or s.endswith(w)), None)
-
-
-def _strip_corp(s):
-    for w in CORP_FORMS:
-        if s.startswith(w) and len(s) > len(w):
-            return s[len(w):].lstrip(" 　")
-        if s.endswith(w) and len(s) > len(w):
-            return s[:-len(w)].rstrip(" 　")
-    return s
-
-
-GENERIC_LABELS = frozenset("""www web site home info mail store shop cart member members app apps cloud blog news online page pages net com org
-    portal service services official top main index html blogs wiki forum bbs""".split())
-_SLD = frozenset(["co", "or", "ne", "ac", "go", "ed", "lg", "gr", "ad", "com", "net", "org", "gov", "edu"])
-
-
-def registrable_label(host):
-    """The label of the registrable domain (blog.example.co.jp -> example; shop.foo.jp -> foo). Simple public-suffix rule: a two-letter ccTLD
-    with a second-level word (co / or / ne ...) takes the label before them."""
-    labels = [x for x in (host or "").lower().strip(".").split(".") if x]
-    if len(labels) < 2:
-        return labels[0] if labels else ""
-    if len(labels[-1]) == 2 and len(labels) >= 3 and labels[-2] in _SLD:
-        return labels[-3]
-    return labels[-2]
-
-
-def _brand_tokens(host):
-    """Tokens of the registrable domain label only (never a subdomain word such as blog / shop / news), without generic words."""
-    return [t for t in re.split(r"[-_]", registrable_label(host)) if len(t) >= 3 and t not in GENERIC_LABELS]
-
-
-def _has_token(text, tok):
-    """Whole-word match (art does not match Smart)."""
-    return re.search(r"(?<![a-z0-9])" + re.escape(tok) + r"(?![a-z0-9])", text) is not None
-
-
-def _shorten(s):
-    """> NAME_MAX: only at a clause boundary (a trailing bracket group, or the first sentence stop). Never in the middle of a word / phrase."""
-    if len(s) <= NAME_MAX:
-        return s
-    for pat in (r"\s*[（(][^）)]*[）)]\s*$", r"。.*$"):
-        t = re.sub(pat, "", s).strip()
-        if t and t != s and len(t) <= NAME_MAX and not is_fragment(t):
-            return t
-    return None
-
-
 def name_acceptable_long(title):
     """A single-clause title (a long formal name) up to NAME_LONG_MAX characters, no promo phrase, not a sentence: kept as the name."""
     t = collapse(title)
@@ -263,9 +203,6 @@ def name_acceptable_long(title):
 # A suffix that names the kind of page; with it, the clause in front is the owner's name (the suffix is cut off).
 ANCHOR_SUFFIX = SITE_TYPE + ("ウェブサイト", "webサイト", "web site", "website", "公式通販サイト", "公式オンラインショップ", "公式オンラインストア", "公式通販", "オンラインショップ", "オンラインストア", "通販サイト",
                              "公式ブログ", "official online shop", "official online store", "official shop")
-# Words that end an organisation's / a facility's name.
-ORG_END = ("協会", "学会", "大学", "大学院", "学園", "学院", "学校", "高校", "高等学校", "中学校", "小学校", "幼稚園", "保育園", "病院", "医院", "クリニック", "神社",
-           "寺", "院", "教会", "組合", "財団", "研究所", "研究会", "センター", "美術館", "博物館", "図書館", "ホテル", "旅館", "商店街", "市役所", "役場", "協議会")
 # A clause that is a location line, a product / service description or a catch-phrase: never a name candidate.
 _PITCH = tuple(re.compile(p) for p in (
     r"(鎮座|所在|所在地|にあります|にあるお店|にある)$", r"(都|道|府|県|市|区|町|村)[^\s、。]{0,8}(にある|にあります|鎮座|に所在)",                                       # 新潟県加茂市鎮座 / 駅前にあります
@@ -278,11 +215,6 @@ def pitch_like(clause):
     """A clause that describes a place, a product or a service, or is a catch-phrase (〜ならXX・〜を改善する・〇〇県〇〇市鎮座), not a name."""
     t = collapse(clause)
     return bool(t) and any(p.search(t) for p in _PITCH)
-
-
-def org_name(clause):
-    t = collapse(clause).rstrip("）)」』】 ")
-    return bool(_corp_form(t)) or t.endswith(ORG_END)
 
 
 def _strip_anchor_suffix(s):
@@ -317,73 +249,167 @@ def generic_clause(clause, shared=False):
     return had and not rest
 
 
-def suggest_name(title, host=""):
-    """The site's own name out of a <title>, or None (the LLM / a human must supply one). Deterministic. It only picks a whole clause:
-    a corporate-form clause (one only), else the clause that matches the host's brand, else the single clause left; with several clauses
-    left and no such sign it returns None rather than guess. Never cuts inside a clause; a result that is a fragment is refused."""
-    t = collapse(title)
-    if not t:
+# ---- derive_name: the plain, standard way to get a name out of a <title> (owner direction 2026-11-25, #273 / #167) ----------------------
+# NO choosing between segments. Split the title into segments, drop the boilerplate ones, drop repeats, keep the rest IN ORDER as far as
+# NAME_SOFT_MAX allows (cut only between segments). Never reorders, rewrites, translates or adds a word. Deterministic, no LLM, no I/O.
+_DASHES = "–—―\\-−:：·"
+_SEG_SPLIT = re.compile(r"\s*[｜│┃|／/]\s*|\s+[" + _DASHES + r"]\s+")
+_D = "0-9０-９"
+_DASH_IN_NUM = "-－‐‑−"
+# a phone / fax number, a postal code, a URL, opening hours: never a part of a name (removed from inside a segment; a segment with nothing else is dropped)
+_NOISE = re.compile(
+    r"(?:(?:tel|fax|ＴＥＬ|ＦＡＸ|電話|ＴＥＬ)\s*[:：.]?\s*)?[(（]?0[" + _D + r"]{1,4}[)）]?[" + _DASH_IN_NUM + r"][" + _D + r"]{1,4}[" + _DASH_IN_NUM + r"][" + _D + r"]{3,4}"
+    r"|〒?\s*[" + _D + r"]{3}[" + _DASH_IN_NUM + r"][" + _D + r"]{4}"
+    r"|(?:営業時間|受付時間|OPEN|Open)?\s*[:：]?\s*[" + _D + r"]{1,2}[:：][" + _D + r"]{2}\s*[-〜~～－–]\s*[" + _D + r"]{1,2}[:：][" + _D + r"]{2}"
+    r"|https?://\S+|\bwww\.\S+", re.I)
+# 【公式】 [Official] ... : a label decoration; the label goes, the rest stays
+_LABEL = re.compile(r"[【\[［]\s*(?:公式サイト|公式ホームページ|公式通販|公式|オフィシャルサイト|オフィシャル|official(?:\s+(?:site|website))?)\s*[】\]］]", re.I)
+_BOILER_EXACT = frozenset([
+    "トップページ", "トップ", "ホーム", "ホームページ", "top", "home", "top page", "home page", "homepage", "welcome", "ようこそ", "index", "メニュー",
+    "公式サイト", "公式ホームページ", "公式ウェブサイト", "公式webサイト", "公式hp", "公式", "オフィシャルサイト", "オフィシャルホームページ", "オフィシャル",
+    "ウェブサイト", "webサイト", "website", "web site", "official", "official site", "official website", "official web site", "official homepage",
+    "official home page", "dealer site", "official dealer site"])
+_ERROR_PAGE = re.compile(
+    r"(?:page )?not found|404(?: not found| error)?|403(?: forbidden)?|500(?: internal server error)?|forbidden|error|access denied|it works|"
+    r"index of\b.*|welcome to nginx|apache2? .*default page|under construction|untitled(?: document)?|no title|無題|エラー|エラーページ|"
+    r"ページが見つかりません|見つかりません|ようこそ.*へ")
+
+
+def _fold_seg(s):
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", s or "")).casefold().strip()
+
+
+def boilerplate_segment(seg, shared=False):
+    """WHOLE-segment test only ('404 Gallery', 'Home Sweet Home Bakery' and 'Jeep Official Dealer Site' are not boilerplate): a page-kind word
+    (トップページ・ホーム・TOP・公式サイト・ウェブサイト・Official Site ...), an error / default page, or (on a shared host) a service's own name."""
+    f = _fold_seg(seg).strip(" .!-_|:/・")
+    return (not f or f in _BOILER_EXACT or bool(_ERROR_PAGE.fullmatch(f)) or (shared and service_name_clause(seg)))
+
+
+# Page-kind phrases hanging on the edge of a segment (S2): removed, the name in front / behind stays. Whole words only (ASCII ones are not
+# cut out of a longer word); only at the END or the START of the segment, never from the middle of a name. 公式サイト is removed only when it
+# FOLLOWS a name (a segment that is only 公式サイト is boilerplate anyway).
+_EDGE_TAIL = re.compile(r"(?:へようこそ|ようこそ|トップページ|(?<![A-Za-z0-9])(?:top\s*ページ|top\s*page|official\s+web\s*site|untitled\s+document)|"
+                        r"オフィシャルサイト|公式サイト|無題ドキュメント)(?P<punct>[\s!！?？。．.、…]*)$", re.I)
+_EDGE_HEAD = re.compile(r"^(?:トップページ|top\s*ページ|top\s*page|無題ドキュメント|untitled\s+document)(?=\s|$)\s*", re.I)   # at the start only as a separate word
+_EDGE_DASH_TAIL = re.compile(r"(?:^|\s)[" + _DASHES + r"]+\s*$")
+_EDGE_DASH_HEAD = re.compile(r"^\s*[" + _DASHES + r"]+(?:\s|$)")
+
+
+def _strip_edges(piece):
+    """The phrases of _EDGE_TAIL / _EDGE_HEAD off the ends of one segment, repeatedly (a name must remain: '' when nothing does)."""
+    prev = None
+    while prev != piece:
+        prev = piece
+        m = _EDGE_TAIL.search(piece)
+        # a tail phrase with punctuation after it (ようこそ！) goes too, but only when something is left in front of it
+        cut = piece[:m.start()] if m and (m.group("punct").strip() == "" or piece[:m.start()].strip()) else piece
+        piece = collapse(_EDGE_HEAD.sub("", cut))
+    return piece
+
+
+def _tidy_sep(raw):
+    """The separator as the title wrote it; a bar with a space on one side only ('X ｜Y', left over from a removed 【公式】) -> no spaces."""
+    if not raw.strip():
+        return " | "
+    return raw.strip() if raw[0].isspace() != raw[-1].isspace() else raw
+
+
+def split_segments(title):
+    """-> [(segment, separator in front of it)]: the segments of the title (noise removed, label decorations stripped, edge page-kind phrases
+    removed, empty ones dropped); the separator is the text the title itself used there ('' for the first, ' | ' when a joined-up gap has none).
+    Full-width / vertical bars and slashes always split (spaces or not); a dash / colon / middle dot only with spaces around it
+    (アシザワ・ファインテック, 20th-Century stay whole); a bare dash at either end of the title is dropped."""
+    t = collapse(_LABEL.sub("", _NOISE.sub("", collapse(title))))
+    t = collapse(_EDGE_DASH_HEAD.sub("", _EDGE_DASH_TAIL.sub("", t)))
+    out, pos, sep = [], 0, ""
+    for m in list(_SEG_SPLIT.finditer(t)) + [None]:
+        piece = _strip_edges(collapse(t[pos:m.start()] if m else t[pos:]))
+        if piece:
+            out.append((piece, sep if out else ""))
+            sep = _tidy_sep(m.group(0)) if m else ""
+        elif m and not sep:                      # a gap with nothing in it (a removed phone number ...): the first separator of the run stands
+            sep = _tidy_sep(m.group(0))
+        pos = m.end() if m else pos
+    return out
+
+
+def _kind(seg):
+    """'ja' (kana / kanji), 'en' (Latin letters only), or '' (digits / symbols only)."""
+    if has_japanese(seg):
+        return "ja"
+    return "en" if re.search(r"[A-Za-z]", unicodedata.normalize("NFKC", seg)) else ""
+
+
+def _cut_long(seg):
+    """> NAME_LONG_MAX: cut at the last clause punctuation (、。）」) or space before the limit. None when there is none."""
+    head = seg[:NAME_LONG_MAX]
+    cut = max(head.rfind(c) for c in "、。）」 ")
+    if cut <= 0:
         return None
-    if not brackets_balanced(t):      # a bracket left open / closed without an opening: the title is broken, its clauses cannot be trusted
-        return None
+    out = head[:cut + 1].rstrip(" 、")
+    return out if out else None
+
+
+def derive_name(title, host=""):
+    """-> {'name', 'name_ja', 'name_en'} or None (nothing usable: the row is left alone and listed as needs_human).
+    Segments (split_segments) -> drop boilerplate (boilerplate_segment) -> drop repeats (NFKC + casefold) -> keep in order, each kept segment
+    joined with the separator the title had in front of it, as many as fit in NAME_SOFT_MAX (cut only at a segment boundary; the first
+    segment that does not fit ends the list); the first one always stays whole when it is at most NAME_LONG_MAX, else it is cut at the last
+    、。）」 or space (none -> None). name_ja / name_en are set only when exactly ONE Japanese and ONE Latin-only segment remain and both read as short names
+    (_short_ja_name / _short_en_name: 'brand + tag line' is not a translation pair; each = its segment
+    joined); otherwise they are None. Digit-only segments belong to neither."""
     shared = shared_service_host(host)
-    clauses = split_clauses(t)
-    if not check_name(t):
-        if len(clauses) > 1:
-            rest = [c for c in (_strip_site_type(c) for c in clauses) if c and c.casefold() not in _SITE_TYPE_ONLY and not not_a_name_clause(c, shared)]
-            if len(rest) == 1:
-                return rest[0] if not check_name(rest[0]) else None
-            return t if len(rest) == len(clauses) else None
-        clean = _strip_site_type(t)
-        return clean if clean and not check_name(clean) and not not_a_name_clause(clean, shared) else None
-    cands, suffixed = [], set()
-    for c in clauses:
-        c, had = _strip_anchor_suffix(c)
-        if not c or c.casefold() in _SITE_TYPE_ONLY or promo_hit(c) or sentence_like(c) or is_fragment(c) or not_a_name_clause(c, shared) or pitch_like(c):
+    seen, keep = set(), []
+    for s, sep in split_segments(title):
+        k = re.sub(r"\s+", "", _fold_seg(s))
+        if boilerplate_segment(s, shared) or k in seen:
             continue
-        if c in CORP_FORMS:        # a corporate form alone is not a name
-            continue
-        if had and "・" in c and re.search(r"の\s", c):     # 安産祈願・厄除けの 明星寺: a list of wishes in front of the name
-            continue
-        cands.append(c)
-        if had:
-            suffixed.add(c)
-    if not cands:
+        seen.add(k)
+        keep.append((s, sep or " | "))
+    if not keep:
         return None
-    toks = [] if shared else _brand_tokens(host)     # a shared service's own label says nothing about this site
-    folded = lambda c: unicodedata.normalize("NFKC", c).casefold()
-    corp = [c for c in cands if _corp_form(c)]
-    brand = [c for c in cands if any(_has_token(folded(c), tk) for tk in toks)]
-    if len(brand) == 1:
-        pick = brand[0]
-    elif len(brand) > 1:
-        return None
-    elif len(corp) == 1:
-        pick = corp[0]
-    elif len(cands) == 1:
-        pick = cands[0]
-    else:
-        # several clauses, no brand / corporate sign: only a clause with an anchor may be the name (the page-kind suffix first, then an
-        # organisation word); two clauses with the same kind of anchor, or none -> None (the LLM, with validation, decides)
-        pick = None
-        for group in ([c for c in cands if c in suffixed], [c for c in cands if org_name(c)]):
-            if len(group) == 1:
-                pick = group[0]
-                break
-            if len(group) > 1:
-                return None
-        if pick is None:
+    first = keep[0][0]
+    if len(first) > NAME_LONG_MAX:
+        first = _cut_long(first)
+        if first is None:
             return None
-    # the corporate form is part of the formal name: dropped only when the name would not fit in NAME_MAX otherwise (S9)
-    if len(pick) > NAME_MAX and _strip_corp(pick) != pick:
-        pick = _strip_corp(pick)
-    pick = _shorten(pick)
-    if pick is None or check_name(pick) or is_fragment(pick) or pick in CORP_FORMS:
-        return None
-    return pick
+        keep = [(first, "")]
+    kept, total = [(first, "")], len(first)
+    for s, sep in keep[1:]:
+        if total + len(sep) + len(s) > NAME_SOFT_MAX:
+            break
+        kept.append((s, sep))
+        total += len(sep) + len(s)
+
+    def join(items):
+        return "".join((sep if i else "") + s for i, (s, sep) in enumerate(items))
+    ja = [(s, sep) for s, sep in kept if _kind(s) == "ja"]
+    en = [(s, sep) for s, sep in kept if _kind(s) == "en"]
+    both = len(ja) == 1 and len(en) == 1 and _short_ja_name(ja[0][0]) and _short_en_name(en[0][0])
+    return {"name": join(kept), "name_ja": join(ja) if both else None, "name_en": join(en) if both else None}
 
 
-# ---------------------------------------------------------------------------------------------------------- description style
+_CATCH_MARK = re.compile(r"[、。！？!?「」『』〜~…・]|なら|を|販売|購入|予約|情報|サイト|通販|サービス|ポータル|サポート|ご案内")
+
+
+def _short_ja_name(seg):
+    """A Japanese segment that reads as a NAME (not a catch-phrase): at most 18 characters, no punctuation / quote / ellipsis / ・, no 〜なら / 〜を, no describing word (販売 購入 予約 情報 サイト 通販 サービス ポータル サポート ご案内),
+    and no Latin brand inside (a segment like 'ファンクラブをつくるならBitfan' is the tag line)."""
+    return len(seg) <= 18 and not _CATCH_MARK.search(seg) and not re.search(r"[A-Za-z]", unicodedata.normalize("NFKC", seg))
+
+
+def _short_en_name(seg):
+    """A Latin segment that reads as a name: at most 50 characters and not a sentence (a long phrase ending in . ! ?)."""
+    return len(seg) <= 50 and not (re.search(r"[.!?]$", seg) and len(seg.split()) >= 5)
+
+
+def suggest_name(title, host=""):
+    """The site's name out of a <title> (derive_name's 'name'), or None."""
+    d = derive_name(title, host)
+    return d["name"] if d else None
+
+
 _PLAIN_END = re.compile(
     r"(であった|だった|である|でいる|でいた|ている|ていた|ておる|いる|ある|する|される|された|した|れる|れた|った|んだ|いた|えた|けた|めた|"
     r"できる|ならない|ない|なる|いく|くる|たい|だ)$")
