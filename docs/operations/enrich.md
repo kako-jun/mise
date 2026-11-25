@@ -143,8 +143,11 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 - **タグの同義語**: `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`。variants は `|` 区切り）。読み込み（`quality.load_synonyms`）が全行を検証し（日本語の正準名・日本語を含まない英語名・variants あり・同じ語が複数の正準に属さない）、`tests/test_quality.py` が実ファイルを検査する。語を足すときは 1 行足してテストを通す。
 - **タグの方針（再利用・#273）**: タグは**増やさず使い回す**。LLM のタグが検証（上の規則）を通ったあと、**決定的な正規化**（`quality.canonical_tag`。LLM を追加で呼ばない・指示文に語彙を貼らない）で**既存のタグ**に寄せる。タグは日本語（`label_ja`）と英語（`label_en`）の**両方を持つ**（英語だけは不可）。
   - **語彙**: `site_tags` の `GROUP BY label_ja, label_en`（使用数つき）の上位 3000 件（`quality.VOCAB_TOP_N`）。実行（段）ごとに集計 SQL を **1 回**だけ発行し、500 サイトごとに読み直す（行ごとの問い合わせは無い）。読めない／有効なタグが 50 件未満（空の表）のときは寄せずそのまま通す。答えになれるのは `check_tags` を通る既存タグだけ（`label_ja` が英語の旧タグは答えにならない）。
-  - **一致の順**: (a) 英語ラベルの正規キー（NFKC・大小・ハイフン／空白／下線の除去・冠詞 a/an/the の除去・単複 -ies/-es/-s）、(b) 日本語ラベルのキー（全角半角・カタカナ→ひらがな・末尾の長音「ー」（3 字以上）と末尾の「の」（3 字以上）。「用」は意味が変わる（子供用 ≠ 子供）ので畳まない）、(c) `data/tag-synonyms.csv`（両方向。同義の既存タグのうち最多、無ければ表の正準タグ）、(d) 保守的な曖昧一致: 語順違い（`alumni association` = `association alumni`）、6 字以上の語 1 つだけの綴り違い（距離 1・隣り合う入れ替えを含む。先頭 3 字が同じ・別の語形（manager / managed）でない・その語が既存タグに 3 回以上出る＝実在の語なら直さない）。同点は使用数の多い方 → 短い `label_en` → 辞書順。
-  - **やらない結合**: 否定・修飾の語が違うもの（`non-profit` と `profit`、`inactive` と `active`）、`children` と `childcare`、略語・固有名詞（`latin_token_ok`・`data/tag-proper-nouns.csv`）は**完全一致のみ**（表は可）、日本語と英語が別の既存タグを指すとき、1 つの英語ラベルに無関係な日本語ラベルが並ぶ語（bank = 銀行 / 土手）は 1 つが 6 割以上を占めるときだけ。
+  - **方針は「間違って統合するより、統合しない」**。一致の条件（`TagVocab.find`）:
+    - **日本語ラベルを持つタグ**は、日本語ラベルが同じ（正規キーが同じ、または同義語表の同じ組）で、かつ英語ラベルが**語形違い**（単複・大小・ハイフン・冠詞 = 同じ正規キー）か、**語を共有し、一方が他方を含まない**ときだけ寄せる。日本語は同じで英語の意味が違うもの（認証 / authentication と certification、ゲーム / game と game development、舞台 / stage と stage musical、登山 / mountaineering と hiking）は別のタグのまま。英語ラベルが同じでも日本語ラベルが違うもの（設計 / デザイン、世界遺産 / 世界文化遺産）も寄せない。同義語表に載る組だけは寄せる（同義の既存タグのうち最多、無ければ表の正準タグ。英語ラベルだけで表に引かれることはない）。
+    - **`label_ja` が英語のまま**（変換前）のタグは、同じ英語ラベル（正規キー）の日本語タグへ、1 つの意味が 6 割以上を占めるときだけ寄せる（bank = 銀行 / 土手 は寄せない）。
+    - **綴り（距離 1・隣り合う入れ替えを含む）と語順の入れ替えは、`label_ja` も英語のままの組どうしだけ**（`tags --merge` の `find_foreign`。musci → music、educaton → education、alumni association = association alumni）。5 字以上の語 1 つだけ・先頭 3 字が同じ・別の語形（manager / managed）でない・その語が実在（3 回以上使用）なら直さない・少ない側が 2 行以下かつ多い側が 5 倍以上。日本語ラベルを持つ組には使わない（赤牛 / akaushi と 明石 / akashi、home nursing と nursing home は別）。
+    - 略語・固有名詞（`latin_token_ok`・`data/tag-proper-nouns.csv`）は完全一致のみ（大文字小文字を除く）。**大文字を含む表記（NPO・iOS・WordPress）を、使用数が少なくても正規にする**。否定・修飾の語が違うもの（non-profit と profit）は寄せない。同点は使用数の多い方 → 短い `label_en` → 辞書順。
   - **新しいタグ**: どれにも一致しないタグは 1 サイト**最大 2 つ**（LLM の並び順で先の 2 つ）。超えた分・重複・5 つ超えの分は捨てる。新しいタグも `check_tags`（日本語の `label_ja`・英語の `label_en`）を通す。結果が `check_tags` を通らなければ元のタグを（5 つまで）そのまま使う。
   - **どこで**: 判定段・合議段の describe・requalify は `judge_stage.parse`（検証の直後）、掲載段は `plan` の直後。統計 `tags_canonicalized`（既存タグに置き換えた数）・`tags_new`・`tags_dropped`（捨てた数）を各段の結果に出す。`--tag-vocab-in-prompt`（既定オフ）は describe の指示文（キャッシュされる）に既存タグの上位 150 件（`ja|en`）を足す。オンにするとリクエストごとの入力トークンが増えるので、既定の決定的な正規化で足りないと分かってから。
   - **既存データ**: `cleanup_quality.py tags --merge`（下の「是正ツール」）。同じ規則で既存タグを束ねる。
@@ -217,8 +220,8 @@ uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | -
 uv run python scripts/cleanup_quality.py tags --merge [--limit N] [--dry-run | --apply] [--chunk N]
 ```
 
-- **規則**: 上の「タグの方針」と同じ関数（`TagVocab.find`）。有効なタグを使用数の多い順（同数は短い `label_en` → 辞書順）に見て、先に決まった正規タグに一致すればそこへ、しなければ自分が正規になる（連鎖しない）。`label_ja` が英語の旧タグ（`tags` の対象）は、同じ英語ラベルの有効な正規タグが**一意に決まるとき**だけそこへ寄せる（bank のように 2 つの意味が拮抗するものは `tags`（LLM）に任せる）。綴り違いは、少ない側が 2 行以下・多い側が 5 倍以上のときだけ。
-- **dry-run（既定）**: 何も書かない。統合するクラスタ数・動かすラベル数・行数と、**大きい順 30 クラスタ**を出す。同時に**同義語の候補**（統合後のタグで、2 つのサイト集合の Jaccard ≥ 0.8・各 10 サイト以上）を最大 40 組出す。**自動では統合しない**（人が見て `data/tag-synonyms.csv` へ足す）。
+- **規則**: 上の「タグの方針」と同じ関数（`TagVocab.find`）。有効なタグを使用数の多い順（同数は短い `label_en` → 辞書順）に見て、先に決まった正規タグに一致すればそこへ、しなければ自分が正規になる（連鎖しない）。`label_ja` が英語の旧タグ（`tags` の対象）は、同じ英語ラベルの有効な正規タグが**一意に決まるとき**だけそこへ寄せる（bank のように 2 つの意味が拮抗するものは `tags`（LLM）に任せる）。綴り・語順の統合は `label_ja` が英語のままの組どうしだけ（上の「タグの方針」）。
+- **dry-run（既定）**: 何も書かない。統合するクラスタ数・動かすラベル数・行数と、**大きい順 30 クラスタ**を出す。同時に**同義語の候補**（統合後のタグで、2 つのサイト集合の Jaccard ≥ 0.5・各 5 サイト以上。意味が近い候補として）を最大 40 組出す。**自動では統合しない**（人が見て `data/tag-synonyms.csv` へ足す）。
 - **`--apply`**: bookmark・lease・読み戻しは他のサブコマンドと同じ。行の移動は `tags` と同じ衝突回避（`UPDATE … WHERE NOT EXISTS`＋同サイトの重複は削除。`--chunk`、既定 50）。`label_ja` が同じで `label_en` だけ違うものは `label_en` だけを書き換える（主キーは動かない）。1 サイトのタグは増えない（≤5 のまま。実行後に 5 超のサイト数 `sites_over_5` を出す）。`search_text` / FTS は既存トリガが追従する（書いた後は `node scripts/refresh-search-text.mjs --remote`）。`--limit` = 1 回に動かすラベル数（行数の多い順）。冪等（再実行すると 0 件）。
 - テスト: `tests/test_tag_canonicalization.py`。
 

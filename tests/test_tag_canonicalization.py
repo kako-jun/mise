@@ -39,14 +39,16 @@ class Canonical(unittest.TestCase):
         self.assertEqual(self.c('非営利', 'nonprofit'), ('非営利', 'non-profit'))
         self.assertEqual(self.c('3Dプリント', '3D-Printing'), ('3Dプリント', '3d printing'))
 
-    def test_a_vocabulary_entry_with_an_english_label_ja_is_never_the_answer(self):
-        self.assertEqual(self.c('大学教育', 'university'), ('大学', 'university'))     # 'university / university' (900 rows) has the most uses but cannot be published
+    def test_an_english_label_ja_meets_a_japanese_tag_only_by_its_english_label(self):
+        self.assertEqual(self.c('university', 'university'), ('大学', 'university'))      # 'university / university' (900 rows) cannot be the answer
+        self.assertEqual(self.c('universities', 'universities'), ('大学', 'university'))
+        self.assertIsNone(self.c('大学教育', 'university'))                                   # a Japanese label that differs is another tag
 
     def test_japanese_key_width_long_vowel_and_no(self):
-        self.assertEqual(self.c('サーバ', 'servers hosting'), ('サーバー', 'server'))
-        self.assertEqual(self.c('ｻｰﾊﾞｰ', 'x'), ('サーバー', 'server'))                    # half width katakana
-        self.assertEqual(self.c('動画の', 'x'), ('動画', 'video'))                        # trailing の
-        self.assertIsNone(self.c('子供用', 'for kids'))                                  # 用 is not folded: 子供用 is not 子供
+        self.assertEqual(self.c('サーバ', 'servers'), ('サーバー', 'server'))
+        self.assertEqual(self.c('ｻｰﾊﾞｰ', 'server'), ('サーバー', 'server'))                    # half width katakana
+        self.assertEqual(self.c('動画の', 'videos'), ('動画', 'video'))                        # trailing の
+        self.assertIsNone(self.c('子供用', 'for kids'))                                      # 用 is not folded: 子供用 is not 子供
 
     def test_synonym_table_both_directions(self):
         self.assertEqual(self.c('ビデオ', 'zzz clip'), ('動画', 'video'))                 # variant -> the most used existing tag of the group
@@ -55,58 +57,72 @@ class Canonical(unittest.TestCase):
         self.assertEqual(quality.canonical_tag('フォト', 'zzz', v2), ('写真', 'photography'))
         v3 = quality.TagVocab([('猫', 'cat', 80)])
         self.assertEqual(quality.canonical_tag('ビデオ', 'zzz clip', v3), ('動画', 'video'))     # nothing of the group stored: the table's own tag
-        self.assertEqual(self.c('映像', 'movie clip'), ('映像', 'footage'))                    # the Japanese key (an existing tag) comes before the table
+        self.assertEqual(self.c('映像', 'movie clip'), ('動画', 'video'))                      # same Japanese label, unrelated English: the table decides
+        self.assertIsNone(self.c('動画編集', 'video'))                                          # the English word alone never pulls a Japanese tag into the group
 
-    def test_word_order_and_typo(self):
-        self.assertEqual(self.c('同窓会', 'association alumni'), ('同窓会', 'alumni association'))
-        self.assertEqual(self.c('x', 'universtiy'), ('大学', 'university'))               # transposition
-        self.assertEqual(self.c('x', 'univeristy'), ('大学', 'university'))
-        self.assertEqual(self.c('x', 'alumni associaton'), ('同窓会', 'alumni association'))
+    def test_no_spelling_or_word_order_matching_for_tags_with_a_japanese_label(self):
+        self.assertIsNone(self.c('同窓会', 'association alumni'))
+        self.assertIsNone(self.c('x', 'universtiy'))
+        self.assertIsNone(self.c('大学', 'univerzity'))
 
-    def test_fuzzy_never_on_short_words_known_words_or_other_word_forms(self):
-        v = quality.TagVocab([('猫', 'cat', 50), ('管理者', 'manager', 9), ('美術', 'painting', 9), ('組合', 'association', 20)])
-        self.assertIsNone(quality.canonical_tag('x', 'cut', v))                          # short word
-        self.assertIsNone(quality.canonical_tag('x', 'managed', v))                      # another form of the word, not a typo
-        self.assertIsNone(quality.canonical_tag('x', 'pointing', v))                     # first letters differ: another word
-        self.assertEqual(quality.canonical_tag('x', 'paintng', v), ('美術', 'painting'))
-        self.assertEqual(quality.canonical_tag('x', 'assocation', v), ('組合', 'association'))
-        v2 = quality.TagVocab([('管理者', 'manager', 9), ('管理済み', 'managed', 9)])
-        self.assertIsNone(quality.canonical_tag('x', 'managers x', v2))
+    def test_same_japanese_label_different_english_meaning_is_not_merged(self):
+        for ja, en, tja, ten in [('認証', 'authentication', '認証', 'certification'), ('学会', 'conference', '学会', 'academic society'),
+                                 ('登山', 'mountaineering', '登山', 'hiking'), ('入試', 'entrance exam', '入試', 'admissions'),
+                                 ('買取', 'car buying', '買取', 'buyback'), ('産学官連携', 'collaboration', '産学官連携', 'industry academia collaboration'),
+                                 ('計測機器', 'instruments', '計測機器', 'measuring instruments'), ('舞台', 'stage musical', '舞台', 'stage'),
+                                 ('ゲーム', 'game development', 'ゲーム', 'game'), ('写真資料', 'photo archive', '写真', 'photography')]:
+            v = quality.TagVocab([(tja, ten, 100)])
+            self.assertNotEqual(quality.canonical_tag(ja, en, v), (tja, ten), (ja, en, tja, ten))
+            v = quality.TagVocab([(ja, en, 100)])                                              # ... and the other way round
+            self.assertNotEqual(quality.canonical_tag(tja, ten, v), (ja, en), (tja, ten, ja, en))
+
+    def test_same_english_label_different_japanese_label_is_not_merged(self):
+        for ja, en, tja in [('通信教育', 'correspondence education', '神学通信講座'), ('勤怠管理', 'attendance management', '出席管理'),
+                            ('画集', 'art book', '美術書'), ('設計', 'design', 'デザイン'), ('世界遺産', 'world heritage', '世界文化遺産'),
+                            ('隠岐の島', 'oki', '隠岐諸島')]:
+            v = quality.TagVocab([(tja, en, 100)])
+            self.assertIsNone(quality.canonical_tag(ja, en, v), (ja, en, tja))
+
+    def test_japanese_pairs_never_use_spelling_or_word_order(self):
+        for ja, en, tja, ten in [('赤牛', 'akaushi', '明石', 'akashi'), ('介護', 'home nursing', '老人ホーム', 'nursing home'),
+                                 ('ストア', 'store app', 'アプリストア', 'app store'), ('観光', 'tour bus', 'バスツアー', 'bus tour')]:
+            v = quality.TagVocab([(tja, ten, 100)])
+            self.assertIsNone(quality.canonical_tag(ja, en, v), (ja, en))
 
     def test_negation_and_qualifier_never_merge(self):
         self.assertEqual(self.c('営利', 'profit'), ('営利', 'profit'))
-        self.assertEqual(self.c('営利団体', 'non profit'), ('非営利', 'non-profit'))
-        self.assertIsNone(self.c('x', 'childcares x'))
+        self.assertIsNone(self.c('営利団体', 'non profit'))
         self.assertEqual(self.c('保育', 'childcare'), ('保育', 'childcare'))             # children / childcare stay two tags
         self.assertEqual(self.c('子供', 'children'), ('子供', 'children'))
         v = quality.TagVocab([('活動', 'active member', 50)])
-        self.assertIsNone(quality.canonical_tag('x', 'inactive member', v))              # a prefix that negates is never a typo
-        v2 = quality.TagVocab([('営利', 'profit organization', 50)])
-        self.assertIsNone(quality.canonical_tag('x', 'non profit organization', v2))     # 'non' is a word the other label lacks
+        self.assertIsNone(quality.canonical_tag('活動', 'inactive member', v))
 
     def test_the_two_labels_disagree_is_a_new_tag(self):
         self.assertIsNone(self.c('非営利', 'profit'))                                     # ja says 非営利, en says profit
 
-    def test_proper_nouns_exact_only(self):
+    def test_proper_nouns_exact_only_and_the_capitalised_form_wins(self):
         self.assertEqual(self.c('FPGA', 'fpga'), ('FPGA', 'fpga'))
         self.assertEqual(self.c('fpga', 'FPGA'), ('FPGA', 'fpga'))                        # case only
         self.assertIsNone(self.c('FPGAs', 'fpgas'))
-        v = quality.TagVocab([('エフピージーエー', 'fpgas', 5), ('5G', '5g', 9)])
+        v = quality.TagVocab([('エフピージーエー', 'fpgas', 5), ('5G', '5g', 9), ('npo', 'npo', 50), ('NPO', 'npo', 3), ('WordPress', 'wordpress', 2)])
         self.assertIsNone(quality.canonical_tag('5Gs', '5gs', v))
         self.assertEqual(quality.canonical_tag('5G', '5g', v), ('5G', '5g'))
+        self.assertEqual(quality.canonical_tag('npo', 'npo', v), ('NPO', 'npo'))             # 3 uses, but the capitalised spelling
+        self.assertEqual(quality.canonical_tag('wordpress', 'wordpress', v), ('WordPress', 'wordpress'))
 
     def test_one_english_label_two_unrelated_japanese_labels(self):
         self.assertEqual(self.c('銀行', 'bank'), ('銀行', 'bank'))                          # 100 vs 3: a clear majority
+        self.assertEqual(self.c('bank', 'bank'), ('銀行', 'bank'))
         v = quality.TagVocab([('銀行', 'bank', 10), ('土手', 'bank', 8)])
-        self.assertIsNone(quality.canonical_tag('x', 'bank', v))                         # a real tie of senses: nothing is guessed
+        self.assertIsNone(quality.canonical_tag('bank', 'bank', v))                      # a real tie of senses: nothing is guessed
 
     def test_ties_go_to_the_highest_use_count_then_the_shorter_label_then_alphabetical(self):
         v = quality.TagVocab([('動画', 'video', 5), ('映像', 'video', 9)])
-        self.assertEqual(quality.canonical_tag('ムービー', 'video', v), ('映像', 'video'))   # same group, more uses
+        self.assertEqual(quality.canonical_tag('movie', 'video', v), ('映像', 'video'))     # same group, more uses
         v = quality.TagVocab([('動画', 'video', 5), ('映像', 'video', 5)])
-        self.assertEqual(quality.canonical_tag('ムービー', 'video', v), ('動画', 'video'))   # equal uses, equal length: alphabetical
+        self.assertEqual(quality.canonical_tag('movie', 'video', v), ('動画', 'video'))     # equal uses, equal length: alphabetical
         v = quality.TagVocab([('絵', 'picture', 9), ('画', 'picture', 3)])
-        self.assertEqual(quality.canonical_tag('作品', 'picture', v), ('絵', 'picture'))     # unrelated labels: the dominant one (75%)
+        self.assertEqual(quality.canonical_tag('picture', 'picture', v), ('絵', 'picture'))   # unrelated labels: the dominant one (75%)
 
     def test_list_vocabulary_is_indexed_once(self):
         n = []
@@ -120,10 +136,23 @@ class Canonical(unittest.TestCase):
         self.assertEqual(len(n), len(VOCAB))
 
     def test_pure_and_deterministic(self):
-        a = [quality.canonical_tag(j, e, VOCAB) for j, e in [('ビデオ', 'videos'), ('x', 'universtiy'), ('新', 'brand new')]]
-        b = [quality.canonical_tag(j, e, list(reversed(VOCAB))) for j, e in [('ビデオ', 'videos'), ('x', 'universtiy'), ('新', 'brand new')]]
+        qs = [('ビデオ', 'videos'), ('大学', 'universities'), ('新', 'brand new')]
+        a = [quality.canonical_tag(j, e, VOCAB) for j, e in qs]
+        b = [quality.canonical_tag(j, e, list(reversed(VOCAB))) for j, e in qs]
         self.assertEqual(a, b)
         self.assertIsNone(a[2])
+
+    def test_foreign_pairs_meet_only_their_spelling_variants(self):
+        v = quality.TagVocab()
+        for ja, n in (('music', 40), ('temple', 30), ('association alumni', 9), ('manager', 9), ('managed', 9)):
+            v.add_foreign(ja, ja, n)
+        self.assertEqual(v.find_foreign('musci', 'musci', own=1), ('music', 'music'))          # typo of a common word
+        self.assertEqual(v.find_foreign('temples', 'Temples'), ('temple', 'temple'))
+        self.assertEqual(v.find_foreign('alumni association', 'alumni association'), ('association alumni', 'association alumni'))   # word order
+        self.assertIsNone(v.find_foreign('managers', 'managers x'))
+        self.assertIsNone(v.find_foreign('cap', 'cap'))                                          # short words are never fuzzy
+        self.assertIsNone(v.find_foreign('musci', 'musci', own=5))                               # not rare: left to the translator
+        self.assertIsNone(v.find_foreign('音楽', '音楽'))                                          # a Japanese tag is not foreign
 
 
 class Canonicalize(unittest.TestCase):
@@ -287,7 +316,7 @@ class Merge(Base):
         code, st = self.merge(apply=False)
         self.assertEqual(code, 0, self.text())
         self.assertEqual((self.d1.writes, self.snapshot(), self.d1.db.execute('SELECT * FROM site_tags ORDER BY 1,2').fetchall()), (0, before, tags_before))
-        self.assertGreaterEqual(st['clusters'], 3)
+        self.assertGreaterEqual(st['clusters'], 2)
         self.assertGreater(st['rows_to_move'], 0)
         self.assertIn('largest cluster', self.text())
         self.assertIn('動画 / video (x', self.text())
@@ -305,7 +334,7 @@ class Merge(Base):
         # the English-only 'university' on s5 was merged into 大学 (the same site holds it: deleted, no PK error)
         self.assertNotIn(('university', 'university'), s['s5'])
         self.assertEqual(s['s6'], [('同窓会', 'alumni association'), ('大学', 'university')])
-        self.assertEqual(s['s2'], [('動画', 'video'), ('同窓会', 'alumni association'), ('犬', 'dog')])      # word order merged
+        self.assertEqual(s['s2'], [('動画', 'video'), ('同窓会', 'association alumni'), ('犬', 'dog')])      # no word-order merge for a Japanese label
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_ja='university'")[0], 0)
         self.assertEqual((st['verify_mismatch'], st['sites_over_5']), (0, 0))
         self.assertEqual(self.d1.one('SELECT MAX(c) FROM (SELECT COUNT(*) c FROM site_tags GROUP BY site_id)')[0] <= 5, True)
@@ -348,23 +377,49 @@ class Merge(Base):
         self.assertEqual(st['verify_mismatch'], 0)
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_en='universities'")[0], 0)
 
-    def test_misspelling_merges_only_when_rare_and_the_target_common(self):
+    def test_misspelling_merges_only_between_english_only_tags_when_rare_and_the_target_common(self):
+        add_site(self.d1, 't1', '山田屋')
+        add_site(self.d1, 'm1', '山田屋')
+        add_site(self.d1, 'm2', '山田屋')
         for i in range(8):
             add_site(self.d1, f'u{i}', '山田屋')
-            add_tags(self.d1, f'u{i}', ('大学', 'university'))
-        add_site(self.d1, 't1', '山田屋')
-        add_tags(self.d1, 't1', ('学府', 'universtiy'))
-        _c, st = self.merge()
-        self.assertEqual(tags_of(self.d1, 't1'), [('大学', 'university')])
-        add_site(self.d1, 'm1', '山田屋')                         # two real, equally used words one edit apart: never merged
-        add_site(self.d1, 'm2', '山田屋')
-        add_tags(self.d1, 'm1', ('管理者', 'manager'))
-        add_tags(self.d1, 'm2', ('管理済み', 'managed'))
+            add_tags(self.d1, f'u{i}', ('telescope', 'telescope'))
+        add_tags(self.d1, 't1', ('telescpoe', 'telescpoe'))
+        add_tags(self.d1, 'm1', ('manager', 'manager'))
+        add_tags(self.d1, 'm2', ('managed', 'managed'))                                       # two real words one edit apart: never merged
         self.merge()
-        self.assertEqual((tags_of(self.d1, 'm1'), tags_of(self.d1, 'm2')), ([('管理者', 'manager')], [('管理済み', 'managed')]))
+        self.assertEqual(tags_of(self.d1, 't1'), [('telescope', 'telescope')])
+        self.assertEqual((tags_of(self.d1, 'm1'), tags_of(self.d1, 'm2')), ([('manager', 'manager')], [('managed', 'managed')]))
+
+    def test_japanese_tags_are_never_merged_by_spelling_or_word_order(self):
+        for sid, t in (('a', ('赤牛', 'akaushi')), ('b', ('明石', 'akashi')), ('c', ('老人ホーム', 'nursing home')), ('d', ('介護', 'home nursing'))):
+            add_site(self.d1, sid, '山田屋')
+            add_tags(self.d1, sid, t)
+        _c, st = self.merge()
+        self.assertEqual(st['labels_to_move'], 0)
+
+    def test_same_japanese_label_with_a_different_english_meaning_stays_separate(self):
+        for i, en in enumerate(('authentication', 'certification', 'game', 'game development')):
+            add_site(self.d1, f'x{i}', '山田屋')
+            add_tags(self.d1, f'x{i}', ('認証' if i < 2 else 'ゲーム', en))
+        _c, st = self.merge()
+        self.assertEqual(st['labels_to_move'], 0)
+
+    def test_the_capitalised_abbreviation_is_the_canonical(self):
+        for i in range(4):
+            add_site(self.d1, f'n{i}', '山田屋')
+        add_tags(self.d1, 'n0', ('npo', 'npo'))
+        add_tags(self.d1, 'n1', ('npo', 'npo'))
+        add_tags(self.d1, 'n2', ('NPO', 'npo'))
+        add_tags(self.d1, 'n3', ('wordpress', 'wordpress'))
+        add_site(self.d1, 'w', '山田屋')
+        add_tags(self.d1, 'w', ('WordPress', 'wordpress'))
+        self.merge()
+        self.assertEqual(tags_of(self.d1, 'n0'), [('NPO', 'npo')])
+        self.assertEqual(tags_of(self.d1, 'n3'), [('WordPress', 'wordpress')])
 
     def test_candidate_synonyms_by_cooccurrence_are_reported_not_merged(self):
-        for i in range(12):
+        for i in range(6):
             sid = f'c{i}'
             add_site(self.d1, sid, '山田屋')
             add_tags(self.d1, sid, ('野球', 'baseball'), ('球団', 'pro team'))
@@ -377,8 +432,8 @@ class Merge(Base):
         self.assertIn('球団 / pro team', self.text())
         self.assertEqual(self.d1.db.execute('SELECT * FROM site_tags ORDER BY 1,2').fetchall(), before)
 
-    def test_candidates_need_ten_sites_each(self):
-        for i in range(9):
+    def test_candidates_need_five_sites_each(self):
+        for i in range(4):
             add_site(self.d1, f'c{i}', '山田屋')
             add_tags(self.d1, f'c{i}', ('野球', 'baseball'), ('球団', 'pro team'))
         _c, st = self.merge()

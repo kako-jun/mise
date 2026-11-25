@@ -999,8 +999,8 @@ def clean_tags(client, kind, *, limit, apply, restart, out, llm, lease, budget_m
 # ---------------------------------------------------------------------------------------------------------- tags --merge (no LLM)
 MERGE_TOP = 30                  # dry-run: the largest clusters shown
 CAND_MAX = 40                   # synonym candidates shown
-CAND_MIN_SITES = 10
-CAND_JACCARD = 0.8
+CAND_MIN_SITES = 5
+CAND_JACCARD = 0.5
 ROW_PAGE = 5000                 # site_tags rows per read of the co-occurrence scan
 
 
@@ -1014,7 +1014,7 @@ def merge_plan(groups, syn, proper):
     for g in groups:
         k = (collapse(g['ja']), collapse(g['en']))
         rows[k] = rows.get(k, 0) + g['n']
-    order = sorted(rows, key=lambda k: (-rows[k], len(k[1]), k[0], k[1]))
+    order = sorted(rows, key=lambda k: (k[0] == k[0].casefold() and not quality.has_japanese(k[0]), -rows[k], len(k[1]), k[0], k[1]))   # a capitalised NPO / iOS before nasa / ios
     vocab.prefill([(k[0], k[1], n) for k, n in rows.items()])
     mapping, foreign = {}, []
     for k in order:
@@ -1030,6 +1030,13 @@ def merge_plan(groups, syn, proper):
         hit = vocab.find(k[0], k[1], own=rows[k])
         if hit:
             mapping[k] = hit
+            vocab.add_foreign(k[0], k[1], rows[k])     # its spelling variants follow it to the same target
+            continue
+        hit = vocab.find_foreign(k[0], k[1], own=rows[k])
+        if hit:
+            mapping[k] = mapping.get(hit, hit)
+        else:
+            vocab.add_foreign(k[0], k[1], rows[k])     # still English: only its spelling / word order variants (never a Japanese tag's) meet it
     return mapping, rows, vocab
 
 
@@ -1046,7 +1053,7 @@ def load_tag_sites(client):
 
 
 def synonym_candidates(site_tags, mapping, syn):
-    """Tag pairs (after the merge) whose site sets overlap with Jaccard >= CAND_JACCARD and that each have >= CAND_MIN_SITES sites: a strong hint of
+    """Tag pairs (after the merge) whose site sets overlap with Jaccard >= CAND_JACCARD and that each have >= CAND_MIN_SITES sites: a hint (close in meaning) of
     synonyms for data/tag-synonyms.csv (the owner decides; nothing is merged). -> [(jaccard, both, a, b, na, nb)], best first."""
     sites, together = {}, {}
     for _sid, tags in site_tags.items():
