@@ -317,6 +317,23 @@ class MeasuredMistakes(Base):
         ('Home | 山田屋', 'x.example.jp', '山田屋'), ('Peatix', 'a.peatix.com', None), ('note', 'a.note.com', None),
     ]
 
+    REAL_NAMES = [('404 Gallery', 'x.example.jp'), ('エラー研究所', 'x.example.jp'), ('Error Handling Inc.', 'x.example.jp'),
+                  ('It Works! Studio', 'x.example.jp'), ('Forbidden City Tours | 北京旅行社', 'x.example.jp'), ('Base', 'a.base.shop'),
+                  ('山田屋 | Line', 'a.line.me'), ('Main | 山田屋', 'a.main.jp')]
+
+    def test_real_names_with_stock_words_are_kept(self):
+        for title, host in self.REAL_NAMES:
+            self.assertEqual(cq.deterministic_name(title, host), title, (title, host))
+        for whole in ('Error', '404', 'It works!', 'エラー', 'Home', 'Top', '404 Not Found', 'Index of /', 'エラー ページ'):
+            self.assertTrue(quality.generic_page(whole), whole)
+        for part in ('404 Gallery', 'エラー研究所', 'Error Handling Inc.', 'It Works! Studio', 'Forbidden City Tours', 'Home Cafe', 'Top Gear'):
+            self.assertFalse(quality.generic_page(part), part)
+
+    def test_more_services_and_aliases(self):
+        for title, host, want in [('パン工房ムギ - Jimdo', 'mugi.jimdofree.com', 'パン工房ムギ'), ('ムギの日常|Ameba (アメーバ)', 'mugi.ameblo.jp', 'ムギの日常'),
+                                  ('みどり - ココログ', 'midori.cocolog-nifty.com', 'みどり')]:
+            self.assertEqual(cq.deterministic_name(title, host), want, title)
+
     def test_rule(self):
         for title, host, want in self.CASES:
             self.assertEqual(cq.deterministic_name(title, host), want, (title, host))

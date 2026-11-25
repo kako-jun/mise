@@ -56,15 +56,20 @@ _SITE_TYPE_ONLY = {"home", "top", "トップ", "ホーム", "index", "welcome", 
 
 # ---- Titles that are not a site's name: error / default pages, shared-service names, broken brackets (#273)
 # Long phrases are shared with the judge's placeholder_title (judge_stage.PLACEHOLDER_TITLE_PARTS); the short words only as a whole clause.
-GENERIC_PAGE_PHRASES = ("not found", "404", "403", "forbidden", "error", "index of", "welcome to nginx", "apache2", "default page",
-                        "it works", "under construction", "untitled", "ページが見つかりません", "見つかりません", "エラー")
-GENERIC_PAGE_EXACT = frozenset(["home", "top", "トップ", "トップページ", "ホーム", "ホームページ", "ようこそ", "index", "welcome", "無題", "no title"])
+# Short words (error, 404, 403, forbidden, it works, エラー, home, top ...) count only when they are the WHOLE clause; "404 Gallery", "エラー研究所",
+# "Forbidden City Tours" are real names. Only the long stock phrases below match as a part of a clause.
+GENERIC_PAGE_PHRASES = ("not found", "page not found", "404 not found", "403 forbidden", "index of", "welcome to nginx", "apache2", "default page",
+                        "under construction", "untitled document", "ページが見つかりません", "見つかりません", "エラー ページ", "エラーページ")
+GENERIC_PAGE_EXACT = frozenset(["home", "top", "トップ", "トップページ", "ホーム", "ホームページ", "ようこそ", "index", "welcome", "無題", "no title", "untitled",
+                                "error", "404", "403", "500", "forbidden", "access denied", "it works", "エラー"])
 _GENERIC_RE = re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in GENERIC_PAGE_PHRASES if w.isascii()) + r")(?![a-z0-9])")
 
 
 def generic_page(clause):
-    """A clause that names an error / default / placeholder page (not found HGU, 404, Index of /, Welcome to nginx, Untitled, ホーム ...)."""
+    """A clause that names an error / default / placeholder page: the whole clause is a short stock word (Home, 404, Error, It works!), or it
+    holds a long stock phrase (not found HGU, 404 Not Found, Index of /, Welcome to nginx, Apache2 ... Default Page, ページが見つかりません)."""
     f = unicodedata.normalize("NFKC", clause or "").casefold().strip(" .!-_|:/")
+    f = re.sub(r"\s+", " ", f)
     return (not f or f in GENERIC_PAGE_EXACT or bool(_GENERIC_RE.search(f))
             or any(w in f for w in GENERIC_PAGE_PHRASES if not w.isascii()))
 
@@ -87,9 +92,13 @@ def brackets_balanced(t):
 # Domains whose pages belong to many different owners (blogs, event / shop / classified services, SNS): the blocklists the discovery uses
 # (platforms.txt, platform_pages.txt [host]) plus the services below. A host under one of them says nothing about the site's own name.
 SHARED_EXTRA = ("peatix.com", "jmty.jp", "wix.com", "kokucheese.com", "connpass.com", "doorkeeper.jp", "eventbrite.com", "tumblr.com",
-                "medium.com", "qiita.com", "zenn.dev", "youtube.com", "ameba.jp", "rakuten.co.jp", "booth.pm", "mercari.com", "linkedin.com")
+                "medium.com", "qiita.com", "zenn.dev", "youtube.com", "ameba.jp", "rakuten.co.jp", "booth.pm", "mercari.com", "linkedin.com",
+                "jimdofree.com", "jimdosite.com", "jimdo.com")
 SERVICE_ALIASES = ("はてなブログ", "はてなダイアリー", "hatena blog", "ジモティー", "アメブロ", "アメーバブログ", "ameba", "ライブドアブログ", "livedoor blog",
-                   "楽天ブログ", "楽天市場", "wix.com", "ピーティックス", "こくチーズ", "twitter", "github pages", "google サイト", "google sites", "x")
+                   "楽天ブログ", "楽天市場", "wix.com", "ピーティックス", "こくチーズ", "twitter", "github pages", "google サイト", "google sites", "ココログ", "cocolog",
+                   "jimdo", "アメーバ")
+# Short / generic labels of the blocklist domains (main.jp, goo.ne.jp, base.shop, lin.ee, lit.link, line.me, g.page ...) are not service names as a clause.
+SHORT_GENERIC = frozenset(["main", "goo", "base", "line", "lin", "lit", "g", "x", "fb", "pages", "stores", "theshop", "themedia"])
 _SHARED = {}
 
 
@@ -103,7 +112,8 @@ def _service_tables():
         import hostnames
         doms = set(hostnames.blocklist("platforms.txt")[""]) | set(hostnames.blocklist("platform_pages.txt")["host"]) | set(SHARED_EXTRA)
         fold = lambda s: re.sub(r"[\s.]", "", unicodedata.normalize("NFKC", s).casefold())
-        brands = {fold(x.split(".")[0]) for x in doms} | {fold(a) for a in SERVICE_ALIASES} | {fold(x) for x in doms}
+        labels = {x.split(".")[0] for x in doms if len(x.split(".")[0]) >= 4 and x.split(".")[0] not in SHORT_GENERIC}
+        brands = {fold(x) for x in labels} | {fold(a) for a in SERVICE_ALIASES} | {fold(x) for x in doms if x.split(".")[0] in labels}
         _SHARED["domains"], _SHARED["brands"] = frozenset(doms), frozenset(b for b in brands if b)
     return _SHARED["domains"], _SHARED["brands"]
 
@@ -116,7 +126,9 @@ def shared_service_host(host):
 
 def service_name_clause(clause):
     """A clause that is only the name of such a service (Peatix, note, はてなブログ, Wix.com, ジモティー, Facebook ...)."""
-    f = re.sub(r"[\s.]", "", unicodedata.normalize("NFKC", clause or "").casefold())
+    c = unicodedata.normalize("NFKC", clause or "").casefold()
+    c = re.sub(r"\s*[（(][^）)]*[）)]\s*", " ", c).strip() or c         # Ameba (アメーバ) -> Ameba
+    f = re.sub(r"[\s.]", "", c)
     brands = _service_tables()[1]
     return f in brands or re.sub(r"(blog|ブログ|公式|official|com|jp)$", "", f) in brands
 
