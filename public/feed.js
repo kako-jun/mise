@@ -5,7 +5,6 @@
   const FRESH_HALF_LIFE_DAYS = 60; // 更新から何日で優遇が半分になるか
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
-  const SEEN_DWELL_MS = 1500;      // 「見た」= 上の割合以上が画面に出たまま、これだけ経過(素通りは数えない)
   const AUTO_ADVANCE_MS = 12000;   // 自動送り(#199): 1 枚を見せる時間
   const AUTO_RESUME_MS = 4000;     // 手動操作・停止が解けてから、数え直しを始めるまでの無操作時間
   const AUTO_KEY = 'mise-feed-auto-v1'; // 自動送りのオン/オフ(localStorage。'on' / 'off')
@@ -49,7 +48,6 @@
   let scope, startPage, path = [], categories = [], all = [], list = [], current = 0, cards = [], loadFailed = false, hasMore = false, loadedCount = 0;
 
   // 「見た」の滞在タイマー。一覧を作り直すとき clearAll() で古いタイマーを止める(止めないと見ていないサイトを数える)
-  const dwell = L.makeDwell(SEEN_DWELL_MS, site => { if (!document.hidden) markSeen(site); });
   let root, scroller, bar, observer, globeTimer = 0, lastPlace = '', seenTrigger;
 
   // ---- データ整形 ----
@@ -377,7 +375,7 @@
     scroller.insertBefore(frag, endEl); cards.splice(rendered, 0, ...fresh); fresh.forEach(c => observer.observe(c)); rendered = target;
   }
   function resetList() {
-    observer && observer.disconnect(); dwell.clearAll(); clearTimeout(chunkTimer);
+    observer && observer.disconnect(); clearTimeout(chunkTimer);
     scroller.replaceChildren(); scroller.classList.remove('f-error'); cards = []; rendered = 0; endEl = null; current = 0;
   }
   function showLoading() {
@@ -500,16 +498,16 @@
     root.append(bar, scroller, nav, hint, panel, progress); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
     scroller.addEventListener('scroll', () => window.dispatchEvent(new Event('mise-globe-busy')), { passive: true }); // スクロール中は背面の地球の描画を休ませる(#196)
     observer = new IntersectionObserver(entries => {
+      let settled = false; // 送り先に着いた(または指で止めた)とき true。連続送りの通過点は数えない(#277)
       for (const e of entries) if (e.isIntersecting) {
-        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); if (navTarget === current) navTarget = null; auto.reset(); kick();
+        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); settled = navTarget === null || navTarget === current; if (navTarget === current) navTarget = null; auto.reset(); kick();
         updateButtons(); fly(idx === 'end' ? null : list[current]);
       }
       for (const e of entries) {
         const idx = e.target.dataset.index; if (idx === 'end') continue;
         e.target.classList.toggle('is-active', e.isIntersecting);
         if (e.isIntersecting) { const h = e.target.querySelector('.f-hero'); if (h) panFit([h]); }
-        dwell.stop(e.target);
-        if (e.isIntersecting) dwell.start(e.target, list[Number(idx)]);
+        if (e.isIntersecting && settled && Number(idx) === current && !document.hidden) markSeen(list[current]); // 切り替わった瞬間に数える(#277)
       }
     }, { root: scroller, threshold: IN_VIEW_THRESHOLD });
     loadSeen();
