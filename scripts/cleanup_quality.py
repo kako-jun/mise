@@ -187,6 +187,45 @@ def predicate_like(n):
     return bool('。' in t or t.endswith(_CALL_END) or quality._POLITE_END.search(t) or quality._plain(t, True) or quality.sentence_like(t))
 
 
+_DOMAIN_FORM = re.compile(r'[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+')
+_SPACED_SEP = re.compile(r'\s[・/\-–—:：]\s|[│┃｜|]')
+_LEAD_WORD = re.compile(r'^(?:top|home|ホーム|トップ|トップページ)(?:$|[\s│┃｜|:：\-])', re.I)
+_GENERIC_WORDS = re.compile(r'official\s+(?:dealer\s+)?(?:web\s*site|site|homepage)|dealer\s+site|web\s*site|website|homepage|オフィシャルサイト|公式サイト|公式ホームページ|ウェブサイト', re.I)
+
+
+def domain_like(n, host=''):
+    """The name is the host name itself or has the form of a domain (100s.jp, www.example.com)."""
+    f = unicodedata.normalize('NFKC', collapse(n)).casefold()
+    h = (host or '').lower()
+    bare = h[4:] if h.startswith('www.') else h
+    return bool(f) and (bool(_DOMAIN_FORM.fullmatch(f)) or f in (h, bare))
+
+
+def suspicious_name(name, title='', host=''):
+    """The CURRENT name looks wrong, so --recompute may try again (a name that does not match here is never touched): (a) a separator left in it or a
+    leading TOP / ホーム, (b) a phone number / postal code / URL / hours, (c) a page-kind word (Official Site, Dealer Site, Website, Homepage,
+    オフィシャルサイト), (d) a sentence / call / catch-phrase (〜なら, 〜をお探し, 〜専門), (e) a list of three or more ・ parts (symptoms, trades),
+    (f) a fragment (ends in a particle / 、), (g) an unclosed bracket, (h) the host name itself, (i) cut out of a ・ compound of the title."""
+    n = collapse(name)
+    if not n:
+        return True
+    f = unicodedata.normalize('NFKC', n).casefold()
+    if _SPACED_SEP.search(n) or _LEAD_WORD.match(f) or quality.contact_like(n) or _GENERIC_WORDS.search(f):
+        return True
+    if (predicate_like(n) or quality.pitch_like(n) or f.endswith(('なら', '専門', '、')) or 'をお探し' in n or quality.is_fragment(n)
+            or not quality.brackets_balanced(n) or domain_like(n, host) or len([x for x in n.split('・') if x.strip()]) >= 3):
+        return True
+    if name_needs_fix(n):
+        return True
+    t = collapse(title)
+    k = t.find(n) if t else -1
+    while k != -1:
+        if (k > 0 and t[k - 1] == '・') or (k + len(n) < len(t) and t[k + len(n)] == '・'):
+            return True
+        k = t.find(n, k + 1)
+    return False
+
+
 def deterministic_name(title, host):
     """Only the certain simple forms are decided by rule (everything else goes to the LLM, with validation):
     drop the generic clauses (トップページ / ホーム / TOP / 公式サイト / Official Dealer Site / a shared service's name / an error page); when exactly ONE
@@ -201,7 +240,7 @@ def deterministic_name(title, host):
         return None
     n = keep[0]
     if (quality._strip_anchor_suffix(n)[1] or not name_ok(n) or len(n) > quality.NAME_MAX or quality.is_fragment(n) or predicate_like(n) or quality.pitch_like(n)
-            or quality.promo_hit(n) or quality.sentence_like(n) or n in quality.CORP_FORMS):
+            or quality.promo_hit(n) or quality.sentence_like(n) or n in quality.CORP_FORMS or domain_like(n, host)):
         return None
     return n
 
@@ -254,7 +293,7 @@ def llm_name_valid(new, sources, host=''):
     if not n or len(n) > quality.NAME_MAX or quality.check_name(n) or quality.is_fragment(n) or n in quality.CORP_FORMS or predicate_like(n):
         return None
     if not quality.brackets_balanced(n) or quality.not_a_name_clause(n, quality.shared_service_host(host)) or quality.pitch_like(n) \
-            or quality.contact_like(n) or quality.generic_clause(n, quality.shared_service_host(host)):
+            or quality.contact_like(n) or quality.generic_clause(n, quality.shared_service_host(host)) or domain_like(n, host):
         return None                       # an error-page title / a shared service's own name is not this site's name
     if any(sep in n for sep in _NAME_SEPARATORS):
         return None
@@ -380,6 +419,8 @@ def plan_names(ctx, rows, recompute=False):
                 st['llm_calls'] += 1
                 new = llm_name_valid(obj.get('site_name'), [title, cur, snip], host)
                 how = 'llm'
+        if new is not None and how != 'adult_host' and domain_like(new, host):
+            new = None                              # the host name is not the site's name
         if new is not None and new == cur:
             st['same'] += 1                         # recompute: already what the current rules give
             continue
@@ -588,6 +629,10 @@ def plan_descriptions(ctx, rows):
 
 
 # -------------------------------------------------------------------------------------------------------------- run
+def keep_recompute(r):
+    return suspicious_name(r['name'], r.get('title'), host_of(r['url']))
+
+
 def keep_names(r):
     return name_needs_fix(r['name'] or '')
 
@@ -598,7 +643,7 @@ def keep_descriptions(r):
 
 KINDS = {
     'names': dict(sql=NAMES_SQL, column='name', keep=keep_names, plan=plan_names),
-    'names-recompute': dict(sql=RECOMPUTE_SQL, column='name', keep=lambda r: True, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
+    'names-recompute': dict(sql=RECOMPUTE_SQL, column='name', keep=keep_recompute, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
     'descriptions': dict(sql=DESC_SQL, column='description_ja', keep=keep_descriptions, plan=plan_descriptions),
 }
 
