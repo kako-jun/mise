@@ -402,7 +402,7 @@ def states_of(client, keys):
 
 
 # ------------------------------------------------------------------ run
-def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True):
+def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True, priority=None):
     """llm_enabled=False: never calls the LLM (no key needed); only the deterministic moves of rows that already carry a review_state are done."""
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
              "moved_without_llm": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
@@ -410,10 +410,15 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
     cols = ", ".join(("p." if c in ("identity_key", "url") else "c.") + c for c in SELECT_COLUMNS)
     # review_state/notes and the policy inputs of an already judged row come from the same row
     cols += ", c.categories, c.spam_verdict, c.spam_kind, c.confidence, c.description_ja, c.description_en, c.site_kind, c.freshness, c.exempt"
+    order, extra = "p.identity_key", ""
+    if priority is not None:
+        order, extra = priority.order(client, "p.identity_key")
     rows = client.query(
-        f"SELECT {cols} FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
+        f"SELECT {cols}{extra} FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
         f"WHERE p.state='fetched' OR (p.state='reviewing' AND p.updated_at < datetime('now','-{CLAIM_MINUTES} minutes') "
-        "AND (c.review_state IS NULL OR c.review_state='')) ORDER BY p.identity_key LIMIT ?", [int(limit)])
+        "AND (c.review_state IS NULL OR c.review_state='')) ORDER BY " + order + " LIMIT ?", [int(limit)])
+    if priority is not None:
+        priority.report(rows, log, "judge")
     stats["selected"] = len(rows)
     ledger = Ledger(client, judge.new_run_id(), budget_month)
     todo = [r for r in rows if not r.get("review_state")]
