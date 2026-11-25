@@ -1,6 +1,7 @@
 // 新着とカテゴリ別の縦フィード。 `?view=feed` のときだけ index.html が読み込む。
 (() => {
   // ---- 調整できる定数（触って決める） -------------------------------------------------
+  const WIN_BEHIND = 2, WIN_AHEAD = 3, WIN_MARGIN = 3; // 縦フィードの窓(#278): 現在の前 2 枚〜後 3 枚を描き、そこから 3 枚以上離れたら捨てる(描画済みはおよそ 12 枚まで)
   const FRESH_BOOST = 1.5;       // 更新が新しいサイトの出やすさの上乗せ。0=完全ランダム、大きいほど新しい順に近づく
   const FRESH_HALF_LIFE_DAYS = 60; // 更新から何日で優遇が半分になるか
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
@@ -144,7 +145,13 @@
   const activeHeroes = () => [...document.querySelectorAll('#feed .f-card.is-active .f-hero')];
   function card(s, i, total) {
     const art = document.createElement('article'); art.className = 'f-card'; art.tabIndex = -1; art.dataset.index = i; art.dataset.id = s.id;
-    art.setAttribute('aria-posinset', i + 1); art.setAttribute('aria-setsize', total); art.setAttribute('aria-labelledby', `f-name-${i}`);
+    art.setAttribute('aria-posinset', i + 1); art.setAttribute('aria-setsize', total); art.setAttribute('aria-label', siteName(s)); // 中身を捨てた(窓の外)ときも名前が残るよう、labelledby でなく aria-label
+    art.inert = true; // 中身が無い間は支援技術に空の要素を読ませない(fillCard で外す)
+    return art; // 中身は fillCard が窓の中でだけ作る(#278)
+  }
+  // 中身(サムネ・名前・説明・タグ・場所・足元)。窓の中のカードだけ作り、離れたら emptyCard 側ではなく dropCard で捨てる
+  function fillCard(art) {
+    const i = Number(art.dataset.index), s = list[i];
     // 横長の1枚(幅320px前後想定)を上部に幅いっぱいで置き、同じ絵を強く拡大・ぼかしてカード全体の背景に敷く。
     // thumb_lqip(極小base64)を先にぼかして出し、画像が届いたらなめらかに入れ替える
     const pic = document.createElement('div'); pic.className = 'f-art';
@@ -153,8 +160,9 @@
     for (const layer of [bg, hero]) {
       if (thumb) {
         if (lqip) { const l = document.createElement('img'); l.className = 'f-lqip'; l.alt = ''; l.src = lqip; layer.append(l); }
-        const img = document.createElement('img'); img.className = 'f-img'; img.alt = ''; img.decoding = 'async'; img.loading = i < 2 ? 'eager' : 'lazy';
-        img.addEventListener('load', () => { img.classList.add('is-in'); if (layer === hero && art.classList.contains('is-active')) panFit([hero]); }); img.addEventListener('error', () => { layer.replaceChildren(); if (layer === hero) { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }); img.src = thumb; layer.append(img);
+        const img = document.createElement('img'); img.className = 'f-img'; img.alt = ''; img.decoding = 'async'; img.loading = 'eager'; // 窓の中(±数枚)だけ作るので先読みする。描く前に decode() して、見えた瞬間に空白・カクつきを出さない(#278)
+        img.addEventListener('load', () => { if (layer === hero && art.classList.contains('is-active')) panFit([hero]); }); img.addEventListener('error', () => { layer.replaceChildren(); if (layer === hero) { hero.style.removeProperty('--pan-w'); hero.style.removeProperty('--pan-px'); } }); img.src = thumb; layer.append(img);
+        img.decode().then(() => img.classList.add('is-in'), () => { if (img.complete && img.naturalWidth) img.classList.add('is-in'); });
       }
     }
     const body = document.createElement('div'); body.className = 'f-body';
@@ -201,9 +209,10 @@
     }
     body.append(foot);
     const scrim = document.createElement('div'); scrim.className = 'f-scrim'; scrim.setAttribute('aria-hidden', 'true');
-    art.append(pic, scrim, body);
-    return art;
+    art.append(pic, scrim, body); art.dataset.filled = '1'; art.inert = false;
   }
+  // 窓の外へ出たカードは中身を捨てて空の枠に戻す(高さは CSS で固定なのでスクロール位置も snap の位置も変わらない)
+  function dropCard(art) { if (!art.dataset.filled) return; art.replaceChildren(); delete art.dataset.filled; art.classList.remove('is-active'); art.inert = true; }
   function endCard(n) {
     const sec = document.createElement('section'); sec.className = 'f-card f-end'; sec.tabIndex = -1; sec.dataset.index = 'end'; sec.setAttribute('aria-label', t('end')(fmt(n)));
     const body = document.createElement('div'); body.className = 'f-end-body';
@@ -377,20 +386,26 @@
     for (const el of [$('.f-surf-rig'), $('.f-surf-num')]) { if (!el) continue; el.classList.remove('is-hop'); void el.getBoundingClientRect(); el.classList.add('is-hop'); }
   }
 
-  // 描画は最初の FIRST_BATCH 枚だけ先に行い、残りは少しずつ足す(1,000 枚を一度に描かない)。終了カードは常に最後に置く
-  const FIRST_BATCH = 100, BATCH = 100;
-  let rendered = 0, endEl = null, chunkTimer = 0;
+  // 全カードの空の枠(高さ固定・snap の位置を持つ)を先に並べ、中身は窓(現在の前 WIN_BEHIND 枚〜後 WIN_AHEAD 枚)だけ描く(#278)。窓の外は捨てる
+  let endEl = null, winTimer = 0, winIdx = -1;
   const totalCards = () => (list.length ? list.length + 1 : 1);
-  function renderMore(upTo) {
-    if (!endEl) return;
-    const target = Math.min(list.length, Math.max(upTo, rendered)), fresh = [], frag = document.createDocumentFragment();
-    for (let i = rendered; i < target; i++) { const c = card(list[i], i, list.length); fresh.push(c); frag.append(c); }
-    if (!fresh.length) return;
-    scroller.insertBefore(frag, endEl); cards.splice(rendered, 0, ...fresh); fresh.forEach(c => observer.observe(c)); rendered = target;
+  const cardH = () => (cards[0] && cards[0].offsetHeight) || (scroller && scroller.clientHeight) || 1;
+  const posIndex = () => Math.max(0, Math.min(totalCards() - 1, Math.round(scroller.scrollTop / cardH())));
+  // 窓の中で未描画のカードを近い順に並べ、現在とその前後 1 枚は同期で、それより遠い先読みは 1 フレームに 1 枚ずつ描く(一度に何枚も作ってフレームを落とさない)
+  let fillQueue = [], fillRaf = 0;
+  function pumpFill() { fillRaf = 0; const i = fillQueue.shift(); if (i != null && cards[i] && !cards[i].dataset.filled) fillCard(cards[i]); if (fillQueue.length) fillRaf = requestAnimationFrame(pumpFill); }
+  function ensureWindow(c) {
+    if (!list.length) return;
+    const w = L.windowRange(Math.min(c, list.length - 1), list.length, { behind: WIN_BEHIND, ahead: WIN_AHEAD, margin: WIN_MARGIN });
+    fillQueue = [];
+    for (let k = 0; k <= Math.max(w.hi - c, c - w.lo); k++) for (const i of k ? [c + k, c - k] : [c]) if (i >= w.lo && i <= w.hi && cards[i] && !cards[i].dataset.filled) { if (k === 0) fillCard(cards[i]); else fillQueue.push(i); }
+    if (fillQueue.length && !fillRaf) fillRaf = requestAnimationFrame(pumpFill);
+    for (let i = 0; i < list.length; i++) { if ((i < w.dropBelow || i > w.dropAbove) && cards[i] && cards[i].dataset.filled) dropCard(cards[i]); }
   }
+  function scheduleWindow() { if (winTimer) return; winTimer = requestAnimationFrame(() => { winTimer = 0; const c = posIndex(); if (c !== winIdx) { winIdx = c; ensureWindow(c); } }); }
   function resetList() {
-    observer && observer.disconnect(); clearTimeout(chunkTimer);
-    scroller.replaceChildren(); scroller.classList.remove('f-error'); cards = []; rendered = 0; endEl = null; current = 0;
+    observer && observer.disconnect(); cancelAnimationFrame(winTimer); winTimer = 0; cancelAnimationFrame(fillRaf); fillRaf = 0; fillQueue = []; winIdx = -1; cancelSettle();
+    scroller.replaceChildren(); scroller.classList.remove('f-error'); cards = []; endEl = null; current = 0;
   }
   function showLoading() {
     resetList(); list = [];
@@ -400,10 +415,9 @@
     list = visible(); resetList(); scroller.className = 'f-scroll';
     if (!list.length) { const e = emptyCard(); scroller.append(e); cards = [e]; }
     else {
-      endEl = endCard(list.length); scroller.append(endEl); cards = [endEl]; observer.observe(endEl);
-      renderMore(FIRST_BATCH);
-      const tick = () => { if (rendered >= list.length) return; renderMore(rendered + BATCH); chunkTimer = setTimeout(tick, 40); };
-      chunkTimer = setTimeout(tick, 250);
+      const frag = document.createDocumentFragment(); cards = list.map((site, i) => { const c = card(site, i, list.length); frag.append(c); return c; });
+      endEl = endCard(list.length); frag.append(endEl); cards.push(endEl); scroller.append(frag); cards.forEach(c => observer.observe(c));
+      ensureWindow(0);
     }
     scroller.scrollTop = 0;
     updateSeenBadge(); updateButtons();
@@ -412,7 +426,7 @@
   function go(i, instant) {
     if (!cards.length) return;
     i = Math.max(0, Math.min(totalCards() - 1, i));
-    if (i >= rendered && list.length) renderMore(i >= list.length ? list.length : i + 1); // まだ描いていないカードへ飛ぶときは、そこまで先に描く
+    cancelSettle(); ensureWindow(Math.min(i, Math.max(0, list.length - 1))); // 飛ぶ先とその前後を先に描く
     const c = i >= list.length && list.length ? cards[cards.length - 1] : cards[i];
     c.scrollIntoView({ behavior: instant || reduced.matches ? 'auto' : 'smooth', block: 'start' });
     return c;
@@ -420,6 +434,41 @@
   // 連打でも取りこぼさないよう、スクロールが落ち着く前は「向かっている先」を基準にする
   let navTarget = null, navTimer = 0;
   function step(d, focus) { const base = navTarget ?? current; navTarget = Math.max(0, Math.min(totalCards() - 1, base + d)); clearTimeout(navTimer); navTimer = setTimeout(() => { navTarget = null; }, 900); const c = go(navTarget); if (c && focus) c.focus({ preventScroll: true }); }
+  // ---- 指を離したあとの寄せ(#278) ----
+  // CSS の scroll-snap だけだと、離してから止まるまで 0.7〜0.8 秒かかり「ぐいっと」寄らない(実測は docs/design/ui.md)。指を離した瞬間の位置と速度で行き先(触り始めから ±1 枚)を決め、
+  // 150〜300ms の ease-out で寄せる。寄せている間だけ CSS の snap を外し(両方を同時にかけると奪い合う)、終わったら戻す。キー・ボタン・自動送り・ホイールは従来どおり(CSS snap と scrollIntoView)
+  let settleRaf = 0, touch = null;
+  function cancelSettle() { if (settleRaf) { cancelAnimationFrame(settleRaf); settleRaf = 0; } if (scroller) { scroller.style.scrollSnapType = ''; scroller.style.overflowY = ''; } }
+  function settleTo(dest) {
+    scroller.style.overflowY = 'hidden'; // 指を離したあとにブラウザが続けるはずの慣性(fling)を止める。止めないと、こちらの寄せと奪い合う
+    const to = cards[dest] ? cards[dest].offsetTop : dest * cardH(), from = scroller.scrollTop, dist = to - from;
+    if (Math.abs(dist) < 1) { cancelSettle(); return; }
+    ensureWindow(Math.min(dest, Math.max(0, list.length - 1)));
+    if (reduced.matches) { scroller.scrollTop = to; let n = 0; const hold = () => { if (++n < 6) settleRaf = requestAnimationFrame(hold); else { settleRaf = 0; cancelSettle(); seenIfSettled(); } }; settleRaf = requestAnimationFrame(hold); return; } // 動きを減らす設定: 即座に移るが、ブラウザ自身の慣性が続いて 2 枚目へ進まないよう、数フレームは overflow を止めたままにする
+    const t0 = performance.now(), dur = L.settleMs(dist, cardH());
+    const frame = now => {
+      const x = (now - t0) / dur; scroller.scrollTop = x >= 1 ? to : from + dist * L.easeOutCubic(x);
+      if (x < 1) settleRaf = requestAnimationFrame(frame); else { settleRaf = 0; scroller.style.scrollSnapType = ''; scroller.style.overflowY = ''; seenIfSettled(); }
+    };
+    settleRaf = requestAnimationFrame(frame);
+  }
+  function bindSettle() {
+    const opt = { passive: true };
+    // 触っている間は CSS の snap を外す(離した瞬間にブラウザの snap が走ると、こちらの寄せと奪い合う)。離したら必ず settleTo か cancelSettle で戻す
+    scroller.addEventListener('touchstart', e => {
+      cancelSettle(); touch = e.touches.length === 1 ? { idx: posIndex(), samples: [{ t: e.timeStamp, y: e.touches[0].clientY }] } : touch;
+      if (touch) scroller.style.scrollSnapType = 'none';
+    }, opt);
+    scroller.addEventListener('touchmove', e => { if (touch && e.touches.length === 1) { touch.samples.push({ t: e.timeStamp, y: e.touches[0].clientY }); if (touch.samples.length > 12) touch.samples.shift(); } }, opt);
+    const release = e => {
+      if (e.touches.length) return; const tc = touch; touch = null; if (!tc) return;
+      const h = cardH(), pos = scroller.scrollTop;
+      if (!list.length || Math.abs(pos - tc.idx * h) < 1) { cancelSettle(); return; } // 動いていない(タップ・枠内スクロール): snap を戻すだけ
+      settleTo(L.settleTarget({ startIdx: tc.idx, pos, h, v: e.type === 'touchcancel' ? 0 : L.releaseVelocity(tc.samples, e.timeStamp), count: totalCards() }));
+    };
+    scroller.addEventListener('touchend', release, opt); scroller.addEventListener('touchcancel', release, opt);
+    scroller.addEventListener('wheel', cancelSettle, opt);
+  }
   function updateButtons() { const p = $('#f-prev'), n = $('#f-next'); if (!p) return; updatePosition(); const ab = $('.f-auto'); if (ab) ab.hidden = !list.length; p.disabled = current <= 0; n.disabled = !cards.length || !list.length || current >= totalCards() - 1; }
 
   // 上下ボタンの間の「現在位置/読み込み済み件数」(#204)。続きがある・読み込み失敗のときは分母に + を付ける。aria-live=off(スクロールの度に読み上げない)
@@ -510,7 +559,7 @@
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;
     root.append(bar, scroller, nav, hint, panel, progress); renderBar(); new ResizeObserver(() => root.style.setProperty('--bar-h', bar.offsetHeight + 'px')).observe(bar); new ResizeObserver(() => { clearIdlePan(); panFit(activeHeroes()); }).observe(scroller); document.body.append(root);
-    scroller.addEventListener('scroll', () => { window.dispatchEvent(new Event('mise-globe-busy')); }, { passive: true });
+    scroller.addEventListener('scroll', () => { window.dispatchEvent(new Event('mise-globe-busy')); scheduleWindow(); }, { passive: true }); bindSettle();
     scroller.addEventListener('scrollend', () => seenIfSettled()); // スクロール中は背面の地球の描画を休ませる(#196)
     observer = new IntersectionObserver(entries => {
       let settled = false; // 送り先に着いた(または指で止めた)とき true。連続送りの通過点は数えない(#277)

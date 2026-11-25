@@ -90,5 +90,35 @@
     };
   }
 
-  g.MiseFeedLib = { makeAutoAdvance, panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, SEEN_MAX_BYTES };
+  // 縦フィードの窓(#278)。現在のカード c の前後だけ中身を描き、離れたカードは空の枠(高さ固定)に戻してノード数を抑える。
+  // 描く範囲は [c-behind, c+ahead]、捨てる範囲はそこから margin 離れたところ(境目で描く・捨てるを繰り返さない)。範囲は 0..total-1 に収める。
+  function windowRange(c, total, { behind = 2, ahead = 3, margin = 3 } = {}) {
+    const lo = Math.max(0, c - behind), hi = Math.min(total - 1, c + ahead);
+    return { lo, hi, dropBelow: c - behind - margin, dropAbove: c + ahead + margin };
+  }
+
+  // 指を離したときの行き先(#278)。startIdx=触り始めのカード、pos=離した瞬間の scrollTop(px)、h=カードの高さ、v=離す直前の速度(px/ms、下へ進む向きが正)。
+  // 速い flick(|v| >= flickV かつ動かした量が minMove 以上)は触り始めから 1 枚だけ。そうでなければ位置で近い方(半分を越えれば次)。どちらも触り始めから ±1 枚までで、2 枚以上は飛ばさない。
+  function settleTarget({ startIdx, pos, h, v, count, flickV = 0.3, minMove = 12 }) {
+    if (!(h > 0) || !(count > 0)) return 0;
+    pos = Math.max(0, Math.min((count - 1) * h, pos)); // 端のゴムバンドで範囲外にいても、先頭〜末尾の中へ丸める
+    const moved = pos - startIdx * h; let d;
+    if (Math.abs(v) >= flickV && Math.abs(moved) >= minMove) d = v > 0 ? 1 : -1;
+    else d = Math.max(-1, Math.min(1, Math.round(pos / h) - startIdx));
+    return Math.max(0, Math.min(count - 1, startIdx + d));
+  }
+
+  // 触った点列 [{t(ms), y(px)}] から離す直前の速度(px/ms。指が上へ動く=下へ進む向きが正)。終点が離す時刻 end より span ms 以上古ければ止まっていたとして 0
+  function releaseVelocity(samples, end, span = 100) {
+    if (!samples || samples.length < 2) return 0;
+    const last = samples[samples.length - 1]; if (end - last.t > span) return 0;
+    let first = last; for (let i = samples.length - 2; i >= 0 && last.t - samples[i].t <= span; i--) first = samples[i];
+    const dt = last.t - first.t; return dt > 0 ? (first.y - last.y) / dt : 0;
+  }
+
+  // 寄せるアニメーションの時間(ms): 近いほど短く、1 枚分でも 150〜300ms に収める。ease-out(三次)
+  const settleMs = (dist, h) => Math.round(150 + 150 * Math.min(1, Math.abs(dist) / (h || 1)));
+  const easeOutCubic = x => 1 - Math.pow(1 - Math.max(0, Math.min(1, x)), 3);
+
+  g.MiseFeedLib = { windowRange, settleTarget, releaseVelocity, settleMs, easeOutCubic, makeAutoAdvance, panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, SEEN_MAX_BYTES };
 })(globalThis);
