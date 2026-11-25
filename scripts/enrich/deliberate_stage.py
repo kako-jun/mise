@@ -10,6 +10,9 @@ Three cats, each with its own prompt (and model), vote approve | hold | reject w
 Adult content is an ATTRIBUTE, never a reason to reject. Popularity / traffic / size / followers / backlinks are never criteria.
 Decision: >=2 approve -> review_state 'approved', url_progress 'approved' (the publish stage takes it); >=2 reject -> 'rejected';
 anything else (hold majority, 1/1/1, a cat that failed after one retry) -> stays candidate/pending, deliberations.status='meeting' (a human).
+Describe-after-approve: an approve decision (SAFETY_VETO already passed) whose row fails the publish gate ONLY for a missing/invalid
+description / category / tags gets ONE describe call (judge_stage.describe_row: the judge's own prompt, validation and ledger); the result is
+written in the same guarded batch and the gate is re-run on it: passes -> approved ('deliberation:approve+described'), else meeting.
 
 Excluded from selection: review_reason 'public_body' and 'gate:*' (publish-stage holds need data repair, not a vote) and rows that already
 have a finished deliberation (decided/meeting) with the same input hash. Order: identity_key. Claim: a 'running' deliberations row with a
@@ -240,6 +243,16 @@ def ask(ctx, cat, src, user_text, row):
 
 # ------------------------------------------------------------------ decision / SQL
 NEEDS_REVIEW = "deliberation:needs_review:"
+APPROVE_DESCRIBED = "deliberation:approve+described"
+# publish gates a describe call can repair; gate:verdict_* (spam verdict) and the rest stay a human's
+DESCRIBABLE = {"gate:no_description", "gate:no_valid_category", "gate:bad_categories_json", "gate:bad_tags_json"}
+
+
+def categories_usable(full):
+    """Whether the STORED categories pass the publish gate's own test (decides if a triage call is needed, not the first gate reason)."""
+    raw = publish_stage._json_list(full.get("categories"))
+    return raw is not None and bool(judge.modernize_categories([c for c in raw if isinstance(c, str)], publish_stage.VALID_CATEGORIES,
+                                                               publish_stage.LEGACY_CATEGORIES))
 
 
 def decide(votes, row=None, gate=None):
@@ -266,11 +279,20 @@ def decide(votes, row=None, gate=None):
     return None, None
 
 
-def gate_of(client, row):
-    """The publish stage's gate for this row, evaluated on the full url_candidates row (what the publish stage will read)."""
+def full_row(client, row):
+    """The joined row the publish stage reads (url_progress p + url_candidates c.*), or None."""
     full = client.query("SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
                         "WHERE p.identity_key=?", [row["identity_key"]])
-    return publish_stage.gate_reason(full[0]) if full else "gate:no_row"
+    return full[0] if full else None
+
+
+def gate_of(client, row, overrides=None):
+    """The publish stage's gate for this row, evaluated on the full url_candidates row (what the publish stage will read);
+    overrides = column values that are about to be written in the same batch."""
+    full = full_row(client, row)
+    if full is None:
+        return "gate:no_row"
+    return publish_stage.gate_reason(dict(full, **(overrides or {})))
 
 
 CLAIM_SQL = ("INSERT INTO deliberations (identity_key,status,input_hash,lease_until,updated_at) "
@@ -303,17 +325,25 @@ def unclaim_statements(row, lease):
     return [("DELETE FROM deliberations WHERE identity_key=? AND status='running' AND lease_until=?", [row["identity_key"], lease])]
 
 
-def result_statements(row, lease, votes, decision, meeting_reason=None):
-    """votes: {cat: (vote dict | None)}. One atomic batch; the two row moves exist only while the claim still holds."""
+def content_statements(row, lease, sets, params):
+    """The describe result, written under the claim (the row stays pending until the decision statement of the same batch)."""
+    k = row["identity_key"]
+    return [(f"UPDATE url_candidates SET {sets}, updated_at=datetime('now') WHERE identity_key=? AND review_state='pending' AND {HELD}",
+             list(params) + [k, k, lease, input_hash(row)])]
+
+
+def result_statements(row, lease, votes, decision, meeting_reason=None, approve_reason=None, content=()):
+    """votes: {cat: (vote dict | None)}. One atomic batch; the two row moves exist only while the claim still holds.
+    content: describe-after-approve statements, applied first in the same batch."""
     k, h = row["identity_key"], input_hash(row)
     held = [k, lease, h]
-    stmts = []
+    stmts = list(content)
     stamp = now_iso()
     if decision:
         rs = "approved" if decision == "approve" else "rejected"
         stmts.append(("UPDATE url_candidates SET review_state=?, reviewed_at=?, review_reason=?, updated_at=datetime('now') "
                       f"WHERE identity_key=? AND review_state='pending' AND {HELD}",
-                      [rs, stamp, "deliberation:" + decision, k] + held))
+                      [rs, stamp, approve_reason or "deliberation:" + decision, k] + held))
         stmts.append(("UPDATE url_progress SET state=?, updated_at=datetime('now') "
                       f"WHERE identity_key=? AND state='candidate' AND {HELD}", [rs, k] + held))
     elif meeting_reason:
@@ -383,7 +413,7 @@ class Ctx:
 
 def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True):
     stats = {"selected": 0, "deliberated": 0, "approved": 0, "rejected": 0, "meeting": 0, "cat_failed": 0, "write_failed": 0,
-             "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False, "stopped": None, "dry_run": not apply}
+             "lost_claim": 0, "described": 0, "describe_failed": 0, "describe_cost_usd": 0.0, "cost_usd": 0.0, "budget_stopped": False, "stopped": None, "dry_run": not apply}
     stats["public_body_moved"] = 0
     rows = select_rows_without_public(client, limit, apply, stats, log)
     stats["selected"] = len(rows)
@@ -403,6 +433,10 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
             raise RuntimeError("ANTHROPIC_API_KEY is not set (the value is never printed)")
         llm = js.default_llm
     ctx = Ctx(llm, ledger, log)
+    # describe-after-approve: its own Ledger object on the SAME run id and cap (the cap is read from D1, so it is shared), only to show its cost
+    dledger = js.Ledger(client, ledger.run_id, budget_month)
+    jctx = js.Ctx(llm, dledger, log, judge.load_categories())
+    dlock = threading.Lock()
     fatal = []
 
     def count(kind):
@@ -425,6 +459,42 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
             write(client, stmts)
         except Exception as e:  # noqa: BLE001 - the claim expires by itself after LEASE_MINUTES
             log(f"deliberate: cleanup write failed ({type(e).__name__})")
+
+    def describe_after_approve(row, lease, gate):
+        """The cats approved but the row lacks description / category / tags: one describe call, then the gate again on the result.
+        -> (decision, meeting reason, approve reason, content statements). Any failure or stop -> meeting with the original gate reason."""
+        meeting = (None, NEEDS_REVIEW + gate, None, [])
+        full = full_row(client, row)
+        if full is None:
+            return meeting
+        need_cat = not categories_usable(full)
+        with dlock:      # one describe at a time: the shared judge context's stop flag and the cost difference stay exact
+            with ctx.lock:
+                jctx.stop = ctx.stop
+            spent = dledger.spent
+            try:
+                out, problem = js.describe_row(jctx, full, need_categories=need_cat)
+            except js.BudgetExceeded as e:
+                out, problem = None, str(e)
+            finally:
+                with ctx.lock:
+                    stats["describe_cost_usd"] = round(stats["describe_cost_usd"] + dledger.spent - spent, 6)
+                    if jctx.stop:
+                        ctx.stop = ctx.stop or jctx.stop
+        if problem == STOP:
+            problem = ctx.stop or "stopped"
+        if out is None:
+            count("describe_failed")
+            log(f"deliberate: describe of {row['identity_key']} failed ({problem})"[:300])
+            return meeting
+        sets, params, over = js.described_assignments(out, full, need_cat)
+        gate2 = publish_stage.gate_reason(dict(full, **over))
+        content = content_statements(row, lease, sets, params)
+        if gate2:
+            count("describe_failed")
+            return None, NEEDS_REVIEW + gate2, None, content
+        count("described")
+        return "approve", None, APPROVE_DESCRIBED, content
 
     def do_row(row, lease):
         if ctx.stop or ctx.consecutive_failures >= 3 or not beat():
@@ -450,16 +520,25 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
         vv = {c: votes[c]["vote"] for c in CATS} if not failed else {}
         gate = gate_of(client, row) if sum(1 for v in vv.values() if v == "approve") >= 2 else None
         decision, mreason = (None, None) if failed else decide(vv, row, gate)
+        content, areason = [], None
+        if not failed and gate in DESCRIBABLE and decide(vv, row, None)[0] == "approve":
+            try:
+                decision, mreason, areason, content = describe_after_approve(row, lease, gate)
+            except js.LedgerSettleError as e:
+                ctx.stop = ctx.stop or "ledger error"
+                fatal.append(e)
+                best_effort(unclaim_statements(row, lease))
+                return
         with ctx.lock:
             if all(v is None for v in votes.values()):
                 ctx.consecutive_failures += 1
             else:
                 ctx.consecutive_failures = 0
         if not beat():
-            best_effort(result_statements(row, lease, votes, decision, mreason))   # cost is settled: keep the votes (guarded by the claim)
+            best_effort(result_statements(row, lease, votes, decision, mreason, areason, content))   # cost is settled: keep the votes (guarded by the claim)
             return
         try:
-            write(client, result_statements(row, lease, votes, decision, mreason))
+            write(client, result_statements(row, lease, votes, decision, mreason, areason, content))
         except Exception as e:  # noqa: BLE001 - atomic: nothing of this row was written; the lease expires and the row is voted again
             log(f"deliberate: write for {row['identity_key']} failed ({type(e).__name__})")
             count("write_failed")
@@ -504,7 +583,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
             if ctx.stop:
                 break
             do_batch(p)
-    stats["cost_usd"] = round(ledger.spent, 6)
+    stats["cost_usd"] = round(ledger.spent + dledger.spent, 6)
     if not ctx.stop and ctx.consecutive_failures >= 3:
         ctx.stop = "3 consecutive rows without a usable vote"
     stats["stopped"] = ctx.stop

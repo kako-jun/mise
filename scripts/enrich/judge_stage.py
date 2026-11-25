@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import unicodedata
 import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -401,11 +402,208 @@ def states_of(client, keys):
     return out
 
 
+# ------------------------------------------------------------------ empty pages (no LLM)
+# A page with (almost) no text and no description is rejected deterministically: there is nothing to list yet. This says nothing about
+# the kind of site (adult, personal, tiny are all treated the same). A later re-fetch cycle can reopen it (next_fetch_at, see enrich.md).
+EMPTY_TEXT_LEN = 80
+EMPTY_REASON = "empty_content"
+EMPTY_REOPEN_DAYS = 30
+EMPTY_CAND_SQL = ("UPDATE url_candidates SET review_state='rejected', review_reason='" + EMPTY_REASON + "', reviewed_at=?, "
+                  "next_fetch_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','+" + str(EMPTY_REOPEN_DAYS) + " days'), updated_at=datetime('now') ")
+
+
+# A title that says nothing about the site. Exact (after folding case/width/trailing punctuation) or, for the long phrases, contained.
+PLACEHOLDER_TITLES_EXACT = ("無題", "untitled", "no title", "notitle", "welcome", "home", "index", "top", "トップ", "トップページ",
+                            "ホーム", "ようこそ", "new page", "my site", "test", "テスト")
+PLACEHOLDER_TITLE_PARTS = ("index of", "まだ記事がありません", "記事がありません", "準備中", "coming soon", "under construction",
+                           "工事中", "default web site page", "it works", "welcome to nginx", "apache2 default")
+
+
+def placeholder_title(title):
+    """True for an empty title or a generic placeholder (PLACEHOLDER_TITLES_EXACT / PLACEHOLDER_TITLE_PARTS)."""
+    t = unicodedata.normalize("NFKC", title or "").strip().casefold().strip(" .!-_|:/")
+    return not t or t in PLACEHOLDER_TITLES_EXACT or any(w in t for w in PLACEHOLDER_TITLE_PARTS)
+
+
+def is_empty_content(row):
+    """True only when EVERY condition holds (the safest shape: text_len counts visible body text only, so SPA shells, framesets, image
+    galleries, image-text shops, link-only tops, ENTER pages and Flash pages must go to the LLM as before):
+      text_len known and < EMPTY_TEXT_LEN; no fetched meta description (`description`); no description of our own (description_ja);
+      title empty or a placeholder; no external references (ext_refs 0 / NULL); not public-body looking (the public_body path).
+    An unknown text_len is never 'empty'."""
+    try:
+        n = int(row.get("text_len"))
+    except (TypeError, ValueError):
+        return False
+    if n >= EMPTY_TEXT_LEN or (row.get("description_ja") or "").strip() or (row.get("description") or "").strip():
+        return False
+    try:
+        if int(row.get("ext_refs") or 0) > 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if not placeholder_title(row.get("title")):
+        return False
+    return not approve_policy.public_looking({"key": row["identity_key"], "title": row.get("title"), "description_ja": row.get("description_ja")})
+
+
+def empty_fetched_statements(row, stamp):
+    """A claimed ('reviewing') row that has no review_state yet."""
+    k = row["identity_key"]
+    return [(EMPTY_CAND_SQL + "WHERE identity_key=? AND (review_state IS NULL OR review_state='')", [stamp, k]), (PROGRESS_SQL, ["rejected", k])]
+
+
+def empty_pending_statements(row, stamp):
+    """An already judged row (state 'candidate', review_state 'pending'); nobody may be voting on it right now."""
+    k = row["identity_key"]
+    return [(EMPTY_CAND_SQL + "WHERE identity_key=? AND review_state='pending' AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state='candidate') "
+             "AND NOT EXISTS (SELECT 1 FROM deliberations WHERE identity_key=? AND status='running' AND lease_until >= " + D1_NOW + ")",
+             [stamp, k, k, k]),
+            ("UPDATE url_progress SET state='rejected', updated_at=datetime('now') WHERE identity_key=? AND state='candidate' AND EXISTS "
+             "(SELECT 1 FROM url_candidates WHERE identity_key=? AND review_state='rejected' AND review_reason='" + EMPTY_REASON + "')", [k, k])]
+
+
+def backfill_empty_content(client, apply, log=print, page=100):
+    """One-time-safe backfill: rows already judged ('candidate'/'pending') that are empty pages -> rejected 'empty_content'.
+    Idempotent (a rejected row is no longer selected). Dry-run (apply=False) writes nothing and only counts. -> stats dict."""
+    stats = {"examined": 0, "empty": 0, "skipped_public_body": 0, "rejected": 0, "lost": 0, "dry_run": not apply}
+    last = ""
+    while True:
+        rows = client.query(
+            "SELECT p.identity_key AS identity_key, c.title, c.description, c.description_ja, c.text_len, c.ext_refs FROM url_progress p "
+            "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='candidate' AND c.review_state='pending' "
+            "AND c.text_len IS NOT NULL AND c.text_len < ? AND TRIM(COALESCE(c.description_ja,''))='' "
+            # rows a human or the cats can still save are not touched: a pass/suspect verdict (the describe-after-approve path),
+            # public bodies, anything the deliberation already wrote a reason for, and rows with an approve majority
+            "AND COALESCE(c.spam_verdict,'') NOT IN ('pass','suspect') AND COALESCE(c.review_reason,'')<>'public_body' "
+            "AND COALESCE(c.review_reason,'') NOT LIKE 'deliberation:%' AND NOT EXISTS (SELECT 1 FROM deliberations d WHERE "
+            "d.identity_key=p.identity_key AND (d.shiro_vote='approve')+(d.kuro_vote='approve')+(d.yomogi_vote='approve')>=2) "
+            "AND p.identity_key > ? ORDER BY p.identity_key LIMIT ?",
+            [EMPTY_TEXT_LEN, last, int(page)])
+        if not rows:
+            break
+        last = rows[-1]["identity_key"]
+        stats["examined"] += len(rows)
+        hit = [r for r in rows if is_empty_content(r)]
+        stats["skipped_public_body"] += len(rows) - len(hit)
+        stats["empty"] += len(hit)
+        if apply and hit:
+            stamp = now_iso()
+            for i in range(0, len(hit), 20):
+                part = hit[i:i + 20]
+                write(client, [s for r in part for s in empty_pending_statements(r, stamp)])
+                got = {r["identity_key"] for r in client.query(
+                    f"SELECT p.identity_key FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='rejected' "
+                    f"AND c.review_state='rejected' AND c.review_reason='{EMPTY_REASON}' AND p.identity_key IN ({','.join('?' * len(part))})",
+                    [r["identity_key"] for r in part])}
+                stats["rejected"] += len(got)
+                stats["lost"] += len(part) - len(got)
+    log(f"backfill-empty: {stats}")
+    return stats
+
+
+REOPEN_SQL = [
+    # one batch (= one transaction). 1: due rows go back to the fetch queue. 2: the review mark of every empty_content row that is back in
+    # the fetch/judge flow is cleared (also rows the fetch stage already claimed, so a re-run picks up what a half done run left).
+    ("UPDATE url_progress SET state='discovered', updated_at=datetime('now') WHERE state='rejected' AND identity_key IN "
+     "(SELECT identity_key FROM url_candidates WHERE review_reason='" + EMPTY_REASON + "' AND review_state='rejected' "
+     "AND next_fetch_at<=" + D1_NOW + ")"),
+    ("UPDATE url_candidates SET review_state=NULL, review_reason=NULL, reviewed_at=NULL, updated_at=datetime('now') "
+     "WHERE review_reason='" + EMPTY_REASON + "' AND review_state='rejected' AND identity_key IN "
+     "(SELECT identity_key FROM url_progress WHERE state IN ('discovered','queued','fetched'))"),
+]
+
+
+def reopen_empty_content(client, apply, log=print):
+    """Reopen 'empty_content' rows whose next_fetch_at has passed (next_fetch_at is only a mark; nothing reopens them by itself).
+    Dry-run counts only. -> stats."""
+    due = client.query("SELECT COUNT(*) AS n FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='rejected' "
+                       f"AND c.review_reason='{EMPTY_REASON}' AND c.review_state='rejected' AND c.next_fetch_at<={D1_NOW}")[0]["n"]
+    stats = {"due": int(due), "dry_run": not apply}
+    if apply:
+        client.batch([(q, []) for q in REOPEN_SQL])
+    log(f"reopen-empty: {stats}")
+    return stats
+
+
+# ------------------------------------------------------------------ describe-after-approve (shared with the deliberate stage)
+def _json_list(v):
+    try:
+        x = json.loads(v) if isinstance(v, str) else v
+    except ValueError:
+        return None
+    return x if isinstance(x, list) else None
+
+
+def describe_base(row, categories, ctx):
+    """A triage-shaped 'full' output rebuilt from the stored judgement columns, so the describe stage (and its validation) can be reused."""
+    adult = row.get("adult") if row.get("adult") in ("yes", "no", "unknown") else "unknown"
+    verdict = row.get("spam_verdict")
+    kind = row.get("spam_kind") or ("none" if verdict == "pass" else "other")
+    return {"description_ja": None, "description_en": None, "long_description_ja": None, "long_description_en": None,
+            "long_description_evidence": [],
+            "spam": {"verdict": verdict, "kind": kind, "reason": row.get("spam_reason") or "(no reason given)"},
+            "categories": categories, "tags": [],
+            # adult=yes needs a verbatim quote that is not stored: validate as 'unknown' (the stored value is untouched and still sent as pre-judged)
+            "adult": {"value": "unknown" if adult == "yes" else adult, "evidence_quote": None},
+            "site_scope": row.get("site_scope") or "standalone", "site_kind": row.get("site_kind") or "unknown",
+            "site_kind_reason": row.get("site_kind_reason") or "(stored)", "freshness": row.get("freshness") or "unknown",
+            "exempt": row.get("exempt") or "none", "confidence": row.get("confidence") or "low",
+            "location": {"country_code": None, "region_code": None, "evidence_quote": None}, "notes": ""}
+
+
+def defang_row(row):
+    """Angle brackets in the site's own text become full-width, so nothing in a page can close <candidate> or open a tag of its own."""
+    return {k: (v.replace("<", "＜").replace(">", "＞") if isinstance(v, str) and k in ("title", "description", "text_head", "lang", "url", "final_url",
+                                                                                      "hint_leaf", "freshness_source") else v) for k, v in row.items()}
+
+
+def describe_row(ctx, row, need_categories=False):
+    """Describe ONE already judged row with the judge's own describe prompt / validation / ledger (run_stage -> call -> reserve/settle).
+    need_categories: the stored categories are unusable, so a triage call (the same cheap one) supplies them first.
+    row = the full joined row (url_progress p + url_candidates c.*). -> (output | None, problem | None); problem == STOP when the run must stop.
+    Raises LedgerSettleError. Nothing is written here."""
+    cand = candidate_from_row(defang_row(row))
+    if need_categories:
+        t, p = run_stage(ctx, "triage", TRIAGE_MODEL, [(cand, None, None)])[0]
+        if t is None:
+            return None, p
+        if t["spam"]["verdict"] == "reject" or not t["categories"]:
+            return None, "triage: " + ("rejected" if t["spam"]["verdict"] == "reject" else "no category")
+        cats = t["categories"]
+    else:
+        cats = judge.canonical_categories(_json_list(row.get("categories")) or [], ctx.valid_ids, ctx.legacy)
+    base = describe_base(row, cats, ctx)
+    adult = row.get("adult") if row.get("adult") in ("yes", "no", "unknown") else "unknown"
+    out, p = run_stage(ctx, "describe", DESCRIBE_MODEL, [(cand, f"pre-judged: adult={adult[0]}", base)])[0]
+    if out is None:
+        return None, p
+    if not out["description_ja"] or not out["description_en"]:
+        return None, "the text supports no description"
+    if adult == "yes":    # same policy as judged_statements: no long body-derived text for adult sites
+        out.update(long_description_ja=None, long_description_en=None, long_description_evidence=[])
+    return out, None
+
+
+def described_assignments(out, row, regenerate_categories):
+    """-> (SET clause, params, overrides dict for an in-memory gate check). Country/region only fill, never erase."""
+    loc = out["location"]
+    over = {"description_ja": out["description_ja"], "description_en": out["description_en"],
+            "long_description_ja": out["long_description_ja"], "long_description_en": out["long_description_en"],
+            "long_description_evidence": json.dumps(out["long_description_evidence"], ensure_ascii=False) if out["long_description_evidence"] else None,
+            "tags": json.dumps(out["tags"], ensure_ascii=False),
+            "country_code": loc["country_code"] or row.get("country_code"), "region_code": loc["region_code"] or row.get("region_code")}
+    if regenerate_categories:
+        over["categories"] = json.dumps(out["categories"])
+    sets = ", ".join(f"{k}=?" for k in over)
+    return sets, list(over.values()), over
+
+
 # ------------------------------------------------------------------ run
 def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True, priority=None):
     """llm_enabled=False: never calls the LLM (no key needed); only the deterministic moves of rows that already carry a review_state are done."""
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
-             "moved_without_llm": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
+             "moved_without_llm": 0, "empty_rejected": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
              "stopped": None, "dry_run": not apply}
     cols = ", ".join(("p." if c in ("identity_key", "url") else "c.") + c for c in SELECT_COLUMNS)
     # review_state/notes and the policy inputs of an already judged row come from the same row
@@ -422,13 +620,16 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
     stats["selected"] = len(rows)
     ledger = Ledger(client, judge.new_run_id(), budget_month)
     todo = [r for r in rows if not r.get("review_state")]
+    empties = [r for r in todo if is_empty_content(r)]      # no LLM, ever: decided before any call (also with llm_enabled=False)
+    todo = [r for r in todo if not is_empty_content(r)]
     if not llm_enabled:
         stats["llm_disabled"] = True
         if apply:
             todo = []
     if not apply:
         stats["would_call_llm_for"] = len(todo)
-        stats["would_move_without_llm"] = len(rows) - len(todo)
+        stats["would_reject_empty"] = len(empties)
+        stats["would_move_without_llm"] = len(rows) - len(todo) - len(empties)
         stats["month_spent_usd"] = round(ledger.month_total(), 6)
         log(f"judge dry-run: {stats}")
         return stats
@@ -457,6 +658,20 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             count("moved_without_llm")
         except Exception as e:  # noqa: BLE001 - the row stays 'fetched' and is moved by the next run
             log(f"judge: move of {r['identity_key']} failed ({type(e).__name__})")
+            count("write_failed")
+
+    for i in range(0, len(empties), 20):
+        part = empties[i:i + 20]
+        try:
+            mine = claim(client, part)
+            if mine:
+                stamp = now_iso()
+                write(client, [s for r in mine for s in empty_fetched_statements(r, stamp)])
+                have = states_of(client, [r["identity_key"] for r in mine])
+                for r in mine:
+                    count("empty_rejected" if have.get(r["identity_key"]) == "rejected" else "lost_claim")
+        except Exception as e:  # noqa: BLE001 - claimed rows expire by themselves after CLAIM_MINUTES; the rest stays 'fetched'
+            log(f"judge: empty-content rejection failed ({type(e).__name__})")
             count("write_failed")
 
     def beat():
