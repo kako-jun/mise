@@ -207,6 +207,14 @@ class Names(Base):
         self.assertEqual([self.name_of(f'k{n}') for n in range(3)], ['山田屋', LONG_TITLE, LONG_TITLE])
         self.assertEqual(cq.get_cursor(self.d1, 'names'), '')
 
+    def test_predicate_and_call_clauses_are_not_names(self):
+        for bad in ('ご相談ください', '手作り家具の店です', '一緒に作りましょう', '家具を作る', '気軽に相談できる', '皆で作ろう', 'お待ちしています', '家具を作っています。'):
+            self.assertTrue(cq.predicate_like(bad), bad)
+            self.assertIsNone(cq.llm_name_valid(bad, [bad]), bad)
+        for good in ('山田屋の店', '手作り家具の店', 'American Express', '山田屋', 'おやつ工房', 'ほたる'):
+            self.assertFalse(cq.predicate_like(good), good)
+        self.assertNotEqual(cq.deterministic_name('山田屋 | ご相談ください', 'yamada.example.jp'), 'ご相談ください')
+
     def test_llm_name_must_be_a_whole_piece_of_one_source(self):
         v = cq.llm_name_valid
         self.assertIsNone(v('American Expr', ['American Express']))

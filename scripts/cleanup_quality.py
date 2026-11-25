@@ -167,13 +167,24 @@ def name_needs_fix(name):
     return not name_ok(collapse(name))
 
 
+_CALL_END = ('ください', 'ましょう', 'しよう', 'ませんか', 'ろう', 'そう', 'なさい', 'て', '！', '!', '？', '?', 'よ', 'ね')
+
+
+def predicate_like(n):
+    """A clause that reads as a sentence, a call or an invitation (ご相談ください・手作り家具の店です・皆で作ろう), not as a name: a full stop, a
+    polite / plain predicate ending (です ます でした ください ましょう する できる ある いる ...) or an imperative / exhortative form.
+    A formal name that merely ends in a noun (〇〇の店) is not. Doubtful forms count as predicates (the row then goes to needs_human)."""
+    t = collapse(n).rstrip()
+    return bool('。' in t or t.endswith(_CALL_END) or quality._POLITE_END.search(t) or quality._plain(t, True) or quality.sentence_like(t))
+
+
 def deterministic_name(title, host):
     """suggest_name, then the long single-clause title as it is (publish_stage.site_name's order). None = not decidable by rule."""
     t = collapse(title)
     new = quality.suggest_name(t, host)
     if new is None and quality.name_acceptable_long(t):
         new = t
-    if new and name_ok(new) and not quality.is_fragment(new):
+    if new and name_ok(new) and not quality.is_fragment(new) and not predicate_like(new):
         return new
     return None
 
@@ -215,7 +226,7 @@ def llm_name_valid(new, sources):
     """The LLM's site_name: <= NAME_MAX, passes check_name, no separator inside, not a fragment / bare corporate form, and a whole piece of
     ONE of the sources (title / current name / text excerpt, each looked at alone)."""
     n = collapse(new) if isinstance(new, str) else ''
-    if not n or len(n) > quality.NAME_MAX or quality.check_name(n) or quality.is_fragment(n) or n in quality.CORP_FORMS:
+    if not n or len(n) > quality.NAME_MAX or quality.check_name(n) or quality.is_fragment(n) or n in quality.CORP_FORMS or predicate_like(n):
         return None
     if any(sep in n for sep in _NAME_SEPARATORS):
         return None
@@ -313,7 +324,7 @@ def plan_names(ctx, rows):
         else:
             new = deterministic_name(title, host)
             stored = collapse(r.get('cand_site_name'))
-            if new is None and stored and not quality.check_name(stored) and not quality.is_fragment(stored):
+            if new is None and stored and not quality.check_name(stored) and not quality.is_fragment(stored) and not predicate_like(stored):
                 new, how = stored, 'stored'         # 判定段が支払い済みの site_name(publish_stage.site_name と同じ採用条件)
         if new is None and how != 'adult_host':
             if not apply:
