@@ -96,6 +96,9 @@ LLM 費用（月上限）を、掲載数が目標（`FLOOR`=100 サイト）に�
 - rank 0: `hint_leaf` が不足のある葉（不足が大きい葉が先、次に `identity_key`）／ rank 1: ヒントなし・葉でない値（`identity_key` 順）／ rank 2: ヒントの葉が既に 100 以上（落とさず後回し。`identity_key` 順）。
 - 葉 id は `categories` 表の id を正規表現で検証して `CASE` に定数で埋め込む（束縛変数 0、D1 の 100 個制限に触れない）。選択は `LIMIT` で絞ったまま。
 - 公平枠: 段ごとの選択 5 回に 1 回（`FAIRNESS_EVERY`）は優先せず `identity_key` 順だけで選ぶ。rank 2 が永久に止まらない。
+- 行の葉は 1 つの式（判定済みなら `categories` の先頭、無ければ `hint_leaf`）で、処理中の数え方と rank の両方に同じものを使う。
+- **依存**: 取得段の `discovered` 行には `url_candidates` 行（と `hint_leaf`）が無いことが多い（作るのは取得後）。ヒントを付けるのは発見側（#269: 発見時に `hint_leaf` つきで `url_candidates` へ upsert）で、それと組み合わさって効く。ヒントの無い行（`url_candidates` 行なしを含む）は rank 1 で `identity_key` 順に処理される。既に `hint_leaf` を持つ旧 frontier 由来の Wikidata 行には rank 0/2 が効く。
+- **D1 の読み取り**: 並びは `CASE` の `ORDER BY` で、選択のたびに対象状態の全行（約 3 万行）を読む（読み取り行数の課金）。段ごと・回ごとに 1 回なので許容し、候補の絞り込み（rank 別の `LIMIT` 取得）はしていない。
 - 毎回、不足の大きい上位 5 葉と選ばれた行の rank 0/1/2 の件数をログに出す。
 - `--priority leaf|none`（ランナー既定 `leaf`）。各段の `run(..., priority=None)` は従来どおり（`Selector` を渡したときだけ有効）。
 - 掲載段の選択は変えない。熟議段はこの時点の main に無いので対象外。

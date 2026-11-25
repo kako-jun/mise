@@ -95,6 +95,20 @@ class Deficits(unittest.TestCase):
         self.assertEqual(defs[self.b], 0)
         self.assertEqual(defs[self.c], 100 - 3)
 
+    def test_rank_and_inflight_use_same_leaf(self):
+        """判定済み(categories 先頭)と hint が食い違う行は、処理中の数えも rank も categories 先頭の葉で揃う。"""
+        k = self.d.add('https://mix.example/', 'fetched', hint=self.a, cats=f'["{self.c}"]')
+        defs = pr.leaf_deficits(self.d)
+        self.assertEqual((defs[self.a], defs[self.c]), (100, 99))
+        rank, _ = pr.rank_sql(defs)
+        r = self.d.query(f"SELECT {rank} AS r FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.identity_key=?", [k])
+        self.assertEqual(r[0]['r'], 0)   # c は不足 99 の葉 = rank 0(hint の a で見ていても 0 だが、c を full にすると下で 2 になる)
+        self.d.publish(self.c, 100)
+        defs = pr.leaf_deficits(self.d)
+        rank, _ = pr.rank_sql(defs)
+        r = self.d.query(f"SELECT {rank} AS r FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.identity_key=?", [k])
+        self.assertEqual(r[0]['r'], 2)
+
     def test_invalid_id_refused(self):
         with self.assertRaises(ValueError):
             pr.rank_sql({"x'; DROP TABLE sites;--": 5})
@@ -133,6 +147,21 @@ class Selection(unittest.TestCase):
         rows = fs.select_rows(self.d, 10, T0, sel)
         self.assertEqual(self.keys(rows), ['big', 'small', 'nohint', 'full'])   # nothing dropped
         self.assertEqual(self.d.max_params, 3)
+
+    def test_plain_progress_rows_without_candidate_are_rank1_in_key_order(self):
+        d = FakeD1()
+        keys = [d.add(f'https://plain{i}.example/') for i in range(5)]   # url_candidates 行なし
+        sel, out = pr.Selector('leaf'), []
+        rows = fs.select_rows(d, 10, T0, sel)
+        sel.report(rows, out.append, 'fetch')
+        self.assertEqual([r['identity_key'] for r in rows], sorted(keys))
+        self.assertTrue(all(r['prio_rank'] == 1 for r in rows))
+        self.assertIn('rank0/1/2=0/5/0', out[0])
+
+    def test_existing_hint_rows_rank0_and_rank2(self):
+        """url_candidates に hint_leaf が既にある行(旧 frontier 由来)では rank 0/2 が効き、ヒント無しの行は間に入る。"""
+        rows = fs.select_rows(self.d, 10, T0, pr.Selector('leaf'))
+        self.assertEqual([r['prio_rank'] for r in rows], [0, 0, 1, 2])
 
     def test_none_and_default_are_identity_key_order(self):
         plain = self.keys(fs.select_rows(self.d, 10, T0))

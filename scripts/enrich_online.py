@@ -280,7 +280,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
 
 
 def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=None, apply=False, budget_month=judge_stage.MONTHLY_CAP_USD,
-                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark, priority='none'):
+                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark, priority='none'):   # 既定 none = 関数を直接呼ぶ側(テスト等)の挙動を変えない。CLI の既定は leaf
     """-> (終了コード, 最初と最後の状態別件数)。テストは fetch / llm / lease / clock / bookmark_fn を差し込む。"""
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     if any(not 1 <= v <= MAX_LIMIT for v in limits.values()):

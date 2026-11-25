@@ -15,6 +15,9 @@ FAIRNESS_EVERY = 5         # この回数に 1 回は identity_key の機械順�
 INFLIGHT_STATES = ('fetched', 'reviewing', 'approved', 'queued')
 LEAF_ID = re.compile(r'^[a-z0-9][a-z0-9-]*$')
 MODES = ('leaf', 'none')
+# 行の葉 = 判定済みなら categories の先頭、無ければ hint_leaf。処理中の数え方(leaf_deficits)と rank の両方でこの同じ式を使う
+LEAF_EXPR = ("COALESCE(CASE WHEN json_valid(c.categories) AND json_type(c.categories)='array' THEN json_extract(c.categories,'$[0]') END, "
+             "c.hint_leaf)")
 
 
 def _safe(ids):
@@ -36,15 +39,14 @@ def leaf_deficits(client):
     states = ','.join(f"'{s}'" for s in INFLIGHT_STATES)
     inflight = collections.Counter()
     for r in client.query(
-            "SELECT COALESCE(CASE WHEN json_valid(c.categories) AND json_type(c.categories)='array' THEN json_extract(c.categories,'$[0]') END, c.hint_leaf) AS leaf, "
-            "COUNT(*) AS n FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
+            f"SELECT {LEAF_EXPR} AS leaf, COUNT(*) AS n FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
             f"WHERE p.state IN ({states}) GROUP BY leaf"):
         if r['leaf']:
             inflight[r['leaf']] += r['n']
     return {leaf: max(0, FLOOR - int(published.get(leaf, 0)) - inflight[leaf]) for leaf in leaves}
 
 
-def rank_sql(deficits, col='c.hint_leaf'):
+def rank_sql(deficits, col=LEAF_EXPR):
     """-> (rank 式, 不足式)。ORDER BY <rank>, <不足> DESC, identity_key に使う。col は SQL の列(固定の文字列)。"""
     _safe(deficits)
     need = sorted((k for k, v in deficits.items() if v > 0), key=lambda k: (-deficits[k], k))
@@ -68,7 +70,7 @@ class Selector:
             raise ValueError(f'priority mode must be one of {MODES}')
         self.mode, self.every, self.batches, self.deficits, self.fair = mode, every, 0, {}, False
 
-    def order(self, client, key_col, hint_col='c.hint_leaf'):
+    def order(self, client, key_col, hint_col=LEAF_EXPR):
         """-> (ORDER BY の中身, SELECT に足す列)。公平枠・mode none は rank を付けない。"""
         self.batches += 1
         self.fair = self.mode == 'none' or self.batches % self.every == 0
