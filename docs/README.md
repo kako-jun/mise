@@ -38,7 +38,7 @@ mise の設計・収集・運用・決定・構想の入口。ここから全フ
 | [operations/deploy.md](operations/deploy.md) | 本番環境、デプロイ、マイグレーション |
 | [operations/requests.md](operations/requests.md) | 申請（推薦・取り下げ・訂正）の受付 API、レート制限、手元スクリプトでの取り込み手順、個人情報の保持期間 |
 | [operations/jobs.md](operations/jobs.md) | 定期処理、LLM の鍵・クレジット・予算、巡回作法 |
-| [operations/enrich.md](operations/enrich.md) | オンライン補強パイプライン（取得段、判定段: LLM 判定・審査ポリシー・D1 費用台帳） |
+| [operations/enrich.md](operations/enrich.md) | オンライン補強パイプライン（取得段、判定段: LLM 判定・審査ポリシー・D1 費用台帳、品質の規則、掲載済みデータの是正ツール） |
 | [operations/usage-guard.md](operations/usage-guard.md) | 使用量ガード（Cloudflare の使用量を込みの枠と比べる）、API トークンの作り方、WAF のレート制限の手順、警告が出たときの対処 |
 | **ideas/** 構想（未実装・検証中） | |
 | [ideas/README.md](ideas/README.md) | 構想の一覧と状態 |
