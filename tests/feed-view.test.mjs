@@ -321,3 +321,49 @@ test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は保留
   assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
   assert.equal(b.tick(1001 + 399, run).state, 'quiet'); assert.equal(b.tick(1001 + 400, run).state, 'running');
 });
+
+test('windowRange: 現在の前後を描き、離れたものだけ捨て、端では範囲に収める(#278)', () => {
+  assert.deepEqual({ ...lib.windowRange(10, 100) }, { lo: 8, hi: 13, dropBelow: 5, dropAbove: 16 });
+  const top = lib.windowRange(0, 100); assert.equal(top.lo, 0); assert.equal(top.hi, 3);
+  const end = lib.windowRange(99, 100); assert.equal(end.hi, 99); assert.equal(end.lo, 97);
+  assert.equal(lib.windowRange(0, 2).hi, 1, '総数より先は描かない');
+  // 描く範囲と捨てる範囲の間に余白があり、境目で描く・捨てるを繰り返さない
+  const w = lib.windowRange(50, 100); assert.ok(w.lo - w.dropBelow > 1 && w.dropAbove - w.hi > 1);
+});
+
+test('settleTarget: 半分を越えたら次・手前なら元・速い flick は 1 枚・2 枚以上は飛ばさない(#278)', () => {
+  const o = { startIdx: 3, h: 800, count: 10, v: 0 };
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 200 }), 3, '25% は元');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 399 }), 3, '50% 手前は元');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 401 }), 4, '50% 超は次');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 600 }), 4, '75% は次');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 - 200 }), 3, '上へ 25% は元');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 - 500 }), 2, '上へ 62% は前');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 100, v: 1.2 }), 4, '速い下向き flick は 10% でも次');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 - 100, v: -1.2 }), 2, '速い上向き flick は前');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 5, v: 1.2 }), 3, '動いていないのに速度だけ大きくても動かさない');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 + 2000, v: 3 }), 4, 'どれだけ進んでも触り始めから 1 枚まで');
+  assert.equal(lib.settleTarget({ ...o, pos: 3 * 800 - 2000, v: -3 }), 2);
+  assert.equal(lib.settleTarget({ ...o, startIdx: 0, pos: -100, v: -1 }), 0, '先頭より前へは行かない');
+  assert.equal(lib.settleTarget({ ...o, startIdx: 9, pos: 9 * 800 + 300, v: 1 }), 9, '末尾より先へは行かない');
+});
+
+test('releaseVelocity / settleMs / easeOutCubic(#278)', () => {
+  assert.equal(lib.releaseVelocity([], 100), 0);
+  assert.equal(lib.releaseVelocity([{ t: 0, y: 500 }, { t: 50, y: 400 }], 60), 2, '指が上へ 100px/50ms = 下へ進む向きで +2');
+  assert.equal(lib.releaseVelocity([{ t: 0, y: 400 }, { t: 50, y: 500 }], 60), -2);
+  assert.equal(lib.releaseVelocity([{ t: 0, y: 500 }, { t: 50, y: 400 }], 400), 0, '離す直前に止まっていたら 0');
+  for (const d of [0, 10, 400, 800, 5000]) { const ms = lib.settleMs(d, 800); assert.ok(ms >= 150 && ms <= 300, `${d}px → ${ms}ms`); }
+  assert.equal(lib.easeOutCubic(0), 0); assert.equal(lib.easeOutCubic(1), 1); assert.ok(lib.easeOutCubic(0.5) > 0.8, '最初に大きく動き、終わりに減速する');
+});
+
+test('縦フィードの窓(#278): 全カードは高さ固定の枠 + snap、中身は窓の中だけで、寄せは snap と同時にかけない', () => {
+  assert.match(css, /#feed \.f-scroll \{[^}]*scroll-snap-type: y mandatory/);
+  assert.match(css, /#feed \.f-card \{[^}]*scroll-snap-align: start; scroll-snap-stop: always/);
+  assert.match(appJs, /function fillCard\(/); assert.match(appJs, /function dropCard\(/);
+  assert.match(appJs, /img\.decode\(\)/, '描く前にサムネを decode する');
+  assert.ok(!/renderMore|FIRST_BATCH/.test(appJs), '100 枚ずつ足す旧方式は残さない');
+  // 寄せている間だけ snap を外し、終わったら必ず戻す(奪い合い防止)
+  assert.match(appJs, /scrollSnapType = 'none'/); assert.match(appJs, /scrollSnapType = ''/);
+  assert.match(appJs, /function cancelSettle\(/);
+});

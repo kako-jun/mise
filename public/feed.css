@@ -94,7 +94,8 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 }
 #feed .f-lqip { filter: blur(22px) !important; transform: scale(1.2) !important; }
 #feed .f-bg > .f-lqip { transform: scale(1.8) !important; }
-#feed .f-img { opacity: 0; transition: opacity .6s ease; }
+#feed .f-img { opacity: 0; }
+#feed .f-card.is-active .f-img { transition: opacity .6s ease; } /* 先読みで decode 済みの隣のカードは最初から不透明。表示中のカードに遅れて届いたときだけ、なめらかに入れる */
 #feed .f-img.is-in { opacity: 1; }
 /* 黒の重ね: 全体にごく薄い黒で画像を締め、下ほど濃い黒へ(灰色・ぼかしは使わない) */
 #feed .f-scrim { position: absolute; inset: 0; pointer-events: none;
@@ -183,8 +184,7 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 #feed .f-panel-msg { margin: 6px 0 0; font-size: 12px; min-height: 1em; }
 #feed .f-file { display: none; }
 #feed .f-panel, #feed .f-panel * { text-align: left; } #feed .f-bd-v { text-align: right; }
-/* 長い一覧でも描画を軽く保つ: 画面外のカードは中身を描かない(高さは固定なのでスクロール位置は変わらない) */
-#feed .f-card { content-visibility: auto; contain-intrinsic-size: auto 100dvh; }
+/* 長い一覧でも軽く保つ(#278): 全カードは高さ固定の枠(snap の位置を持つ)で、中身は feed.js が現在の前後だけ描き、離れたら捨てる(content-visibility は不要になった) */
 #feed .f-loading { margin: 0; }
 #feed .f-host { margin: 0; font-size: 12px; opacity: .72; overflow-wrap: anywhere; }
 
