@@ -245,7 +245,14 @@ def ask(ctx, cat, src, user_text, row):
 NEEDS_REVIEW = "deliberation:needs_review:"
 APPROVE_DESCRIBED = "deliberation:approve+described"
 # publish gates a describe call can repair; gate:verdict_* (spam verdict) and the rest stay a human's
-DESCRIBABLE = {"gate:no_description": False, "gate:no_valid_category": True, "gate:bad_categories_json": True, "gate:bad_tags_json": False}
+DESCRIBABLE = {"gate:no_description", "gate:no_valid_category", "gate:bad_categories_json", "gate:bad_tags_json"}
+
+
+def categories_usable(full):
+    """Whether the STORED categories pass the publish gate's own test (decides if a triage call is needed, not the first gate reason)."""
+    raw = publish_stage._json_list(full.get("categories"))
+    return raw is not None and bool(judge.modernize_categories([c for c in raw if isinstance(c, str)], publish_stage.VALID_CATEGORIES,
+                                                               publish_stage.LEGACY_CATEGORIES))
 
 
 def decide(votes, row=None, gate=None):
@@ -429,6 +436,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
     # describe-after-approve: its own Ledger object on the SAME run id and cap (the cap is read from D1, so it is shared), only to show its cost
     dledger = js.Ledger(client, ledger.run_id, budget_month)
     jctx = js.Ctx(llm, dledger, log, judge.load_categories())
+    dlock = threading.Lock()
     fatal = []
 
     def count(kind):
@@ -459,29 +467,33 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
         full = full_row(client, row)
         if full is None:
             return meeting
-        jctx.stop = ctx.stop
-        spent = dledger.spent
-        try:
-            out, problem = js.describe_row(jctx, dict(full, url=full.get("url") or row.get("url")), need_categories=DESCRIBABLE[gate])
-        except js.BudgetExceeded as e:
-            out, problem = None, str(e)
-        finally:
+        need_cat = not categories_usable(full)
+        with dlock:      # one describe at a time: the shared judge context's stop flag and the cost difference stay exact
             with ctx.lock:
-                stats["describe_cost_usd"] = round(stats["describe_cost_usd"] + dledger.spent - spent, 6)
-        if jctx.stop:
-            ctx.stop = ctx.stop or jctx.stop
+                jctx.stop = ctx.stop
+            spent = dledger.spent
+            try:
+                out, problem = js.describe_row(jctx, full, need_categories=need_cat)
+            except js.BudgetExceeded as e:
+                out, problem = None, str(e)
+            finally:
+                with ctx.lock:
+                    stats["describe_cost_usd"] = round(stats["describe_cost_usd"] + dledger.spent - spent, 6)
+                    if jctx.stop:
+                        ctx.stop = ctx.stop or jctx.stop
         if problem == STOP:
             problem = ctx.stop or "stopped"
         if out is None:
             count("describe_failed")
             log(f"deliberate: describe of {row['identity_key']} failed ({problem})"[:300])
             return meeting
-        sets, params, over = js.described_assignments(out, full, DESCRIBABLE[gate])
+        sets, params, over = js.described_assignments(out, full, need_cat)
         gate2 = publish_stage.gate_reason(dict(full, **over))
-        count("described")
         content = content_statements(row, lease, sets, params)
         if gate2:
+            count("describe_failed")
             return None, NEEDS_REVIEW + gate2, None, content
+        count("described")
         return "approve", None, APPROVE_DESCRIBED, content
 
     def do_row(row, lease):

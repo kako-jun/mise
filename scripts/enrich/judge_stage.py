@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import unicodedata
 import uuid
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -411,14 +412,37 @@ EMPTY_CAND_SQL = ("UPDATE url_candidates SET review_state='rejected', review_rea
                   "next_fetch_at=strftime('%Y-%m-%dT%H:%M:%SZ','now','+" + str(EMPTY_REOPEN_DAYS) + " days'), updated_at=datetime('now') ")
 
 
+# A title that says nothing about the site. Exact (after folding case/width/trailing punctuation) or, for the long phrases, contained.
+PLACEHOLDER_TITLES_EXACT = ("無題", "untitled", "no title", "notitle", "welcome", "home", "index", "top", "トップ", "トップページ",
+                            "ホーム", "ようこそ", "new page", "my site", "test", "テスト")
+PLACEHOLDER_TITLE_PARTS = ("index of", "まだ記事がありません", "記事がありません", "準備中", "coming soon", "under construction",
+                           "工事中", "default web site page", "it works", "welcome to nginx", "apache2 default")
+
+
+def placeholder_title(title):
+    """True for an empty title or a generic placeholder (PLACEHOLDER_TITLES_EXACT / PLACEHOLDER_TITLE_PARTS)."""
+    t = unicodedata.normalize("NFKC", title or "").strip().casefold().strip(" .!-_|:/")
+    return not t or t in PLACEHOLDER_TITLES_EXACT or any(w in t for w in PLACEHOLDER_TITLE_PARTS)
+
+
 def is_empty_content(row):
-    """True: text_len known and < EMPTY_TEXT_LEN, no description of our own (description_ja), and not a public-body-looking row
-    (those are left to the public_body path). An unknown text_len is never 'empty'."""
+    """True only when EVERY condition holds (the safest shape: text_len counts visible body text only, so SPA shells, framesets, image
+    galleries, image-text shops, link-only tops, ENTER pages and Flash pages must go to the LLM as before):
+      text_len known and < EMPTY_TEXT_LEN; no fetched meta description (`description`); no description of our own (description_ja);
+      title empty or a placeholder; no external references (ext_refs 0 / NULL); not public-body looking (the public_body path).
+    An unknown text_len is never 'empty'."""
     try:
         n = int(row.get("text_len"))
     except (TypeError, ValueError):
         return False
-    if n >= EMPTY_TEXT_LEN or (row.get("description_ja") or "").strip():
+    if n >= EMPTY_TEXT_LEN or (row.get("description_ja") or "").strip() or (row.get("description") or "").strip():
+        return False
+    try:
+        if int(row.get("ext_refs") or 0) > 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if not placeholder_title(row.get("title")):
         return False
     return not approve_policy.public_looking({"key": row["identity_key"], "title": row.get("title"), "description_ja": row.get("description_ja")})
 
@@ -446,9 +470,15 @@ def backfill_empty_content(client, apply, log=print, page=100):
     last = ""
     while True:
         rows = client.query(
-            "SELECT p.identity_key AS identity_key, c.title, c.description_ja, c.text_len FROM url_progress p JOIN url_candidates c "
-            "ON c.identity_key=p.identity_key WHERE p.state='candidate' AND c.review_state='pending' AND c.text_len IS NOT NULL "
-            "AND c.text_len < ? AND TRIM(COALESCE(c.description_ja,''))='' AND p.identity_key > ? ORDER BY p.identity_key LIMIT ?",
+            "SELECT p.identity_key AS identity_key, c.title, c.description, c.description_ja, c.text_len, c.ext_refs FROM url_progress p "
+            "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='candidate' AND c.review_state='pending' "
+            "AND c.text_len IS NOT NULL AND c.text_len < ? AND TRIM(COALESCE(c.description_ja,''))='' "
+            # rows a human or the cats can still save are not touched: a pass/suspect verdict (the describe-after-approve path),
+            # public bodies, anything the deliberation already wrote a reason for, and rows with an approve majority
+            "AND COALESCE(c.spam_verdict,'') NOT IN ('pass','suspect') AND COALESCE(c.review_reason,'')<>'public_body' "
+            "AND COALESCE(c.review_reason,'') NOT LIKE 'deliberation:%' AND NOT EXISTS (SELECT 1 FROM deliberations d WHERE "
+            "d.identity_key=p.identity_key AND (d.shiro_vote='approve')+(d.kuro_vote='approve')+(d.yomogi_vote='approve')>=2) "
+            "AND p.identity_key > ? ORDER BY p.identity_key LIMIT ?",
             [EMPTY_TEXT_LEN, last, int(page)])
         if not rows:
             break
@@ -469,6 +499,30 @@ def backfill_empty_content(client, apply, log=print, page=100):
                 stats["rejected"] += len(got)
                 stats["lost"] += len(part) - len(got)
     log(f"backfill-empty: {stats}")
+    return stats
+
+
+REOPEN_SQL = [
+    # one batch (= one transaction). 1: due rows go back to the fetch queue. 2: the review mark of every empty_content row that is back in
+    # the fetch/judge flow is cleared (also rows the fetch stage already claimed, so a re-run picks up what a half done run left).
+    ("UPDATE url_progress SET state='discovered', updated_at=datetime('now') WHERE state='rejected' AND identity_key IN "
+     "(SELECT identity_key FROM url_candidates WHERE review_reason='" + EMPTY_REASON + "' AND review_state='rejected' "
+     "AND next_fetch_at<=" + D1_NOW + ")"),
+    ("UPDATE url_candidates SET review_state=NULL, review_reason=NULL, reviewed_at=NULL, updated_at=datetime('now') "
+     "WHERE review_reason='" + EMPTY_REASON + "' AND review_state='rejected' AND identity_key IN "
+     "(SELECT identity_key FROM url_progress WHERE state IN ('discovered','queued','fetched'))"),
+]
+
+
+def reopen_empty_content(client, apply, log=print):
+    """Reopen 'empty_content' rows whose next_fetch_at has passed (next_fetch_at is only a mark; nothing reopens them by itself).
+    Dry-run counts only. -> stats."""
+    due = client.query("SELECT COUNT(*) AS n FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='rejected' "
+                       f"AND c.review_reason='{EMPTY_REASON}' AND c.review_state='rejected' AND c.next_fetch_at<={D1_NOW}")[0]["n"]
+    stats = {"due": int(due), "dry_run": not apply}
+    if apply:
+        client.batch([(q, []) for q in REOPEN_SQL])
+    log(f"reopen-empty: {stats}")
     return stats
 
 
@@ -498,12 +552,18 @@ def describe_base(row, categories, ctx):
             "location": {"country_code": None, "region_code": None, "evidence_quote": None}, "notes": ""}
 
 
+def defang_row(row):
+    """Angle brackets in the site's own text become full-width, so nothing in a page can close <candidate> or open a tag of its own."""
+    return {k: (v.replace("<", "＜").replace(">", "＞") if isinstance(v, str) and k in ("title", "description", "text_head", "lang", "url", "final_url",
+                                                                                      "hint_leaf", "freshness_source") else v) for k, v in row.items()}
+
+
 def describe_row(ctx, row, need_categories=False):
     """Describe ONE already judged row with the judge's own describe prompt / validation / ledger (run_stage -> call -> reserve/settle).
     need_categories: the stored categories are unusable, so a triage call (the same cheap one) supplies them first.
     row = the full joined row (url_progress p + url_candidates c.*). -> (output | None, problem | None); problem == STOP when the run must stop.
     Raises LedgerSettleError. Nothing is written here."""
-    cand = candidate_from_row(row)
+    cand = candidate_from_row(defang_row(row))
     if need_categories:
         t, p = run_stage(ctx, "triage", TRIAGE_MODEL, [(cand, None, None)])[0]
         if t is None:

@@ -377,14 +377,14 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
     return code, start, end
 
 
-def backfill_empty(client, apply, lease=None, out=print):
-    """--backfill-empty: 判定済みの空ページ(candidate/pending)を empty_content で却下する(1 回だけ。--apply のときだけ書き、リースを取る)。"""
+def one_shot(fn, client, apply, lease=None, out=print):
+    """--backfill-empty / --reopen-empty: 1 回だけ実行して終了する(--apply のときだけ書き、リースを取る。途中のハートビートは無く、リース TTL に収まる件数の前提)。"""
     lease = lease or do.Lease(client, ttl=LEASE_TTL, key=LEASE_KEY)
     if apply and not lease.acquire():
         out('lease: 別の実行が動いている。何もせず終了')
         return 2
     try:
-        judge_stage.backfill_empty_content(client, apply, log=out)
+        fn(client, apply, log=out)
     finally:
         if apply:
             try:
@@ -407,6 +407,7 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--judge-concurrency', type=int, default=1, help='判定段の並列数(1〜4)')
     ap.add_argument('--priority', choices=prio.MODES, default='leaf', help='取得・判定の行の選び方。leaf = 掲載数が目標未満の葉を埋める行を先に(機械順。既定)、none = identity_key 順')
     ap.add_argument('--backfill-empty', action='store_true', help='1 回だけ実行して終了: 判定済み(candidate/pending)で本文がほぼ空(text_len<80)・説明なしの行を empty_content で却下する(LLM 無し。既定 dry-run は件数だけ)')
+    ap.add_argument('--reopen-empty', action='store_true', help='1 回だけ実行して終了: next_fetch_at が過ぎた empty_content の行を取得段へ戻す(next_fetch_at は印にすぎず自動では再開しない。既定 dry-run は件数だけ)')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かない')
     mode.add_argument('--apply', action='store_true', help='本番 D1 へ書く')
@@ -424,8 +425,11 @@ def main(argv=None, *, client=None, **inject):
     if client is None:
         import media_online
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
-    if a.backfill_empty:
-        return backfill_empty(client, a.apply, lease=inject.get('lease'), out=inject.get('out', print))
+    if a.backfill_empty and a.reopen_empty:
+        ap.error('--backfill-empty と --reopen-empty は同時に指定できない')
+    if a.backfill_empty or a.reopen_empty:
+        return one_shot(judge_stage.backfill_empty_content if a.backfill_empty else judge_stage.reopen_empty_content, client, a.apply,
+                        lease=inject.get('lease'), out=inject.get('out', print))
     code, _, _ = run_pipeline(client, stages=stages, limits=limits, rounds=a.rounds, max_seconds=a.max_seconds, apply=a.apply,
                               budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, priority=a.priority, **inject)
     return code
