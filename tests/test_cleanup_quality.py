@@ -18,7 +18,7 @@ from enrich import judge_stage as js
 from enrich import quality
 from test_enrich_publish_stage import FakeD1
 
-LONG_TITLE = '家具の工房ガイド | 手作り家具の通販 | 山田屋の店舗案内 | ご相談ください'     # three clauses, no brand / corporate-form sign: not decidable by rule
+LONG_TITLE = '家具の工房ガイド | 手作り家具の通販 | 山田屋 | ご相談ください'     # three clauses, no brand / corporate-form sign: not decidable by rule
 
 
 def add_site(d1, sid, name, desc='小さな工房の紹介サイト。', url=None, title=None, text_head='', **kw):
@@ -53,6 +53,9 @@ class FakeLLM:
 class Base(unittest.TestCase):
     def setUp(self):
         self.d1, self.out = FakeD1(), []
+        self._bm = eo.time_travel_bookmark
+        eo.time_travel_bookmark = lambda c: 'bm-test'
+        self.addCleanup(lambda: setattr(eo, 'time_travel_bookmark', self._bm))
         for t in ('site_categories', 'site_tags', 'sites'):       # the fake D1 starts with the repo's dev seed sites: only the test's own rows here
             self.d1.db.execute(f'DELETE FROM {t}')
 
@@ -105,13 +108,13 @@ class Names(Base):
         self.assertEqual(self.name_of('human'), LONG_TITLE)            # not decidable -> unchanged
         self.assertEqual((st['updated'], st['needs_human'], st['verify_mismatch']), (2, 1, 0))
         self.assertEqual(st['needs_human_ids'], ['human'])
-        self.assertIn("needs_human ids: ['human']", self.text())
+        self.assertIn("needs_human (1) ids: ['human']", self.text())
         # second run: nothing left to fix except the human row (re-tried once after the table end -> cursor wrapped)
         calls = len(llm.calls)
         code, st2 = self.go('names', llm=llm)
         self.assertEqual((st2['updated'], st2['by_rule'], st2['by_llm']), (0, 0, 0))
         self.assertEqual(self.name_of('llm1'), '山田屋')
-        self.assertLessEqual(len(llm.calls) - calls, 1)
+        self.assertEqual(len(llm.calls), calls)           # the needs_human row is marked in D1 and not sent again
         self.assertEqual(self.d1.max_params <= 100, True)
 
     def test_original_title_kept(self):
@@ -140,11 +143,79 @@ class Names(Base):
         hit = db.execute("SELECT s.id FROM sites_fts f JOIN sites s ON s.rowid=f.rowid WHERE sites_fts MATCH '\"山田屋\"'").fetchall()
         self.assertIn('llm1', [r[0] for r in hit])
 
-    def test_adult_and_name_ja_untouched(self):
-        add_site(self.d1, 'ad', LONG_TITLE, title=LONG_TITLE, adult_content=1, name_ja='別名', country_code='JP')
-        self.go('names', llm=FakeLLM(names={'ad.example.jp': '山田屋'}))
+    def test_adult_uses_host_like_publish_and_name_ja_untouched(self):
+        add_site(self.d1, 'ad', LONG_TITLE, title=LONG_TITLE, adult_content=1, name_ja='別名', country_code='JP', url='https://ad.example.jp/')
+        llm = FakeLLM(names={'ad.example.jp': '山田屋'})
+        self.go('names', llm=llm)
         row = self.d1.one("SELECT name, name_ja, adult_content, country_code FROM sites WHERE id='ad'")
-        self.assertEqual(tuple(row), ('山田屋', '別名', 1, 'JP'))
+        self.assertEqual(tuple(row), ('ad.example.jp', '別名', 1, 'JP'))
+        self.assertEqual(llm.calls, [])
+
+    def test_stored_site_name_used_before_llm(self):
+        add_site(self.d1, 'st', LONG_TITLE, title=LONG_TITLE, url='https://st.example.jp/')
+        self.d1.db.execute("UPDATE url_candidates SET site_name='山田屋' WHERE host='st'")
+        llm = FakeLLM()
+        self.go('names', llm=llm)
+        self.assertEqual((self.name_of('st'), llm.calls), ('山田屋', []))
+
+    def test_guard_uses_stored_value_not_collapsed(self):
+        odd = 'Ｙ工房  ｜ ' + 'あ' * 40                    # full-width letter and a double space: collapse() would not equal the stored text
+        add_site(self.d1, 'w', odd, title=odd, url='https://w.example.jp/')
+        code, st = self.go('names', llm=FakeLLM(names={'w.example.jp': 'Ｙ工房'}))
+        self.assertEqual((st['updated'], st['skipped_changed']), (1, 0), self.text())
+        self.assertEqual(self.name_of('w'), 'Ｙ工房')
+
+    def test_old_name_kept_in_url_candidates(self):
+        add_site(self.d1, 'nt', LONG_TITLE, url='https://nt.example.jp/')                 # no url_candidates row at all
+        add_site(self.d1, 'wt', LONG_TITLE, title='別のタイトル | 宣伝 | 説明 | もっと', url='https://wt.example.jp/')
+        self.go('names', llm=FakeLLM(names={'nt.example.jp': '山田屋', 'wt.example.jp': '別のタイトル'}))
+        pk = self.d1.one("SELECT progress_key FROM sites WHERE id='nt'")[0]
+        self.assertEqual(self.d1.one('SELECT title FROM url_candidates WHERE identity_key=?', (pk,))[0], LONG_TITLE)
+        self.assertEqual(self.d1.one("SELECT title FROM url_candidates WHERE host='wt'")[0], '別のタイトル | 宣伝 | 説明 | もっと')
+        self.assertIn(repr(LONG_TITLE), self.text())             # every (id, old, new) is printed on apply
+
+    def test_needs_human_is_marked_and_skipped_until_retry(self):
+        self.seed()
+        llm = FakeLLM(names={'llm-one.example.jp': '山田屋'})
+        self.go('names', llm=llm)
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM discovery_cursors WHERE source='cleanup-skip'")[0], 1)
+        n = len(llm.calls)
+        code, st = self.go('names', llm=llm, restart=True)
+        self.assertEqual((len(llm.calls), st['skip_listed'], st['needs_human']), (n, 1, 0))
+        llm.names['nothing.example.jp'] = '山田屋'
+        code, st = self.go('names', llm=llm, restart=True, retry_skipped=True)
+        self.assertEqual((st['updated'], self.name_of('human')), (1, '山田屋'))
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM discovery_cursors WHERE source='cleanup-skip'")[0], 0)
+
+    def test_long_single_clause_names_counted_untouched(self):
+        self.seed()
+        _c, st = self.go('names', apply=False)
+        self.assertEqual(st['long_name_kept'], 1)
+
+    def test_written_by_chunks_so_a_stop_keeps_paid_results(self):
+        for n in range(3):
+            add_site(self.d1, f'k{n}', LONG_TITLE, title=LONG_TITLE, url=f'https://k{n}.example.jp/')
+        inner, seen = FakeLLM(names={f'k{n}.example.jp': '山田屋' for n in range(3)}), []
+
+        def second_refused(params):
+            if seen:
+                raise js.LLMRefused('overloaded')
+            seen.append(1)
+            return inner(params)
+        code, st = self.go('names', llm=second_refused)
+        self.assertEqual(code, 1)
+        self.assertEqual([self.name_of(f'k{n}') for n in range(3)], ['山田屋', LONG_TITLE, LONG_TITLE])
+        self.assertEqual(cq.get_cursor(self.d1, 'names'), '')
+
+    def test_llm_name_must_be_a_whole_piece_of_one_source(self):
+        v = cq.llm_name_valid
+        self.assertIsNone(v('American Expr', ['American Express']))
+        self.assertIsNone(v('rican Express', ['American Express']))
+        self.assertIsNone(v('山田製', ['山田製作所']))
+        self.assertIsNone(v('作所｜精密', ['山田製作所｜精密']))
+        self.assertIsNone(v('山田屋 精密', ['山田屋', '精密']))                    # joined sources do not count
+        self.assertEqual(v('American Express', ['American Express Japan']), 'American Express')
+        self.assertEqual(v('山田製作所', ['山田製作所｜精密工業のご案内']), '山田製作所')
 
     def test_limit_and_cursor_resume(self):
         for n in range(5):
@@ -247,23 +318,18 @@ class Leasing(Base):
         code, _ = self.go('names', lease=lease, clock=lambda: next(ticks))
         self.assertEqual(code, 4)
 
-    def test_bookmark_printed_first_and_failure_is_warning(self):
+    def test_bookmark_printed_and_failure_aborts_unless_allowed(self):
         add_site(self.d1, 'a', LONG_TITLE, title=LONG_TITLE)
-        orig = eo.time_travel_bookmark
-        eo.time_travel_bookmark = lambda c: 'bm-xyz'
-        try:
-            self.go('names', llm=FakeLLM(names={'a.example.jp': '山田屋'}))
-        finally:
-            eo.time_travel_bookmark = orig
-        self.assertIn('bm-xyz', self.text())
-        self.out.clear()
+        llm = FakeLLM(names={'a.example.jp': '山田屋'})
+        self.go('names', llm=llm)
+        self.assertIn('bm-test', self.text())
         add_site(self.d1, 'b', LONG_TITLE, title=LONG_TITLE)
         eo.time_travel_bookmark = lambda c: (_ for _ in ()).throw(RuntimeError('no token'))
-        try:
-            code, _ = self.go('names', llm=FakeLLM(names={'b.example.jp': '山田屋'}))
-        finally:
-            eo.time_travel_bookmark = orig
-        self.assertEqual(code, 0)
+        llm2 = FakeLLM(names={'b.example.jp': '山田屋'})
+        code, _ = self.go('names', llm=llm2)
+        self.assertEqual((code, llm2.calls, self.name_of('b')), (1, [], LONG_TITLE))
+        code, _ = self.go('names', llm=llm2, allow_no_bookmark=True)
+        self.assertEqual((code, self.name_of('b')), (0, '山田屋'))
         self.assertIn('WARNING', self.text())
 
 
@@ -294,13 +360,13 @@ class Descriptions(Base):
     def test_apply(self):
         self.seed()
         self.assertEqual(quality.to_polite(PLAIN_RULE), '手作りの家具を作っています。')
-        llm = FakeLLM(rewrite={PLAIN_LLM: '山田氏が2020年に始めた活動を記録しています。「ひだまり」の様子を載せました。',
+        llm = FakeLLM(rewrite={PLAIN_LLM: '山田氏が2020年に始めた活動を記録します。「ひだまり」の様子を載せました。',
                                '作品を載せた。': '作品を載せた内容に新しい発表が3件あります。'})
         code, st = self.go('descriptions', llm=llm)
         self.assertEqual(code, 0, self.text())
         self.assertEqual(self.desc('good'), '家具工房の紹介サイト。')
         self.assertEqual(self.desc('rule'), '手作りの家具を作っています。')
-        self.assertEqual(self.desc('llm'), '山田氏が2020年に始めた活動を記録しています。「ひだまり」の様子を載せました。')
+        self.assertEqual(self.desc('llm'), '山田氏が2020年に始めた活動を記録します。「ひだまり」の様子を載せました。')
         self.assertEqual(self.desc('bad'), '作品を載せた。')                 # a new number -> rejected
         self.assertEqual((st['by_rule'], st['by_llm'], st['needs_human'], st['llm_calls']), (1, 1, 1, 1))     # ONE call for the batch
         self.assertEqual(st['needs_human_ids'], ['bad'])
@@ -323,12 +389,34 @@ class Descriptions(Base):
     def test_check_rewrite(self):
         ok = cq.check_rewrite
         self.assertEqual(ok('作品を載せた。', '作品を載せました。'), (True, ''))
+        self.assertEqual(ok('作品を紹介している。ご注文は受け付けない。', '作品を紹介しています。ご注文は受け付けません。'), (True, ''))
         self.assertEqual(ok('作品を載せた。', '作品を載せた。')[0], False)
-        self.assertEqual(ok('Linuxの話を書いた。', 'Windowsの話を書きました。'), (False, 'latin'))
-        self.assertEqual(ok('2020年に始めた。', '2021年に始めました。'), (False, 'numbers'))
-        self.assertEqual(ok('「ひだまり」を載せた。', 'ひなたを載せました。'), (False, 'quoted'))
+        self.assertEqual(ok('Linuxの話を書いた。', 'Windowsの話を書きました。')[0], False)
+        self.assertEqual(ok('2020年に始めた。', '2021年に始めました。')[0], False)
+        self.assertEqual(ok('「ひだまり」を載せた。', 'ひなたを載せました。')[0], False)
         self.assertEqual(ok('作品を載せた。', '作品を載せましたが、それ以外にも様々な活動の記録を毎週詳しく丁寧に載せています。'), (False, 'length'))
         self.assertFalse(ok('作品を載せた。', None)[0])
+
+    def test_check_rewrite_rejects_meaning_changes(self):
+        bad = [('公式の団体ではない。', '公式の団体です。'), ('作品を販売しない。', '作品を販売します。'), ('無料で使える。', '有料で使えます。'),
+               ('東京で開催する。', '大阪で開催します。'), ('事業を終了した。', '事業を開始しました。'), ('料理を提供している。', '絶品の料理を提供しています。'),
+               ('日本のお店を紹介している。', '日本最大級のお店を紹介しています。'), ('人気のお店を紹介している。', 'お店を紹介しています。'),
+               ('作品を載せた。サイトを運営している。', '作品を載せました。')]
+        for old, new in bad:
+            self.assertFalse(cq.check_rewrite(old, new)[0], (old, new))
+
+    def test_rule_path_is_checked_and_keeps_spaces(self):
+        add_site(self.d1, 'sp', '山田屋', desc='作品を作っている。  家具も売っている。')
+        add_site(self.d1, 'hira', '山田屋', desc='また、あした。')
+        add_site(self.d1, 'hira2', '山田屋', desc='家具を作っている。また、あした')
+        llm = FakeLLM()
+        self.go('descriptions', llm=llm)
+        self.assertEqual(self.desc('sp'), '作品を作っています。  家具も売っています。')
+        self.assertEqual(self.desc('hira'), 'また、あした。')
+        self.assertEqual(self.desc('hira2'), '家具を作っている。また、あした')
+
+    def desc(self, sid):
+        return self.d1.one('SELECT description_ja FROM sites WHERE id=?', (sid,))[0]
 
 
 class Misc(Base):
