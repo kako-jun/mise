@@ -204,9 +204,14 @@ html[data-theme="dark"] #feed .f-search input[type="search"] { background: rgba(
 }
 
 /* 自動送り(#199): 上下ボタン群の下のオン/オフ(文字だけ・周囲と同じ丸ボタン。大きさ・枠・色は `.f-nav button` が決める)と、画面下端の進行バー(高さ 4px・transform だけ更新) */
-#feed .f-progress { position: fixed; z-index: 3; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.22); pointer-events: none; transition: opacity .2s; }
+#feed .f-progress { position: fixed; z-index: 3; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.22); pointer-events: auto; cursor: pointer; transition: opacity .2s; }
+#feed .f-progress::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 24px; } /* 見た目は 4px のまま、タップ・クリックの当たり判定だけ 24px(WCAG 2.2.2 の一時停止) */
+#feed .f-progress:focus-visible { outline: 2px solid #ffb27a; outline-offset: 2px; }
+#feed .f-progress[inert] { pointer-events: none; }
 @media (min-width: 700px) { #feed .f-progress { left: 50%; right: auto; width: 520px; margin-left: -260px; } } /* PC はカード列の幅(白い余白の上に出さない) */
 #feed .f-progress i { display: block; width: 100%; height: 100%; background: #ffb27a; transform: scaleX(0); transform-origin: left center; will-change: transform; }
 #feed .f-progress[data-state="off"], #feed .f-progress:not([data-state]) { opacity: 0; }
 #feed .f-progress[data-state="held"], #feed .f-progress[data-state="moving"] { opacity: .45; }
+#feed .f-progress[data-state="paused"] { opacity: .9; } /* 一時停止中は現在位置で静止し、色を落として分かるようにする(点滅なし) */
+#feed .f-progress[data-state="paused"] i { background: #b9b9b9; }
 #feed .f-progress[data-state="quiet"] { opacity: .7; }

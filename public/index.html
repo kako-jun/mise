@@ -48,7 +48,7 @@ addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.ser
 </script>
 <script>
 // ?view=feed: 縦フィードの試作ビュー(#52)。指定が無ければ何もしない。
-if (new URLSearchParams(location.search).get("view") === "feed") { const de = document.documentElement; de.classList.add("feed-mode"); const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/feed.css?v=18"; document.head.append(l); const off = () => { de.classList.remove("feed-mode"); l.remove(); }; for (const f of ["/feed-lib.js?v=10", "/feed.js?v=24"]) { const s = document.createElement("script"); s.src = f; s.async = false; s.onerror = off; document.head.append(s); } setTimeout(() => { if (!document.getElementById("feed")) off(); }, 10000); }
+if (new URLSearchParams(location.search).get("view") === "feed") { const de = document.documentElement; de.classList.add("feed-mode"); const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/feed.css?v=19"; document.head.append(l); const off = () => { de.classList.remove("feed-mode"); l.remove(); }; for (const f of ["/feed-lib.js?v=11", "/feed.js?v=25"]) { const s = document.createElement("script"); s.src = f; s.async = false; s.onerror = off; document.head.append(s); } setTimeout(() => { if (!document.getElementById("feed")) off(); }, 10000); }
 </script>
 <script src="/cat.js?v=5" defer></script>
 <script src="/counter.js?v=2" defer></script>

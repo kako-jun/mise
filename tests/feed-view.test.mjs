@@ -238,8 +238,12 @@ test('feed(#292): 「自動」ボタンはなく自動送りは常に有効・�
   assert.ok(!/f-auto\b|autoOn|setAuto|autoLabel|autoName|AUTO_KEY|mise-feed-auto/.test(appJs), 'feed.js にボタン・オン/オフ・保存キーを残さない');
   assert.ok(!/f-auto\b/.test(feedCss), 'CSS にも残さない');
   assert.ok(!/auto(Label|Name|On|Off|Title)/.test(appJs), '全言語の文言から外す');
-  assert.ok(!/addEventListener\(ev, poke/.test(appJs), 'wheel/touch/pointerdown/keydown で待ちを入れない(遅れの原因)');
-  assert.match(appJs, /addEventListener\('visibilitychange', poke\)/, 'タブ復帰は従来どおり保留');
+  assert.ok(!/poke/.test(appJs) && !/poke/.test(read('feed-lib.js')), 'wheel/touch/pointerdown/keydown で待ちを入れない(遅れの原因)');
+  assert.match(appJs, /visibilitychange', \(\) => \{ if \(!document\.hidden\) \{ auto\.restart\(\)/, 'タブ復帰は待たず 0 から');
+  assert.match(appJs, /\|\| reduced\.matches;/, '動きを減らす設定では自動送りしない'); assert.match(appJs, /reduced\.addEventListener\('change', kick\)/);
+  assert.match(appJs, /role: 'button', tabindex: '0', 'aria-label': t\('autoPause'\), 'aria-pressed': 'false'/, 'バーが一時停止の操作になる(WCAG 2.2.2)');
+  assert.match(appJs, /ae !== c && c\.contains\(ae\)\) return true/, 'カード内のフォーカスで進めない(:focus-visible の条件なし)');
+  assert.match(feedCss, /\.f-progress::before \{[^}]*height: 24px/, '当たり判定は 24px');
   assert.match(appJs, /moving: !atEnd && autoMoving\(now\)/); assert.match(appJs, /!!touch \|\| !!settleRaf \|\| now - lastScrollAt < 150/);
   assert.match(feedCss, /\.f-progress\[data-state="moving"\]/);
 });
@@ -282,18 +286,21 @@ test('index.html は feed.css / feed-lib.js / feed.js を ?v= 付きで参照す
   assert.equal(lib.navPosition(0, 500, true, 'en').denom, '500+');
 });
 
-test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止まり、再開は数え直す(#199)', () => {
+test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止まり、restart・paused・moving・held の挙動(#199, #292)', () => {
   const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
-  const run = { held: false, moving: false, atEnd: false };
+  const run = { paused: false, held: false, moving: false, atEnd: false };
   let now = 0, adv = 0, last;
   const frames = (ms, ctx = run) => { for (let i = 0; i < ms / 50; i++) { now += 50; last = a.tick(now, ctx); if (last.advance) adv++; } };
   a.tick(now, run);
   frames(950); assert.equal(adv, 0); assert.ok(last.progress > .9 && last.state === 'running');
   frames(100); assert.equal(adv, 1); // 1000ms で 1 回
   frames(850); assert.equal(adv, 1); frames(100); assert.equal(adv, 2); // 続けて進む
-  // poke(タブ復帰): 進行を捨て、resumeDelay のあいだ進めない。その後 interval 数え直す
-  adv = 0; frames(500); a.poke(now); frames(250); assert.equal(last.state, 'quiet'); assert.equal(last.progress, 0);
-  frames(950); assert.equal(adv, 0); frames(300); assert.equal(adv, 1);
+  // restart(タブ復帰): 進行を捨て、待たずに 0 から interval 数え直す
+  adv = 0; frames(500); a.restart(); frames(50); assert.equal(last.state, 'running'); assert.ok(last.progress <= .06);
+  frames(900); assert.equal(adv, 0); frames(100); assert.equal(adv, 1);
+  // paused(読んでいる人が止めた): 位置で凍り、解けたらその位置から続く(待ち無し・巻き戻さない)
+  adv = 0; frames(500); const pp = last.progress; frames(5000, { ...run, paused: true }); assert.equal(adv, 0); assert.equal(last.state, 'paused'); assert.equal(last.progress, pp);
+  frames(50); assert.equal(last.state, 'running'); assert.ok(last.progress > pp); frames(350); assert.equal(adv, 0); frames(150); assert.equal(adv, 1);
   // moving(指・スクロール・寄せ中, #292): 進行を 0 に捨てて待ち、止まった瞬間に待ち無しで 0 から数え直す(resumeDelay を挟まない)
   adv = 0; frames(500); frames(5000, { ...run, moving: true }); assert.equal(adv, 0); assert.equal(last.state, 'moving'); assert.equal(last.progress, 0);
   frames(50); assert.equal(last.state, 'running'); assert.ok(last.progress > 0 && last.progress <= .06, '止まった次のフレームから伸びる'); frames(900); assert.equal(adv, 0); frames(100); assert.equal(adv, 1);
@@ -308,30 +315,29 @@ test('makeAutoAdvance: 間隔で進み、停止・手動操作・終了で止ま
   a.tick(now += 60000, run); assert.equal(adv, 0);
 });
 
-test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は即進まず、4秒待って数え直す・時間ぴったりで進む(#199)', () => {
-  const run = { held: false, moving: false, atEnd: false };
+test('makeAutoAdvance: 長い隙間(タブ非表示・画面ロック)の後は待たず 0 から数え直す・時間ぴったりで進む(#199)', () => {
+  const run = { paused: false, held: false, moving: false, atEnd: false };
   const a = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300 });
   let now = 0; a.tick(now, run);
   for (let i = 0; i < 10; i++) { now += 50; a.tick(now, run); } // 500ms 進む
   now += 60000; let r = a.tick(now, run); // 隙間
-  assert.equal(r.advance, false); assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
-  let adv = 0; for (let i = 0; i < 40; i++) { now += 50; r = a.tick(now, run); if (r.advance) adv++; }
-  assert.equal(adv, 1, '隙間の 2000ms 後(待ち 300ms + 1000ms 経過)に 1 回だけ'); // 300ms 待ち→1000ms で進む
+  assert.equal(r.advance, false); assert.equal(r.state, 'running'); assert.ok(r.progress <= .1, '隙間の後は 0 から数え直す(待たない)');
+  let adv = 0; for (let i = 0; i < 30; i++) { now += 50; r = a.tick(now, run); if (r.advance) adv++; }
+  assert.equal(adv, 1, '隙間から 1000ms 経つと 1 回だけ');
   // 時間ぴったり(>=)
   const b = lib.makeAutoAdvance({ interval: 100, resumeDelay: 0 });
   b.tick(0, run); assert.equal(b.tick(50, run).advance, false); assert.equal(b.tick(100, run).advance, true);
   // 隙間が gap ちょうどなら保留しない
   const c = lib.makeAutoAdvance({ interval: 1000, resumeDelay: 300, gap: 1000 });
-  c.tick(0, run); assert.notEqual(c.tick(1000, run).state, 'quiet');
+  c.tick(0, run); assert.equal(c.tick(1000, run).progress, 1 / 10 * 1, 'gap ちょうどは 100ms 進む(隙間扱いにならない)');
 });
 
-test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は保留して quiet)(#199)', () => {
-  const run = { held: false, moving: false, atEnd: false };
+test('makeAutoAdvance: gap の境界(999ms は保留しない・1001ms は 0 から数え直す)(#199)', () => {
+  const run = { paused: false, held: false, moving: false, atEnd: false };
   const mk = () => lib.makeAutoAdvance({ interval: 5000, resumeDelay: 400, gap: 1000 });
   const a = mk(); a.tick(0, run); assert.equal(a.tick(999, run).state, 'running');
   const b = mk(); b.tick(0, run); const r = b.tick(1001, run);
-  assert.equal(r.state, 'quiet'); assert.equal(r.progress, 0);
-  assert.equal(b.tick(1001 + 399, run).state, 'quiet'); assert.equal(b.tick(1001 + 400, run).state, 'running');
+  assert.equal(r.state, 'running'); assert.ok(r.progress <= 100 / 5000 + 1e-9, '待たず 0 付近から');
 });
 
 test('windowRange: 現在の前後を描き、離れたものだけ捨て、端では範囲に収める(#278)', () => {

@@ -7,7 +7,7 @@
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const AUTO_ADVANCE_MS = 12000;   // 自動送り(#199): 1 枚を見せる時間
-  const AUTO_RESUME_MS = 4000;     // 展開・パネル・検索・hover/focus・タブ非表示が解けてから、数え直しを始めるまでの待ち(カードの切り替わり直後は待たない: #292)
+  const AUTO_RESUME_MS = 4000;     // 展開・パネル・検索・フォーカス・hover が解けてから数え直しを始めるまでの待ち(閉じた直後に勝手に動かさない)。カードの切り替わり直後・タブ復帰・一時停止の解除では待たない(#292)
   const MAX_SITES = 500;         // 1 回の範囲選択で読み込むサイト数の上限(100 件ずつ取得 = 最大 5 リクエスト)
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
   const SCROLL_IDLE_MS = 100;      // 位置がこれだけ動かなければ止まったとみなす(scrollend の保険)
@@ -21,9 +21,9 @@
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const words = {
     ja: { searchLabel: 'サイトを検索', clearSearch: '検索語を消去', moreInList: '続きは箇条書きで見る', seen: '見たサイト', seenTitle: n => `見たサイト: ${n}件(タップで詳細)`, seenClose: '閉じる', untilNext: n => `次の節目まであと ${n}件`, topMilestone: 'すべての節目に到達', byMonth: '月ごと', byCountry: '国別', byCat: 'カテゴリ別', exportJson: 'JSONを書き出す', importJson: 'JSONを読み込む', importOk: n => `${n}件を取り込みました`, importBad: '読み込めませんでした', seenNote: 'この端末だけに保存されています。', noCountry: '国不明',
-      directoryTitle: '箇条書きに戻る', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', position: (c, n) => `${n}件中 ${c}件目`, checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
+      directoryTitle: '箇条書きに戻る', autoPause: '自動送りを一時停止', autoPauseTitle: p => p ? '自動送りは一時停止中(押すと再開)' : '押すと自動送りを一時停止', noteFail: '一部の読み込みに失敗しました。', open: 'サイトを開く', openNew: '新しいタブで開く', more: 'もっと見る', less: '閉じる', next: '次へ', prev: '前へ', position: (c, n) => `${n}件中 ${c}件目`, checked: '最終チェック', end: n => `ここまでです（${n}件）。`, top: '最初に戻る', reshuffle: '並びを変えてもう一度', empty: '条件に合うサイトはありません。', error: 'データを取得できませんでした。再読み込みしてください。', loading: '読み込み中', feedLabel: 'サイトのフィード', hint: 'j / k または ↑ ↓ で移動', fallback: '' },
     en: { searchLabel: 'Search sites', clearSearch: 'Clear search', moreInList: 'See more in list view', seen: 'Sites seen', seenTitle: n => `Sites seen: ${n} (tap for details)`, seenClose: 'Close', untilNext: n => `${n} to the next milestone`, topMilestone: 'All milestones reached', byMonth: 'By month', byCountry: 'By country', byCat: 'By category', exportJson: 'Export JSON', importJson: 'Import JSON', importOk: n => `Imported ${n}`, importBad: 'Could not read that file', seenNote: 'Stored on this device only.', noCountry: 'Unknown',
-      directoryTitle: 'Back to list view', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', position: (c, n) => `${c} of ${n}`, checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
+      directoryTitle: 'Back to list view', autoPause: 'Pause auto-advance', autoPauseTitle: p => p ? 'Auto-advance paused (press to resume)' : 'Press to pause auto-advance', noteFail: 'Some sites could not be loaded.', open: 'Open site', openNew: 'Open in new tab', more: 'Read more', less: 'Close', next: 'Next', prev: 'Previous', position: (c, n) => `${c} of ${n}`, checked: 'Last checked', end: n => `End of this feed (${n} sites).`, top: 'Back to the first', reshuffle: 'Reshuffle and go again', empty: 'No sites match.', error: 'Could not load data. Please reload.', loading: 'Loading', feedLabel: 'Site feed', hint: 'j / k or ↑ ↓ to move', fallback: ' (Japanese)' }
   };
   // 通常ページ(app.js)と同じ決め方: 保存値、無ければブラウザの言語
   const savedLang = storage.get('mise-language');
@@ -489,26 +489,29 @@
     if (search && ae && search.contains(ae)) return true;
     const c = cards[current]; if (!c || !c.matches('.f-card:not(.f-end)')) return false;
     if (c.querySelector('.f-cap.is-open')) return true;
-    if (ae && c.contains(ae) && ae.matches('a, button, .f-long') && ae.matches(':focus-visible')) return true;
+    if (ae && ae !== c && c.contains(ae)) return true; // カード内のどこにフォーカスがあっても進めない(j/k で送った直後のカード自身は除く)。:focus-visible の条件は付けない
     return canHover.matches && !!c.querySelector('a:hover, button:hover');
   }
   // 指が触れている・スクロールや寄せのアニメーション中か(#292)。この間はバーを 0 に戻して待ち、止まって揃った瞬間(scrollend。無い環境は最後の scroll から 150ms)に 0 から伸ばし始める。
   // 経路(指・ホイール・キー・ボタン・自動)を区別しない。キー・ボタンは scroll が出る前の 1 フレームを navTarget で覆う
+  let autoPaused = false; // 読んでいる人がバーで止めた(WCAG 2.2.2)。別のカードに移ったら解ける(IntersectionObserver)
   let lastScrollAt = -1e9;
   const autoMoving = now => !!touch || !!settleRaf || now - lastScrollAt < 150 || (navTarget !== null && navTarget !== current);
   let autoRaf = 0, autoFrame = null;
   // rAF ループはオンかつ終了カードでないときだけ回す(オフ・末尾・0件では止めてバッテリーを使わない)。再開は kick()
   function kick() { if (!autoRaf && autoFrame) autoRaf = requestAnimationFrame(autoFrame); }
+  function setPaused(p) { autoPaused = p; const b = $('.f-progress'); if (b) { b.setAttribute('aria-pressed', String(p)); b.title = t('autoPauseTitle')(p); } kick(); }
   function startAuto() {
-    const poke = () => auto.poke(performance.now());
-    addEventListener('visibilitychange', poke);
-    // 手動操作の直後に待つ(旧 poke)は廃止(#292)。操作中かどうかは autoMoving が見て、止まった瞬間に待ち無しで始まる
+    addEventListener('visibilitychange', () => { if (!document.hidden) { auto.restart(); kick(); } }); // タブ復帰: 待たず 0 から数え直す(非表示中は rAF が止まるので、gap でも同じ扱い)
     const barEl = $('.f-progress'), fill = barEl.firstChild; let shown = '';
+    barEl.addEventListener('click', () => setPaused(!autoPaused));
+    barEl.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setPaused(!autoPaused); } });
+    reduced.addEventListener('change', kick); // 動きを減らす設定の切り替えを即時に反映する
     const frame = now => {
-      const atEnd = !list.length || current >= list.length;
-      const r = auto.tick(now, { held: !atEnd && autoHeld(), moving: !atEnd && autoMoving(now), atEnd });
+      const atEnd = !list.length || current >= list.length || reduced.matches; // 動きを減らす設定のあいだは自動送りしない(旧版も既定オフ)
+      const r = auto.tick(now, { paused: autoPaused, held: !atEnd && autoHeld(), moving: !atEnd && autoMoving(now), atEnd });
       const st = r.state;
-      if (st !== shown) { shown = st; barEl.dataset.state = st; }
+      if (st !== shown) { shown = st; barEl.dataset.state = st; barEl.inert = st === 'off'; }
       fill.style.transform = `scaleX(${r.progress.toFixed(4)})`;
       if (r.advance) step(1);
       autoRaf = st === 'off' ? 0 : requestAnimationFrame(frame); // off になったら(バーを隠した後)止める
@@ -545,7 +548,8 @@
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
     const pos = mk('div', 'f-pos', { 'aria-live': 'off' }); pos.hidden = true;
     nav.append(prev, pos, next);
-    const progress = mk('div', 'f-progress', { 'aria-hidden': 'true' }); progress.append(mk('i'));
+    // 進行バーは、読んでいる人が自動送りを止める手段(WCAG 2.2.2)。見た目は細いバーのまま、タップ/クリック・Enter/Space で一時停止・再開。当たり判定は CSS で 24px 以上
+    const progress = mk('div', 'f-progress', { role: 'button', tabindex: '0', 'aria-label': t('autoPause'), 'aria-pressed': 'false', title: t('autoPauseTitle')(false) }); progress.append(mk('i'));
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;
@@ -555,7 +559,7 @@
     observer = new IntersectionObserver(entries => {
       let settled = false; // 送り先に着いた(または指で止めた)とき true。連続送りの通過点は数えない(#277)
       for (const e of entries) if (e.isIntersecting) {
-        const idx = e.target.dataset.index; current = idx === 'end' ? list.length : Number(idx); settled = navTarget === current; if (navTarget === current) navTarget = null; auto.reset(); kick();
+        const idx = e.target.dataset.index; const prevCur = current; current = idx === 'end' ? list.length : Number(idx); if (current !== prevCur && autoPaused) setPaused(false); settled = navTarget === current; if (navTarget === current) navTarget = null; auto.reset(); kick();
         updateButtons(); fly(idx === 'end' ? null : list[current]);
       }
       for (const e of entries) {

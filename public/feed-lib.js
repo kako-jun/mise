@@ -63,24 +63,27 @@
     return over >= PAN_MIN_OVER ? { w, px: over / 2 } : null;
   };
 
-  // 縦フィードの自動送り(#199, #292)。時間の進みだけの純粋な状態機械(DOM・タイマーに触れない)。自動送りは常に有効(オン/オフは無い)。
-  // tick(now, { held, moving, atEnd }) を毎フレーム呼ぶ。now はミリ秒(performance.now / rAF の時刻)。
-  // - atEnd(終了カード・0件)のあいだは進めず 0 に戻す。
+  // 縦フィードの自動送り(#199, #292)。時間の進みだけの純粋な状態機械(DOM・タイマーに触れない)。自動送りの「ボタンによるオン/オフ」は無い。
+  // tick(now, { paused, held, moving, atEnd }) を毎フレーム呼ぶ。now はミリ秒(performance.now / rAF の時刻)。atEnd に reduced-motion も含めて渡す(呼び出し側)。
+  // - atEnd(終了カード・0件・動きを減らす設定)のあいだは進めず 0 に戻す。
+  // - paused(読んでいる人がバーで止めた。WCAG 2.2.2)のあいだは今の位置で凍らせる。解けたらその位置から続ける(待ち無し)。
   // - moving(指が触れている・スクロールや寄せのアニメーション中)のあいだは進行を 0 に捨てて待つ。止まって揃った瞬間に、待ち時間なしで 0 から数え直す(#292。どの経路で切り替わっても同じ)。
-  // - held(展開・パネル・検索・hover/focus・タブ非表示)のあいだは進めない(表示は保留時の進行のまま)。held が解けたら resumeDelay 待って 0 から数え直す。
-  // - poke(now)(タブ復帰など)でも進行を捨て、resumeDelay 待ってから数え直す。
+  // - held(展開・パネル・検索・フォーカス・hover・タブ非表示)のあいだは進めない(表示は保留時の進行のまま)。held が解けたら resumeDelay 待って 0 から数え直す
+  //   (閉じた直後・離れた直後に画面が勝手に動かないための余裕。resumeDelay=AUTO_RESUME_MS の用途はここだけ)。
+  // - restart() は進行を捨てて待ち無しで 0 から数え直す(タブ復帰)。
   // - 1 フレームで進める時間は 100ms まで。前のフレームから gap(既定 1000ms)を超えて空いたとき(タブ非表示・画面ロック・ループ停止の後)は、
-  //   held と同じく進行を捨てて resumeDelay 待ってから 0 から数え直す(ブラウザは非表示中 rAF を止めるので held=true の tick が来ない)。
-  // 戻り値 { progress: 0..1, advance: 次へ進む合図, state: 'off'|'moving'|'held'|'quiet'|'running' }
+  //   restart と同じく待ち無しで 0 から数え直す(ブラウザは非表示中 rAF を止めるので held=true の tick が来ない。止まった状態から戻ったら即再開)。
+  // 戻り値 { progress: 0..1, advance: 次へ進む合図, state: 'off'|'paused'|'moving'|'held'|'quiet'|'running' }
   function makeAutoAdvance({ interval, resumeDelay, gap = 1000 }) {
     let elapsed = 0, last = null, quietUntil = 0, wasHeld = false;
     return {
-      poke(now) { quietUntil = now + resumeDelay; elapsed = 0; },
+      restart() { elapsed = 0; quietUntil = 0; wasHeld = false; },
       reset() { elapsed = 0; },
-      tick(now, { held, moving, atEnd }) {
+      tick(now, { paused = false, held, moving, atEnd }) {
         const raw = last === null ? 0 : now - last, dt = Math.min(100, Math.max(0, raw)); last = now;
-        if (raw > gap) { quietUntil = now + resumeDelay; elapsed = 0; }
+        if (raw > gap) { quietUntil = 0; elapsed = 0; wasHeld = false; }
         if (atEnd) { elapsed = 0; wasHeld = false; return { progress: 0, advance: false, state: 'off' }; }
+        if (paused) return { progress: elapsed / interval, advance: false, state: 'paused' };
         if (moving) { elapsed = 0; return { progress: 0, advance: false, state: 'moving' }; }
         if (held) { wasHeld = true; return { progress: elapsed / interval, advance: false, state: 'held' }; }
         if (wasHeld) { wasHeld = false; quietUntil = now + resumeDelay; elapsed = 0; }

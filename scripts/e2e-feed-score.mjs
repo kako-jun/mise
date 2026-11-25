@@ -22,9 +22,9 @@ const browser = await chromium.launch({ executablePath: chromiumPath(), args: ['
 try {
   const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const page = await ctx.newPage();
-  await page.route('**/feed.js*', async r => { const res = await r.fetch(); await r.fulfill({ response: res, body: (await res.text()).replace('const AUTO_ADVANCE_MS = 12000;', 'const AUTO_ADVANCE_MS = 1e9;') }); }); // 自動送り(12 秒)は常に有効でオフにできない: 計測に混ざらないよう、この検証だけ間隔を実質無限にする
+  let replaced = false; await page.route('**/feed.js*', async r => { const res = await r.fetch(), src = await res.text(); replaced = src.includes('const AUTO_ADVANCE_MS = 12000;'); await r.fulfill({ response: res, body: src.replace('const AUTO_ADVANCE_MS = 12000;', 'const AUTO_ADVANCE_MS = 1e9;') }); }); // 自動送り(12 秒)は常に有効でオフにできない: 計測に混ざらないよう、この検証だけ間隔を実質無限にする
   await page.goto(BASE + '/all/?category=recent&view=feed');
-  await page.waitForSelector('.f-card.is-active'); await page.waitForTimeout(500);
+  await page.waitForSelector('.f-card.is-active'); assert.ok(replaced, 'AUTO_ADVANCE_MS の置換が効いている(効かなければ自動送りが計測に混ざる)'); await page.waitForTimeout(500);
   const styles = await page.evaluate(() => Object.fromEntries([['back', '.f-directory'], ['score', '.f-surf']].map(([k, s]) => {
     const el = document.querySelector('#feed ' + s), cs = getComputedStyle(el), r = el.getBoundingClientRect();
     return [k, { bw: ['Top', 'Right', 'Bottom', 'Left'].map(x => cs['border' + x + 'Width']), shadow: cs.boxShadow, backdrop: cs.backdropFilter, w: r.width, h: r.height }];
