@@ -72,6 +72,17 @@ class Deficit(unittest.TestCase):
         self.assertEqual({l: s['deficit'] for l, s in st.items()}, {'shrines': 80, 'film': 0, 'temples': 0})
         self.assertEqual(dld.plan(st), ['shrines'])
 
+    def test_assign_rule_leaves_are_excluded_everywhere(self):
+        d1 = LeafD1({'cities': 0, 'prefectures': 3, 'poetry': 1})
+        self.assertEqual(sorted(dld.leaf_state(d1)), ['poetry'])
+        self.assertEqual(dld.plan(dld.leaf_state(d1)), ['poetry'])
+        out = []
+        self.assertEqual(dld.report_unmapped(d1, dw.load_map(), out.append), ['poetry'])
+        self.assertNotIn('cities', '\n'.join(out))
+        import priority
+        self.assertEqual(set(priority.leaf_deficits(d1)), {'poetry'})   # 優先順と同じ定義
+        self.assertEqual(priority.rule_leaf_ids(), {'national-agencies', 'independent-agencies', 'prefectures', 'cities', 'special-wards', 'towns', 'villages'})
+
     def test_deficit_descending_order_ties_by_leaf_id(self):
         d1 = LeafD1({'libraries': 90, 'shrines': 20, 'temples': 20, 'museums': 50})
         self.assertEqual(dld.plan(dld.leaf_state(d1)), ['shrines', 'temples', 'museums', 'libraries'])

@@ -11,10 +11,14 @@
 """
 import collections
 import re
+import sys
 import urllib.parse
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'enrich'))
 import discover_links_cc as dlc
 import discover_wikidata as dw
+import priority   # 葉の定義(assign=rule を除く)を優先順と共通にする
 
 FLOOR = 100                 # 公開サイトがこれに満たない葉が対象
 COVER_FACTOR = 3            # 公開 + 取り込み中(hint つき)が FLOOR の何倍に達したらその葉を止めるか
@@ -37,12 +41,14 @@ def chunks(items, n):
 
 # ------------------------------------------------------------------ 不足の計算
 def leaf_state(client, floor=FLOOR):
-    """葉(子を持たないカテゴリ)ごとの {leaf: {'name', 'published', 'hinted', 'deficit'}}。読み取りのみ。"""
+    """葉(子を持たない assign=llm のカテゴリ。priority.leaf_ids と同じ定義)ごとの {leaf: {'name', 'published', 'hinted', 'deficit'}}。読み取りのみ。"""
     rows = client.query(
         'SELECT c.id AS id, c.name_ja AS name, COUNT(sc.site_id) AS n FROM categories c '
         'LEFT JOIN site_categories sc ON sc.category_id=c.id '
         'WHERE NOT EXISTS (SELECT 1 FROM categories k WHERE k.parent_id=c.id) GROUP BY c.id, c.name_ja')
     hinted = hinted_counts(client)
+    rule = priority.rule_leaf_ids()   # 規則で埋める葉(国の機関・自治体など)は発見の対象にしない
+    rows = [r for r in rows if r['id'] not in rule]
     return {r['id']: {'name': r.get('name'), 'published': int(r['n']), 'hinted': hinted.get(r['id'], 0),
                       'deficit': max(0, floor - int(r['n']))} for r in rows}
 
