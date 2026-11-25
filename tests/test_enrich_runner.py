@@ -413,8 +413,8 @@ class Guards(Runner):
 
     def test_publish_batch_failure_guard(self):
         for i in range(eo.PUBLISH_MAX_ERRORS):
-            add_candidate(self.d1, f'e{i}.example.jp', tags=json.dumps(['boom']))
-        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='boom' BEGIN SELECT RAISE(ABORT,'poison'); END")
+            add_candidate(self.d1, f'e{i}.example.jp', tags=json.dumps(['爆|boom']))
+        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='爆' BEGIN SELECT RAISE(ABORT,'poison'); END")
         code, _, _ = self.go(stages=('publish',))
         self.assertEqual(code, 1)
         self.assertIn('バッチ失敗が異常', self.text())

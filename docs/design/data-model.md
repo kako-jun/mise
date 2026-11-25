@@ -49,7 +49,7 @@ D1 の現行スキーマ（実装済み）と、将来案（未実装）を分�
 - `categories`: `id`、`parent_id`（トップ階層は NULL）、`name_ja`、`name_en`、`sort_order`。木の中身と育て方は下の「カテゴリの木」。
 - `site_categories`: `(site_id, category_id)` が主キー。同じサイトを複数カテゴリに登録できる。
 - **カテゴリ所属の正規形（#137）**: 1 サイトの所属は、親と子の両方が付いたら**子だけ**（祖先の除去。親の件数は集計表が子孫を数えるので変わらない）。**退避先（`business` / `society` / `business-services` / `community`。0021 が旧カテゴリから仮置きしたもの。定義の正本は `data/category-map.csv` の `fallback` 行）は外さない**: 新しい木ではこれも LLM が選べる正規のカテゴリ（`assign=llm`）で、再判定済みの付与は LLM の選択だから。旧 id の fallback が付けた退避先は他に何も残らないときだけ（単独）なので、もともと実カテゴリと並ばない。官公庁 `pb-` は `government` 直下の種別葉だけで、この規則の対象外。新しい判定は `judge.normalize_categories` で正規形にしてから台帳・`site_categories` に入り、既存分は一度きりの `scripts/fix-redundant-categories.sql` で整理する。破れていないかは `scripts/check-data-integrity.py`（検査一覧は [llm-judge.md](../collection/llm-judge.md#データ整合チェック137)）。
-- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。タグ名（日英）は `q` の部分一致の対象でもある（`search_text` に含める。0020・#31 第1段）。
+- `site_tags`（0007）: `(site_id, label_ja)` が主キー、`label_en` は NULL 可。新規に載る行は `label_ja` に日本語（かな・漢字）、`label_en` に別の英語ラベルを入れる（品質規則。#273、`docs/operations/enrich.md` の「品質の規則」）。表記ゆれ（動画 / video / videos / 映像 …）を寄せる同義語表は `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`、`scripts/enrich/quality.py` が読み込み時に検証）。表示と、`/api/sites?tag=` の絞り込み（`label_ja` か `label_en` の完全一致。複数は AND）に使う。タグ名（日英）は `q` の部分一致の対象でもある（`search_text` に含める。0020・#31 第1段）。
 
 ### カテゴリ件数の集計表（#126 第1段、0022）
 

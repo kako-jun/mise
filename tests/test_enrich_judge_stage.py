@@ -102,7 +102,7 @@ class FakeLLM:
                               'cf': cf, 'cat': [CAT], 'r': 'because' if v != 'p' else ''})
             else:
                 items.append({'i': n, 'dj': '小さな工房のサイト。', 'de': 'A small workshop site.', 'lj': None, 'le': None, 'ev': [],
-                              'tg': ['craft'], 'cc': None, 'rc': None, 'q': None})
+                              'tg': ['工芸|craft'], 'cc': None, 'rc': None, 'q': None})
         return {'content': [{'type': 'text', 'text': json.dumps({'r': items})}], 'stop_reason': 'end_turn',
                 'usage': {'input_tokens': self.tokens[0], 'output_tokens': self.tokens[1]}}
 

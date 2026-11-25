@@ -34,6 +34,8 @@ for _sub in ("scripts/pipeline", "scripts/llm"):
 import judge  # noqa: E402
 import pipeline as llm_pipeline  # noqa: E402  (scripts/llm/pipeline.py)
 import approve_policy  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "scripts", "enrich"))
+import quality  # noqa: E402  (scripts/enrich/quality.py: name / description / tags / categories rules)
 
 MONTHLY_CAP_USD = 100.0          # same cap as scripts/nightly.py --budget-month (UTC month)
 MAX_JUDGE_ATTEMPTS = 3           # hard failures before url_progress.state -> 'failed'
@@ -169,7 +171,9 @@ class Ctx:
         self.llm, self.ledger, self.log = llm, ledger, log
         self.valid_ids = set(judge.category_ids(cats))
         self.legacy = judge.load_legacy_map()
-        self.systems = {"triage": llm_pipeline.triage_system(cats), "describe": llm_pipeline.describe_system(cats)}
+        self.leaf_ids = quality.leaf_ids_of(list(judge.load_tree()[0].items())) & self.valid_ids
+        self.systems = {"triage": llm_pipeline.triage_system(cats, quality=True), "describe": llm_pipeline.describe_system(cats, quality=True)}
+        self.quality_retries = 0
         self.schemas = {s: llm_pipeline.wrapper_schema(s, cats) for s in self.systems}
         self.lock = threading.Lock()
         self.consecutive_failures = 0
@@ -228,8 +232,10 @@ def call(ctx, stage, model, chunk, max_tokens=None):
     return msg, None
 
 
-def parse(ctx, stage, work, msg):
-    """work = [(cand, extra, base)] -> {pos: (full output|None, problem|None)} (same checks as pipeline.py)."""
+def parse(ctx, stage, work, msg, final=False):
+    """work = [(cand, extra, base)] -> {pos: (full output|None, problem|None)} (same checks as pipeline.py, plus the quality rules).
+    A quality violation is a problem 'quality:<field>: <codes>' (so the item is retried once with the violation stated); with final=True
+    (the retry's answer) the output is kept and carries out['quality_hold'] = 'quality:<field>' so the row goes to a human."""
     obj, problem = judge.parse_response_text(msg)
     if obj is None or not isinstance(obj.get("r"), list):
         return {n: (None, problem or "no result array") for n in range(len(work))}
@@ -240,8 +246,17 @@ def parse(ctx, stage, work, msg):
     res = {}
     for n, (c, _extra, base) in enumerate(work):
         item = by_i.get(n + 1)
-        res[n] = (llm_pipeline.check_item(stage, item, n + 1, ctx.valid_ids, judge.render_candidate(c), base)
-                  if item is not None else (None, "missing from response"))
+        if item is None:
+            res[n] = (None, "missing from response")
+            continue
+        full, problem, q = llm_pipeline.check_item_ex(stage, item, n + 1, ctx.valid_ids, judge.render_candidate(c), base, leaf_ids=ctx.leaf_ids)
+        if full is not None and q:
+            field = quality.which(q[0])
+            if not final:
+                res[n] = (None, f"quality:{field}: {', '.join(q)}")
+                continue
+            full["quality_hold"] = f"quality:{field}"
+        res[n] = (full, problem)
     return res
 
 
@@ -262,13 +277,19 @@ def run_stage(ctx, stage, model, work):
             mt = None
             if p and "truncated" in p:
                 mt = min(16000, 2 * (llm_pipeline.PER_ITEM_TOKENS[stage] + llm_pipeline.THINKING_BUFFER[stage]))
+            pair = pairs[n]
+            if p and p.startswith("quality:"):
+                with ctx.lock:
+                    ctx.quality_retries += 1
+                pair = (pair[0], ((pair[1] + "\n") if pair[1] else "") + "YOUR PREVIOUS ANSWER WAS REJECTED (" + p + "). Answer again and fix exactly this; "
+                        "change nothing else.")
             try:
-                m2, p2 = call(ctx, stage, model, [pairs[n]], mt)
+                m2, p2 = call(ctx, stage, model, [pair], mt)
             except BudgetExceeded as e:
                 ctx.stop = ctx.stop or str(e)
                 out[n] = (None, STOP)
                 continue
-            out[n] = (None, p2) if m2 is None else parse(ctx, stage, [work[n]], m2)[0]
+            out[n] = (None, p2) if m2 is None else parse(ctx, stage, [work[n]], m2, final=True)[0]
     return out
 
 
@@ -280,7 +301,7 @@ def judge_chunk(ctx, cands):
     for n, (t, _p) in enumerate(tri):
         if t is None:
             continue
-        if t["spam"]["verdict"] == "pass":
+        if t["spam"]["verdict"] == "pass" and not t.get("quality_hold"):
             work.append((cands[n], f"pre-judged: adult={t['adult']['value'][0]}", t))
             idx.append(n)
         else:
@@ -322,12 +343,15 @@ def judged_statements(row, cand, out, model, stamp, ctx):
     hide = out["adult"]["value"] == "yes"  # no long body-derived text for adult sites (same policy as import_results.py)
     loc = out["location"]
     cats = json.dumps(out["categories"])
+    hold = out.get("quality_hold")
     rs, why, ps = decide({
         "key": row["identity_key"], "title": row.get("title"), "spam_verdict": out["spam"]["verdict"],
         "spam_kind": out["spam"]["kind"], "confidence": out["confidence"], "description_ja": out["description_ja"],
         "description_en": out["description_en"], "categories": cats, "site_kind": out["site_kind"],
         "freshness": out["freshness"], "exempt": out["exempt"], "freshness_signal_at": row.get("freshness_signal_at"),
         "freshness_source": row.get("freshness_source")})
+    if hold and out["spam"]["verdict"] != "reject":     # a quality violation that survived the retry: a human looks (never auto approved)
+        rs, why, ps = "pending", hold, "candidate"
     params = [input_hash(model, judge.render_candidate(cand)), ORIGIN, model, stamp, stamp,
               out["spam"]["verdict"], out["spam"]["kind"], out["spam"]["reason"], out["description_ja"], out["description_en"],
               None if hide else out["long_description_ja"], None if hide else out["long_description_en"],
@@ -578,6 +602,8 @@ def describe_row(ctx, row, need_categories=False):
     out, p = run_stage(ctx, "describe", DESCRIBE_MODEL, [(cand, f"pre-judged: adult={adult[0]}", base)])[0]
     if out is None:
         return None, p
+    if out.get("quality_hold"):
+        return None, out["quality_hold"]
     if not out["description_ja"] or not out["description_en"]:
         return None, "the text supports no description"
     if adult == "yes":    # same policy as judged_statements: no long body-derived text for adult sites
@@ -603,7 +629,7 @@ def described_assignments(out, row, regenerate_categories):
 def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True, priority=None):
     """llm_enabled=False: never calls the LLM (no key needed); only the deterministic moves of rows that already carry a review_state are done."""
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
-             "moved_without_llm": 0, "empty_rejected": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
+             "moved_without_llm": 0, "quality_held": 0, "quality_retries": 0, "empty_rejected": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
              "stopped": None, "dry_run": not apply}
     cols = ", ".join(("p." if c in ("identity_key", "url") else "c.") + c for c in SELECT_COLUMNS)
     # review_state/notes and the policy inputs of an already judged row come from the same row
@@ -713,6 +739,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             best_effort([s for r in chunk for s in unclaim_statements(r)])
             return
         stmts, kinds, stamp = [], [], now_iso()
+        out_by_key = {r["identity_key"]: res[0] for r, res in zip(chunk, results) if res[0] is not None}
         for r, c, (out, model, problem) in zip(chunk, cands, results):
             if out is not None:
                 s, ps = judged_statements(r, c, out, model, stamp, ctx)
@@ -752,6 +779,8 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
                 count("lost_claim")      # someone else moved the row: not ours to count
             elif kind == "judged":
                 count("judged")
+                if (r_out := out_by_key.get(r["identity_key"])) and r_out.get("quality_hold"):
+                    count("quality_held")
                 count(ps)
             elif kind in ("failed", "candidate"):
                 count(kind)
@@ -767,6 +796,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
         for c in chunks:
             do_chunk(c)
     stats["cost_usd"] = round(ledger.spent, 6)
+    stats["quality_retries"] = ctx.quality_retries
     if not ctx.stop and ctx.consecutive_failures >= 3:
         ctx.stop = "3 consecutive requests without a usable result"
     stats["stopped"] = ctx.stop

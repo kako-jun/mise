@@ -97,7 +97,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 1 バッチの中身:
 
 1. `sites` を INSERT（既掲載 URL（正規化 URL と `progress_key` の両方）・拒否ホスト・拒否済み申請・同じ id がある場合は入れない。`ON CONFLICT DO NOTHING`）
-2. `site_tags`（最大 5、重複・40 字超を除く）
+2. `site_tags`（最大 5。`label_ja` / `label_en` は別々。品質ゲートは下の「品質の規則」）
 3. `site_categories`（最大 3、旧 id の変換と祖先の除去済み、D1 の `categories` に存在する id のみ）。2・3 は `changes()` を使わず、「その sites 行があり、そのサイトの行がまだ無い」で守る（カテゴリ 0 件の sites 行はこのトランザクション内にしか存在しえない）。バッチの最後に、sites があるのにカテゴリが 0 件なら NOT NULL 違反を起こす文を置き、全体をロールバックする
 4. `site_media_jobs`（favicon・thumbnail、`pending`、`identity_key=progress_key`。成人サイトは thumbnail が `excluded`/`eligible=0`。migration 0033/0035 のトリガが作るので、同じ規則の `INSERT OR IGNORE` を保険として添える）
 5. `url_progress.state='published'`
@@ -118,6 +118,29 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 
 置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`、旧 `export_sql.py`（非 published の `url_progress.state` を上書きし `reviewing` を作る。最初の `--apply` の前に停止する）。
 テスト: `tests/test_enrich_publish_stage.py`（実 migration を適用した in-memory SQLite）。
+
+## 品質の規則（`scripts/enrich/quality.py`、Issue #273）
+
+公開される項目（サイト名・日本語の説明・タグ・カテゴリ）の規則を **1 か所（`quality.py`、副作用なしの関数）** に置き、判定段・合議段（describe）・掲載段のゲート・整合チェックが同じ関数を使う。人気・規模の基準は無い。意味を書き換えない・事実を足さない（修復は形だけ）。
+
+| 項目 | 規則（定数） | 違反コード |
+|---|---|---|
+| サイト名 | 40 字以内（`NAME_MAX`）、空でない。区切り（`｜` `|` ` - ` ` – ` ` / ` `／`）で 3 つ以上に分かれる、または 2 つのうち短い方が 12 字超・長い方が 24 字超・文になっている、は一覧／キャッチコピーとして不可。宣伝語（`PROMO`: 公式通販・オンラインショップ・を提案 …）は区切りがある／20 字超のときだけ合図として違反。文（「。」を含む）も不可 | `name_empty` `name_too_long` `name_list` `name_promo` `name_sentence` |
+| 説明（日本語） | 体言止め、または「です・ます・でした・ました」。常体（である・だ・ている・する・れる・った・ない …）で終わる文が 1 つでもあれば違反 | `description_style` |
+| タグ | 1 つが `"日本語ラベル\|english label"`（辞書形式でも可）。`label_ja` にかな・漢字が必要、`label_en` は日本語を含まない別のラベル。日本語 20 字・英語 40 字以内、最大 5 つ、`normalize_tag_key`（全角半角・大小・単複・ハイフン／空白）と `data/tag-synonyms.csv` で同じになるものは重複 | `tag_label_ja_not_japanese` `tag_label_en_not_english` `tag_duplicate` `tag_too_long` `tag_count` `tag_empty` `tag_malformed` |
+| カテゴリ | 葉（子を持たない id）だけ、1 つ以上 | `category_non_leaf` `category_none` |
+
+- **判定段**: 描画段（describe）の指示文に文体・タグ形式の規則、triage の指示文に「葉だけ」の規則を足した（`pipeline.describe_system/triage_system(cats, quality=True)`。**旧 SQLite 経路の指示文は変えない**）。出力検証（`pipeline.check_item_ex`）が上の違反を見つけたら、その項目だけ**違反の内容を添えて 1 回だけ再依頼**し、それでも直らなければ出力は残したまま `review_state='pending'`・`url_progress.state='candidate'`・`review_reason='quality:<description|tags|categories>'` にして人へ回す（自動承認しない）。カテゴリ違反の行は費用をかけないため describe を呼ばない。統計: `quality_retries`、`quality_held`。合議段の describe（`describe_row`）で違反が残った行は、承認せず会議中のまま。
+- **掲載段のゲート**（`gate_reason` / `plan`。合議段も同じ関数）: 次の順で再検査し、通らなければ掲載せず `candidate` に戻す（`review_reason`）。
+  - 名前: `<title>` が規則を通ればそのまま。通らなければ `suggest_name`（区切りで分け、宣伝文・文を除き、ホスト名のブランド語を含む節を優先、「公式サイト」「ホームページ」などの末尾を外し、法人格は**残りが空でないときだけ**外す。語の途中では切らない。40 字を超える節は空白の語境界で切るか、境界が無ければ None）で直す。直せなければ `gate:quality_name`（LLM に名前を出させる列がまだ無いので、人かのちの是正で決める）。成人向けは従来どおりホスト名。80 字の切り詰めは廃止。
+  - 説明: 常体なら `to_polite`（です・ます化。「している→しています」「である→です」「する→します」「した→しました」「れる→れます」「ある→あります」など、**確実なものだけ**。「行った」「読んだ」のように語幹が変わるものは None）で直す。直せなければ `gate:quality_description`。
+  - タグ: `gate:quality_tags`（直さない）。保存形式は `'日本語|english'` の文字列で、掲載時に `label_ja` / `label_en` に別々に入れる。**従来の英語だけのタグを持つ承認済みの行は、このゲートで保留になる**（再判定で日本語ラベルを付ける）。
+  - カテゴリ: 旧 id の変換後に `gate:quality_categories`。
+  - 統計 `repaired`（`{name, description}`）は、直して掲載した（dry-run では掲載できる）件数。
+- **整合チェック**（`scripts/check-data-integrity.py`、warn のみ・終了コードに影響しない）: `quality:name_too_long` `quality:description_style` `quality:tag_label_ja_not_japanese` `quality:category_non_leaf_only` の件数を出す。基準値（`QUALITY_BASELINE`、2026-11-25 本番の実測。是正後は 0 に下げる）を超えたら `ABOVE BASELINE` と出す。
+- **タグの同義語**: `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`。variants は `|` 区切り）。読み込み（`quality.load_synonyms`）が全行を検証し（日本語の正準名・日本語を含まない英語名・variants あり・同じ語が複数の正準に属さない）、`tests/test_quality.py` が実ファイルを検査する。語を足すときは 1 行足してテストを通す。
+- テスト: `tests/test_quality.py`（関数・同義語ファイル・整合チェック）、`tests/test_enrich_quality_stages.py`（判定の再依頼・保留、掲載の修復・保留）。
+- 既存の掲載済みデータの是正は #273 の別作業（この規則は新しく載る行だけを止める）。
 
 ## 優先順（`scripts/enrich/priority.py`）
 

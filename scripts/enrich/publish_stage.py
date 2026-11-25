@@ -32,10 +32,14 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from progress_identity import progress_identity_key  # noqa: E402
 import import_requests  # noqa: E402  (key_of / match_path / block_candidates: the same keys as the intake)
 import judge  # noqa: E402  (category tree, old->new ids, canonical form)
+sys.path.insert(0, HERE)
+import quality  # noqa: E402  (name / description / tags / categories rules; the same functions the judge uses)
 
 MAX_PARAMS = 100
 VALID_CATEGORIES = set(judge.category_ids(judge.load_categories()))
 LEGACY_CATEGORIES = judge.load_legacy_map()
+LEAF_CATEGORIES = quality.leaf_ids_of(list(judge.load_tree()[0].items())) & VALID_CATEGORIES
+SYNONYMS = quality.load_synonyms(os.path.join(ROOT, "data", "tag-synonyms.csv"))
 COUNTRY = re.compile(r"[A-Z]{2}")
 REGION = re.compile(r"[A-Z]{2}-[A-Z0-9]{1,3}")
 OK_VERDICTS = ("pass", "suspect")
@@ -60,10 +64,15 @@ def site_id(key):
 
 
 def site_name(row, host):
+    """-> (name, repaired). The <title> as the site's name when it passes quality.check_name; else quality.suggest_name (a deterministic
+    repair, repaired=True); else None (the caller holds the row: gate:quality_name). Never cut at a fixed length."""
     title = re.sub(r"\s+", " ", row.get("title") or "").strip()
     if row.get("adult") == "yes" or not title:
-        return host
-    return title[:80]
+        return host, False
+    if not quality.check_name(title):
+        return title, False
+    fixed = quality.suggest_name(title, host)
+    return (fixed, True) if fixed and not quality.check_name(fixed) else (None, False)
 
 
 def adult_value(row):
@@ -84,14 +93,13 @@ def crawled_at(row):
 
 
 def clean_tags(tags):
-    out, seen = [], set()
+    """-> [(label_ja, label_en)] (stored 'ja|en' strings or dicts; see quality.parse_tag). Quality (Japanese label, no near duplicates) is
+    checked by plan() with quality.check_tags BEFORE this."""
+    out = []
     for t in tags:
-        if not isinstance(t, str):
-            continue
-        t = re.sub(r"\s+", " ", t).strip()
-        if t and len(t) <= 40 and t.lower() not in seen:
-            seen.add(t.lower())
-            out.append(t)
+        p = quality.parse_tag(t)
+        if p and p[0]:
+            out.append(p)
     return out[:5]
 
 
@@ -148,16 +156,28 @@ def plan(row):
     raw_tags = _json_list(row.get("tags"))
     if raw_tags is None:
         raise Gate("gate:bad_tags_json")
-    name = site_name(row, host)
+    name, name_repaired = site_name(row, host)
+    if name is None:
+        raise Gate("gate:quality_name")
     if not name.strip():
         raise Gate("gate:empty_name")
+    desc_repaired = False
+    if quality.check_description_style(dja):
+        fixed = quality.to_polite(dja)
+        if not fixed or quality.check_description_style(fixed):
+            raise Gate("gate:quality_description")
+        dja, desc_repaired = fixed, True
+    if quality.check_tags(raw_tags[:quality.TAG_COUNT_MAX], SYNONYMS):
+        raise Gate("gate:quality_tags")
+    if quality.check_categories(cats, LEAF_CATEGORIES):
+        raise Gate("gate:quality_categories")
     cc, rc = row.get("country_code"), row.get("region_code")
     cc = cc if cc and COUNTRY.fullmatch(cc) else None
     rc = rc if cc and rc and REGION.fullmatch(rc) and rc.startswith(cc + "-") else None
     cands = list(dict.fromkeys([url, (row.get("url") or "").strip() or url, "https://" + key]))
     return {"identity_key": row["identity_key"], "id": site_id(key), "url": url, "name": name, "dja": dja, "den": den, "cc": cc, "rc": rc,
             "adult": adult_value(row), "crawled": crawled_at(row), "cats": cats, "tags": clean_tags(raw_tags), "cands": cands,
-            "keys": url_keys(cands), "pkey": pkey}
+            "keys": url_keys(cands), "pkey": pkey, "repaired": {"name": name_repaired, "description": desc_repaired}}
 
 
 def blocked_sql(urls, params):
@@ -196,7 +216,7 @@ def publish_statements(p):
         sel_t = " UNION ALL ".join("SELECT ?,?,?" for _ in p["tags"])
         out.append((f"INSERT OR IGNORE INTO site_tags (site_id,label_ja,label_en) SELECT * FROM ({sel_t}) "
                     "WHERE EXISTS (SELECT 1 FROM sites WHERE id=?) AND NOT EXISTS (SELECT 1 FROM site_tags WHERE site_id=?)",
-                    [x for t in p["tags"] for x in (p["id"], t, t)] + [p["id"], p["id"]]))
+                    [x for t in p["tags"] for x in (p["id"], t[0], t[1])] + [p["id"], p["id"]]))
     sel_c = " UNION ALL ".join("SELECT ? AS site_id,? AS category_id" if i == 0 else "SELECT ?,?" for i in range(len(p["cats"])))
     out.append((f"INSERT OR IGNORE INTO site_categories (site_id,category_id) SELECT * FROM ({sel_c}) "
                 "WHERE EXISTS (SELECT 1 FROM sites WHERE id=?) AND NOT EXISTS (SELECT 1 FROM site_categories WHERE site_id=?) "
@@ -324,7 +344,7 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
         "SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
         "WHERE p.state='approved' AND c.review_state='approved' ORDER BY p.updated_at,p.identity_key LIMIT ?", [int(limit)])
     res = {"selected": len(rows), "published": 0, "already_listed": 0, "held": 0, "errors": 0, "dry_run": not apply,
-           "would_publish": 0, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
+           "would_publish": 0, "repaired": {"name": 0, "description": 0}, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
     touched = []
 
     def hold(identity_key, reason):
@@ -363,6 +383,8 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
                 if not apply:
                     if guards_pass(client, p):
                         res["would_publish"] += 1
+                        for k, v in p["repaired"].items():
+                            res["repaired"][k] += int(v)
                     else:
                         res["held"] += 1
                         res["held_reasons"]["gate:not_inserted_blocked_or_rejected_request"] = res["held_reasons"].get("gate:not_inserted_blocked_or_rejected_request", 0) + 1
@@ -397,6 +419,8 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
                 res["stopped"] = True
                 break
             res["published"] += 1
+            for k, v in p["repaired"].items():
+                res["repaired"][k] += int(v)
             res["ids"].append(p["id"])
             touched.append(p["id"])
     except BaseException as e:

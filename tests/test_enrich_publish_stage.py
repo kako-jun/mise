@@ -69,7 +69,7 @@ class FakeD1:
 
 def add_candidate(d1, key='alpha.example.jp', state='approved', **kw):
     row = dict(identity_key=key + '/', frontier_key=key, host=key, url='https://' + key + '/', final_url='https://' + key + '/', title='Alpha Page',
-               description_ja='アルファの個人サイト。', description_en='Personal site of Alpha.', categories=json.dumps([LEAF]), tags=json.dumps(['Cats', 'dogs']),
+               description_ja='アルファの個人サイト。', description_en='Personal site of Alpha.', categories=json.dumps([LEAF]), tags=json.dumps(['猫|cat', '犬|dog']),
                adult='no', country_code='JP', region_code='JP-13', spam_verdict='pass', last_fetched_at='2026-11-24T11:26:33+00:00',
                review_state='approved')
     row.update(kw)
@@ -100,7 +100,7 @@ class Publish(unittest.TestCase):
         self.assertEqual(s['last_crawled_at'], '2026-11-24T11:26:33Z')
         self.assertTrue(s['registered_at'])                       # trigger 0006
         self.assertIn('alpha', s['search_text'])                  # trigger: search text incl. tags
-        self.assertIn('cats', s['search_text'])
+        self.assertIn('cat', s['search_text'])
         self.assertEqual([r[0] for r in self.d1.db.execute('SELECT category_id FROM site_categories WHERE site_id=?', (sid,))], [LEAF])
         self.assertEqual(self.d1.one('SELECT COUNT(*) FROM site_tags WHERE site_id=?', (sid,))[0], 2)
         jobs = {r['kind']: r for r in self.d1.db.execute('SELECT * FROM site_media_jobs WHERE site_id=?', (sid,))}
@@ -152,9 +152,9 @@ class Publish(unittest.TestCase):
 
     def test_partial_failure_is_atomic(self):
         add_candidate(self.d1)
-        add_candidate(self.d1, 'beta.example.jp', tags=json.dumps(['boom']))
+        add_candidate(self.d1, 'beta.example.jp', tags=json.dumps(['爆|boom']))
         # a failure at the tags step of ONE site: the whole batch of that site is rolled back (site row, categories, media jobs, counters)
-        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='boom' BEGIN SELECT RAISE(ABORT,'poison'); END")
+        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='爆' BEGIN SELECT RAISE(ABORT,'poison'); END")
         base = self.d1.one('SELECT n FROM scope_counts WHERE scope=?', ('all',))[0]
         res = self.run_stage()
         self.assertEqual((res['published'], res['errors']), (1, 1))
@@ -190,7 +190,7 @@ class Publish(unittest.TestCase):
         self.assertEqual([r[0] for r in self.d1.db.execute('SELECT category_id FROM site_categories WHERE site_id=?', (sid,))], [LEAF])
 
     def test_param_limit(self):
-        add_candidate(self.d1, tags=json.dumps(['t%d' % i for i in range(30)]),
+        add_candidate(self.d1, tags=json.dumps(['タグ%d|tag%d' % (i, i) for i in range(30)]),
                       final_url='https://alpha.example.jp/' + 'a/' * 5, categories=json.dumps([LEAF, 'dictionaries', 'archives', 'arts']))
         res = self.run_stage()
         self.assertEqual((res['published'], res['errors']), (1, 0))
@@ -268,6 +268,8 @@ class Publish(unittest.TestCase):
     def test_category_missing_in_d1_never_publishes_without_category(self):
         ps.VALID_CATEGORIES.add('ghost-cat')
         self.addCleanup(ps.VALID_CATEGORIES.discard, 'ghost-cat')
+        ps.LEAF_CATEGORIES.add('ghost-cat')
+        self.addCleanup(ps.LEAF_CATEGORIES.discard, 'ghost-cat')
         add_candidate(self.d1, categories=json.dumps(['ghost-cat']))
         res = self.run_stage()
         self.assertEqual((res['held'], res['published']), (1, 0))
@@ -315,11 +317,11 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='approved'")[0], 1)   # the second one was not touched
 
     def test_failing_row_goes_to_back_of_queue(self):
-        add_candidate(self.d1, 'a.example.jp', tags=json.dumps(['boom']))
+        add_candidate(self.d1, 'a.example.jp', tags=json.dumps(['爆|boom']))
         add_candidate(self.d1, 'b.example.jp')
         self.d1.db.execute("UPDATE url_progress SET updated_at='2000-01-01 00:00:00' WHERE identity_key='a.example.jp/'")
         self.d1.db.execute("UPDATE url_progress SET updated_at='2001-01-01 00:00:00' WHERE identity_key='b.example.jp/'")
-        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='boom' BEGIN SELECT RAISE(ABORT,'poison'); END")
+        self.d1.db.execute("CREATE TRIGGER poison BEFORE INSERT ON site_tags WHEN NEW.label_ja='爆' BEGIN SELECT RAISE(ABORT,'poison'); END")
         self.run_stage(limit=1)
         self.assertGreater(self.d1.one("SELECT updated_at FROM url_progress WHERE identity_key='a.example.jp/'")[0], '2000')
         res = self.run_stage(limit=1)

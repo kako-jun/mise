@@ -51,7 +51,7 @@ class FakeLLM:
             if kind == 'triage':
                 items.append({'i': n, 'v': 'p', 'kd': '-', 'sk': 'i', 'ad': 'n', 'aq': None, 'sc': 's', 'fr': 'a', 'ex': '-', 'cf': 'h', 'cat': [LEAF], 'r': ''})
             else:
-                items.append({'i': n, 'dj': '小さな工房のサイト。', 'de': 'A small workshop site.', 'lj': None, 'le': None, 'ev': [], 'tg': ['craft'],
+                items.append({'i': n, 'dj': '小さな工房のサイト。', 'de': 'A small workshop site.', 'lj': None, 'le': None, 'ev': [], 'tg': ['工芸|craft'],
                               'cc': None, 'rc': None, 'q': None})
         return {'content': [{'type': 'text', 'text': json.dumps({'r': items})}], 'stop_reason': 'end_turn', 'usage': usage}
 
@@ -264,7 +264,7 @@ class DescribeAfterApprove(unittest.TestCase):
             r = row(self.d1, k)
             self.assertEqual((r['state'], r['review_state'], r['review_reason']), ('approved', 'approved', 'deliberation:approve+described'))
             self.assertEqual(json.loads(r['categories']), [LEAF])
-            self.assertEqual(json.loads(r['tags']), ['craft'])
+            self.assertEqual(json.loads(r['tags']), ['工芸|craft'])
             self.assertTrue(r['description_ja'] and r['description_en'])
         kinds = self.llm.kinds()
         self.assertEqual((kinds.count('describe'), kinds.count('triage')), (3, 1))     # triage only for the row without a usable category
