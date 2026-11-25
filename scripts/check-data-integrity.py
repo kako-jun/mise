@@ -19,6 +19,38 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts", "llm"))
 import integrity  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "scripts", "enrich"))
+import quality  # noqa: E402  (the same rules the judge and the publish gate use; Issue #273)
+
+# Warn-level quality checks (never fail the run). Baseline = production count measured 2026-11-25 (16,915 published sites); the report says
+# when a count is above it, so a regression is noticed. The goal after the cleanup is 0 (then lower the baseline to 0).
+QUALITY_BASELINE = {"name_too_long": 2603, "description_style": 4232, "tag_label_ja_not_japanese": 58543, "category_non_leaf_only": 1836}
+QUALITY_SQL = {
+    "name_too_long": f"SELECT id, name FROM sites WHERE length(name) > {quality.NAME_MAX}",
+    "description_style": "SELECT id, description_ja FROM sites WHERE description_ja IS NOT NULL AND description_ja<>''",
+    "tag_label_ja_not_japanese": "SELECT site_id, label_ja FROM site_tags",
+    "category_non_leaf_only": ("SELECT s.id FROM sites s WHERE EXISTS (SELECT 1 FROM site_categories a WHERE a.site_id=s.id) AND NOT EXISTS "
+                              "(SELECT 1 FROM site_categories x WHERE x.site_id=s.id AND NOT EXISTS (SELECT 1 FROM categories c WHERE c.parent_id=x.category_id))"),
+}
+QUALITY_WHY = {
+    "name_too_long": f"sites.name (what the publish stage writes) is longer than {quality.NAME_MAX} characters",
+    "description_style": "description_ja ends in the plain (常体) form instead of 体言止め / です・ます",
+    "tag_label_ja_not_japanese": "a tag whose label_ja has no kana / kanji",
+    "category_non_leaf_only": "a site that has only non-leaf (parent) categories",
+}
+
+
+def quality_checks(execute):
+    """-> {name: [violating rows]} using scripts/enrich/quality.py (one SELECT per check; execute(sql) -> list of tuples)."""
+    out = {}
+    for name, sql in QUALITY_SQL.items():
+        rows = execute(sql)
+        if name == "description_style":
+            rows = [r for r in rows if quality.check_description_style(r[1])]
+        elif name == "tag_label_ja_not_japanese":
+            rows = [r for r in rows if not quality.has_japanese(r[1] or "")]
+        out[name] = rows
+    return out
 
 
 def wrangler_execute(db, target, persist_to):
@@ -64,6 +96,13 @@ def main(argv=None):
         for r in rows[:a.limit]:
             print(f"        {r}")
         failed += bool(rows) and sev == "error"
+    for name, rows in quality_checks(execute).items():
+        base = QUALITY_BASELINE[name]
+        mark = "ok  " if not rows else "warn"
+        trend = "" if len(rows) <= base else f" ABOVE BASELINE {base} (+{len(rows) - base})"
+        print(f"[{mark}] quality:{name}: {len(rows)} row(s) (baseline {base}) -- {QUALITY_WHY[name]}{trend}")
+        for r in rows[:a.limit]:
+            print(f"        {r}")
     print(f"{failed} check(s) failed" if failed else "all error-level checks passed")
     return 1 if failed else 0
 

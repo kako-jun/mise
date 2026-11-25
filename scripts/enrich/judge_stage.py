@@ -34,6 +34,8 @@ for _sub in ("scripts/pipeline", "scripts/llm"):
 import judge  # noqa: E402
 import pipeline as llm_pipeline  # noqa: E402  (scripts/llm/pipeline.py)
 import approve_policy  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "scripts", "enrich"))
+import quality  # noqa: E402  (scripts/enrich/quality.py: name / description / tags / categories rules)
 
 MONTHLY_CAP_USD = 100.0          # same cap as scripts/nightly.py --budget-month (UTC month)
 MAX_JUDGE_ATTEMPTS = 3           # hard failures before url_progress.state -> 'failed'
@@ -169,8 +171,11 @@ class Ctx:
         self.llm, self.ledger, self.log = llm, ledger, log
         self.valid_ids = set(judge.category_ids(cats))
         self.legacy = judge.load_legacy_map()
-        self.systems = {"triage": llm_pipeline.triage_system(cats), "describe": llm_pipeline.describe_system(cats)}
-        self.schemas = {s: llm_pipeline.wrapper_schema(s, cats) for s in self.systems}
+        self.leaf_ids = quality.leaf_ids_of(list(judge.load_tree()[0].items())) & self.valid_ids
+        self.systems = {"triage": llm_pipeline.triage_system(cats, quality=True), "describe": llm_pipeline.describe_system(cats, quality=True)}
+        self.quality_retries = 0
+        self.schemas = {s: llm_pipeline.wrapper_schema(s, cats, quality=True) for s in self.systems}
+        self.need_name = False    # requalify: an LLM site name is required
         self.lock = threading.Lock()
         self.consecutive_failures = 0
         self.stop = None          # reason string once the run must make no new call (budget, API-wide refusal, ledger error)
@@ -186,21 +191,21 @@ def group_text(chunk):
     return "\n".join(parts)
 
 
-def build_request(ctx, stage, model, chunk, max_tokens):
+def build_request(ctx, stage, model, chunk, max_tokens, note=None):
     out = {"format": {"type": "json_schema", "schema": ctx.schemas[stage]}}
     if stage == "triage":
         out["effort"] = "low"
     return {"model": model, "max_tokens": max_tokens,
             "system": [{"type": "text", "text": ctx.systems[stage], "cache_control": {"type": "ephemeral"}}],
-            "messages": [{"role": "user", "content": group_text(chunk)}], "output_config": out}
+            "messages": [{"role": "user", "content": ((note + "\n\n") if note else "") + group_text(chunk)}], "output_config": out}
 
 
-def call(ctx, stage, model, chunk, max_tokens=None):
+def call(ctx, stage, model, chunk, max_tokens=None, note=None):
     """reserve -> call -> settle. Returns (msg|None, problem|None). Raises BudgetExceeded / LedgerSettleError."""
     mt = max_tokens or min(16000, llm_pipeline.PER_ITEM_TOKENS[stage] * len(chunk) + llm_pipeline.THINKING_BUFFER[stage])
-    params = build_request(ctx, stage, model, chunk, mt)
+    params = build_request(ctx, stage, model, chunk, mt, note)
     try:
-        wc, _ = judge.worst_case(model, ctx.systems[stage] + json.dumps(ctx.schemas[stage]), group_text(chunk), mt)
+        wc, _ = judge.worst_case(model, ctx.systems[stage] + json.dumps(ctx.schemas[stage]), (note or "") + group_text(chunk), mt)
     except judge.BudgetExceeded as e:
         return None, f"prompt too large: {e}"[:200]
     if ctx.stop:
@@ -228,8 +233,10 @@ def call(ctx, stage, model, chunk, max_tokens=None):
     return msg, None
 
 
-def parse(ctx, stage, work, msg):
-    """work = [(cand, extra, base)] -> {pos: (full output|None, problem|None)} (same checks as pipeline.py)."""
+def parse(ctx, stage, work, msg, final=False):
+    """work = [(cand, extra, base)] -> {pos: (full output|None, problem|None)} (same checks as pipeline.py, plus the quality rules).
+    A quality violation is a problem 'quality:<field>: <codes>' (so the item is retried once with the violation stated); with final=True
+    (the retry's answer) the output is kept and carries out['quality_hold'] = 'quality:<field>' so the row goes to a human."""
     obj, problem = judge.parse_response_text(msg)
     if obj is None or not isinstance(obj.get("r"), list):
         return {n: (None, problem or "no result array") for n in range(len(work))}
@@ -240,16 +247,26 @@ def parse(ctx, stage, work, msg):
     res = {}
     for n, (c, _extra, base) in enumerate(work):
         item = by_i.get(n + 1)
-        res[n] = (llm_pipeline.check_item(stage, item, n + 1, ctx.valid_ids, judge.render_candidate(c), base)
-                  if item is not None else (None, "missing from response"))
+        if item is None:
+            res[n] = (None, "missing from response")
+            continue
+        full, problem, q = llm_pipeline.check_item_ex(stage, item, n + 1, ctx.valid_ids, judge.render_candidate(c), base, leaf_ids=ctx.leaf_ids,
+                                                     need_name=ctx.need_name)
+        if full is not None and q:
+            field = quality.which(q[0])
+            if not final:
+                res[n] = (None, f"quality:{field}: {', '.join(q)}")
+                continue
+            full["quality_hold"] = f"quality:{field}"
+        res[n] = (full, problem)
     return res
 
 
-def run_stage(ctx, stage, model, work):
+def run_stage(ctx, stage, model, work, note=None):
     """work = [(cand, extra, base)] sent as one request. Returns [(output|None, problem|None)]; an invalid item gets one retry."""
     pairs = [(c, e) for c, e, _ in work]
     try:
-        msg, problem = call(ctx, stage, model, pairs)
+        msg, problem = call(ctx, stage, model, pairs, note=note)
     except BudgetExceeded as e:
         ctx.stop = ctx.stop or str(e)
         return [(None, STOP)] * len(work)
@@ -262,13 +279,19 @@ def run_stage(ctx, stage, model, work):
             mt = None
             if p and "truncated" in p:
                 mt = min(16000, 2 * (llm_pipeline.PER_ITEM_TOKENS[stage] + llm_pipeline.THINKING_BUFFER[stage]))
+            pair, note2 = pairs[n], note
+            if p and p.startswith("quality:"):
+                with ctx.lock:
+                    ctx.quality_retries += 1
+                note2 = (((note + "\n") if note else "") + "YOUR PREVIOUS ANSWER WAS REJECTED (" + p + "). Answer again and fix exactly this; "
+                         "change nothing else.")
             try:
-                m2, p2 = call(ctx, stage, model, [pairs[n]], mt)
+                m2, p2 = call(ctx, stage, model, [pair], mt, note2)
             except BudgetExceeded as e:
                 ctx.stop = ctx.stop or str(e)
                 out[n] = (None, STOP)
                 continue
-            out[n] = (None, p2) if m2 is None else parse(ctx, stage, [work[n]], m2)[0]
+            out[n] = (None, p2) if m2 is None else parse(ctx, stage, [work[n]], m2, final=True)[0]
     return out
 
 
@@ -280,7 +303,7 @@ def judge_chunk(ctx, cands):
     for n, (t, _p) in enumerate(tri):
         if t is None:
             continue
-        if t["spam"]["verdict"] == "pass":
+        if t["spam"]["verdict"] == "pass" and not t.get("quality_hold"):
             work.append((cands[n], f"pre-judged: adult={t['adult']['value'][0]}", t))
             idx.append(n)
         else:
@@ -308,7 +331,7 @@ JUDGE_SQL = ("UPDATE url_candidates SET input_hash=?, origin=?, model=?, judged_
              "spam_reason=?, description_ja=?, description_en=?, long_description_ja=?, long_description_en=?, "
              "long_description_evidence=?, categories=?, tags=?, adult=?, site_kind=?, site_kind_reason=?, site_scope=?, "
              "confidence=?, country_code=?, region_code=?, notes=?, review_state=?, reviewed_at=?, freshness=?, exempt=?, "
-             "review_reason=?, updated_at=datetime('now') WHERE identity_key=? AND (review_state IS NULL OR review_state='')")
+             "review_reason=?, site_name=?, updated_at=datetime('now') WHERE identity_key=? AND (review_state IS NULL OR review_state='')")
 # A row is claimed ('fetched' -> 'reviewing', compare-and-set) before any LLM call; every write below is guarded by 'reviewing'.
 PROGRESS_SQL = "UPDATE url_progress SET state=?, updated_at=datetime('now') WHERE identity_key=? AND state='reviewing'"
 CLAIM_SQL = ("UPDATE url_progress SET state='reviewing', updated_at=datetime('now') WHERE identity_key=? AND "
@@ -322,20 +345,26 @@ def judged_statements(row, cand, out, model, stamp, ctx):
     hide = out["adult"]["value"] == "yes"  # no long body-derived text for adult sites (same policy as import_results.py)
     loc = out["location"]
     cats = json.dumps(out["categories"])
+    hold = out.get("quality_hold")
     rs, why, ps = decide({
         "key": row["identity_key"], "title": row.get("title"), "spam_verdict": out["spam"]["verdict"],
         "spam_kind": out["spam"]["kind"], "confidence": out["confidence"], "description_ja": out["description_ja"],
         "description_en": out["description_en"], "categories": cats, "site_kind": out["site_kind"],
         "freshness": out["freshness"], "exempt": out["exempt"], "freshness_signal_at": row.get("freshness_signal_at"),
         "freshness_source": row.get("freshness_source")})
+    note = out["notes"]
+    if hold and rs == "approved":     # a quality violation that survived the retry: a human looks (never auto approved); a rejection stays one
+        rs, why, ps = "pending", hold, "candidate"
+    elif hold and rs == "pending":    # the policy already sends it to a human / the cats: keep ITS reason, only note the violation
+        note = (note + " " if note else "") + f"[{hold}]"
     params = [input_hash(model, judge.render_candidate(cand)), ORIGIN, model, stamp, stamp,
               out["spam"]["verdict"], out["spam"]["kind"], out["spam"]["reason"], out["description_ja"], out["description_en"],
               None if hide else out["long_description_ja"], None if hide else out["long_description_en"],
               None if hide else json.dumps(out["long_description_evidence"], ensure_ascii=False),
               cats, json.dumps(out["tags"], ensure_ascii=False), out["adult"]["value"], out["site_kind"],
               out["site_kind_reason"], out["site_scope"], out["confidence"], loc["country_code"], loc["region_code"],
-              out["notes"], rs, stamp if rs in ("approved", "rejected") else None, out["freshness"], out["exempt"], why,
-              row["identity_key"]]
+              note, rs, stamp if rs in ("approved", "rejected") else None, out["freshness"], out["exempt"], why,
+              out.get("site_name"), row["identity_key"]]
     return [(JUDGE_SQL, params), (PROGRESS_SQL, [ps, row["identity_key"]])], ps
 
 
@@ -558,7 +587,7 @@ def defang_row(row):
                                                                                       "hint_leaf", "freshness_source") else v) for k, v in row.items()}
 
 
-def describe_row(ctx, row, need_categories=False):
+def describe_row(ctx, row, need_categories=False, note=None):
     """Describe ONE already judged row with the judge's own describe prompt / validation / ledger (run_stage -> call -> reserve/settle).
     need_categories: the stored categories are unusable, so a triage call (the same cheap one) supplies them first.
     row = the full joined row (url_progress p + url_candidates c.*). -> (output | None, problem | None); problem == STOP when the run must stop.
@@ -570,14 +599,18 @@ def describe_row(ctx, row, need_categories=False):
             return None, p
         if t["spam"]["verdict"] == "reject" or not t["categories"]:
             return None, "triage: " + ("rejected" if t["spam"]["verdict"] == "reject" else "no category")
+        if t.get("quality_hold"):
+            return None, t["quality_hold"]
         cats = t["categories"]
     else:
         cats = judge.canonical_categories(_json_list(row.get("categories")) or [], ctx.valid_ids, ctx.legacy)
     base = describe_base(row, cats, ctx)
     adult = row.get("adult") if row.get("adult") in ("yes", "no", "unknown") else "unknown"
-    out, p = run_stage(ctx, "describe", DESCRIBE_MODEL, [(cand, f"pre-judged: adult={adult[0]}", base)])[0]
+    out, p = run_stage(ctx, "describe", DESCRIBE_MODEL, [(cand, f"pre-judged: adult={adult[0]}", base)], note=note)[0]
     if out is None:
         return None, p
+    if out.get("quality_hold"):
+        return None, out["quality_hold"]
     if not out["description_ja"] or not out["description_en"]:
         return None, "the text supports no description"
     if adult == "yes":    # same policy as judged_statements: no long body-derived text for adult sites
@@ -593,17 +626,173 @@ def described_assignments(out, row, regenerate_categories):
             "long_description_evidence": json.dumps(out["long_description_evidence"], ensure_ascii=False) if out["long_description_evidence"] else None,
             "tags": json.dumps(out["tags"], ensure_ascii=False),
             "country_code": loc["country_code"] or row.get("country_code"), "region_code": loc["region_code"] or row.get("region_code")}
+    if out.get("site_name"):
+        over["site_name"] = out["site_name"]
     if regenerate_categories:
         over["categories"] = json.dumps(out["categories"])
     sets = ", ".join(f"{k}=?" for k in over)
     return sets, list(over.values()), over
 
 
+# ------------------------------------------------------------------ requalify (quality violations that need a new describe)
+REQUALIFY_MAX_ATTEMPTS = 2       # per row; after that only a human moves it (it never blocks the queue)
+
+
+def requalify_attempts(notes):
+    m = re.match(r"requalify_attempts=(\d+);", notes or "")
+    return int(m.group(1)) if m else 0
+
+
+def _strip_attempts(notes):
+    return re.sub(r"^requalify_attempts=\d+;\s*", "", notes or "")
+
+
+# The attempt count is the prefix 'requalify_attempts=N;' of notes (the old notes follow it). SQL compares it (GLOB), so rows whose attempts are used
+# up never take a place in the selection: nothing is discarded in Python after a LIMIT.
+ATTEMPTS_LEFT_SQL = ("COALESCE(c.notes,'') NOT GLOB 'requalify_attempts=[" + str(REQUALIFY_MAX_ATTEMPTS) + "-9];*' AND "
+                     "COALESCE(c.notes,'') NOT GLOB 'requalify_attempts=[1-9][0-9]*;*'")
+REQUALIFY_PAGE = 200
+REQUALIFY_SCAN_MAX = 2000        # approved rows looked at per run (clean ones are the publish stage's)
+HELD_SQL = ("SELECT p.identity_key AS identity_key, p.state AS progress_state, p.updated_at AS progress_updated_at, c.* FROM url_progress p "
+            "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='candidate' AND c.review_state='pending' "
+            "AND (c.review_reason LIKE 'gate:quality_%' OR c.review_reason LIKE 'quality:%') AND " + ATTEMPTS_LEFT_SQL +
+            " ORDER BY p.updated_at, p.identity_key LIMIT ?")
+APPROVED_SQL = ("SELECT p.identity_key AS identity_key, p.state AS progress_state, p.updated_at AS progress_updated_at, c.* FROM url_progress p "
+                "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='approved' AND c.review_state='approved' AND " + ATTEMPTS_LEFT_SQL +
+                " AND (p.updated_at > ? OR (p.updated_at = ? AND p.identity_key > ?)) ORDER BY p.updated_at, p.identity_key LIMIT ?")
+
+
+def requalify_candidates(client, limit):
+    """-> [(row, gate reason | None)]. Eligible: 'candidate' rows held for a quality reason (gate:quality_* from the publish gate, quality:* from the
+    judge; attempts left, oldest first) and 'approved' rows the publish gate would hold for a quality reason (scanned page by page from the oldest;
+    a clean row is skipped, so a long run of clean rows never hides the one behind it)."""
+    import publish_stage
+    out = [(r, publish_stage.gate_reason(dict(r))) for r in client.query(HELD_SQL, [int(limit)])]
+    seen, after = 0, ("", "")
+    while len(out) < limit and seen < REQUALIFY_SCAN_MAX:
+        rows = client.query(APPROVED_SQL, [after[0], after[0], after[1], REQUALIFY_PAGE])
+        if not rows:
+            break
+        for r in rows:
+            g = publish_stage.gate_reason(dict(r))
+            if (g or "").startswith("gate:quality_") and len(out) < limit:
+                out.append((r, g))
+        seen += len(rows)
+        after = (rows[-1]["progress_updated_at"], rows[-1]["identity_key"])
+    return out
+
+
+def requalify_note(gate, row):
+    return ("REQUALIFY: the stored result for the candidate below was rejected (" + str(gate or row.get("review_reason")) + "). Answer again so that every "
+            "rule passes. " + quality.PROMPT_DESCRIBE_RULES + " " + quality.PROMPT_TRIAGE_RULES)
+
+
+def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, heartbeat=None, llm_enabled=True):
+    """One describe (and a triage when the categories are unusable) per row whose stored result breaks a quality rule, with the violation
+    stated; then the publish gate again on the result. A row the judge held (review_reason 'quality:*') goes through the approval policy
+    (decide) again and is promoted only if the policy approves it; a row the publish gate held was approved before and is approved again.
+    The original review_reason of a human / deliberation waiting row is never overwritten (the judge keeps it and only notes the violation).
+    Fails -> 'candidate'/'pending' with the new reason; the attempt is counted in the notes PREFIX (requalify_attempts=N; the old notes follow),
+    max REQUALIFY_MAX_ATTEMPTS, and the row goes to the back of the queue (url_progress.updated_at). A request without an answer (timeout) is not an
+    attempt; 3 requests in a row without a usable result stop the run. Same ledger / cap / defanging as the judge."""
+    import publish_stage
+    stats = {"selected": 0, "requalified": 0, "still_held": 0, "describe_failed": 0, "no_answer": 0, "cost_usd": 0.0, "stopped": None,
+             "budget_stopped": False, "dry_run": not apply}
+    rows = requalify_candidates(client, limit)
+    stats["selected"] = len(rows)
+    if not apply or not llm_enabled or not rows:
+        log(f"requalify: {stats}")
+        return stats
+    if llm is None:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError("ANTHROPIC_API_KEY is not set (the value is never printed)")
+        llm = default_llm
+    ledger = Ledger(client, judge.new_run_id(), budget_month)
+    ctx = Ctx(llm, ledger, log, judge.load_categories())
+    failures = 0
+    for row, gate in rows:
+        if heartbeat:
+            heartbeat()
+        k, pstate, reason = row["identity_key"], row["progress_state"], row.get("review_reason") or ""
+        gate_now = gate or ""
+        need_cat = gate_now == "gate:quality_categories" or reason == "quality:categories" or not _leaf_usable(row, ctx)
+        ctx.need_name = gate_now == "gate:quality_name"
+        n = requalify_attempts(row.get("notes")) + 1
+        out, problem, over, gate2 = None, None, {}, gate
+        try:
+            if gate is not None:
+                out, problem = describe_row(ctx, defang_row(row), need_categories=need_cat, note=requalify_note(gate, row))
+                if out is not None:
+                    _sets, _params, over = described_assignments(out, row, need_cat)
+                    gate2 = publish_stage.gate_reason(dict(row, **over))
+        except BudgetExceeded as e:
+            ctx.stop = ctx.stop or str(e)
+            problem = STOP
+        except LedgerSettleError:
+            stats["stopped"] = "ledger error"
+            raise
+        if problem == STOP:
+            stats["stopped"] = ctx.stop
+            stats["budget_stopped"] = bool(ctx.stop) and str(ctx.stop).startswith("monthly cap")
+            break
+        if gate is not None:
+            failures = 0 if out is not None else failures + 1
+        if gate is not None and out is None:
+            log(f"requalify: describe of {k} failed ({problem})"[:300])
+            if (problem or "").startswith("no answer"):
+                stats["no_answer"] += 1           # a timeout is not the row's fault: no attempt, no write
+                if failures >= 3:
+                    stats["stopped"] = "3 consecutive requests without a usable result"
+                    break
+                continue
+            stats["describe_failed"] += 1
+        if failures >= 3:
+            stats["stopped"] = "3 consecutive requests without a usable result"
+        stamp = now_iso()
+        rs, why = "approved", "requalified"
+        if gate2 is None and reason.startswith("quality:"):      # the judge's own hold: the approval policy decides again, never a promotion by itself
+            rs, why, _ps = decide(dict(row, key=k, **over))
+        sets = ", ".join(f"{c}=?" for c in over)
+        if gate2 is None and rs == "approved":
+            stmts = [("UPDATE url_candidates SET " + (sets + ", " if sets else "") + "review_state='approved', reviewed_at=?, review_reason='requalified', "
+                      "notes=?, updated_at=datetime('now') WHERE identity_key=? AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      list(over.values()) + [stamp, _strip_attempts(row.get("notes")), k, k, pstate]),
+                     ("UPDATE url_progress SET state='approved', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
+            stats["requalified"] += 1
+        elif gate2 is None:                                      # fixed, but the policy says a human / the cats look: back to their queue with its own reason
+            stmts = [("UPDATE url_candidates SET " + (sets + ", " if sets else "") + "review_state='pending', review_reason=?, notes=?, "
+                      "updated_at=datetime('now') WHERE identity_key=? AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      list(over.values()) + [why, _strip_attempts(row.get("notes")), k, k, pstate]),
+                     ("UPDATE url_progress SET state='candidate', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
+            stats["requalified"] += 1
+        else:
+            stmts = [("UPDATE url_candidates SET review_state='pending', review_reason=?, notes=?, updated_at=datetime('now') WHERE identity_key=? "
+                      "AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      [gate2 or gate_now, f"requalify_attempts={n}; " + _strip_attempts(row.get("notes")), k, k, pstate]),
+                     ("UPDATE url_progress SET state='candidate', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
+            stats["still_held"] += 1
+        write(client, stmts)
+        if stats["stopped"]:
+            break
+    stats["cost_usd"] = round(ledger.spent, 6)
+    log(f"requalify: {stats}")
+    return stats
+
+
+def _leaf_usable(row, ctx):
+    """The stored categories (after the old-id conversion) are non-empty and all leaves."""
+    raw = _json_list(row.get("categories"))
+    if raw is None:
+        return False
+    cats = judge.canonical_categories([c for c in raw if isinstance(c, str)], ctx.valid_ids, ctx.legacy)
+    return not quality.check_categories(cats, ctx.leaf_ids)
+
+
 # ------------------------------------------------------------------ run
 def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True, priority=None):
     """llm_enabled=False: never calls the LLM (no key needed); only the deterministic moves of rows that already carry a review_state are done."""
     stats = {"selected": 0, "judged": 0, "approved": 0, "candidate": 0, "rejected": 0, "failed": 0, "retry_later": 0,
-             "moved_without_llm": 0, "empty_rejected": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
+             "moved_without_llm": 0, "quality_held": 0, "quality_retries": 0, "empty_rejected": 0, "write_failed": 0, "lost_claim": 0, "cost_usd": 0.0, "budget_stopped": False,
              "stopped": None, "dry_run": not apply}
     cols = ", ".join(("p." if c in ("identity_key", "url") else "c.") + c for c in SELECT_COLUMNS)
     # review_state/notes and the policy inputs of an already judged row come from the same row
@@ -713,6 +902,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             best_effort([s for r in chunk for s in unclaim_statements(r)])
             return
         stmts, kinds, stamp = [], [], now_iso()
+        out_by_key = {r["identity_key"]: res[0] for r, res in zip(chunk, results) if res[0] is not None}
         for r, c, (out, model, problem) in zip(chunk, cands, results):
             if out is not None:
                 s, ps = judged_statements(r, c, out, model, stamp, ctx)
@@ -752,6 +942,8 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
                 count("lost_claim")      # someone else moved the row: not ours to count
             elif kind == "judged":
                 count("judged")
+                if (r_out := out_by_key.get(r["identity_key"])) and r_out.get("quality_hold"):
+                    count("quality_held")
                 count(ps)
             elif kind in ("failed", "candidate"):
                 count(kind)
@@ -767,6 +959,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
         for c in chunks:
             do_chunk(c)
     stats["cost_usd"] = round(ledger.spent, 6)
+    stats["quality_retries"] = ctx.quality_retries
     if not ctx.stop and ctx.consecutive_failures >= 3:
         ctx.stop = "3 consecutive requests without a usable result"
     stats["stopped"] = ctx.stop

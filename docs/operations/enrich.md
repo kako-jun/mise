@@ -53,7 +53,7 @@ UPDATE url_candidates SET review_state=NULL, review_reason=NULL, reviewed_at=NUL
 
 ## 合議段（`scripts/enrich/deliberate_stage.py`、migration 0039）
 
-判定段の審査（`approve_policy`）で決まらず `url_progress.state='candidate'` / `url_candidates.review_state='pending'` に残った行（`review_reason` が空・`not_pass`・`stale_individual_*`・`no_description` など）を、3 匹の猫が投票して終点へ進める。`run(client, *, limit, apply, log, llm, budget_month, concurrency, heartbeat, llm_enabled)`。ランナーでは判定段と掲載段の間（`--stages fetch,judge,deliberate,publish`、既定は全段、`--deliberate-limit` 既定 20・上限 200）。
+判定段の審査（`approve_policy`）で決まらず `url_progress.state='candidate'` / `url_candidates.review_state='pending'` に残った行（`review_reason` が空・`not_pass`・`stale_individual_*`・`no_description` など）を、3 匹の猫が投票して終点へ進める。`run(client, *, limit, apply, log, llm, budget_month, concurrency, heartbeat, llm_enabled)`。ランナーでは判定段と掲載段の間（`--stages fetch,judge,deliberate,requalify,publish`、既定は全段、`--deliberate-limit` 既定 20・上限 200）。
 
 - 3 匹（性格は Issue #53 で確定、指示文は `PROMPTS`）: **白猫** = 用心深い番猫（安全と法。なりすまし・著作権・個人情報・マルウェア/誘導。厳しめ、迷えば保留/却下。モデル sonnet）/ **黒猫** = 潔癖な審査員（独立性と質。広告中心・量産・パーキング・更新停止。中庸。haiku）/ **よもぎ猫** = 好奇心旺盛な探検家（手作り感・個性・ニッチ・長続き。寛容、迷えば承認。haiku）。各猫は `{vote: approve|hold|reject, reason, evidence_quote?}` を返す。理由は事実の短い日本語 1 文（「スパム」などのレッテルは検証で弾く）。成人向けは属性にすぎず、それだけで reject しない（指示文に明記。成人向けの行への reject で理由が成人向けを挙げていれば無効票として 1 回再試行）。人気・流入・規模・フォロワー・被リンクは基準にしない（各指示文に明記）。入力は取得・判定段が保存した材料（`<candidate>` と `<judge_notes>`）を「信用できないデータ」として渡す。LLM にツールは無い。`evidence_quote` はサイト本文の逐語であること（`judge.quote_source` で検査）。
 - 追加の歯止め（すべて自動決定を止めて人へ回す向き。#53 の素の 2/3 多数決からの変更）:
@@ -97,7 +97,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 1 バッチの中身:
 
 1. `sites` を INSERT（既掲載 URL（正規化 URL と `progress_key` の両方）・拒否ホスト・拒否済み申請・同じ id がある場合は入れない。`ON CONFLICT DO NOTHING`）
-2. `site_tags`（最大 5、重複・40 字超を除く）
+2. `site_tags`（最大 5。`label_ja` / `label_en` は別々。品質ゲートは下の「品質の規則」）
 3. `site_categories`（最大 3、旧 id の変換と祖先の除去済み、D1 の `categories` に存在する id のみ）。2・3 は `changes()` を使わず、「その sites 行があり、そのサイトの行がまだ無い」で守る（カテゴリ 0 件の sites 行はこのトランザクション内にしか存在しえない）。バッチの最後に、sites があるのにカテゴリが 0 件なら NOT NULL 違反を起こす文を置き、全体をロールバックする
 4. `site_media_jobs`（favicon・thumbnail、`pending`、`identity_key=progress_key`。成人サイトは thumbnail が `excluded`/`eligible=0`。migration 0033/0035 のトリガが作るので、同じ規則の `INSERT OR IGNORE` を保険として添える）
 5. `url_progress.state='published'`
@@ -118,6 +118,32 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 
 置き換え対象（段 C の実行器が入ったら撤去する）: `nightly.py` の `sql`/`gate`/`prod`、`scripts/llm/export_approved_sql.py`、旧 `export_sql.py`（非 published の `url_progress.state` を上書きし `reviewing` を作る。最初の `--apply` の前に停止する）。
 テスト: `tests/test_enrich_publish_stage.py`（実 migration を適用した in-memory SQLite）。
+
+## 品質の規則（`scripts/enrich/quality.py`、Issue #273）
+
+公開される項目（サイト名・日本語の説明・タグ・カテゴリ）の規則を **1 か所（`quality.py`、副作用なしの関数）** に置き、判定段・合議段（describe）・掲載段のゲート・整合チェックが同じ関数を使う。人気・規模の基準は無い。意味を書き換えない・事実を足さない（修復は形だけ）。
+
+| 項目 | 規則（定数） | 違反コード |
+|---|---|---|
+| サイト名 | 40 字以内（`NAME_MAX`）、空でない（**例外**: 区切りの無い 1 節の title は 80 字以内（`NAME_LONG_MAX`）まで、長い正式名称としてそのまま載せる。宣伝語・文を含まない場合）。区切り（`｜` `|` ` - ` ` – ` ` / ` `／`）で 3 つ以上に分かれる、または 2 つのうち短い方が 12 字超・長い方が 24 字超・文になっている、は一覧／キャッチコピーとして不可。宣伝語（`PROMO`: 公式通販・オンラインショップ・を提案 …）は区切りがある／20 字超のときだけ合図として違反。文（「。」を含む）も不可 | `name_empty` `name_too_long` `name_list` `name_promo` `name_sentence` |
+| 説明（日本語） | 体言止め、または「です・ます・でした・ました」。常体（である・だ・ている・する・れる・った・ない …、および「。」で終わる辞書形（行う・描く・届ける）と過去形（載せた・集めてきた））で終わる文が 1 つでもあれば違反（辞書形・過去形は、漢字／カタカナの語幹＋送り仮名の動詞だけを見る。おやつ・ほたる・みんなのうた・世界のおやつのような名詞は検査外。「〜からだ。」型の文末は常体として残す） | `description_style` |
+| タグ | 1 つが `"日本語ラベル\|english label"`（辞書形式でも可）。`label_ja` にかな・漢字が必要、`label_en` は日本語を含まない別のラベル。日本語 20 字・英語 40 字以内（半角カナは NFKC で日本語として扱う）、最大 5 つ、`市` `町` `県` などの行政区分語だけのタグは不可（`tag_admin_only`）、ラテン表記の固有名詞は `data/tag-proper-nouns.csv`（許可リスト。FPGA・iOS・Linux など。読み込みで検証）にあれば `label_ja` に置ける、`normalize_tag_key`（全角半角・大小・単複・ハイフン／空白）と `data/tag-synonyms.csv` で同じになるものは重複 | `tag_label_ja_not_japanese` `tag_admin_only` `tag_label_en_not_english` `tag_duplicate` `tag_too_long` `tag_count` `tag_empty` `tag_malformed` |
+| カテゴリ | 葉（子を持たない id）だけ、1 つ以上。**親の `business` `society` も不可**（旧 id の退避先として `modernize_categories` が返しても、オンライン経路では `gate:quality_categories` で止め、triage の指示文にも「親・退避の指示より優先して葉だけ」と書く。旧 SQLite 経路は変えない） | `category_non_leaf` `category_none` |
+
+- **判定段**: 描画段（describe）の指示文に文体・タグ形式の規則、triage の指示文に「葉だけ」の規則を足した（`pipeline.describe_system/triage_system(cats, quality=True)`。**旧 SQLite 経路の指示文は変えない**）。出力検証（`pipeline.check_item_ex`）が上の違反を見つけたら、その項目だけ**違反の内容を添えて 1 回だけ再依頼**し、それでも直らなければ出力は残したまま `review_state='pending'`・`url_progress.state='candidate'`・`review_reason='quality:<description|tags|categories>'` にして人へ回す（自動承認しない）。カテゴリ違反の行は費用をかけないため describe を呼ばない。統計: `quality_retries`、`quality_held`。合議段の describe（`describe_row`）で違反が残った行は、承認せず会議中のまま。
+- **掲載段のゲート**（`gate_reason` / `plan`。合議段も同じ関数）: 次の順で再検査し、通らなければ掲載せず `candidate` に戻す（`review_reason`）。
+  - 名前: `<title>` が規則を通ればそのまま。通らなければ `suggest_name`（区切りで分け、宣伝文・文を除き、ホスト名のブランド語を含む節を優先、「公式サイト」「ホームページ」などの末尾を外し、法人格は**残りが空でないときだけ**外す。語の途中では切らない。40 字を超える節は空白の語境界で切るか、境界が無ければ None）で直す。直せなければ LLM が付けた `url_candidates.site_name`（migration 0040・非公開。describe の `sn`。title か本文からの逐語・40 字以内を検証し、無ければ null）を使い、それも無ければ `gate:quality_name`。`suggest_name` は区切った節をそのまま選ぶだけ（節の途中では切らない）。宣伝文・文・断片（助詞や英語の前置詞・冠詞で終わる、括弧が閉じない）・法人格だけの節は除き、残りから **法人格を持つ節が 1 つ → ホスト名の登録可能ドメインのラベル（`blog.` `shop.` などのサブドメインや blog・shop・news・www などの汎用語は使わない）を単語境界で含む節 → 残りが 1 つ** の順に決め、複数残って決め手が無ければ None（先頭を推測しない）。40 字を超える節は末尾の括弧書き・最初の文だけ落とし、それ以外は None。法人格は 40 字に収めるのに必要なときだけ外す。区切りの無い 1 節の title は 80 字以内ならそのまま使うが、`·`・`: `・です／ます／常体の語尾を含む（スローガン・文）ものは名前にしない。成人向けは従来どおりホスト名。80 字の切り詰めは廃止。
+  - 説明: 常体なら `to_polite`（です・ます化。「している→しています」「である→です」「する→します」「した→しました」「れる→れます」「ある→あります」など、**確実なものだけ**。「行った」「読んだ」のように語幹が変わるものは None）で直す。直せなければ `gate:quality_description`。
+  - タグ: `gate:quality_tags`（直さない）。保存形式は `'日本語|english'` の文字列で、掲載時に `label_ja` / `label_en` に別々に入れる。**従来の英語だけのタグを持つ承認済みの行は、このゲートで保留になる**（下の `requalify` 段が describe を 1 回やり直して日本語ラベルを付ける）。
+  - カテゴリ: 旧 id の変換後に `gate:quality_categories`。
+  - 統計 `repaired`（`{name, description}`）は、直して掲載した（dry-run では掲載できる）件数。
+- **再資格化の方針**: 判定段が品質違反を見つけても、承認方針が既に人／合議へ回す行（`pending`）は**元の `review_reason` を上書きせず**、`notes` の末尾に `[quality:<項目>]` を足すだけ。方針が承認する行だけ `quality:<項目>` の理由で保留にする。`requalify` はその行を直したあと `approve_policy.decide` を再実行し、方針が承認するときだけ `approved` にする（それ以外は方針の理由のまま人／合議の列へ）。掲載ゲートで止まった行（`gate:quality_*`）は承認済みだったので再承認する。
+- **再資格化（`requalify` 段、`judge_stage.requalify`）**: 掲載ゲートが品質の理由（`gate:quality_*`）で止める承認済みの行（`state='approved'`）と、`state='candidate'` で `review_reason` が `gate:quality_%` / `quality:%` の行を対象に、違反内容を指示に書いて describe を 1 回（カテゴリが使えないときは triage も）呼び直す（判定段と同じ台帳・月の上限・山括弧の無害化。`describe_row` を使う。LLM の `site_name` は、名前を直せない行では必須）。結果に掲載ゲートをもう一度当て、通れば `approved`（`review_reason='requalified'`）、通らなければ `candidate`/`pending` のまま理由を更新する。失敗した行は `notes` の**先頭**に `requalify_attempts=N; ` を足し（元の notes はその後ろに残す。SQL の GLOB で試行を使い切った行を選択の前に除く）、 `url_progress.updated_at` を更新し列の後ろに回す（先頭で詰まらない）。1 行 2 回（`REQUALIFY_MAX_ATTEMPTS`）で打ち切り、以後は人だけが動かす。無応答（タイムアウト）は試行に数えず、使えない結果が 3 回続いたら停止する（判定段と同じ）。承認済みの行はページ単位で古い順に走査する（クリーンな行が続いても後ろの対象に届く。1 回 2,000 行まで）。ゲートが既に通る行（形はゲートが直す）は LLM を呼ばず承認する。`gate:quality_*` の保留は掲載段の保留率ガード（`PUBLISH_MAX_HELD_RATIO`）に数えず、`requalify` の選択件数はラウンドの選択件数に入る。事前確認（preflight）で `url_candidates.site_name` が無ければ開始しない（migration 0040 が先）。ランナーでは合議段と掲載段の間（`--stages …,requalify,publish`、`--requalify-limit` 既定 20・上限 200）。合議段の describe-after-approve も `gate:quality_*` を扱う（`DESCRIBABLE`、同じ `describe_row`）。統計: `selected` `requalified` `still_held` `describe_failed` `cost_usd`。
+- **整合チェック**（`scripts/check-data-integrity.py`、warn のみ・終了コードに影響しない）: `quality:name_too_long`（`sites.name` の 40 字超。公開側が書くのは `name`）`quality:description_style` `quality:tag_label_ja_not_japanese` `quality:category_non_leaf_only` の件数を出す。基準値（`QUALITY_BASELINE`、2026-11-25 本番の実測。是正後は 0 に下げる）を超えたら `ABOVE BASELINE` と出す。
+- **タグの同義語**: `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`。variants は `|` 区切り）。読み込み（`quality.load_synonyms`）が全行を検証し（日本語の正準名・日本語を含まない英語名・variants あり・同じ語が複数の正準に属さない）、`tests/test_quality.py` が実ファイルを検査する。語を足すときは 1 行足してテストを通す。
+- **migration 0040**: `url_candidates.site_name TEXT`（非公開）。コードより先に本番へ適用する（判定段の UPDATE がこの列を書く）。
+- テスト: `tests/test_quality.py`（関数・同義語ファイル・整合チェック）、`tests/test_enrich_quality_stages.py`（判定の再依頼・保留、掲載の修復・保留）。
+- 既存の掲載済みデータの是正は #273 の別作業（この規則は新しく載る行だけを止める）。
 
 ## 優先順（`scripts/enrich/priority.py`）
 
@@ -146,7 +172,7 @@ uv run python scripts/enrich_online.py --apply --stages fetch,judge --limit 30 -
 uv run python scripts/enrich_online.py --backfill-empty [--apply]        # 判定済みの空ページを empty_content で却下（1 回で終了。既定 dry-run）
 ```
 
-主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--deliberate-limit`/`--publish-limit`（既定 60 / 30 / 20 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
+主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--deliberate-limit`/`--requalify-limit`/`--publish-limit`（既定 60 / 30 / 20 / 20 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
 
 終了コード: `0` 正常（残り無し・予算上限・`--max-seconds`・`--rounds`・日次の掲載上限）/ `1` 検証不一致・整合チェック違反・異常ガード・前提チェック不合格・判定段の停止・判定の費用ガード / `2` リースが取れない・引数不正 / `3` レート制限（429）/ `4` 実行中にリースを失った / `5` 費用台帳を確定できない（人の対応が必要）。**スケジューラは 5 で再試行しない**（再実行のたびに課金して `reserve` 行が増える。「残った reserve 行の解消」を人が済ませてから再開）。
 

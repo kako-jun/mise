@@ -64,7 +64,17 @@ HEAD = ("You are a judging step of \"mise\", a small human-curated web directory
         "When unsure about any field use null, an empty array, or the lowest-commitment code.\n")
 
 
-def triage_system(cats):
+def _quality():
+    """scripts/enrich/quality.py (the online pipeline's rules). Imported on use: the old pipeline never needs it."""
+    d = os.path.join(ROOT, "scripts", "enrich")
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import quality
+    return quality
+
+
+def triage_system(cats, quality=False):
+    """quality=True (the online enrichment pipeline, scripts/enrich/quality.py): + the leaf-category rule."""
     R = split_rules(judge.build_system(cats))
     return (HEAD + GROUP_NOTE + "\n\nSTAGE 1 (triage). Output keys per item, all required, use exactly these codes:\n"
             "i = candidate index\n"
@@ -82,10 +92,11 @@ def triage_system(cats):
             "Definitions follow. Keep every definition, but answer with the codes above.\n\n"
             + R["4"] + "\n" + R["4a"] + "\n" + R["4b"] + "\n" + R["4d"] + "\n" + R["4c"] + "\n" + R["5"] + "\n" + R["8"]
             + "\n\nALLOWED CATEGORY IDS (id = English name / Japanese name; each 2-space indent = one level deeper, a child of the nearest less-indented line above)\n"
-            + category_block(cats) + "\n")
+            + category_block(cats) + "\n" + (("\n" + _quality().PROMPT_TRIAGE_RULES + "\n") if quality else ""))
 
 
-def describe_system(cats):
+def describe_system(cats, quality=False):
+    """quality=True: style rule for dj, Japanese|English tags (tg strings 'ja|en'), see scripts/enrich/quality.py."""
     R = split_rules(judge.build_system(cats))
     return (HEAD + GROUP_NOTE + "\n\nSTAGE 2 (describe). The candidates already passed triage; a line \"pre-judged\" shows "
             "adult=y/n/u. Output keys per item, all required:\n"
@@ -93,9 +104,12 @@ def describe_system(cats):
             "dj / de = short description, ONE sentence, max 60 Japanese characters / max 25 English words, same facts; null if the text supports none\n"
             "lj / le = long description (rule 3b), max 400 Japanese characters / 160 English words, same facts; null if the text is too thin\n"
             "ev = 2 to 6 short verbatim quotes supporting lj (empty array when lj is null)\n"
-            "tg = 0 to 5 short lowercase English tags from topics the text mentions\n"
-            "cc / rc / q = location country_code, region_code, verbatim evidence quote (rule 7); all null if not stated\n\n"
-            + R["3"] + "\n" + R["3b"] + "\n" + R["6"] + "\n" + R["7"] + "\n")
+            + ("tg = 0 to 5 tags from topics the text mentions, each one string \"日本語ラベル|english label\"\n" if quality else
+               "tg = 0 to 5 short lowercase English tags from topics the text mentions\n")
+            + ("sn = the site's own name (see the rules below)\n" if quality else "")
+            + "cc / rc / q = location country_code, region_code, verbatim evidence quote (rule 7); all null if not stated\n\n"
+            + R["3"] + "\n" + R["3b"] + "\n" + R["6"] + "\n" + R["7"] + "\n"
+            + (("\n" + _quality().PROMPT_DESCRIBE_RULES + "\n") if quality else ""))
 
 
 def full_system(cats):
@@ -106,7 +120,7 @@ def full_system(cats):
 
 
 # ------------------------------------------------------------------ schemas
-def item_schema(stage, cats):
+def item_schema(stage, cats, quality=False):
     ids = judge.category_ids(cats)
     if stage == "triage":
         props = {"i": {"type": "integer"}, "v": {"type": "string", "enum": list(V)},
@@ -119,14 +133,16 @@ def item_schema(stage, cats):
         props = {"i": {"type": "integer"}, "dj": NULLABLE, "de": NULLABLE, "lj": NULLABLE, "le": NULLABLE,
                  "ev": {"type": "array", "items": NS}, "tg": {"type": "array", "items": NS},
                  "cc": NULLABLE, "rc": NULLABLE, "q": NULLABLE}
+        if quality:
+            props["sn"] = NULLABLE
     else:  # full: judge.py's schema plus the index
         full = judge.build_schema(cats)
         props = dict(full["properties"], i={"type": "integer"})
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-def wrapper_schema(stage, cats):
-    return {"type": "object", "properties": {"r": {"type": "array", "items": item_schema(stage, cats)}},
+def wrapper_schema(stage, cats, quality=False):
+    return {"type": "object", "properties": {"r": {"type": "array", "items": item_schema(stage, cats, quality)}},
             "required": ["r"], "additionalProperties": False}
 
 
@@ -152,27 +168,44 @@ def merge_describe(full, d):
     return out
 
 
-def check_item(stage, item, idx, valid_ids, src, base=None):
-    """Returns (full-shaped output | None, problem | None) for one wrapper item."""
+def check_item_ex(stage, item, idx, valid_ids, src, base=None, leaf_ids=None, need_name=False):
+    """-> (full-shaped output | None, problem | None, quality problems). leaf_ids (a set) switches the online pipeline's quality rules
+    on (scripts/enrich/quality.py): they never make the output None; the caller decides (retry with the violation, then hold)."""
     if not isinstance(item, dict) or item.get("i") != idx:
-        return None, "wrong or missing index"
+        return None, "wrong or missing index", []
+    q = []
     try:
         if stage == "triage":
             full = triage_to_full(item)
             extra_errs = ["aq given but ad is not y"] if item.get("ad") != "y" and item.get("aq") else []
             errs = extra_errs + [e for e in validate_output(full, valid_ids, src)
                     if "description" not in e and "long_description" not in e]
+            if leaf_ids is not None and not errs and full["spam"]["verdict"] in ("pass", "suspect"):
+                q = _quality().check_categories(full["categories"], leaf_ids)
         elif stage == "describe":
             full = merge_describe(base, item)
             errs = validate_output(full, valid_ids, src)
             if len(item["dj"] or "") > 120 or len(item["lj"] or "") > 800:
                 errs.append("description too long")
+            if leaf_ids is not None and not errs:
+                qm = _quality()
+                q = qm.check_description_style(full["description_ja"]) + qm.check_tags(full["tags"])
+                nerr = qm.check_site_name(item.get("sn"), src)
+                if need_name:        # requalify of a row whose name could not be repaired: the name must be right
+                    q += nerr or ([] if item.get("sn") else ["name_empty"])
+                full["site_name"] = None if nerr else ((item.get("sn") or "").strip() or None)
         else:
             full = {k: v for k, v in item.items() if k != "i"}
             errs = validate_output(full, valid_ids, src)
     except (KeyError, TypeError) as e:
-        return None, f"malformed item: {e}"
-    return (full if not errs else None), ("; ".join(errs) if errs else None)
+        return None, f"malformed item: {e}", []
+    return (full if not errs else None), ("; ".join(errs) if errs else None), q
+
+
+def check_item(stage, item, idx, valid_ids, src, base=None):
+    """Returns (full-shaped output | None, problem | None) for one wrapper item."""
+    full, problem, _q = check_item_ex(stage, item, idx, valid_ids, src, base)
+    return full, problem
 
 
 # ------------------------------------------------------------------- runner
