@@ -447,11 +447,23 @@ SECOND_RUN = [   # (title, host, wrong name written earlier, right name)
 ]
 
 
+GOOD = [   # names that were fine from the start: --recompute must leave them alone (a rebuilt name made two of them worse)
+    ('g1', '100s [Hyaku-Shiki]', '100s [Hyaku-Shiki] | 百式 100s のホームページ 商品とサービスのご案内はこちら', '100s.jp'),
+    ('g2', '神田明神1300年事業', '神田明神1300年事業 | 神田神社の御鎮座1300年を記念した事業のご案内 募金のお願い', 'kanda.example.jp'),
+    ('g3', 'アビリティ', 'アビリティ | 障害のある方の就労支援を行う事業所のご案内 見学・体験のお申し込み', 'ability.example.jp'),
+    ('g4', 'ABILITY INC.', 'ABILITY INC. | 障害のある方の就労支援を行う法人のご案内 見学のお申し込み', 'ability-inc.example.jp'),
+    ('g5', 'アシザワ・ファインテック株式会社', 'ビーズミル専門メーカー｜アシザワ・ファインテック株式会社 乾式も湿式も微粉砕機・分散機', 'ashizawa2.example.jp'),
+    ('g6', 'AKIBA LOST', 'AKIBA LOST | 秋葉原で遊べる体験型イベント ゲーム・アニメの最新情報はこちら', 'akiba.example.jp'),
+]
+
+
 class SecondRun(Base):
     def seed(self):
         for n, (title, host, wrong, right) in enumerate(SECOND_RUN):
             add_site(self.d1, f'r{n}', wrong, title=title, url=f'https://{host}/')
-        add_site(self.d1, 'same', '山田屋', title='山田屋 | ホーム', url='https://same.example.jp/')           # already what the rules give
+        add_site(self.d1, 'same', '山田屋', title='山田屋 | ホーム', url='https://same.example.jp/')           # a sound name: never touched
+        for sid, name, title, host in GOOD:
+            add_site(self.d1, sid, name, title=title, url=f'https://{host}/')
         add_site(self.d1, 'plain', '山田屋の店', title='別の題名', url='https://plain.example.jp/')           # not a piece of its title: not a target
 
     def llm(self):
@@ -495,7 +507,7 @@ class SecondRun(Base):
         code, st = self.go('names-recompute', apply=False, llm=llm)
         self.assertEqual((code, llm.calls, self.d1.writes), (0, [], 0))
         self.assertEqual(self.snapshot(), before)
-        self.assertEqual(st['selected'], len(SECOND_RUN) + 1)
+        self.assertEqual(st['selected'], len(SECOND_RUN))              # only the suspicious names are targets
         self.assertIn('ジープ厚木', self.text())                  # the rule-decided one is shown with its new name
         self.assertEqual(st['would_llm'], len(SECOND_RUN) - 1)
 
@@ -506,11 +518,32 @@ class SecondRun(Base):
         self.assertEqual(code, 0, self.text())
         self.assertEqual([self.name_of(f'r{n}') for n in range(len(SECOND_RUN))], [r for _t, _h, _w, r in SECOND_RUN])
         self.assertEqual((self.name_of('same'), self.name_of('plain')), ('山田屋', '山田屋の店'))
-        self.assertEqual((st['updated'], st['same'], st['verify_mismatch']), (len(SECOND_RUN), 1, 0))
+        self.assertEqual([self.name_of(g[0]) for g in GOOD], [g[1] for g in GOOD])
+        self.assertEqual((st['updated'], st['verify_mismatch']), (len(SECOND_RUN), 0))
         self.assertIn(repr('肩こり・腰痛・体の歪み・マッサージ'), self.text())          # old -> new printed
         calls = len(llm.calls)
         code, st2 = self.go('names-recompute', llm=llm)
         self.assertEqual(st2['updated'], 0)
+
+    def test_every_known_mistake_is_suspicious_and_no_good_name_is(self):
+        for title, host, wrong, right in SECOND_RUN:
+            self.assertTrue(cq.suspicious_name(wrong, title, host), wrong)
+            self.assertFalse(cq.suspicious_name(right, title, host), right)
+        for _sid, name, title, host in GOOD:
+            self.assertFalse(cq.suspicious_name(name, title, host), name)
+        for bad in ('100s.jp', 'www.example.com', 'TOP│山田屋', 'ホーム 山田屋', '山田屋 | 手作り', '山田屋 / 家具', '山田屋 ・ 家具', '〒930-0001 山田屋', 'Official Site',
+                    'Dealer Site', 'Homepage', 'オフィシャルサイト', '山田屋ならおまかせ', '肩こりをお探し', '腰痛専門', 'ご相談ください', '山田屋の', '山田屋、', '山田屋（本店'):
+            self.assertTrue(cq.suspicious_name(bad, '', 'x.example.jp'), bad)
+
+    def test_host_name_is_never_the_name(self):
+        self.assertTrue(cq.domain_like('100s.jp', '100s.jp'))
+        self.assertTrue(cq.domain_like('www.example.com', 'x.jp'))
+        self.assertFalse(cq.domain_like('100s', '100s.jp'))
+        self.assertIsNone(cq.llm_name_valid('100s.jp', ['100s.jp | 百式'], '100s.jp'))
+        self.assertIsNone(cq.deterministic_name('100s.jp | ホーム', '100s.jp'))
+        add_site(self.d1, 'dm', 'x' * 30 + ' | ' + 'y' * 30, title='100s.jp | 百式 100s のご案内 商品 サービス 会社概要 ご注文', url='https://100s.jp/')
+        code, st = self.go('names', llm=FakeLLM(names={'100s.jp': '100s.jp'}))
+        self.assertNotEqual(self.name_of('dm'), '100s.jp')
 
     def test_recompute_guard_uses_stored_value(self):
         self.seed()
