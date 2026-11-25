@@ -314,8 +314,10 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
 
 
 def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=None, apply=False, budget_month=judge_stage.MONTHLY_CAP_USD,
-                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark, priority='none'):   # 既定 none = 関数を直接呼ぶ側(テスト等)の挙動を変えない。CLI の既定は leaf
+                 concurrency=1, max_publish_per_day=None, out=print, fetch=None, llm=None, lease=None, clock=time.monotonic, bookmark_fn=time_travel_bookmark, priority='none',
+                 tag_vocab_in_prompt=False):   # 既定 none = 関数を直接呼ぶ側(テスト等)の挙動を変えない。CLI の既定は leaf
     """-> (終了コード, 最初と最後の状態別件数)。テストは fetch / llm / lease / clock / bookmark_fn を差し込む。"""
+    judge_stage.TAG_VOCAB_IN_PROMPT = bool(tag_vocab_in_prompt)
     limits = {**DEFAULT_LIMITS, **(limits or {})}
     if any(not 1 <= v <= MAX_LIMIT for v in limits.values()):
         raise ValueError(f'各段の limit は 1〜{MAX_LIMIT}')
@@ -423,6 +425,7 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--max-publish-per-day', type=int, default=MAX_PUBLISH_PER_DAY, help=f'直近 24 時間に作られた sites の日次上限(1 以上。既定 {MAX_PUBLISH_PER_DAY})')
     ap.add_argument('--judge-concurrency', type=int, default=1, help='判定段の並列数(1〜4)')
     ap.add_argument('--priority', choices=prio.MODES, default='leaf', help='取得・判定の行の選び方。leaf = 掲載数が目標未満の葉を埋める行を先に(機械順。既定)、none = identity_key 順')
+    ap.add_argument('--tag-vocab-in-prompt', action='store_true', help='describe の指示文(キャッシュされる)に、既存タグの上位 150 件(ja|en)を足す。既定オフ(タグの再利用は決定的な正規化だけで行い、LLM のトークンを増やさない)')
     ap.add_argument('--backfill-empty', action='store_true', help='1 回だけ実行して終了: 判定済み(candidate/pending)で本文がほぼ空(text_len<80)・説明なしの行を empty_content で却下する(LLM 無し。既定 dry-run は件数だけ)')
     ap.add_argument('--reopen-empty', action='store_true', help='1 回だけ実行して終了: next_fetch_at が過ぎた empty_content の行を取得段へ戻す(next_fetch_at は印にすぎず自動では再開しない。既定 dry-run は件数だけ)')
     mode = ap.add_mutually_exclusive_group()
@@ -448,7 +451,7 @@ def main(argv=None, *, client=None, **inject):
         return one_shot(judge_stage.backfill_empty_content if a.backfill_empty else judge_stage.reopen_empty_content, client, a.apply,
                         lease=inject.get('lease'), out=inject.get('out', print))
     code, _, _ = run_pipeline(client, stages=stages, limits=limits, rounds=a.rounds, max_seconds=a.max_seconds, apply=a.apply,
-                              budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, priority=a.priority, **inject)
+                              budget_month=a.budget_month, concurrency=a.judge_concurrency, max_publish_per_day=a.max_publish_per_day, priority=a.priority, tag_vocab_in_prompt=a.tag_vocab_in_prompt, **inject)
     return code
 
 

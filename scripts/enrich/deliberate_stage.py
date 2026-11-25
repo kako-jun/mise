@@ -437,7 +437,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
     ctx = Ctx(llm, ledger, log)
     # describe-after-approve: its own Ledger object on the SAME run id and cap (the cap is read from D1, so it is shared), only to show its cost
     dledger = js.Ledger(client, ledger.run_id, budget_month)
-    jctx = js.Ctx(llm, dledger, log, judge.load_categories())
+    jctx = js.attach_tag_vocab(js.Ctx(llm, dledger, log, judge.load_categories()), client)
     dlock = threading.Lock()
     fatal = []
 
@@ -588,6 +588,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
                 break
             do_batch(p)
     stats["cost_usd"] = round(ledger.spent + dledger.spent, 6)
+    stats.update(js.tag_stat_fields(jctx))
     if not ctx.stop and ctx.consecutive_failures >= 3:
         ctx.stop = "3 consecutive rows without a usable vote"
     stats["stopped"] = ctx.stop

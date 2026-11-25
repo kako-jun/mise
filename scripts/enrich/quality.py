@@ -527,7 +527,13 @@ def to_polite(text):
 
 
 # ------------------------------------------------------------------------------------------------------------------- tags
+_ARTICLES = frozenset(("a", "an", "the"))
+_PLURAL_ONLY = frozenset(("news", "series", "species", "lens", "bus", "gas", "plus", "chaos", "canvas", "atlas", "bias", "texas", "paris"))
+
+
 def _stem_word(w):
+    if w in _PLURAL_ONLY or w.endswith(("ics", "ous")):
+        return w
     if len(w) > 4 and w.endswith("ies"):
         return w[:-3] + "y"
     if len(w) > 4 and re.search(r"(ss|x|ch|sh|z)es$", w):
@@ -537,14 +543,17 @@ def _stem_word(w):
     return w[:-2] + "y" if len(w) > 3 and w.endswith("ie") else w
 
 
+def tag_tokens(label):
+    """Words of a label: NFKC, lower case, split at space / hyphen / underscore / middle dot / slash, articles (a an the) dropped, English plural -> singular."""
+    s = unicodedata.normalize("NFKC", label or "").casefold().strip()
+    words = [w for w in re.split(r"[\s\-_・/]+", s) if w and w not in _ARTICLES]
+    return [_stem_word(w) if re.fullmatch(r"[a-z0-9]+", w) else w for w in words]
+
+
 def normalize_tag_key(label):
     """Comparison key of a tag label: NFKC (full/half width), lower case, hyphen / underscore / space / middle dot removed between words,
-    English plural -> singular (simple stemming). Japanese text keeps its characters. Does NOT apply the synonym table (see TagSynonyms)."""
-    s = unicodedata.normalize("NFKC", label or "").casefold().strip()
-    if not s:
-        return ""
-    words = re.split(r"[\s\-_・/]+", s)
-    return "".join(_stem_word(w) if re.fullmatch(r"[a-z0-9]+", w) else w for w in words if w)
+    articles dropped, English plural -> singular (simple stemming). Japanese text keeps its characters. Does NOT apply the synonym table (see TagSynonyms)."""
+    return "".join(tag_tokens(label))
 
 
 class TagSynonyms:
@@ -702,6 +711,333 @@ def check_tags(tags, synonyms=None, proper=None):
             out.append("tag_duplicate")
         keys.update({k, k2} - {""})
     return list(dict.fromkeys(out))
+
+
+# ------------------------------------------------------------------------------------------------------ tag canonicalization (#273)
+# Reuse the tags that already exist: a tag from the LLM is mapped onto an existing one by DETERMINISTIC rules (no LLM call, no vocabulary in
+# the prompt), and only a tag that matches nothing is "new" (at most TAG_NEW_MAX per site). cleanup_quality.py `tags --merge` clusters the
+# tags already stored by the same rules (TagVocab.find), so the new-tag path and the old-data path never disagree.
+TAG_NEW_MAX = 2              # new (matching nothing) tags kept per site
+VOCAB_TOP_N = 3000           # existing tags (by use count) the matcher knows
+VOCAB_REFRESH_ROWS = 500     # sites between two reloads of the vocabulary in one run
+VOCAB_MIN = 50               # a vocabulary smaller than this (an empty / fresh table) is no basis for reuse: tags pass unchanged
+TYPO_MIN_LEN = 6             # a word is fuzzy-matched (edit distance 1) only from this length
+KNOWN_WORD_MIN = 3           # a word used by this many existing tags is a real word, never "corrected"
+MERGE_TYPO_RARE_MAX = 2      # `tags --merge`: the misspelt side has at most this many rows ...
+MERGE_TYPO_RATIO = 5         # ... and the other side at least this many times more
+AMBIGUOUS_SHARE = 0.6        # an English label that several different Japanese labels carry (bank: 銀行 / 土手) is mapped only when one has this share
+NEGATION_WORDS = frozenset(("no", "not", "non", "anti", "without", "free", "less", "un", "nor", "never"))
+NEGATION_PREFIXES = ("un", "in", "im", "il", "ir", "non", "anti", "dis", "mis", "de")
+_KATA = re.compile(r"[ァ-ヶ]")
+
+
+def ja_tag_key(label):
+    """Comparison key of a Japanese label: NFKC (full / half width), lower case, space and ・ removed, katakana folded to hiragana, a trailing
+    長音 ー dropped (サーバー = サーバ; only when 3+ characters, so カー stays) and a trailing の dropped (3+ characters). NOT 用: 子供用 is not 子供."""
+    s = unicodedata.normalize("NFKC", label or "").casefold()
+    s = re.sub(r"[\s・･]+", "", s)
+    s = _KATA.sub(lambda m: chr(ord(m.group(0)) - 0x60), s)
+    if len(s) >= 3 and s.endswith("ー"):
+        s = s[:-1]
+    if len(s) >= 3 and s.endswith("の"):
+        s = s[:-1]
+    return s
+
+
+def _within_one(a, b):
+    """Edit distance <= 1 (substitution, insertion, deletion) or one adjacent transposition."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        d = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(d) == 1 or (len(d) == 2 and d[1] == d[0] + 1 and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]])
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    return a[i:] == b[i + 1:]
+
+
+def _typo_of(t, c):
+    """t is a misspelling of the known word c: one edit away, c at least TYPO_MIN_LEN long, the first 3 letters kept, and not a different word form
+    (c = t + a letter, or only the last two letters differ: manager / managed, manage / managed)."""
+    if len(c) < TYPO_MIN_LEN or t[:3] != c[:3] or not _within_one(t, c):
+        return False
+    if c.startswith(t) or t.startswith(c):
+        return False
+    return not (len(t) == len(c) and t[:-2] == c[:-2])
+
+
+def _forms(tok, swaps):
+    out = {tok} | {tok[:i] + tok[i + 1:] for i in range(len(tok))}
+    if swaps:
+        out |= {tok[:i] + tok[i + 1] + tok[i] + tok[i + 2:] for i in range(len(tok) - 1)}
+    return out
+
+
+def _neg_conflict(ta, tb):
+    """True when the two token lists differ in a negation / qualifier word (non-profit vs profit, inactive vs active)."""
+    if "".join(ta) == "".join(tb):
+        return False                                      # non-profit = nonprofit
+    na, nb = {t for t in ta if t in NEGATION_WORDS}, {t for t in tb if t in NEGATION_WORDS}
+    if na != nb:
+        return True
+    only_a, only_b = set(ta) - set(tb), set(tb) - set(ta)
+    return any(x != y and any(x == p + y or y == p + x for p in NEGATION_PREFIXES) for x in only_a for y in only_b)
+
+
+def _entry_of(t):
+    if isinstance(t, dict):
+        return t.get("label_ja", t.get("ja")), t.get("label_en", t.get("en")), t.get("n", t.get("count", t.get("uses", 1)))
+    return (t[0], t[1], t[2] if len(t) > 2 else 1)
+
+
+class TagVocab:
+    """Existing tags (label_ja, label_en, use count) indexed for canonical_tag. Only tags that pass check_tags can be the answer (the answer must
+    publish); `add` can be called one by one (the `tags --merge` clustering grows the vocabulary in use-count order)."""
+
+    def __init__(self, entries=(), synonyms=None, proper=None):
+        self.syn = synonyms or default_synonyms()
+        self.proper = proper_nouns() if proper is None else proper
+        self.count = {}                                    # (ja, en) -> use count, valid tags only
+        self.words = {}                                    # stemmed English word -> uses of the tags that contain it
+        self._en_rows, self._noted = {}, set()             # English key -> Japanese class -> rows (every valid tag; see prefill)
+        self._en, self._ja, self._syn, self._set, self._typo, self._exact = {}, {}, {}, {}, {}, {}
+        for t in entries:
+            ja, en, n = _entry_of(t)
+            self.add(ja, en, n)
+
+    def __len__(self):
+        return len(self.count)
+
+    def is_proper(self, ja):
+        """label_ja a Latin-script abbreviation / name (5G, NASA, iOS, FPGA): only an exact (case-insensitive) match counts for it."""
+        ja = unicodedata.normalize("NFKC", ja or "").strip()
+        return bool(ja) and not has_japanese(ja) and ja_label_ok(ja, self.proper)
+
+    def valid(self, ja, en):
+        return bool(ja) and bool(en) and not check_tags([{"label_ja": ja, "label_en": en}], self.syn, self.proper)
+
+    def add(self, ja, en, n=1):
+        ja, en = collapse(ja or ""), collapse(en or "")
+        key = (ja, en)
+        if key in self.count:
+            self.count[key] += int(n)
+            return True
+        if not self.valid(ja, en):
+            return False
+        self.count[key] = int(n)
+        self._note(ja, en, n)
+        self._exact.setdefault(unicodedata.normalize("NFKC", ja).casefold(), set()).add(key)
+        if self.is_proper(ja):
+            return True                                    # proper nouns / abbreviations: exact match only (and the table), never stemmed / fuzzy
+        self._en.setdefault(normalize_tag_key(en), set()).add(key)
+        self._ja.setdefault(ja_tag_key(ja), set()).add(key)
+        for label in (ja, en):
+            g = self.syn.map.get(normalize_tag_key(label))
+            if g:
+                self._syn.setdefault(g, set()).add(key)
+        toks = tag_tokens(en)
+        if len(toks) > 1:
+            self._set.setdefault(tuple(sorted(toks)), set()).add(key)
+        for i, t in enumerate(toks):
+            if len(t) >= TYPO_MIN_LEN and t.isalpha():
+                rest = tuple(sorted(toks[:i] + toks[i + 1:]))
+                for f in _forms(t, False):
+                    self._typo.setdefault((rest, f), set()).add(key)
+        return True
+
+    def _note(self, ja, en, n):
+        """Use counts of the English key's Japanese classes and of every English word (the polysemy and known-word guards)."""
+        if (ja, en) in self._noted or self.is_proper(ja):
+            return
+        self._noted.add((ja, en))
+        row = self._en_rows.setdefault(normalize_tag_key(en), {})
+        c = self._ja_class(ja)
+        row[c] = row.get(c, 0) + int(n)
+        for t in tag_tokens(en):
+            self.words[t] = self.words.get(t, 0) + int(n)
+
+    def prefill(self, entries):
+        """Tell the guards about tags that are NOT (yet) candidates: `tags --merge` adds the tags one by one, but a tag that is not added yet is still a
+        known, distinct tag (土手 / bank next to 銀行 / bank)."""
+        for t in entries:
+            ja, en, n = _entry_of(t)
+            ja, en = collapse(ja or ""), collapse(en or "")
+            if self.valid(ja, en):
+                self._note(ja, en, n)
+
+    def _ja_class(self, ja):
+        g = self.syn.map.get(normalize_tag_key(ja))
+        return ("syn", g) if g else ("ja", ja_tag_key(ja))
+
+    def _best(self, cands):
+        """Highest use count (tie: shorter label_en, then alphabetical)."""
+        return min(cands, key=lambda k: (-self.count[k], len(k[1]), k[0], k[1])) if cands else None
+
+    def find(self, ja, en, own=None):
+        """-> the existing (label_ja, label_en) this tag is the same tag as, or None. own = this tag's own use count (`tags --merge` only: a
+        misspelling is merged only when it is rare and the target common)."""
+        ja, en = collapse(ja or ""), collapse(en or "")
+        en_ok = bool(en) and not has_japanese(en)
+        if self.is_proper(ja):
+            hit = self._exact.get(unicodedata.normalize("NFKC", ja).casefold())
+            if hit:
+                return self._best(hit)
+            return self._table(ja, en)
+        toks = tag_tokens(en) if en_ok else []
+        iclass = self._ja_class(ja)
+        key = normalize_tag_key(en) if en_ok else None
+        by_en = list(self._en.get(key, ())) if en_ok else []                                # (a) English key
+        ja_raw = list(self._ja.get(ja_tag_key(ja), ()))                                     # (b) Japanese key
+        by_ja = [k for k in ja_raw if not (en_ok and _neg_conflict(toks, tag_tokens(k[1])))]
+        both = [k for k in by_en if k in by_ja]
+        if both:
+            return self._best(both)
+        if by_en and ja_raw:                                                                # the two labels name different existing tags?
+            same = {self._ja_class(k[0]) for k in by_en} & {self._ja_class(k[0]) for k in ja_raw}
+            return self._best([k for k in by_en + by_ja if self._ja_class(k[0]) in same]) if same else None
+        if by_ja:
+            return self._best(by_ja)
+        if by_en:
+            rows = self._en_rows.get(key, {})
+            top = max(rows, key=lambda c: (rows[c], c))
+            if iclass not in rows and rows[top] >= AMBIGUOUS_SHARE * sum(rows.values()):     # not a known, distinct tag; one sense clearly dominates
+                return self._best([k for k in by_en if self._ja_class(k[0]) == top])
+        got = self._table(ja, en)                                                           # (c) synonym table, both directions
+        if got:
+            return got
+        if not en_ok or not toks:
+            return None
+        cands = [k for k in self._set.get(tuple(sorted(toks)), ()) if not _neg_conflict(toks, tag_tokens(k[1]))] if len(toks) > 1 else []   # (d) word order
+        hit = self._best(cands)
+        if hit:
+            return hit
+        for i, t in enumerate(toks):                                                        # (d) one misspelt word (>= 6 letters, not a known word)
+            if len(t) < TYPO_MIN_LEN or not t.isalpha() or self.words.get(t, 0) >= KNOWN_WORD_MIN:
+                continue
+            rest = tuple(sorted(toks[:i] + toks[i + 1:]))
+            found = set()
+            for f in _forms(t, True):
+                for k in self._typo.get((rest, f), ()):
+                    ct = tag_tokens(k[1])
+                    diff = [c for c in ct if c not in toks]
+                    if len(ct) == len(toks) and len(diff) == 1 and diff[0] != t and _typo_of(t, diff[0]) and not _neg_conflict(toks, ct):
+                        found.add(k)
+            if own is not None:
+                found = {k for k in found if own <= MERGE_TYPO_RARE_MAX and self.count[k] >= MERGE_TYPO_RATIO * max(own, 1)}
+            hit = self._best(found)
+            if hit:
+                return hit
+        return None
+
+    def _table(self, ja, en):
+        """The synonym table: the most used existing tag of the same group, else the table's own canonical (it is a curated, valid tag)."""
+        groups = [g for g in (self.syn.map.get(normalize_tag_key(x)) for x in (ja, en) if x) if g]
+        for g in groups:
+            hit = self._best(self._syn.get(g, ()))
+            if hit:
+                return hit
+            for tja, ten, _v in self.syn.rows:
+                if normalize_tag_key(tja) == g and self.valid(tja, ten):
+                    return (tja, ten)
+        return None
+
+
+_VOCAB_MEMO = []
+
+
+def canonical_tag(label_ja, label_en, vocab, synonyms=None, proper=None):
+    """The existing tag (label_ja, label_en) this tag stands for, or None (= a new tag). Pure and deterministic. vocab = a TagVocab or a list of
+    (label_ja, label_en, use count) / dicts. Order: English key (NFKC, case, hyphen / space, plural, articles) -> Japanese key (width, ー, の) ->
+    data/tag-synonyms.csv (both directions) -> word order ('alumni association' = 'association alumni') -> one misspelt word. A difference in a
+    negation word (non-profit / profit), a Latin abbreviation or proper noun (exact match only) and an English label shared by unrelated Japanese
+    labels never merge."""
+    if not isinstance(vocab, TagVocab):
+        if _VOCAB_MEMO and _VOCAB_MEMO[0][0] is vocab and _VOCAB_MEMO[0][1] == len(vocab):
+            vocab = _VOCAB_MEMO[0][2]
+        else:
+            src = vocab
+            vocab = TagVocab(src, synonyms, proper)
+            _VOCAB_MEMO[:] = [(src, len(src), vocab)]
+    return vocab.find(label_ja, label_en)
+
+
+def canonicalize_tags(tags, vocab, max_new=TAG_NEW_MAX, max_total=TAG_COUNT_MAX, synonyms=None):
+    """The LLM's tags (already validated) -> ([(label_ja, label_en)], stats). Each tag goes through canonical_tag; duplicates are merged; a tag that
+    matches nothing is new and at most max_new of them are kept (the first ones, in the LLM's order); at most max_total in all. stats: canonicalized
+    (replaced by an existing tag), reused (already exactly an existing tag), new, dropped (extra new, duplicate, over max_total). If the result would
+    not pass check_tags, the original tags are returned (stats fallback=1)."""
+    syn = synonyms or default_synonyms()
+    st = {"canonicalized": 0, "reused": 0, "new": 0, "dropped": 0, "fallback": 0}
+    parsed = [p for p in (parse_tag(t) for t in tags) if p and p[0]]
+    out, seen, new = [], set(), 0
+    for ja, en in parsed:
+        m = canonical_tag(ja, en, vocab, syn)
+        cand = m or (ja, en)
+        keys = {syn.key(cand[0]), syn.key(cand[1])} - {""}
+        if keys & seen or len(out) >= max_total or (m is None and new >= max_new):
+            st["dropped"] += 1
+            continue
+        seen |= keys
+        out.append(cand)
+        if m is None:
+            new += 1
+            st["new"] += 1
+        elif m == (ja, en):
+            st["reused"] += 1
+        else:
+            st["canonicalized"] += 1
+    if check_tags([{"label_ja": a, "label_en": b} for a, b in out], syn):
+        return parsed[:max_total], {"canonicalized": 0, "reused": 0, "new": 0, "dropped": 0, "fallback": 1}
+    return out, st
+
+
+VOCAB_SQL = "SELECT label_ja, label_en, COUNT(*) AS n FROM site_tags GROUP BY label_ja, label_en ORDER BY n DESC, label_ja, label_en LIMIT ?"
+
+
+class VocabCache:
+    """The tag vocabulary of one run: ONE aggregate query, reloaded after `refresh_rows` sites. A failed load keeps the old vocabulary (or, at the
+    first load, none: the tags then pass unchanged). No per-row query."""
+
+    def __init__(self, client, top_n=VOCAB_TOP_N, refresh_rows=VOCAB_REFRESH_ROWS, min_size=VOCAB_MIN):
+        self.client, self.top_n, self.refresh_rows, self.min_size = client, top_n, refresh_rows, min_size
+        self.vocab_obj, self.rows, self.loads = None, 0, 0
+
+    def _load(self):
+        self.rows = 0
+        try:
+            rows = self.client.query(VOCAB_SQL, [int(self.top_n)])
+            self.vocab_obj = TagVocab([(r["label_ja"], r["label_en"], r["n"]) for r in rows])
+            self.loads += 1
+        except Exception:  # noqa: BLE001 - the stage keeps going without reuse
+            self.loads += 1
+
+    def vocab(self):
+        """-> the TagVocab, or None while it is empty / too small to be a basis for reuse."""
+        if self.loads == 0 or self.rows >= self.refresh_rows:
+            self._load()
+        return self.vocab_obj if self.vocab_obj is not None and len(self.vocab_obj) >= self.min_size else None
+
+    def note_row(self):
+        self.rows += 1
+
+
+def canonicalize_strings(tags, cache, stats=None):
+    """Judge / publish helper: the stored 'ja|en' strings through the cache's vocabulary. -> the new list (unchanged when there is no vocabulary).
+    Adds the counts to stats (tags_canonicalized / tags_new / tags_dropped / tags_reused / tags_fallback)."""
+    voc = cache.vocab() if cache is not None else None
+    if voc is None:
+        return tags
+    cache.note_row()
+    got, st = canonicalize_tags(tags, voc)
+    if stats is not None:
+        for k, v in st.items():
+            stats["tags_" + k] = stats.get("tags_" + k, 0) + v
+    return [f"{a}|{b}" for a, b in got]
 
 
 # ------------------------------------------------------------------------------------------------------------------ categories

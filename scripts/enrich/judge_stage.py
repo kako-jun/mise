@@ -166,6 +166,10 @@ def default_llm(params):
         raise LLMRefused(str(e)[:300]) from None
 
 
+TAG_VOCAB_IN_PROMPT = False     # enrich_online --tag-vocab-in-prompt: append the TAG_PROMPT_TOP most used existing tags to the describe system prompt
+TAG_PROMPT_TOP = 150
+
+
 class Ctx:
     def __init__(self, llm, ledger, log, cats):
         self.llm, self.ledger, self.log = llm, ledger, log
@@ -179,6 +183,34 @@ class Ctx:
         self.lock = threading.Lock()
         self.consecutive_failures = 0
         self.stop = None          # reason string once the run must make no new call (budget, API-wide refusal, ledger error)
+        self.tag_cache = None     # quality.VocabCache of the run (attach_tag_vocab): the LLM's tags are mapped onto existing tags (#273)
+        self.tag_stats = {}       # tags_canonicalized / tags_new / tags_dropped / tags_reused / tags_fallback
+
+
+def attach_tag_vocab(ctx, client, **kw):
+    """Tag reuse for this run: ONE aggregate query (quality.VOCAB_SQL), kept in ctx.tag_cache, reloaded every quality.VOCAB_REFRESH_ROWS sites.
+    Without it (or while the table has too few tags) the LLM's tags pass unchanged."""
+    ctx.tag_cache = quality.VocabCache(client, **kw)
+    if TAG_VOCAB_IN_PROMPT:      # off by default: the vocabulary costs input tokens on every request (the cached system prompt then carries it)
+        voc = ctx.tag_cache.vocab()
+        if voc is not None:
+            top = sorted(voc.count, key=lambda k: (-voc.count[k], k))[:TAG_PROMPT_TOP]
+            ctx.systems["describe"] += ("\nEXISTING TAGS (ja|en), most used first. Prefer one of these for a topic it covers; invent a new tag only for "
+                                        "something distinctive about this site (at most 2 new):\n" + "\n".join(f"{a}|{b}" for a, b in top) + "\n")
+    return ctx
+
+
+def tag_stat_fields(ctx):
+    """The tag counts of a run, for the stage stats."""
+    return {k: ctx.tag_stats.get(k, 0) for k in ("tags_canonicalized", "tags_new", "tags_dropped")}
+
+
+def canonicalize_output_tags(ctx, out):
+    """Map out['tags'] ('ja|en' strings, already validated) onto the existing tags: reuse, at most 2 new, at most 5 (quality.canonicalize_tags)."""
+    if ctx.tag_cache is None or not out.get("tags") or out.get("quality_hold"):
+        return
+    with ctx.lock:
+        out["tags"] = quality.canonicalize_strings(out["tags"], ctx.tag_cache, ctx.tag_stats)
 
 
 def group_text(chunk):
@@ -258,6 +290,8 @@ def parse(ctx, stage, work, msg, final=False):
                 res[n] = (None, f"quality:{field}: {', '.join(q)}")
                 continue
             full["quality_hold"] = f"quality:{field}"
+        if full is not None and stage == "describe":
+            canonicalize_output_tags(ctx, full)
         res[n] = (full, problem)
     return res
 
@@ -708,7 +742,7 @@ def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY
             raise RuntimeError("ANTHROPIC_API_KEY is not set (the value is never printed)")
         llm = default_llm
     ledger = Ledger(client, judge.new_run_id(), budget_month)
-    ctx = Ctx(llm, ledger, log, judge.load_categories())
+    ctx = attach_tag_vocab(Ctx(llm, ledger, log, judge.load_categories()), client)
     failures = 0
     for row, gate in rows:
         if heartbeat:
@@ -775,6 +809,7 @@ def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY
         if stats["stopped"]:
             break
     stats["cost_usd"] = round(ledger.spent, 6)
+    stats.update(tag_stat_fields(ctx))
     log(f"requalify: {stats}")
     return stats
 
@@ -826,7 +861,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
         if not os.environ.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("ANTHROPIC_API_KEY is not set (the value is never printed)")
         llm = default_llm
-    ctx = Ctx(llm, ledger, log, judge.load_categories())
+    ctx = attach_tag_vocab(Ctx(llm, ledger, log, judge.load_categories()), client)
     fatal = []
 
     def count(kind):
@@ -960,6 +995,7 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_U
             do_chunk(c)
     stats["cost_usd"] = round(ledger.spent, 6)
     stats["quality_retries"] = ctx.quality_retries
+    stats.update(tag_stat_fields(ctx))
     if not ctx.stop and ctx.consecutive_failures >= 3:
         ctx.stop = "3 consecutive requests without a usable result"
     stats["stopped"] = ctx.stop
