@@ -77,7 +77,20 @@ class ReviewRegressionTests(unittest.TestCase):
                           ('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', '愛知工業大学', 'AICHI INSTITUTE OF TECHNOLOGY'),
                           ('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine', '日本抗加齢医学会', 'Japanese Society of Anti-aging Medicine')):
             self.assertEqual(derive(t), (t, ja, en), t)
+        for t, ja, en in (('公益財団法人 教科書研究センター | Textbook Research Center', '公益財団法人 教科書研究センター', 'Textbook Research Center'),
+                          ('財団法人 服部公益財団 | Hattori Foundation', '財団法人 服部公益財団', 'Hattori Foundation')):
+            self.assertEqual(derive(t), (t, ja, en), t)
         self.assertEqual(derive('湘南ビーチFM'), ('湘南ビーチFM', None, None))
+        self.assertEqual(derive('TIGET | ライブイベントのチケット販売・購入・予約'), ('TIGET | ライブイベントのチケット販売・購入・予約', None, None))
+        self.assertEqual(derive('山田屋 | Yamada')[1:], ('山田屋', 'Yamada'))
+        self.assertEqual(derive('あ' * 19 + ' | Foo')[1:], (None, None))
+        self.assertEqual(derive('ABC | 会員向けサービス')[1:], (None, None))
+
+    def test_trailing_welcome_with_punctuation(self):
+        self.assertEqual(derive('ＷＡＯ北九州支部へようこそ！'), ('ＷＡＯ北九州支部', None, None))
+        self.assertEqual(derive('山田屋トップページ。'), ('山田屋', None, None))
+        self.assertEqual(derive('山田屋へようこそ！！ | Yamada'), ('山田屋 | Yamada', '山田屋', 'Yamada'))
+        self.assertEqual(derive('山田屋 | ようこそ！'), ('山田屋', None, None))
 
     def test_brand_plus_tag_line_is_not_a_translation_pair(self):
         for t in ('PEAK – 神戸の多様なイベント情報をまとめたポータルサイト', 'Bitfan - ファンクラブをつくるならBitfan', 'TIGET | ライブイベントのチケット販売・電子チケット…',

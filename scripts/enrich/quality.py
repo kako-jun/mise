@@ -290,7 +290,7 @@ def boilerplate_segment(seg, shared=False):
 # cut out of a longer word); only at the END or the START of the segment, never from the middle of a name. 公式サイト is removed only when it
 # FOLLOWS a name (a segment that is only 公式サイト is boilerplate anyway).
 _EDGE_TAIL = re.compile(r"(?:へようこそ|ようこそ|トップページ|(?<![A-Za-z0-9])(?:top\s*ページ|top\s*page|official\s+web\s*site|untitled\s+document)|"
-                        r"オフィシャルサイト|公式サイト|無題ドキュメント)\s*$", re.I)
+                        r"オフィシャルサイト|公式サイト|無題ドキュメント)(?P<punct>[\s!！?？。．.、…]*)$", re.I)
 _EDGE_HEAD = re.compile(r"^(?:トップページ|top\s*ページ|top\s*page|無題ドキュメント|untitled\s+document)(?=\s|$)\s*", re.I)   # at the start only as a separate word
 _EDGE_DASH_TAIL = re.compile(r"(?:^|\s)[" + _DASHES + r"]+\s*$")
 _EDGE_DASH_HEAD = re.compile(r"^\s*[" + _DASHES + r"]+(?:\s|$)")
@@ -301,7 +301,10 @@ def _strip_edges(piece):
     prev = None
     while prev != piece:
         prev = piece
-        piece = collapse(_EDGE_HEAD.sub("", _EDGE_TAIL.sub("", piece)))
+        m = _EDGE_TAIL.search(piece)
+        # a tail phrase with punctuation after it (ようこそ！) goes too, but only when something is left in front of it
+        cut = piece[:m.start()] if m and (m.group("punct").strip() == "" or piece[:m.start()].strip()) else piece
+        piece = collapse(_EDGE_HEAD.sub("", cut))
     return piece
 
 
@@ -387,13 +390,13 @@ def derive_name(title, host=""):
     return {"name": join(kept), "name_ja": join(ja) if both else None, "name_en": join(en) if both else None}
 
 
-_CATCH_MARK = re.compile(r"[、。！？!?「」『』〜~…]|なら|を")
+_CATCH_MARK = re.compile(r"[、。！？!?「」『』〜~…・]|なら|を|販売|購入|予約|情報|サイト|通販|サービス|ポータル|サポート|ご案内")
 
 
 def _short_ja_name(seg):
-    """A Japanese segment that reads as a NAME (not a catch-phrase): at most 30 characters, no punctuation / quote / ellipsis, no 〜なら / 〜を,
+    """A Japanese segment that reads as a NAME (not a catch-phrase): at most 18 characters, no punctuation / quote / ellipsis / ・, no 〜なら / 〜を, no describing word (販売 購入 予約 情報 サイト 通販 サービス ポータル サポート ご案内),
     and no Latin brand inside (a segment like 'ファンクラブをつくるならBitfan' is the tag line)."""
-    return len(seg) <= 30 and not _CATCH_MARK.search(seg) and not re.search(r"[A-Za-z]", unicodedata.normalize("NFKC", seg))
+    return len(seg) <= 18 and not _CATCH_MARK.search(seg) and not re.search(r"[A-Za-z]", unicodedata.normalize("NFKC", seg))
 
 
 def _short_en_name(seg):
