@@ -4,6 +4,7 @@
   uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute] [--llm-fallback]    サイト名(sites.name / name_ja / name_en)
   uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply]    説明文(sites.description_ja)の文体
   uv run python scripts/cleanup_quality.py tags         [--limit N] [--dry-run | --apply] [--retry-skipped]    タグ(site_tags.label_ja が日本語でない行を、ラベルごとに日本語へ)
+  uv run python scripts/cleanup_quality.py tags --merge [--limit N] [--dry-run | --apply] [--chunk N]          タグ(既存タグを決定的な規則で束ねる。LLM なし)
   uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | --apply] [--retry-skipped]    上位カテゴリだけのサイトに葉を付ける
 
 規則は scripts/enrich/quality.py(判定・掲載と同じ 1 か所)。names は quality.derive_name(title の節を選ばず、定型の節と重複だけ外して順に 60 字まで。LLM を通らない)。
@@ -995,6 +996,167 @@ def clean_tags(client, kind, *, limit, apply, restart, out, llm, lease, budget_m
     return finish(kind, st, samples, apply, out, ledger, asker, code), st
 
 
+# ---------------------------------------------------------------------------------------------------------- tags --merge (no LLM)
+MERGE_TOP = 30                  # dry-run: the largest clusters shown
+CAND_MAX = 40                   # synonym candidates shown
+CAND_MIN_SITES = 5
+CAND_JACCARD = 0.5
+ROW_PAGE = 5000                 # site_tags rows per read of the co-occurrence scan
+
+
+def merge_plan(groups, syn, proper):
+    """Cluster the stored tags by the SAME deterministic rules as quality.canonical_tag. Valid tags (they pass check_tags) are taken in use-count order
+    (tie: shorter label_en, then alphabetical) and each is mapped onto an earlier one or becomes a canonical itself, so the canonical of a cluster is its
+    most used tag and nothing is chained. Then the tags whose label_ja is English (the `tags` subcommand's targets) are mapped onto a canonical when
+    their English label is the same (never a new canonical). -> (mapping {(ja,en): (ja,en)}, rows {(ja,en): n}, TagVocab of the canonicals)."""
+    vocab = quality.TagVocab(synonyms=syn, proper=proper)
+    rows = {}
+    for g in groups:
+        k = (collapse(g['ja']), collapse(g['en']))
+        rows[k] = rows.get(k, 0) + g['n']
+    order = sorted(rows, key=lambda k: (k[0] == k[0].casefold() and not quality.has_japanese(k[0]), -rows[k], len(k[1]), k[0], k[1]))   # a capitalised NPO / iOS before nasa / ios
+    vocab.prefill([(k[0], k[1], n) for k, n in rows.items()])
+    mapping, foreign = {}, []
+    for k in order:
+        if vocab.valid(*k):
+            hit = vocab.find(k[0], k[1])
+            if hit and hit != k:
+                mapping[k] = hit
+            else:
+                vocab.add(k[0], k[1], rows[k])
+        elif quality.check_tags([{'label_ja': k[0], 'label_en': k[1]}], syn, proper) == ['tag_label_ja_not_japanese']:
+            foreign.append(k)
+    for k in foreign:
+        hit = vocab.find(k[0], k[1])
+        if hit:
+            mapping[k] = hit
+            vocab.add_foreign(k[0], k[1], rows[k])
+            continue
+        hit = vocab.find_foreign(k[0], k[1])              # still English: only a word form (plural, case, hyphen) of another English-only tag
+        if hit:
+            mapping[k] = mapping.get(hit, hit)
+        else:
+            vocab.add_foreign(k[0], k[1], rows[k])
+    clusters = {}
+    for src, dst in mapping.items():
+        clusters.setdefault(dst, []).append(src)
+    for dst, members in clusters.items():                  # the most used is not always the best canonical: 花 / flowers, 博物館 over ミュージアム
+        if dst not in rows:
+            continue
+        best = quality.pick_canonical([dst] + [m for m in members if vocab.valid(*m)], rows)
+        if best != dst:
+            for m in [dst] + members:
+                if m != best:
+                    mapping[m] = best
+            mapping.pop(best, None)
+    return mapping, rows, vocab
+
+
+def load_tag_sites(client):
+    """-> {site_id: [(label_ja, label_en)]}: the whole site_tags table, paged by rowid (the co-occurrence report)."""
+    out, after = {}, 0
+    while True:
+        rows = client.query('SELECT rowid AS rid, site_id, label_ja, label_en FROM site_tags WHERE rowid > ? ORDER BY rowid LIMIT ?', [after, ROW_PAGE])
+        if not rows:
+            return out
+        for r in rows:
+            out.setdefault(r['site_id'], []).append((collapse(r['label_ja']), collapse(r['label_en'])))
+        after = rows[-1]['rid']
+
+
+def synonym_candidates(site_tags, mapping, syn):
+    """Tag pairs (after the merge) whose site sets overlap with Jaccard >= CAND_JACCARD and that each have >= CAND_MIN_SITES sites: a hint (close in meaning) of
+    synonyms for data/tag-synonyms.csv (the owner decides; nothing is merged). -> [(jaccard, both, a, b, na, nb)], best first."""
+    sites, together = {}, {}
+    for _sid, tags in site_tags.items():
+        mine = sorted({mapping.get(t, t) for t in tags})
+        for t in mine:
+            sites[t] = sites.get(t, 0) + 1
+        for i, a in enumerate(mine):
+            for b in mine[i + 1:]:
+                together[(a, b)] = together.get((a, b), 0) + 1
+    out = []
+    for (a, b), c in together.items():
+        na, nb = sites[a], sites[b]
+        if na < CAND_MIN_SITES or nb < CAND_MIN_SITES:
+            continue
+        j = c / (na + nb - c)
+        if j >= CAND_JACCARD and syn.key(a[0]) != syn.key(b[0]) and syn.key(a[1]) != syn.key(b[1]):
+            out.append((j, c, a, b, na, nb))
+    return sorted(out, key=lambda x: (-x[0], -x[1], x[2], x[3]))
+
+
+def apply_en_only(client, src, dst, n, st, beat, chunk):
+    """Same label_ja, another label_en: only label_en is rewritten (the primary key is untouched). Read back: nothing left on the old label_en."""
+    moved = 0
+    for _ in range(n // chunk + 5):
+        beat()
+        res = client.batch([('UPDATE site_tags SET label_en=? WHERE rowid IN (SELECT rowid FROM site_tags WHERE label_ja=? AND label_en IS ? LIMIT ?) '
+                             'RETURNING site_id', [dst[1], src[0], src[1], chunk])])
+        if not res[0]:
+            break
+        moved += len(res[0])
+    st['updated'] += moved
+    if client.query('SELECT COUNT(*) AS c FROM site_tags WHERE label_ja=? AND label_en IS ?', [src[0], src[1]])[0]['c']:
+        st['verify_mismatch'] += 1
+        st['verify_mismatch_ids'].append(src[0])
+        return False
+    return True
+
+
+def merge_tags(client, kind, *, limit, apply, restart, out, llm, lease, budget_month, hb, run_id, retry_skipped=False, allow_no_bookmark=False,
+               llm_fallback=False, ids=None, allow_large_llm_mapping=False, tag_chunk=TAG_ROW_CHUNK, explain=False, model=None):
+    """`tags --merge`: cluster the stored tags by the deterministic keys (no LLM) and move the rows of every non-canonical tag onto its canonical.
+    --limit = labels moved in one run. -> (exit code, stats)."""
+    st = new_stats(apply)
+    st.update({'labels': 0, 'rows_total': 0, 'clusters': 0, 'labels_to_move': 0, 'rows_to_move': 0, 'foreign_to_move': 0, 'merged': 0, 'sites_over_5': 0,
+               'synonym_candidates': 0})
+    beat = hb.__call__ if (apply and hb) else (lambda: None)
+    bad = preflight(client, apply, out, allow_no_bookmark)
+    if bad is not None:
+        return bad, st
+    syn, proper = quality.default_synonyms(), quality.proper_nouns()
+    groups = load_tag_groups(client)
+    mapping, rows, vocab = merge_plan(groups, syn, proper)
+    st['labels'], st['rows_total'] = len(rows), sum(rows.values())
+    clusters = {}
+    for src, dst in mapping.items():
+        clusters.setdefault(dst, []).append(src)
+    st['clusters'], st['labels_to_move'] = len(clusters), len(mapping)
+    st['rows_to_move'] = sum(rows[s] for s in mapping)
+    st['foreign_to_move'] = sum(1 for s in mapping if not quality.ja_label_ok(s[0], proper))
+    out(f'cleanup tags --merge: {st["mode"]}, limit={limit}')
+    out(f'--- {min(MERGE_TOP, len(clusters))} largest cluster(s) of {len(clusters)} (canonical = most used; x = rows) ---')
+    for dst, members in sorted(clusters.items(), key=lambda kv: (-(rows.get(kv[0], 0) + sum(rows[m] for m in kv[1])), kv[0]))[:MERGE_TOP]:
+        out(f'  {dst[0]} / {dst[1]} (x{rows.get(dst, 0)}) <- ' + ', '.join(f'{m[0]} / {m[1]} (x{rows[m]})' for m in sorted(members, key=lambda m: -rows[m])[:8])
+            + (f' ... +{len(members) - 8}' if len(members) > 8 else ''))
+    todo = sorted(mapping, key=lambda s: (-rows[s], s))[:limit]
+    code = 0
+    if apply:
+        for src in todo:
+            dst = mapping[src]
+            out(f'  merge {src[0]!r}/{src[1]!r} x{rows[src]}: -> {dst[0]!r}/{dst[1]!r}')
+            if src[0] == dst[0]:
+                ok = apply_en_only(client, src, dst, rows[src], st, beat, tag_chunk)
+            else:
+                ok = apply_tag(client, {'ja': src[0], 'en': src[1], 'n': rows[src]}, dst[0], dst[1], [dst[0]], st, beat, tag_chunk)
+            code = code or (0 if ok else 1)
+        st['sites_over_5'] = client.query('SELECT COUNT(*) AS c FROM (SELECT site_id FROM site_tags GROUP BY site_id HAVING COUNT(*) > 5)')[0]['c']
+    st['selected'] = len(todo)
+    cands = synonym_candidates(load_tag_sites(client), mapping, syn)
+    st['synonym_candidates'] = len(cands)
+    out(f'--- synonym candidates by co-occurrence (Jaccard >= {CAND_JACCARD}, >= {CAND_MIN_SITES} sites each; report only, nothing merged): '
+        f'{min(CAND_MAX, len(cands))} of {len(cands)} ---')
+    for j, c, a, b, na, nb in cands[:CAND_MAX]:
+        out(f'  J={j:.2f} both={c}: {a[0]} / {a[1]} (x{na})  ~  {b[0]} / {b[1]} (x{nb})')
+    eo.table('cleanup tags --merge', {k: v for k, v in st.items() if k not in ('needs_human_ids', 'needs_human_reasons', 'verify_mismatch_ids')}, out)
+    if st['verify_mismatch_ids']:
+        out(f'  verify mismatch ids: {st["verify_mismatch_ids"]}')
+    if not apply:
+        out('dry-run: 何も書いていない・LLM を呼んでいない。--apply で書く')
+    return code, st
+
+
 # ------------------------------------------------------------------------------------------------------------------ categories
 CAT_BATCH = 10
 CAT_DESC_CHARS = 300
@@ -1407,7 +1569,7 @@ def report(kind, st, samples, apply, out):
         out('dry-run: 何も書いていない・LLM を呼んでいない。--apply で書く')
 
 
-CLEANERS = {'tags': clean_tags, 'categories': clean_categories}
+CLEANERS = {'tags': clean_tags, 'tags-merge': merge_tags, 'categories': clean_categories}
 
 
 def run(client, kind, *, limit=DEFAULT_LIMIT, apply=False, restart=False, out=print, llm=None, lease=None, budget_month=js.MONTHLY_CAP_USD,
@@ -1460,6 +1622,7 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--allow-large-llm-mapping', action='store_true', help=f'tags のみ: LLM が決めた対応で、使っている行が {LARGE_LLM_ROWS} を超えるものも適用する(既定は needs_human)')
     ap.add_argument('--model', choices=sorted(judge.MODELS), help='tags / categories の LLM(既定: tags = haiku、categories = sonnet。dry-run の費用見積りも同じモデル)')
     ap.add_argument('--explain', action='store_true', help='tags / categories: needs_human の理由コードをラベル(サイト)ごとに全件出す(既定は理由別の件数と各 5 例)')
+    ap.add_argument('--merge', action='store_true', help='tags のみ: 既存タグを決定的な規則(LLM なし)で束ねる。正規 = 使用数が最多。--limit は 1 回に動かすラベル数。同義語の候補(共起)も表示')
     ap.add_argument('--chunk', type=int, default=TAG_ROW_CHUNK, help=f'tags のみ: 1 回の batch で書き換える行数(既定 {TAG_ROW_CHUNK}、最大 {TAG_ROW_CHUNK_MAX})')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かず LLM も呼ばない')
@@ -1476,6 +1639,8 @@ def main(argv=None, *, client=None, **inject):
         ap.error('--allow-large-llm-mapping / --chunk は tags だけ')
     if not 1 <= a.chunk <= TAG_ROW_CHUNK_MAX:
         ap.error(f'--chunk は 1〜{TAG_ROW_CHUNK_MAX}')
+    if a.merge and (a.kind != 'tags' or a.model or a.allow_large_llm_mapping or a.retry_skipped):
+        ap.error('--merge は tags だけ(LLM を使わないので --model / --allow-large-llm-mapping / --retry-skipped とは併用しない)')
     if (a.recompute or a.llm_fallback) and a.kind != 'names':
         ap.error('--recompute / --llm-fallback は names だけ')
     ids = None
@@ -1486,7 +1651,7 @@ def main(argv=None, *, client=None, **inject):
         ids = list(dict.fromkeys(x.strip() for x in text.splitlines() if x.strip()))
         if not 1 <= len(ids) <= IDS_MAX:
             ap.error(f'--ids は 1〜{IDS_MAX} 件(今は {len(ids)} 件)')
-    code, _ = run(client, 'names-ids' if ids else ('names-recompute' if a.recompute else a.kind), ids=ids, limit=a.limit, apply=a.apply, restart=a.restart, budget_month=a.budget_month,
+    code, _ = run(client, 'names-ids' if ids else ('names-recompute' if a.recompute else ('tags-merge' if a.merge else a.kind)), ids=ids, limit=a.limit, apply=a.apply, restart=a.restart, budget_month=a.budget_month,
                   retry_skipped=a.retry_skipped, allow_no_bookmark=a.allow_no_bookmark, llm_fallback=a.llm_fallback, allow_large_llm_mapping=a.allow_large_llm_mapping, tag_chunk=a.chunk, explain=a.explain, model=a.model, **inject)
     return code
 

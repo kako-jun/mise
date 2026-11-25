@@ -204,7 +204,7 @@ class PublishGate(unittest.TestCase):
         cand(self.d1, tags=json.dumps(['動画|video', {'label_ja': '猫', 'label_en': 'cat'}]))
         self.run_stage()
         rows = self.d1.db.execute('SELECT label_ja,label_en FROM site_tags WHERE site_id=? ORDER BY label_ja', (ps.site_id('alpha.example.jp'),)).fetchall()
-        self.assertEqual([tuple(r) for r in rows], [('動画', 'video'), ('猫', 'cat')])
+        self.assertEqual([tuple(r) for r in rows], [('動画', 'Videos'), ('猫', 'cat')])   # 動画|video is mapped onto the existing tag (the dev seed's 動画 / Videos)
 
     def test_non_leaf_category_is_held(self):
         cand(self.d1, categories=json.dumps(['reference']))

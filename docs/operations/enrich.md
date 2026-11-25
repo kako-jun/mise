@@ -141,6 +141,17 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 - **再資格化（`requalify` 段、`judge_stage.requalify`）**: 掲載ゲートが品質の理由（`gate:quality_*`）で止める承認済みの行（`state='approved'`）と、`state='candidate'` で `review_reason` が `gate:quality_%` / `quality:%` の行を対象に、違反内容を指示に書いて describe を 1 回（カテゴリが使えないときは triage も）呼び直す（判定段と同じ台帳・月の上限・山括弧の無害化。`describe_row` を使う。LLM の `site_name` は、名前を直せない行では必須）。結果に掲載ゲートをもう一度当て、通れば `approved`（`review_reason='requalified'`）、通らなければ `candidate`/`pending` のまま理由を更新する。失敗した行は `notes` の**先頭**に `requalify_attempts=N; ` を足し（元の notes はその後ろに残す。SQL の GLOB で試行を使い切った行を選択の前に除く）、 `url_progress.updated_at` を更新し列の後ろに回す（先頭で詰まらない）。1 行 2 回（`REQUALIFY_MAX_ATTEMPTS`）で打ち切り、以後は人だけが動かす。無応答（タイムアウト）は試行に数えず、使えない結果が 3 回続いたら停止する（判定段と同じ）。承認済みの行はページ単位で古い順に走査する（クリーンな行が続いても後ろの対象に届く。1 回 2,000 行まで）。ゲートが既に通る行（形はゲートが直す）は LLM を呼ばず承認する。`gate:quality_*` の保留は掲載段の保留率ガード（`PUBLISH_MAX_HELD_RATIO`）に数えず、`requalify` の選択件数はラウンドの選択件数に入る。事前確認（preflight）で `url_candidates.site_name` が無ければ開始しない（migration 0040 が先）。ランナーでは合議段と掲載段の間（`--stages …,requalify,publish`、`--requalify-limit` 既定 20・上限 200）。合議段の describe-after-approve も `gate:quality_*` を扱う（`DESCRIBABLE`、同じ `describe_row`）。統計: `selected` `requalified` `still_held` `describe_failed` `cost_usd`。
 - **整合チェック**（`scripts/check-data-integrity.py`、warn のみ・終了コードに影響しない）: `quality:name_too_long`（`sites.name` の 80 字超 = `NAME_LONG_MAX`。`derive_name` が書く名前は最大 80 字）`quality:description_style` `quality:tag_label_ja_not_japanese`（上の規則で `label_ja` として認められるものは違反に数えない） `quality:category_non_leaf_only` の件数を出す。基準値（`QUALITY_BASELINE`、2026-11-25 本番の実測。是正後は 0 に下げる）を超えたら `ABOVE BASELINE` と出す。
 - **タグの同義語**: `data/tag-synonyms.csv`（`canonical_ja,canonical_en,variants`。variants は `|` 区切り）。読み込み（`quality.load_synonyms`）が全行を検証し（日本語の正準名・日本語を含まない英語名・variants あり・同じ語が複数の正準に属さない）、`tests/test_quality.py` が実ファイルを検査する。語を足すときは 1 行足してテストを通す。
+- **タグの方針（再利用・#273）**: タグは**増やさず使い回す**。LLM のタグが検証（上の規則）を通ったあと、**決定的な正規化**（`quality.canonical_tag`。LLM を追加で呼ばない・指示文に語彙を貼らない）で**既存のタグ**に寄せる。タグは日本語（`label_ja`）と英語（`label_en`）の**両方を持つ**（英語だけは不可）。
+  - **語彙**: `site_tags` の `GROUP BY label_ja, label_en`（使用数つき）の上位 3000 件（`quality.VOCAB_TOP_N`）。実行（段）ごとに集計 SQL を **1 回**だけ発行し、500 サイトごとに読み直す（行ごとの問い合わせは無い）。読めない／有効なタグが 50 件未満（空の表）のときは寄せずそのまま通す。答えになれるのは `check_tags` を通る既存タグだけ（`label_ja` が英語の旧タグは答えにならない）。
+  - **方針は「間違って統合するより、統合しない」**。一致の条件（`TagVocab.find`）:
+    - **日本語ラベルを持つタグ**は、日本語ラベルが同じ（正規キーが同じ、または同義語表の同じ組）で、かつ英語ラベルが**語形違い**（単複・大小・ハイフン・冠詞 = 同じ正規キー）か、**語を共有し、一方が他方を含まない**ときだけ寄せる。日本語は同じで英語の意味が違うもの（認証 / authentication と certification、ゲーム / game と game development、舞台 / stage と stage musical、登山 / mountaineering と hiking）は別のタグのまま。英語ラベルが同じでも日本語ラベルが違うもの（設計 / デザイン、世界遺産 / 世界文化遺産）も寄せない。同義語表に載る組だけは寄せる（同義の既存タグのうち最多、無ければ表の正準タグ。英語ラベルだけで表に引かれることはない）。
+    - **`label_ja` が英語のまま**（変換前）のタグは、同じ英語ラベル（正規キー）で**既に変換済みの組**の日本語タグへ、その日本語ラベルが**5 行以上かつ 80% 以上**を占めるときだけ寄せる（bank = 銀行 / 土手、お手入れ / 保守 / maintenance のように分かれるものは寄せない）。
+    - **綴り・語順による統合は無い**（編集距離・語順入れ替えは削除。trailer / trainer、home care / care home、securities / security、radio / radiko のような誤りが出て、実表での利益が小さかった）。残るのは語形違い（単複・大小・ハイフン・全角半角・長音）と同義語表だけ。複数形が別の語になるもの（securities・goods・customs・works・sales・times・news など）は `data/tag-plural-exceptions.csv` に置き、畳まない（`arts` / `art` は畳む）。
+    - 略語・固有名詞（`latin_token_ok`・`data/tag-proper-nouns.csv`）は完全一致のみ（大文字小文字を除く）。否定・修飾の語が違うもの（non-profit と profit）は寄せない。
+    - **正規の選び方**（`quality.pick_canonical`。`tags --merge` はクラスタごとに最後にもう一度選ぶ）: 大文字を含むラテン表記（NPO・WordPress・iOS）があればそれ、無ければ日本語ラベルは使用数が 3 倍以内の中で一般語（`data/tag-general-words.csv`、無ければ文字数の短い方: 博物館 > ミュージアム）、英語ラベルは一般語なら小文字（花 / flowers）、同点は使用数 → 短い `label_en` → 辞書順。
+  - **新しいタグ**: どれにも一致しないタグは 1 サイト**最大 2 つ**（LLM の並び順で先の 2 つ）。超えた分・重複・5 つ超えの分は捨てる。新しいタグも `check_tags`（日本語の `label_ja`・英語の `label_en`）を通す。結果が `check_tags` を通らなければ元のタグを（5 つまで）そのまま使う。
+  - **どこで**: 判定段・合議段の describe・requalify は `judge_stage.parse`（検証の直後）、掲載段は `plan` の直後。統計 `tags_canonicalized`（既存タグに置き換えた数）・`tags_new`・`tags_dropped`（捨てた数）を各段の結果に出す。`--tag-vocab-in-prompt`（既定オフ）は describe の指示文（キャッシュされる）に既存タグの上位 150 件（`ja|en`）を足す。オンにするとリクエストごとの入力トークンが増えるので、既定の決定的な正規化で足りないと分かってから。
+  - **既存データ**: `cleanup_quality.py tags --merge`（下の「是正ツール」）。同じ規則で既存タグを束ねる。
 - **migration 0040**: `url_candidates.site_name TEXT`（非公開）。コードより先に本番へ適用する（判定段の UPDATE がこの列を書く）。
 - テスト: `tests/test_quality.py`（関数・同義語ファイル・整合チェック）、`tests/test_enrich_quality_stages.py`（判定の再依頼・保留、掲載の修復・保留）。
 - 既存の掲載済みデータの是正は下の「是正ツール」（この規則そのものは新しく載る行だけを止める）。
@@ -153,6 +164,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute | --ids FILE|-] [--llm-fallback] [--restart] [--retry-skipped]
 uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
 uv run python scripts/cleanup_quality.py tags         [--limit N] [--dry-run | --apply] [--retry-skipped] [--allow-large-llm-mapping] [--chunk N] [--budget-month USD]
+uv run python scripts/cleanup_quality.py tags --merge [--limit N] [--dry-run | --apply] [--chunk N]
 uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | --apply] [--restart] [--retry-skipped] [--budget-month USD]
 ```
 
@@ -203,6 +215,17 @@ uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | -
 5. **検索**: `site_tags` の INSERT/UPDATE/DELETE トリガ（0020/0030）が `sites.search_text` を作り直し、`sites_fts_au`（0027）が FTS を追従させる。ツールは `search_text` を直接書かない。**書いた後は `node scripts/refresh-search-text.mjs --remote`**（暫定値を NFKC 正規化版に戻す）。
 6. **報告**: 処理したラベル数・表／多数決／LLM の別・`needs_human`・重複として消した行（`merged`）・移した行（`updated`）・日本語でない `label_ja` の残り（`foreign_labels_after`、許可表を除く。ほぼ 0 になるはず）。dry-run は前後の例 20 件・`would_merge`・`would_update`・LLM に回る数と費用の上限見積り（`est_cost_usd_max`）。
 
+#### `tags --merge`（既存タグの統合。LLM なし・決定的）
+
+```
+uv run python scripts/cleanup_quality.py tags --merge [--limit N] [--dry-run | --apply] [--chunk N]
+```
+
+- **規則**: 上の「タグの方針」と同じ関数（`TagVocab.find`）。有効なタグを使用数の多い順（同数は短い `label_en` → 辞書順）に見て、先に決まった正規タグに一致すればそこへ、しなければ自分が正規になる（連鎖しない）。`label_ja` が英語の旧タグ（`tags` の対象）は、同じ英語ラベルの有効な正規タグが**一意に決まるとき**だけそこへ寄せる（bank のように 2 つの意味が拮抗するものは `tags`（LLM）に任せる）。`label_ja` が英語のままの組どうしは語形違い（単複・大小・ハイフン）だけ寄せる（綴り・語順の統合は無い。上の「タグの方針」）。
+- **dry-run（既定）**: 何も書かない。統合するクラスタ数・動かすラベル数・行数と、**大きい順 30 クラスタ**を出す。同時に**同義語の候補**（統合後のタグで、2 つのサイト集合の Jaccard ≥ 0.5・各 5 サイト以上。意味が近い候補として）を最大 40 組出す。**自動では統合しない**（人が見て `data/tag-synonyms.csv` へ足す）。
+- **`--apply`**: bookmark・lease・読み戻しは他のサブコマンドと同じ。行の移動は `tags` と同じ衝突回避（`UPDATE … WHERE NOT EXISTS`＋同サイトの重複は削除。`--chunk`、既定 50）。`label_ja` が同じで `label_en` だけ違うものは `label_en` だけを書き換える（主キーは動かない）。1 サイトのタグは増えない（≤5 のまま。実行後に 5 超のサイト数 `sites_over_5` を出す）。`search_text` / FTS は既存トリガが追従する（書いた後は `node scripts/refresh-search-text.mjs --remote`）。`--limit` = 1 回に動かすラベル数（行数の多い順）。冪等（再実行すると 0 件）。
+- テスト: `tests/test_tag_canonicalization.py`。
+
 ### `categories`
 
 問題: 葉（`categories` で子を持たない）でなく上位カテゴリ（最上位・中間）**だけ**が付いたサイト。葉を 1 つも持たないサイトだけが対象（葉を持つサイトは触らない）。
@@ -244,7 +267,7 @@ uv run python scripts/enrich_online.py --apply --stages fetch,judge --limit 30 -
 uv run python scripts/enrich_online.py --backfill-empty [--apply]        # 判定済みの空ページを empty_content で却下（1 回で終了。既定 dry-run）
 ```
 
-主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--deliberate-limit`/`--requalify-limit`/`--publish-limit`（既定 60 / 30 / 20 / 20 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
+主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--deliberate-limit`/`--requalify-limit`/`--publish-limit`（既定 60 / 30 / 20 / 20 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--tag-vocab-in-prompt`（既定オフ。「タグの方針」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
 
 終了コード: `0` 正常（残り無し・予算上限・`--max-seconds`・`--rounds`・日次の掲載上限）/ `1` 検証不一致・整合チェック違反・異常ガード・前提チェック不合格・判定段の停止・判定の費用ガード / `2` リースが取れない・引数不正 / `3` レート制限（429）/ `4` 実行中にリースを失った / `5` 費用台帳を確定できない（人の対応が必要）。**スケジューラは 5 で再試行しない**（再実行のたびに課金して `reserve` 行が増える。「残った reserve 行の解消」を人が済ませてから再開）。
 

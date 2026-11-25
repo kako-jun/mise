@@ -196,7 +196,7 @@ class Publish(unittest.TestCase):
         self.assertEqual((res['published'], res['errors']), (1, 0))
         self.assertLessEqual(self.d1.max_params, 100)
         sid = ps.site_id('alpha.example.jp')
-        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM site_tags WHERE site_id=?', (sid,))[0], 5)     # max 5 tags
+        self.assertEqual(self.d1.one('SELECT COUNT(*) FROM site_tags WHERE site_id=?', (sid,))[0], 2)     # 30 new tags: at most 2 new ones per site (tag reuse, #273; the dev seed gives the vocabulary)
         self.assertLessEqual(self.d1.one('SELECT COUNT(*) FROM site_categories WHERE site_id=?', (sid,))[0], 3)
 
     def test_dry_run_writes_nothing(self):

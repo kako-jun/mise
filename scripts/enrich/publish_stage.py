@@ -348,8 +348,13 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
         "SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
         "WHERE p.state='approved' AND c.review_state='approved' ORDER BY p.updated_at,p.identity_key LIMIT ?", [int(limit)])
     res = {"selected": len(rows), "published": 0, "already_listed": 0, "held": 0, "errors": 0, "dry_run": not apply,
-           "would_publish": 0, "repaired": {"name": 0, "description": 0}, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
+           "would_publish": 0, "tags_canonicalized": 0, "tags_new": 0, "tags_dropped": 0, "repaired": {"name": 0, "description": 0}, "held_reasons": {}, "verify_problems": {}, "integrity": {}, "ids": [], "stopped": False}
     touched = []
+    tag_cache = quality.VocabCache(client)    # ONE aggregate query per run (reloaded every quality.VOCAB_REFRESH_ROWS sites); none -> tags unchanged
+
+    def count_tags(ts):
+        for k in ("tags_canonicalized", "tags_new", "tags_dropped"):
+            res[k] += ts.get(k, 0)
 
     def hold(identity_key, reason):
         res["held"] += 1
@@ -372,6 +377,8 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
                 heartbeat()   # raises when the runner lost its lease: stop before the next site's batch
             try:
                 p = plan(dict(row))
+                ts = {}
+                p["tags"] = [quality.parse_tag(t) for t in quality.canonicalize_strings([f"{a}|{b}" for a, b in p["tags"]], tag_cache, ts)]   # reuse existing tags, <= 2 new
                 have_cats = {r["id"] for r in client.query(f"SELECT id FROM categories WHERE id IN ({','.join('?' * len(p['cats']))})", p["cats"])}
                 p["cats"] = [c for c in p["cats"] if c in have_cats]
                 if not p["cats"]:
@@ -387,6 +394,7 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
                 if not apply:
                     if guards_pass(client, p):
                         res["would_publish"] += 1
+                        count_tags(ts)
                         for k, v in p["repaired"].items():
                             res["repaired"][k] += int(v)
                     else:
@@ -423,6 +431,7 @@ def run(client, *, limit, apply, log=print, heartbeat=None):
                 res["stopped"] = True
                 break
             res["published"] += 1
+            count_tags(ts)
             for k, v in p["repaired"].items():
                 res["repaired"][k] += int(v)
             res["ids"].append(p["id"])
