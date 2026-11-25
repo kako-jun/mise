@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""オンライン補強ランナー: 取得 -> 判定 -> 掲載を本番 D1 だけを正本にして回す(scripts/enrich/ の 3 段を束ねる)。
+"""オンライン補強ランナー: 取得 -> 判定 -> 合議 -> 掲載を本番 D1 だけを正本にして回す(scripts/enrich/ の 4 段を束ねる)。
 
 ローカルに状態を持たない(ファイル・チェックポイント・ログを作らない)。出力は標準出力だけ。
 続きの位置は url_progress の状態そのもの、排他は D1 discovery_cursors のリース(source='lease', cursor_key='enrich')。
 
-  uv run python scripts/enrich_online.py [--stages fetch,judge,publish] [--limit N | --fetch-limit/--judge-limit/--publish-limit N]
+  uv run python scripts/enrich_online.py [--stages fetch,judge,deliberate,publish] [--limit N | --fetch-limit/--judge-limit/--deliberate-limit/--publish-limit N]
                                          [--rounds N] [--max-seconds S] [--budget-month USD] [--judge-concurrency 1..4] [--priority leaf|none] [--dry-run | --apply]
 
 既定は --dry-run(読むだけ。1 回だけ回し、各段の対象件数を出す)。--apply で書く。--rounds 0 は「残りが無くなるか停止条件まで」。
@@ -22,10 +22,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import discover_online as do
-from enrich import fetch_stage, judge_stage, priority as prio, publish_stage
+from enrich import deliberate_stage, fetch_stage, judge_stage, priority as prio, publish_stage
 
-STAGES = ('fetch', 'judge', 'publish')
-DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'publish': 60}
+STAGES = ('fetch', 'judge', 'deliberate', 'publish')
+DEFAULT_LIMITS = {'fetch': 60, 'judge': 30, 'deliberate': 20, 'publish': 60}
 STATES = ('discovered', 'queued', 'fetched', 'reviewing', 'candidate', 'approved', 'rejected', 'failed', 'blocked', 'published')
 LEASE_KEY = 'enrich'
 LEASE_TTL = 1800
@@ -40,6 +40,8 @@ PUBLISH_MAX_ERROR_RATIO = 0.5   # 選んだ行のうちバッチ失敗がこの�
 PUBLISH_MAX_HELD_RATIO = 0.5    # 選んだ行のうちゲート保留がこの割合を超えたら止める(選択 10 件以上)
 JUDGE_GUARD_WINDOW = 100        # 判定の費用ガード: 直近 JUDGE_GUARD_HOURS 時間の判定がこの件数以上あり approved が 0 件なら、LLM を呼ばない(掲載・取得・LLM 無しの移動は続ける)
 JUDGE_GUARD_HOURS = 6           # 窓の長さ。この時間たつと窓が空になり自然に再開する
+DELIB_GUARD_MIN_ROWS = 10      # 合議段の異常ガード: 選んだ行がこれ以上で、猫の失敗(会議中に落ちた行のうち失敗が原因のもの)が半分を超えたら止める
+DELIB_GUARD_FAIL_RATIO = 0.5
 STALE_RESERVE_HOURS = 6         # これより古い llm_ledger の reserve 行が残っていれば開始しない(exit 5)
 HEARTBEAT_MAX_FAILS = 3         # heartbeat の更新が(リース喪失ではなく)D1 の一時エラーで連続この回数失敗したらリース喪失扱い
 MAX_PUBLISH_PER_DAY = 5000      # 既定。直近 24 時間に作られた sites(D1 から数える)がこの件数に達したら掲載しない(正常終了。残りは翌日以降)。--max-publish-per-day で変更
@@ -161,7 +163,8 @@ def fmt_summary(start, end, out):
         out(f'  {s:<12}{a:>9}{b:>9}{b - a:>+9}')
 
 
-def preflight(client, apply, bookmark_fn, out, judge_active=True):
+def preflight(client, apply, bookmark_fn, out, judge_active=True, llm_active=None):
+    llm_active = judge_active if llm_active is None else llm_active   # reserve 行の検査は LLM を使う段(判定・合議)があるとき
     counts = progress_counts(client)
     sites = client.query('SELECT COUNT(*) AS n FROM sites')[0]['n']
     out('pre-flight: ' + ', '.join(f'{k}={v}' for k, v in counts.items() if v) + f', sites={sites}')
@@ -169,7 +172,7 @@ def preflight(client, apply, bookmark_fn, out, judge_active=True):
     odd = client.query("SELECT COUNT(*) AS n FROM url_progress p JOIN url_candidates c USING(identity_key) WHERE p.state='approved' "
                        "AND COALESCE(c.review_state,'')<>'approved'")[0]['n']
     out(f'pre-flight: url_progress.state=approved なのに review_state が approved でない行 = {odd}(掲載段は選ばない)')
-    if judge_active:
+    if llm_active:
         n_res = stale_reserves(client)
         if n_res:
             msg = (f'pre-flight: {STALE_RESERVE_HOURS} 時間より古い reserve 行が {n_res} 件ある(費用台帳が未解消)。'
@@ -222,7 +225,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
         if res['fetch'].get('verify_failed'):
             raise Stop(1, f'fetch: 読み戻し検証が {res["fetch"]["verify_failed"]} 件不一致(ログの verify failed の行を確認)')
     llm_on = True
-    if 'judge' in active and apply and judge_unapproved_window(client):
+    if ({'judge', 'deliberate'} & active) and apply and judge_unapproved_window(client):
         llm_on = False
         if not state.get('guard_said'):
             state['guard_said'] = True
@@ -240,6 +243,20 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
             out(f'judge: 予算上限に達したため判定段を止める({s.get("stopped")})。他の段は続ける')
         elif s.get('stopped'):
             raise Stop(3 if is_rate_limit(RuntimeError(str(s['stopped']))) else 1, f'judge が止まった: {s["stopped"]}')
+    if 'deliberate' in active:
+        guard_lease()
+        d = deliberate_stage.run(client, limit=limits['deliberate'], apply=apply, log=out, llm=llm, budget_month=budget_month, concurrency=concurrency,
+                                 heartbeat=beat, llm_enabled=llm_on)
+        res['deliberate'] = d
+        selected += d.get('selected', 0) if llm_on else 0
+        state['delib_progress'] = bool(d.get('deliberated'))   # 会議中だけの回は url_progress が動かない。それは進捗として数える
+        if d.get('budget_stopped'):
+            active.discard('deliberate')
+            out(f'deliberate: 予算上限に達したため合議段を止める({d.get("stopped")})。他の段は続ける')
+        elif d.get('stopped'):
+            raise Stop(3 if is_rate_limit(RuntimeError(str(d['stopped']))) else 1, f'deliberate が止まった: {d["stopped"]}')
+        if apply and d.get('selected', 0) >= DELIB_GUARD_MIN_ROWS and d.get('cat_failed', 0) / d['selected'] > DELIB_GUARD_FAIL_RATIO:
+            raise Stop(1, f'deliberate: 猫の失敗が異常({d.get("cat_failed")}/{d["selected"]})。ログの理由を確認')
     if 'publish' in active:
         guard_lease()
         limit = limits['publish']
@@ -297,17 +314,17 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
         out('lease: 別の実行が動いている。何もせず終了')
         return 2, None, None
     started, start, end, code = clock(), None, None, 0
-    state = {'final': 0, 'daily_cap': False, 'sel': {s: prio.Selector(priority) for s in ('fetch', 'judge')}}
+    state = {'final': 0, 'daily_cap': False, 'delib_progress': False, 'sel': {s: prio.Selector(priority) for s in ('fetch', 'judge')}}
     hb = Heartbeat(lease, clock)
     try:
-        start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active)
+        start = preflight(client, apply, bookmark_fn, out, judge_active='judge' in active, llm_active=bool({'judge', 'deliberate'} & active))
         n, prev = 0, start
         while True:
             n += 1
             res, selected = run_round(client, n, active, limits, apply, out, budget_month=budget_month, concurrency=concurrency,
                                       max_publish_per_day=max_publish_per_day, fetch=fetch, llm=llm, lease=lease, hb=hb, state=state)
             cur = progress_counts(client)
-            if apply and cur == prev and selected:
+            if apply and cur == prev and selected and not state.get('delib_progress'):
                 out('WARNING 停止: この回で url_progress が 1 件も動かなかった(対象はあるが進まない。ログを確認)。終了コードは 0')
                 break
             prev = cur
@@ -362,7 +379,7 @@ def run_pipeline(client, *, stages=STAGES, limits=None, rounds=0, max_seconds=No
 
 def main(argv=None, *, client=None, **inject):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--stages', default=','.join(STAGES), help='fetch,judge,publish のうち回す段(カンマ区切り)')
+    ap.add_argument('--stages', default=','.join(STAGES), help='fetch,judge,deliberate,publish のうち回す段(カンマ区切り)')
     ap.add_argument('--limit', type=int, default=None, help='全段共通の 1 回あたりの件数(段別指定が優先)')
     for s in STAGES:
         ap.add_argument(f'--{s}-limit', type=int, default=None, help=f'{s} 段の 1 回あたりの件数(既定 {DEFAULT_LIMITS[s]})')
