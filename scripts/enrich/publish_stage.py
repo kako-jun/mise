@@ -111,6 +111,16 @@ class Gate(Exception):
     """A pre-publish gate failed: the row goes back to 'candidate' with this reason."""
 
 
+def gate_reason(row):
+    """-> the gate reason ('gate:...') that publishing this joined url_candidates row would hit, or None. The deliberate stage uses it
+    so it never approves a row this stage would only send back (same function, not a copy)."""
+    try:
+        plan(row)
+    except Gate as e:
+        return str(e)
+    return None
+
+
 def plan(row):
     """Validate one joined row and build everything the batch needs. Raises Gate(reason)."""
     key = row.get("frontier_key") or row["identity_key"]

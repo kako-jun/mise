@@ -32,6 +32,10 @@ except ImportError:                  # run as a plain script / from a test that 
     import judge_stage as js  # noqa: E402
 import judge  # noqa: E402
 import approve_policy  # noqa: E402
+try:
+    from . import publish_stage  # noqa: E402
+except ImportError:
+    import publish_stage  # noqa: E402
 
 SHIRO_MODEL = judge.MODELS["sonnet"]   # safety / law: the most careful judgement, and the place where a miss costs most
 KURO_MODEL = judge.MODELS["haiku"]     # stated criteria applied mechanically: the cheap model is enough
@@ -88,7 +92,7 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["vote", 
           "properties": {"vote": {"type": "string", "enum": list(VOTES)}, "reason": {"type": "string"},
                          "evidence_quote": {"type": ["string", "null"]}}}
 
-ADULT_RE = re.compile(r"成人|アダルト|18禁|R-?18|ポルノ|エロ|性的|わいせつ|猥褻|淫|大人向け|官能|\badult\b|\bnsfw\b|\bporn|sexual|explicit|erotic|\bxxx\b|mature", re.I)
+ADULT_RE = re.compile(r"成人|アダルト|18禁|R-?18|ポルノ|エロ|性的|わいせつ|猥褻|淫|大人向け|官能|\badult\b|\bnsfw\b|\bporn|sexual|explicit|erotic|\bxxx\b|\bmature\b|ヌード|裸|露骨|風俗|卑猥|公序良俗|18歳未満|年齢制限|えっち|いかがわしい|センシティブ|obscene|nudity|\bnude|for adults only|adults only", re.I)
 LABEL_RE = re.compile(r"スパム|詐欺|悪質|危険サイト|違法サイト|マルウェアサイト|spam|scam|malicious", re.I)
 
 SELECT_COLUMNS = js.SELECT_COLUMNS
@@ -212,37 +216,38 @@ def ask(ctx, cat, src, user_text, row):
 
 
 # ------------------------------------------------------------------ decision / SQL
-NEEDS_DESCRIPTION = "deliberation:needs_description"
+NEEDS_REVIEW = "deliberation:needs_review:"
 
 
-def has_publishable_text(row):
-    """What the publish stage's gates need: both descriptions and at least one valid category."""
-    try:
-        cats_ok = approve_policy.valid_categories(row.get("categories"))
-    except (TypeError, ValueError):
-        cats_ok = False
-    return bool((row.get("description_ja") or "").strip() and (row.get("description_en") or "").strip() and cats_ok)
-
-
-def decide(votes, row=None):
-    """votes: {cat: vote str | None} -> (decision 'approve' | 'reject' | None (meeting), meeting reason | None).
+def decide(votes, row=None, gate=None):
+    """votes: {cat: vote str | None}; gate: the publish stage's gate reason for this row (or None)
+    -> (decision 'approve' | 'reject' | None (meeting), meeting reason | None).
     Extra brakes, all toward a human and never toward an automatic decision:
-      adult attribute yes + reject majority -> meeting (adult content is never a ground for rejection, whatever words the cats used);
-      白猫 reject + approve majority -> meeting (SAFETY_VETO; the other two do not look at safety);
-      approve majority but no description / valid category -> meeting 'deliberation:needs_description' (the publish stage would hold it)."""
+      automatic rejection only when adult == 'no' and fetch_adult != 'yes' (yes / NULL / unknown -> meeting): adult content is never a
+        ground for rejection and a word list cannot catch every paraphrase;
+      automatic approval only when 白猫 voted approve too (SAFETY_VETO: hold or reject from her -> meeting; the other two do not look at safety);
+      approve majority but the publish stage's gates would not pass the row (verdict, descriptions, categories, tags ...) -> meeting
+        'deliberation:needs_review:<gate reason>'. A reject majority is not affected by the gates."""
     row = row or {}
     vs = list(votes.values())
     if vs.count("approve") >= 2:
-        if SAFETY_VETO and votes.get("shiro") == "reject":
+        if SAFETY_VETO and votes.get("shiro") != "approve":
             return None, None
-        if not has_publishable_text(row):
-            return None, NEEDS_DESCRIPTION
+        if gate:
+            return None, NEEDS_REVIEW + gate
         return "approve", None
     if vs.count("reject") >= 2:
-        if row.get("adult") == "yes" or row.get("fetch_adult") == "yes":
+        if row.get("adult") != "no" or row.get("fetch_adult") == "yes":
             return None, None
         return "reject", None
     return None, None
+
+
+def gate_of(client, row):
+    """The publish stage's gate for this row, evaluated on the full url_candidates row (what the publish stage will read)."""
+    full = client.query("SELECT p.identity_key,c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
+                        "WHERE p.identity_key=?", [row["identity_key"]])
+    return publish_stage.gate_reason(full[0]) if full else "gate:no_row"
 
 
 CLAIM_SQL = ("INSERT INTO deliberations (identity_key,status,input_hash,lease_until,updated_at) "
@@ -329,19 +334,20 @@ def public_row(r):
 def select_rows_without_public(client, limit, apply, stats, log):
     """Public bodies are decided deterministically (approve_policy.public_looking), never voted: with apply they get review_reason
     'public_body' (so the selection never sees them again and they cannot fill the LIMIT window); in a dry run they are only left out."""
-    skipped = set()
-    for _ in range(20):
-        rows = [r for r in select_rows(client, limit + len(skipped)) if r["identity_key"] not in skipped][:limit]
+    skipped, window = set(), max(limit * 5, 100)
+    for _ in range(50):
+        rows = [r for r in select_rows(client, window + len(skipped)) if r["identity_key"] not in skipped]
         pub = [r for r in rows if public_row(r)]
-        if not pub:
-            return rows
+        good = [r for r in rows if not public_row(r)]
         for r in pub:
             skipped.add(r["identity_key"])
             if apply:
                 client.batch([("UPDATE url_candidates SET review_reason='public_body', updated_at=datetime('now') "
                                "WHERE identity_key=? AND review_state='pending'", [r["identity_key"]])])
                 stats["public_body_moved"] += 1
-    return []
+        if len(good) >= limit or len(rows) < window:   # enough found, or nothing further to look at
+            return good[:limit]
+    return good[:limit]   # gave up looking further: what was found is voted, the rest comes next run
 
 
 class Ctx:
@@ -418,7 +424,9 @@ def run(client, *, limit, apply, log=print, llm=None, budget_month=js.MONTHLY_CA
             best_effort(unclaim_statements(row, lease))
             return
         failed = bool(problems)
-        decision, mreason = (None, None) if failed else decide({c: votes[c]["vote"] for c in CATS}, row)
+        vv = {c: votes[c]["vote"] for c in CATS} if not failed else {}
+        gate = gate_of(client, row) if sum(1 for v in vv.values() if v == "approve") >= 2 else None
+        decision, mreason = (None, None) if failed else decide(vv, row, gate)
         with ctx.lock:
             if all(v is None for v in votes.values()):
                 ctx.consecutive_failures += 1

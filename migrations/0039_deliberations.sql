@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS deliberations (
   identity_key TEXT PRIMARY KEY,
   status TEXT NOT NULL CHECK (status IN ('running','decided','meeting')),
   decision TEXT CHECK (decision IS NULL OR decision IN ('approve','reject')),
-  input_hash TEXT,                  -- この票が見た入力(合議の版・モデル・url_candidates.input_hash・review_reason)。変われば再合議
+  input_hash TEXT,                  -- この票が見た入力(合議の版・モデル・url_candidates.input_hash。review_reason は含めない: この段自身が書き換えるため)。変われば再合議
   shiro_vote TEXT, shiro_reason TEXT, shiro_model TEXT,
   kuro_vote TEXT, kuro_reason TEXT, kuro_model TEXT,
   yomogi_vote TEXT, yomogi_reason TEXT, yomogi_model TEXT,
