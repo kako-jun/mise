@@ -40,17 +40,6 @@
     try { const d = JSON.parse(text); if (!d || d.v !== 1 || !d.sites || typeof d.sites !== 'object' || Array.isArray(d.sites)) return null; return cleanSeen(d.sites); } catch (_) { return null; }
   }
 
-  // 「見た」の滞在タイマー。カードが画面に出てから delay 後に onSeen。一覧を作り直すとき clearAll() で古いタイマーを全部止める
-  function makeDwell(delay, onSeen, timers = { setTimeout: (f, ms) => g.setTimeout(f, ms), clearTimeout: t => g.clearTimeout(t) }) {
-    const map = new Map();
-    return {
-      start(key, arg) { this.stop(key); map.set(key, timers.setTimeout(() => { map.delete(key); onSeen(arg); }, delay)); },
-      stop(key) { if (map.has(key)) { timers.clearTimeout(map.get(key)); map.delete(key); } },
-      clearAll() { map.forEach(t => timers.clearTimeout(t)); map.clear(); },
-      size: () => map.size,
-    };
-  }
-
   // 件数の桁区切り（表示言語に合わせる）。数でない値は NaN と出さず空文字
   const fmtCount = (n, lang) => Number.isFinite(Number(n)) && n !== null && n !== '' ? Number(n).toLocaleString(lang === 'ja' ? 'ja-JP' : 'en-US') : '';
   // 縦フィードの現在位置(#204)。current は 0 始まりのカード番号(終了カードは list 件数と同じ値)、loaded は読み込み済み件数、more は続きがある/読み込みに失敗した(=分母が確定しない)か。
@@ -101,5 +90,5 @@
     };
   }
 
-  g.MiseFeedLib = { makeAutoAdvance, panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, makeDwell, SEEN_MAX_BYTES };
+  g.MiseFeedLib = { makeAutoAdvance, panGeometry, fmtCount, navPosition, isPending, safeHttpUrl, thumbOf, hash32, rngOf, updatedOf, order, inScope, covers, validSeenKey, cleanSeen, parseSeenImport, SEEN_MAX_BYTES };
 })(globalThis);

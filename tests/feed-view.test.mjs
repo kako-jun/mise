@@ -7,6 +7,7 @@ import { wantsNoindex, isFeedView } from '../src/seo.js';
 
 // 縦フィードの試作ビュー(?view=feed。#52)。DOM を使う IIFE なので、通常表示を変えないこと・CSP と第三者アクセスの規約を静的に守らせる。
 const read = f => readFileSync(new URL('../public/' + f, import.meta.url), 'utf8');
+const feedCss = read('feed.css');
 const html = read('index.html'), appJs = read('feed.js'), libJs = read('feed-lib.js'), css = read('feed.css');
 const js = appJs + '\n' + libJs;
 const lib = (() => { const ctx = { globalThis: null, URL, Date, Math, Number, Object, JSON, Array, String, Map }; ctx.globalThis = ctx; vm.runInNewContext(libJs, ctx); return ctx.MiseFeedLib; })();
@@ -98,21 +99,6 @@ test('「見た」JSON の読み込み: 1MB 超・形違い・不正なキーは
   assert.equal(lib.parseSeenImport('x'.repeat(lib.SEEN_MAX_BYTES + 1)), null);
   for (const bad of ['', 'not json', '[]', 'null', '{"v":2,"sites":{}}', '{"v":1,"sites":[]}', '{"v":1}', 5]) assert.equal(lib.parseSeenImport(bad), null, String(bad));
   assert.match(appJs, /f\.size > L\.SEEN_MAX_BYTES/);
-});
-
-test('dwell: 一覧を作り直すとき clearAll() で古いタイマーが発火しない(見ていないサイトを数えない)', () => {
-  const timers = []; let id = 0;
-  const fake = { setTimeout: (fn, ms) => { timers.push({ id: ++id, fn, ms, live: true }); return id; }, clearTimeout: t => { const x = timers.find(y => y.id === t); if (x) x.live = false; } };
-  const seen = []; const d = lib.makeDwell(1500, s => seen.push(s), fake);
-  d.start('el1', 'site-1'); d.start('el2', 'site-2'); assert.equal(d.size(), 2);
-  d.clearAll(); assert.equal(d.size(), 0);
-  for (const t of timers) if (t.live) t.fn();
-  assert.deepEqual(seen, [], 'clearAll 後は誰も数えない');
-  d.start('el3', 'site-3'); d.stop('el3'); for (const t of timers) if (t.live) t.fn();
-  assert.deepEqual(seen, []);
-  d.start('el4', 'site-4'); for (const t of timers) if (t.live) t.fn();
-  assert.deepEqual(seen, ['site-4']);
-  assert.match(appJs, /function resetList\(\) \{\s*observer && observer\.disconnect\(\); dwell\.clearAll\(\);/);
 });
 
 test('seo: ?view=feed は noindex、無ければ付かない(検索結果の noindex は従来どおり)', () => {
@@ -238,12 +224,19 @@ test('feed(#198): ヘッダーに帯(背景・ぼかし・下線)がなく、検
   assert.ok(existsSync(new URL('../public/fonts/mise-dot-digits-v1.woff2', import.meta.url)) && existsSync(new URL('../public/licenses/PressStart2P-OFL.txt', import.meta.url)), 'フォントとライセンスを同梱');
 });
 
-test('feed(#198): 「見た」は 60% 以上・1.5 秒以上の定数で、素通り(滞在前に離れる)は数えず、同じサイトは 1 回', () => {
-  assert.match(appJs, /IN_VIEW_THRESHOLD = 0\.6;/); assert.match(appJs, /SEEN_DWELL_MS = 1500;/);
-  const fired = [], timers = new Map(); let id = 0;
-  const d = lib.makeDwell(1500, s => fired.push(s), { setTimeout: (f, ms) => { timers.set(++id, f); return id; }, clearTimeout: i => timers.delete(i) });
-  d.start('a', 'siteA'); d.stop('a'); assert.equal(timers.size, 0, '素通りはタイマーごと消える');
-  d.start('b', 'siteB'); [...timers.values()].forEach(f => f()); assert.deepEqual(fired, ['siteB']);
+test('feed(#277): 「見た」は 60% 以上のカードが現在になった瞬間(キー・ボタン)か、止まって境界に揃った瞬間(指・ホイール)に数え、通過点・二重は数えない', () => {
+  assert.match(appJs, /IN_VIEW_THRESHOLD = 0\.6;/); assert.ok(!/SEEN_DWELL_MS|dwell/.test(appJs), '滞在待ちを置かない');
+  assert.match(appJs, /settled = navTarget === current;/, '即時はキー・ボタンの送り先に着いたときだけ');
+  assert.match(appJs, /if \(settled\) countSeen\(\); else scheduleSeen\(\);/);
+  assert.match(appJs, /scroller\.addEventListener\('scrollend', \(\) => seenIfSettled\(\)\)/, 'scrollend で即確定');
+  assert.match(appJs, /Math\.abs\(c\.offsetTop - scroller\.scrollTop\) > 2\) return false/, '境界に揃っていなければ数えない');
+  assert.match(appJs, /scroller\.scrollTop === y\) seenIfSettled\(\); else scheduleSeen\(\)/, '位置が動いている間は待つ');
+  assert.match(appJs, /function markSeen\(site\) \{\s*if \(!site \|\| seen\.sites\[site\.id\]\) return;/, '二重に数えない');
+});
+
+test('feed(#276): 戻る矢印(.f-directory)とスコア(.f-surf)に枠・輪郭・背景の枠を付けない', () => {
+  const cssRule = sel => feedCss.split('\n').filter(l => l.startsWith(sel)).join('\n');
+  for (const sel of ['#feed .f-directory, ', '#feed .f-surf { ']) { const r = cssRule(sel); assert.match(r, /border: 0;/, sel); assert.match(r, /background: transparent;/, sel); assert.ok(!/backdrop-filter|border: 1px|box-shadow/.test(r), sel); }
 });
 
 test('feed.js: 国・地域は一覧と同じ規則(国名テキストを出さない)・タグは一覧の宛先へのリンク(#202)', () => {
