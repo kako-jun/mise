@@ -367,3 +367,10 @@ test('縦フィードの窓(#278): 全カードは高さ固定の枠 + snap、�
   assert.match(appJs, /scrollSnapType = 'none'/); assert.match(appJs, /scrollSnapType = ''/);
   assert.match(appJs, /function cancelSettle\(/);
 });
+
+test('settleTarget: ゴムバンドで範囲外でも先頭〜末尾の中へ丸める・空の枠は inert・reduced でも overflow を保つ(#278)', () => {
+  assert.equal(lib.settleTarget({ startIdx: 0, pos: -300, h: 800, v: 0, count: 5 }), 0);
+  assert.equal(lib.settleTarget({ startIdx: 4, pos: 4 * 800 + 300, h: 800, v: 0, count: 5 }), 4);
+  assert.match(appJs, /art\.inert = true/); assert.match(appJs, /art\.inert = false/);
+  assert.match(appJs, /reduced\.matches\) \{ scroller\.scrollTop = to; let n = 0/);
+});

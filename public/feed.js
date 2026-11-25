@@ -146,6 +146,7 @@
   function card(s, i, total) {
     const art = document.createElement('article'); art.className = 'f-card'; art.tabIndex = -1; art.dataset.index = i; art.dataset.id = s.id;
     art.setAttribute('aria-posinset', i + 1); art.setAttribute('aria-setsize', total); art.setAttribute('aria-label', siteName(s)); // 中身を捨てた(窓の外)ときも名前が残るよう、labelledby でなく aria-label
+    art.inert = true; // 中身が無い間は支援技術に空の要素を読ませない(fillCard で外す)
     return art; // 中身は fillCard が窓の中でだけ作る(#278)
   }
   // 中身(サムネ・名前・説明・タグ・場所・足元)。窓の中のカードだけ作り、離れたら emptyCard 側ではなく dropCard で捨てる
@@ -208,10 +209,10 @@
     }
     body.append(foot);
     const scrim = document.createElement('div'); scrim.className = 'f-scrim'; scrim.setAttribute('aria-hidden', 'true');
-    art.append(pic, scrim, body); art.dataset.filled = '1';
+    art.append(pic, scrim, body); art.dataset.filled = '1'; art.inert = false;
   }
   // 窓の外へ出たカードは中身を捨てて空の枠に戻す(高さは CSS で固定なのでスクロール位置も snap の位置も変わらない)
-  function dropCard(art) { if (!art.dataset.filled) return; art.replaceChildren(); delete art.dataset.filled; art.classList.remove('is-active'); }
+  function dropCard(art) { if (!art.dataset.filled) return; art.replaceChildren(); delete art.dataset.filled; art.classList.remove('is-active'); art.inert = true; }
   function endCard(n) {
     const sec = document.createElement('section'); sec.className = 'f-card f-end'; sec.tabIndex = -1; sec.dataset.index = 'end'; sec.setAttribute('aria-label', t('end')(fmt(n)));
     const body = document.createElement('div'); body.className = 'f-end-body';
@@ -397,7 +398,7 @@
     if (!list.length) return;
     const w = L.windowRange(Math.min(c, list.length - 1), list.length, { behind: WIN_BEHIND, ahead: WIN_AHEAD, margin: WIN_MARGIN });
     fillQueue = [];
-    for (let k = 0; k <= Math.max(w.hi - c, c - w.lo); k++) for (const i of k ? [c + k, c - k] : [c]) if (i >= w.lo && i <= w.hi && cards[i] && !cards[i].dataset.filled) { if (k <= 1) fillCard(cards[i]); else fillQueue.push(i); }
+    for (let k = 0; k <= Math.max(w.hi - c, c - w.lo); k++) for (const i of k ? [c + k, c - k] : [c]) if (i >= w.lo && i <= w.hi && cards[i] && !cards[i].dataset.filled) { if (k === 0) fillCard(cards[i]); else fillQueue.push(i); }
     if (fillQueue.length && !fillRaf) fillRaf = requestAnimationFrame(pumpFill);
     for (let i = 0; i < list.length; i++) { if ((i < w.dropBelow || i > w.dropAbove) && cards[i] && cards[i].dataset.filled) dropCard(cards[i]); }
   }
@@ -443,7 +444,7 @@
     const to = cards[dest] ? cards[dest].offsetTop : dest * cardH(), from = scroller.scrollTop, dist = to - from;
     if (Math.abs(dist) < 1) { cancelSettle(); return; }
     ensureWindow(Math.min(dest, Math.max(0, list.length - 1)));
-    if (reduced.matches) { scroller.scrollTop = to; cancelSettle(); return; }
+    if (reduced.matches) { scroller.scrollTop = to; let n = 0; const hold = () => { if (++n < 6) settleRaf = requestAnimationFrame(hold); else { settleRaf = 0; cancelSettle(); seenIfSettled(); } }; settleRaf = requestAnimationFrame(hold); return; } // 動きを減らす設定: 即座に移るが、ブラウザ自身の慣性が続いて 2 枚目へ進まないよう、数フレームは overflow を止めたままにする
     const t0 = performance.now(), dur = L.settleMs(dist, cardH());
     const frame = now => {
       const x = (now - t0) / dur; scroller.scrollTop = x >= 1 ? to : from + dist * L.easeOutCubic(x);

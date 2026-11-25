@@ -101,6 +101,7 @@
   // 速い flick(|v| >= flickV かつ動かした量が minMove 以上)は触り始めから 1 枚だけ。そうでなければ位置で近い方(半分を越えれば次)。どちらも触り始めから ±1 枚までで、2 枚以上は飛ばさない。
   function settleTarget({ startIdx, pos, h, v, count, flickV = 0.3, minMove = 12 }) {
     if (!(h > 0) || !(count > 0)) return 0;
+    pos = Math.max(0, Math.min((count - 1) * h, pos)); // 端のゴムバンドで範囲外にいても、先頭〜末尾の中へ丸める
     const moved = pos - startIdx * h; let d;
     if (Math.abs(v) >= flickV && Math.abs(moved) >= minMove) d = v > 0 ? 1 : -1;
     else d = Math.max(-1, Math.min(1, Math.round(pos / h) - startIdx));

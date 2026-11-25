@@ -22,8 +22,8 @@ function chromiumPath() {
 }
 const browser = await chromium.launch({ executablePath: chromiumPath(), args: ['--no-sandbox', '--disable-gpu'] });
 const tp = y => [{ x: 195, y, id: 1 }];
-async function fresh() {
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+async function fresh(reducedMotion = 'no-preference') {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, reducedMotion });
   const page = await ctx.newPage();
   await page.goto(BASE + '/all/?category=government&category=cities&view=feed&seed=e2e');
   await page.waitForSelector('.f-card.is-active'); await page.waitForTimeout(800);
@@ -68,6 +68,15 @@ try {
     assert.ok(stop <= 450, `${name}: 離してから 450ms 以内に止まる(${Math.round(stop)}ms)`); assert.ok(back <= 1, `${name}: 行き過ぎ・戻りがない(${Math.round(back)}px)`);
     await ctx.close();
   }
+
+  // (2b) 動きを減らす設定: 47% で離しても 1 枚だけ進み、慣性で 2 枚目へ飛ばない
+  { const { ctx, page, cdp } = await fresh('reduce');
+    const y0 = 700, y1 = y0 - 0.47 * 844;
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: tp(y0) });
+    for (let i = 1; i <= 12; i++) { await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: tp(Math.round(y0 + (y1 - y0) * i / 12)) }); await page.waitForTimeout(8); }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await page.waitForTimeout(1500);
+    const r = await page.evaluate(() => { const sc = document.querySelector('.f-scroll'); return { top: sc.scrollTop, h: sc.clientHeight }; });
+    console.log('reduced 47%', JSON.stringify(r)); assert.equal(r.top % r.h, 0); assert.ok(Math.round(r.top / r.h) <= 1, `reduced-motion でも 1 枚だけ(${r.top})`); await ctx.close(); }
 
   // (3) 30 枚送ってもノード数が窓の分だけ
   { const { ctx, page } = await fresh();
