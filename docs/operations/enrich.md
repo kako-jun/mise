@@ -29,6 +29,21 @@
 - 失敗: LLM の硬い失敗は `fetched` のまま次回再試行（回数は `notes` の `judge_attempts=N`）。3 回で `failed`（`review_reason=judge_failed`）。
 - `apply=False` は読むだけ（LLM も書き込みも無し）。`ANTHROPIC_API_KEY` は環境変数のみ。値は表示しない。
 
+### 空ページの却下（`empty_content`、LLM 無し）
+
+本文がほぼ空のページは、**載せるものがまだ無いから**却下する。サイトの種類（個人・小規模・成人向け・ブログ）では判断しない。規模・人気も見ない。
+- 条件（`judge_stage.is_empty_content`）: `url_candidates.text_len` が分かっていて `EMPTY_TEXT_LEN`（80）未満、かつ `description_ja` が空、かつ `approve_policy.public_looking` でない（公的機関らしい行は従来の `public_body` の道。`text_len` が NULL の行は空とみなさない）。成人向けも他と同じく `empty_content` になるだけ（成人向けは属性）。パーキング・売り物・noindex は別の箇所で扱うので、ここでは重ねない。
+- 判定段は LLM を呼ぶ前にこの行を取り分け（`llm_enabled=False` でも実行）、claim してから `url_progress.state='rejected'`、`url_candidates.review_state='rejected'`、`review_reason='empty_content'`、`next_fetch_at`＝D1 の時計で 30 日後（`EMPTY_REOPEN_DAYS`）を書く。書き込みは claim と状態の条件つき、後で状態を読み戻す。統計は `empty_rejected`（dry-run は `would_reject_empty`）。
+- 既に判定済み（`candidate`/`pending`）の行は 1 回きりの補正で却下する: `uv run python scripts/enrich_online.py --backfill-empty`（既定 dry-run は件数だけ。`--apply` で書く。LLM 無し・リースを取り、1 回で終了。やり直しても同じ結果で、却下済みの行は選ばれない。合議の最中（実行中のリースがある行）は触らない）。
+- 再取得で開き直す（期限が来た行だけ。取得段は `discovered` かつ `next_fetch_at<=now` の行を拾う）。取得段は `review_state` を触らないので、判定の印も外す:
+  ```sql
+  UPDATE url_progress SET state='discovered', updated_at=datetime('now') WHERE state='rejected' AND identity_key IN
+    (SELECT identity_key FROM url_candidates WHERE review_reason='empty_content' AND review_state='rejected' AND next_fetch_at<=strftime('%Y-%m-%dT%H:%M:%SZ','now'));
+  UPDATE url_candidates SET review_state=NULL, review_reason=NULL, reviewed_at=NULL, updated_at=datetime('now')
+    WHERE review_reason='empty_content' AND review_state='rejected' AND identity_key IN (SELECT identity_key FROM url_progress WHERE state='discovered');
+  ```
+  再取得で本文が増えていれば通常どおり判定へ進み、まだ空なら再び `empty_content`（さらに 30 日後）。
+
 ### 費用台帳（D1 `llm_ledger`、migration 0038）
 
 月（UTC）の上限は `MONTHLY_CAP_USD = 100.0`（`nightly.py --budget-month` と同じ）。リクエストごとに
@@ -67,6 +82,7 @@ Message Batches（半額）は未対応。同期呼び出し、`concurrency` は
   - **白猫が approve でなければ自動承認しない（`SAFETY_VETO = True`）**: 白猫が hold か reject の行は、他の 2 匹が承認でも会議中にする。黒猫・よもぎ猫は安全面を見ない指示なので、その 2 票は安全の情報を含まないため。安全側に倒す変更で、元に戻すなら定数 1 つ（`False`）。reject 多数による却下は従来どおり。
   - **自動却下は `adult='no'` かつ `fetch_adult` が `yes` でない行だけ**: `adult` が `yes`・NULL・`unknown`（判定段が属性を付け損ねた行を含む）の reject 多数は必ず会議中にする（承認多数はそのまま通す）。語の列挙では言い換えを塞ぎきれないので構造で守る。補助として、reject の理由に成人向けを示す語（成人・アダルト・R18・性的・わいせつ・露骨・ヌード・風俗・卑猥・sexual・explicit 等）があれば無効票（1 回再試行し、なお直らなければその猫は失敗 = 会議中）。
   - **reject には根拠の引用が必須**（`evidence_quote`。サイト本文の逐語）。無い reject は無効票で 1 回再試行、なお無ければその猫は hold 扱い。理由は 80 字以内、「スパム」「詐欺サイト」「悪質」などの断定語は無効。
+  - **承認後の説明生成（describe-after-approve）**: 承認多数（白猫の承認を含む）なのに、掲載段のゲートに落ちる理由が説明・カテゴリ・tags の欠落／不正だけ（`gate:no_description` `gate:no_valid_category` `gate:bad_categories_json` `gate:bad_tags_json`）の行は、会議中にする前に判定段の describe を 1 回だけ呼ぶ（`judge_stage.describe_row`。指示文・検証・費用台帳（reserve → settle・月の上限）は判定段のものをそのまま使う。カテゴリが使えない行だけ、同じ triage（haiku）を先に 1 回呼んでカテゴリを得る）。得た `description_ja/en`・長い説明・tags・国/地域（既存値は消さず埋めるだけ・カテゴリは必要なときだけ）は、判定結果と同じ 1 つのバッチで claim の条件つきで書き、その結果でゲートをもう一度当てる。通れば `approved`（`review_reason='deliberation:approve+described'`）、通らなければ会議中（`deliberation:needs_review:<ゲート理由>`）。describe の失敗・予算上限・API 全体のエラーも会議中（元のゲート理由。API エラーと予算上限は run を止める）。`spam_verdict` が pass/suspect でない行（`gate:verdict_*`）と reject/hold 多数の行は対象外で、これまでどおり会議中。成人向けの行は長い説明を作らない（判定段と同じ方針）。判定段で「pass だが説明なし」だった行（`no_description`）も、この経路で説明が付く。費用は 1 行あたり describe（sonnet）1 回（＋カテゴリ欠落のとき triage 1 回）で、統計に `described` / `describe_failed` / `describe_cost_usd` を出す（`cost_usd` は猫と describe の合計。月の上限は共有）。
   - **掲載段のゲートを通らない行は承認しない**: 承認多数でも `publish_stage.gate_reason`（掲載段が使う `plan` と同じ判定。コピーではなく共通の関数。`spam_verdict` が pass/suspect のみ・説明文・カテゴリ・tags の JSON など）に引っかかる行は会議中にし、`review_reason='deliberation:needs_review:<ゲート理由>'`（例 `...:gate:verdict_review`）を付ける。掲載段の `gate:*` 保留と保留率ガードを作らないため。reject 多数による却下はゲートと無関係にそのまま可。
   - **公的機関は投票しない**: 選択後に `approve_policy.public_looking` を決定論で当て、該当行は LLM を呼ばず `review_reason='public_body'` に付け替える（以後の選択に出ない。窓を広めに取って繰り返し、公的機関の行が続いても後ろの通常行を取りこぼさない。打ち切ったときは取れた分だけ投票し残りは次回）。dry-run は書かず、対象から外すだけ。
   - **本文の山括弧を無害化**: サイト本文と `<judge_notes>` の値の `<` `>` は全角にして、本文でタグを閉じて偽の指示を差し込めないようにする（system には user メッセージ全体がデータだと明記）。
@@ -93,7 +109,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 
 合議の最中に人が先に決めた行は、行の移動（`review_state` / `url_progress`）は claim と `pending`/`candidate` の条件で効かず、票だけが `deliberations` に残る（実行の統計では `lost_claim`）。人が決めた行は `review_state` が `pending` でなくなるので、合議段はもう選ばない（`deliberations` の `meeting` 行は記録として残す）。
 
-テスト: `tests/test_enrich_deliberate_stage.py`（実 migration の in-memory SQLite と偽 LLM）。
+テスト: `tests/test_enrich_deliberate_stage.py`、`tests/test_enrich_empty_and_describe.py`（空ページの却下・補正・承認後の説明生成。実 migration の in-memory SQLite と偽 LLM）。
 
 ## 掲載段（`scripts/enrich/publish_stage.py`）
 
@@ -149,6 +165,7 @@ LLM 費用（月上限）を、掲載数が目標（`FLOOR`=100 サイト）に�
 uv run python scripts/enrich_online.py                                  # dry-run（既定。各段の対象件数だけ。1 回のみ）
 uv run python scripts/enrich_online.py --apply --rounds 0               # 残りが無くなるか停止条件まで
 uv run python scripts/enrich_online.py --apply --stages fetch,judge --limit 30 --max-seconds 3000
+uv run python scripts/enrich_online.py --backfill-empty [--apply]        # 判定済みの空ページを empty_content で却下（1 回で終了。既定 dry-run）
 ```
 
 主な引数: `--stages`（既定は全段）、`--limit`（全段共通）/`--fetch-limit`/`--judge-limit`/`--deliberate-limit`/`--publish-limit`（既定 60 / 30 / 20 / 60。上限 200、超える指定は引数エラー。リースの有効時間に収めるため）、`--rounds`（0 = 残り無しまで）、`--max-seconds`（超えたら次の回に入らない）、`--budget-month`、`--max-publish-per-day`（日次の掲載上限。既定 5000、1 以上。0 以下は引数エラー）、`--judge-concurrency`（1〜4）、`--priority leaf|none`（既定 leaf。「優先順」）、`--dry-run` / `--apply`。`ANTHROPIC_API_KEY` と `CLOUDFLARE_API_TOKEN` は環境変数のみ。
