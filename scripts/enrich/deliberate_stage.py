@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import threading
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 try:
@@ -31,6 +32,7 @@ except ImportError:                  # run as a plain script / from a test that 
     sys.path.insert(0, HERE)
     import judge_stage as js  # noqa: E402
 import judge  # noqa: E402
+import pipeline as llm_pipeline  # noqa: E402  (scripts/llm/pipeline.py)
 import approve_policy  # noqa: E402
 try:
     from . import publish_stage  # noqa: E402
@@ -42,7 +44,9 @@ KURO_MODEL = judge.MODELS["haiku"]     # stated criteria applied mechanically: t
 YOMOGI_MODEL = judge.MODELS["haiku"]   # generous reading of the same material
 VERSION = "v1"                         # bump when a prompt changes: finished deliberations are then voted again
 BODY_LIMIT = 4000                      # characters of body sent to a cat (the judge sends 9000)
-MAX_TOKENS = 500
+MAX_TOKENS = 1200                      # the answer is ~300-500 tokens (80-char reason + a quote of up to ~100 chars); 500 was cut off by thinking
+RETRY_MAX_TOKENS = 3000                # the one retry after a truncation (same settings would give the same cut)
+TRUNCATED = "truncated"
 REASON_MAX = 80                        # characters; the prompt says the same
 SAFETY_VETO = True                     # 白猫 reject => never auto-approve (-> meeting). A deliberate step beyond #53's plain 2/3 majority; set False to restore it
 LEASE_MINUTES = 30
@@ -64,7 +68,7 @@ COMMON = (
     "because a site is adult-oriented. Judge such a site by the same criteria as any other and, if you mention the attribute, say only "
     "that it is adult-oriented, with no description of the subject.\n"
     "Output ONLY JSON with keys: vote = approve | hold | reject; reason = ONE short factual Japanese sentence (max 80 characters) "
-    "stating what you observed, never a label such as 「スパム」 or an accusation; evidence_quote = a short verbatim quote from the "
+    "stating what you observed, never a label such as 「スパム」 or an accusation; evidence_quote = a short (at most 100 characters) verbatim quote from the "
     "candidate text supporting the reason; REQUIRED (non-empty) when vote is reject, otherwise it may be null.\n")
 
 PROMPTS = {
@@ -150,21 +154,35 @@ def validate(obj, src, row):
     if quote is not None:
         if not isinstance(quote, str) or len(quote) > 300:
             return None, "bad evidence_quote"
-        if quote.strip() and judge._norm(quote) not in judge.quote_source(src):
+        if quote.strip() and not quote_in(quote, src):
             return None, "evidence_quote is not in the candidate text"
     return {"vote": vote, "reason": reason.strip(), "evidence_quote": quote}, None
 
 
+def _fold(text):
+    """judge's whitespace/space normalization plus NFKC (full/half width, compatibility forms): a quote is judged the same way the judge stage does."""
+    return judge._norm(unicodedata.normalize("NFKC", text))
+
+
+def quote_in(quote, src):
+    """The quote must be a contiguous substring of the candidate's own text (not of the labels / notes). Surrounding quote marks are ignored."""
+    q = _fold(quote.strip().strip("「」『』\"'“”"))
+    return bool(q) and q in judge.quote_source(unicodedata.normalize("NFKC", src))   # NFKC first, so the judge's space rules see the folded text
+
+
 # ------------------------------------------------------------------ one cat
-def one_call(ctx, cat, user_text, note):
+def one_call(ctx, cat, user_text, note, max_tokens=MAX_TOKENS):
     """reserve -> call -> settle. Returns (msg|None, problem|None). Raises js.BudgetExceeded / js.LedgerSettleError."""
     model = MODELS[cat]
-    params = {"model": model, "max_tokens": MAX_TOKENS,
+    params = {"model": model, "max_tokens": max_tokens,
               "system": [{"type": "text", "text": PROMPTS[cat], "cache_control": {"type": "ephemeral"}}],
               "messages": [{"role": "user", "content": user_text}],
               "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}}}
+    th = llm_pipeline.thinking_param(model, True)   # the answer is a short JSON: thinking must not eat the output budget
+    if th:
+        params["thinking"] = th
     try:
-        wc, _ = judge.worst_case(model, PROMPTS[cat] + json.dumps(SCHEMA), user_text, MAX_TOKENS)
+        wc, _ = judge.worst_case(model, PROMPTS[cat] + json.dumps(SCHEMA), user_text, max_tokens)
     except judge.BudgetExceeded as e:
         return None, f"prompt too large: {e}"[:200]
     if ctx.stop:
@@ -194,10 +212,10 @@ def one_call(ctx, cat, user_text, note):
 
 def ask(ctx, cat, src, user_text, row):
     """One cat, one retry when the answer is invalid. -> (vote dict | None, problem | None). problem == STOP when the run must stop."""
-    problem = None
+    problem, mt = None, MAX_TOKENS
     for attempt in (1, 2):
         try:
-            msg, problem = one_call(ctx, cat, user_text, f"deliberate:{cat}")
+            msg, problem = one_call(ctx, cat, user_text, f"deliberate:{cat}", mt)
         except js.BudgetExceeded as e:
             ctx.stop = ctx.stop or str(e)
             return None, STOP
@@ -206,12 +224,17 @@ def ask(ctx, cat, src, user_text, row):
                 return None, problem      # ambiguous / hopeless: not sent again
             continue
         obj, problem = judge.parse_response_text(msg)
+        if obj is None and problem and TRUNCATED in problem:
+            mt = RETRY_MAX_TOKENS     # a retry with the same budget would be cut at the same place
+            continue
         if obj is not None:
             v, problem = validate(obj, src, row)
             if v is not None:
                 return v, None
     if problem == NO_QUOTE:   # a reject nobody can back with a quote is a hold
         return {"vote": "hold", "reason": "却下の根拠となる引用を示せなかったため保留", "evidence_quote": None}, None
+    if problem and TRUNCATED in problem:   # cut off even with the raised budget: this cat abstains
+        return {"vote": "hold", "reason": "出力が途中で切れたため判断を保留", "evidence_quote": None}, None
     return None, problem or "unknown"
 
 

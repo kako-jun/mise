@@ -43,6 +43,11 @@ class FakeCats:
             raise js.LLMRefused('overloaded')
         if v == 'noanswer':
             raise ConnectionError('boom')
+        if v == 'trunc_always' or (v == 'trunc' and params['max_tokens'] <= ds.MAX_TOKENS):
+            return {'content': [{'type': 'text', 'text': '{"vote": "appr'}], 'stop_reason': 'max_tokens',
+                    'usage': {'input_tokens': 1500, 'output_tokens': params['max_tokens']}}
+        if v == 'trunc':
+            v = 'approve'
         if v == 'bad':
             return {'content': [{'type': 'text', 'text': 'not json'}], 'usage': {'input_tokens': 10, 'output_tokens': 5}}
         vote, reason = v[:2] if isinstance(v, tuple) else (v, '事実に基づく短い理由です。')
@@ -230,6 +235,31 @@ class Deliberate(unittest.TestCase):
         self.assertEqual((d['status'], d['kuro_vote'], d['shiro_vote']), ('meeting', None, 'approve'))
         self.assertEqual(prog(self.d1, 'flaky.example.jp'), 'candidate')
 
+    def test_truncation_is_retried_once_with_a_larger_budget(self):
+        add(self.d1, 't.example.jp')
+        llm = FakeCats({'t.example': ('approve', 'trunc', 'trunc')})
+        r = self.go(llm)
+        self.assertEqual((r['approved'], r['cat_failed']), (1, 0))
+        self.assertEqual(len(llm.calls), 5)   # kuro and yomogi: cut, then raised budget
+        self.assertEqual(sorted({c['max_tokens'] for c in llm.calls}), [ds.MAX_TOKENS, ds.RETRY_MAX_TOKENS])
+        self.assertGreater(ds.RETRY_MAX_TOKENS, ds.MAX_TOKENS)
+
+    def test_still_truncated_after_the_retry_is_a_hold(self):
+        add(self.d1, 'tt.example.jp')
+        llm = FakeCats({'tt.example': ('approve', 'trunc_always', 'approve')})
+        r = self.go(llm)
+        self.assertEqual(len(llm.calls), 4)   # not retried a second time
+        d = delib(self.d1, 'tt.example.jp')
+        self.assertEqual((d['kuro_vote'], d['status'], r['cat_failed']), ('hold', 'decided', 0))   # shiro+yomogi approve
+
+    def test_thinking_disabled_for_haiku_and_budget_fits_the_answer(self):
+        add(self.d1, 'th.example.jp')
+        llm = FakeCats()
+        self.go(llm)
+        by_model = {c['model']: c for c in llm.calls}
+        self.assertEqual(by_model[ds.KURO_MODEL].get('thinking'), {'type': 'disabled'})
+        self.assertGreaterEqual(ds.MAX_TOKENS, 1000)
+
     def test_no_answer_is_not_resent(self):
         add(self.d1, 'quiet.example.jp')
         llm = FakeCats({'quiet.example': ('approve', 'noanswer', 'approve')})
@@ -410,6 +440,13 @@ class Deliberate(unittest.TestCase):
         add(self.d1, 'fa.example.jp', adult='no', fetch_adult='yes')
         self.go(FakeCats({'fa.example': ('reject', 'reject', 'hold')}))
         self.assertEqual(prog(self.d1, 'fa.example.jp'), 'candidate')
+
+    def test_quote_normalization_matches_the_judge_stage(self):
+        src, _ = ds.render_material({'identity_key': 'k/', 'url': 'https://k/', 'text_head': '手作り　の木工品を\n作っています。ＡＢＣ  shop', 'flags': '{}'})
+        for q in ('手作りの木工品を作っています', '「手作りの木工品」', 'ABC shop', '手作り　の木工品を 作っています。'):
+            self.assertIsNotNone(ds.validate({'vote': 'approve', 'reason': 'r', 'evidence_quote': q}, src, {})[0], q)
+        for q in ('木工品の販売', 'ABC  shop 通販'):
+            self.assertIsNone(ds.validate({'vote': 'approve', 'reason': 'r', 'evidence_quote': q}, src, {})[0], q)
 
     def test_mature_word_boundary(self):
         self.assertIsNone(ds.ADULT_RE.search('premature closing and immature layout'))
