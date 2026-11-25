@@ -55,3 +55,73 @@ internet,Q1668024,P31,P17|P495,1,service on the Internet,[種類4 主要Webサ�
 software,Q7397,P31,P17|P495,0,software,[種類4 主要Webサービスのトップ] ソフトウェア(公式サイトを持つもの),100
 business-services,Q891723,P31,P17|P495,0,public company,[種類5 主要企業の公式サイト] 上場企業,300
 business-services,Q6881511,P31,P17|P495,0,enterprise,[種類5 主要企業の公式サイト] 企業(Q4830453 business は約2.4万件で偏るため入れない),300
+poetry,Q49757,P106,P27,0,poet,"詩人。WDQS 実測(2026-11-25, 日本・P856 あり)50件",100
+poetry,Q11386386,P106,P27,0,haiku poet,"俳人。WDQS 実測(2026-11-25, 日本・P856 あり)4件",50
+poetry,Q11122954,P106,P27,0,waka poet,"歌人(短歌・和歌)。WDQS 実測(2026-11-25, 日本・P856 あり)5件",50
+mathematics,Q170790,P106,P27,0,mathematician,"数学者。WDQS 実測(2026-11-25, 日本・P856 あり)28件",100
+physics,Q169470,P106,P27,0,physicist,"物理学者。WDQS 実測(2026-11-25, 日本・P856 あり)20件",100
+chemistry,Q593644,P106,P27,0,chemist,"化学者。WDQS 実測(2026-11-25, 日本・P856 あり)11件",100
+biology,Q864503,P106,P27,0,biologist,"生物学者。WDQS 実測(2026-11-25, 日本・P856 あり)10件",100
+psychology,Q212980,P106,P27,0,psychologist,"心理学者。WDQS 実測(2026-11-25, 日本・P856 あり)11件",100
+sociology,Q2306091,P106,P27,0,sociologist,"社会学者。WDQS 実測(2026-11-25, 日本・P856 あり)19件",100
+archaeology,Q3621491,P106,P27,0,archaeologist,"考古学者。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+geography,Q901402,P106,P27,0,geographer,"地理学者。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+earth-sciences,Q2310145,P106,P27,0,meteorologist,"気象学者。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+philosophy,Q4964182,P106,P27,0,philosopher,"哲学者。WDQS 実測(2026-11-25, 日本・P856 あり)17件",100
+japanese-history,Q201788,P106,P27,0,historian,"歴史学者。WDQS 実測(2026-11-25, 日本・P856 あり)29件",100
+languages,Q14467526,P106,P27,0,linguist,"言語学者。WDQS 実測(2026-11-25, 日本・P856 あり)6件",50
+economy,Q188094,P106,P27,0,economist,"経済学者。WDQS 実測(2026-11-25, 日本・P856 あり)43件",100
+politics,Q82955,P106,P27,0,politician,"政治家(個人サイト)。WDQS 実測(2026-11-25, 日本・P856 あり)1812件",500
+architecture,Q42973,P106,P27,0,architect,"建築家。WDQS 実測(2026-11-25, 日本・P856 あり)44件",100
+illustration,Q644687,P106,P27,0,illustrator,"イラストレーター。WDQS 実測(2026-11-25, 日本・P856 あり)521件",500
+fine-arts,Q1028181,P106,P27,0,painter,"画家。WDQS 実測(2026-11-25, 日本・P856 あり)143件",300
+fine-arts,Q1007870,P31,P17|P495,0,art gallery,"画廊・美術館類(art gallery)。WDQS 実測(2026-11-25, 日本・P856 あり)61件",150
+photography,Q33231,P106,P27,0,photographer,"写真家。WDQS 実測(2026-11-25, 日本・P856 あり)149件",300
+calligraphy,Q3303330,P106,P27,0,calligrapher,"書家。WDQS 実測(2026-11-25, 日本・P856 あり)9件",50
+crafts,Q7541856,P106,P27,0,ceramicist,"陶芸家。WDQS 実測(2026-11-25, 日本・P856 あり)13件",50
+crafts,Q3400050,P106,P27,0,potter,"陶工。WDQS 実測(2026-11-25, 日本・P856 あり)7件",50
+design,Q3501317,P106,P27,0,fashion designer,"ファッションデザイナー。WDQS 実測(2026-11-25, 日本・P856 あり)33件",100
+design,Q627325,P106,P27,0,graphic designer,"グラフィックデザイナー。WDQS 実測(2026-11-25, 日本・P856 あり)35件",100
+design,Q11287574,P106,P27,0,industrial designer,"インダストリアルデザイナー。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+civil-engineering,Q13582652,P106,P27,0,civil engineer,"土木技術者。WDQS 実測(2026-11-25, 日本・P856 あり)3件",50
+civil-engineering,Q811930,P31,P17|P495,0,construction company,"建設会社。WDQS 実測(2026-11-25, 日本・P856 あり)12件",100
+essays,Q11774202,P106,P27,0,essayist,"随筆家(エッセイスト)。WDQS 実測(2026-11-25, 日本・P856 あり)61件",100
+comedy,Q245068,P106,P27,0,comedian,"お笑い芸人。WDQS 実測(2026-11-25, 日本・P856 あり)44件",100
+comedy,Q11620676,P106,P27,0,rakugoka,"落語家。WDQS 実測(2026-11-25, 日本・P856 あり)23件",100
+celebrities,Q226008,P106,P27,0,idol,"アイドル。WDQS 実測(2026-11-25, 日本・P856 あり)277件",300
+celebrities,Q2405480,P106,P27,0,voice actor,"声優。WDQS 実測(2026-11-25, 日本・P856 あり)14件",100
+celebrities,Q44508716,P106,P27,0,television personality,"タレント(テレビパーソナリティ)。WDQS 実測(2026-11-25, 日本・P856 あり)2件",50
+tv-shows,Q5398426,P31,P17|P495,0,television series,"テレビ番組(シリーズ)の公式サイト。WDQS 実測(2026-11-25, 日本・P856 あり)2350件",500
+martial-arts,Q9017214,P106,P27,0,karateka,"空手家。WDQS 実測(2026-11-25, 日本・P856 あり)53件",100
+martial-arts,Q203609,P31,P17|P495,0,dojo,"道場。WDQS 実測(2026-11-25, 日本・P856 あり)10件",50
+tabletop-games,Q11538947,P106,P27,0,professional shogi player,"将棋棋士。WDQS 実測(2026-11-25, 日本・P856 あり)7件",50
+tabletop-games,Q131436,P31,P17|P495,0,board game,"ボードゲーム。WDQS 実測(2026-11-25, 日本・P856 あり)9件",50
+programming,Q5482740,P106,P27,0,programmer,"プログラマ。WDQS 実測(2026-11-25, 日本・P856 あり)27件",100
+programming,Q1709010,P106,P27,0,software engineer,"ソフトウェアエンジニア。WDQS 実測(2026-11-25, 日本・P856 あり)3件",50
+dictionaries,Q23622,P31,P17|P495,0,dictionary,"辞書。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+dictionaries,Q615699,P31,P17|P495,0,online encyclopedia,"オンライン百科事典。WDQS 実測(2026-11-25, 日本・P856 あり)9件",50
+archives,Q166118,P31,P17|P495,0,archives,"アーカイブ・文書館(一部、機関名での登録が混ざる)。WDQS 実測(2026-11-25, 日本・P856 あり)23件",100
+news-sites,Q1153191,P31,P17|P495,0,online newspaper,"ネット新聞。WDQS 実測(2026-11-25, 日本・P856 あり)10件",50
+news-sites,Q192283,P31,P17|P495,0,news agency,"通信社。WDQS 実測(2026-11-25, 日本・P856 あり)2件",50
+cars,Q786820,P31,P17|P495,0,automobile manufacturer,"自動車メーカー。WDQS 実測(2026-11-25, 日本・P856 あり)18件",100
+cars,Q15081030,P31,P17|P495,0,motorcycle manufacturer,"バイクメーカー。WDQS 実測(2026-11-25, 日本・P856 あり)4件",50
+cars,Q786803,P31,P17|P495,0,car dealership,"自動車販売店。WDQS 実測(2026-11-25, 日本・P856 あり)15件",100
+finance,Q22687,P31,P17|P495,1,bank,"銀行(下位クラス含む)。WDQS 実測(2026-11-25, 日本・P856 あり)90件",200
+finance,Q2143354,P31,P17|P495,1,insurance company,"保険会社(下位クラス含む)。WDQS 実測(2026-11-25, 日本・P856 あり)12件",50
+energy,Q1326624,P31,P17|P495,0,electricity supply company,"電力会社。WDQS 実測(2026-11-25, 日本・P856 あり)14件",50
+energy,Q1341478,P31,P17|P495,0,energy company,"エネルギー会社。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+christianity,Q16970,P31,P17|P495,1,church building,"教会堂(下位クラス含む)。WDQS 実測(2026-11-25, 日本・P856 あり)129件",300
+cram-schools,Q118547,P31,P17|P495,0,cram school,"塾・予備校。WDQS 実測(2026-11-25, 日本・P856 あり)7件",50
+vocational,Q322563,P31,P17|P495,0,vocational school,"専門学校。WDQS 実測(2026-11-25, 日本・P856 あり)7件",50
+languages,Q897403,P31,P17|P495,0,language school,"外国語学校・外国語大学。WDQS 実測(2026-11-25, 日本・P856 あり)4件",50
+fan-works,Q2013644,P31,P17|P495,0,dojin circle,"同人サークル。WDQS 実測(2026-11-25, 日本・P856 あり)12件",50
+disaster-safety,Q6498663,P31,P17|P495,0,fire department,"消防本部。WDQS 実測(2026-11-25, 日本・P856 あり)28件",100
+veterinary,Q1706476,P31,P17|P495,0,veterinary hospital,"動物病院。WDQS 実測(2026-11-25, 日本・P856 あり)15件",100
+veterinary,Q202883,P106,P27,0,veterinarian,"獣医師。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+pharmacy,Q105186,P106,P27,0,pharmacist,"薬剤師。WDQS 実測(2026-11-25, 日本・P856 あり)15件",50
+dentistry,Q27349,P106,P27,0,dentist,"歯科医師。WDQS 実測(2026-11-25, 日本・P856 あり)25件",50
+mental-health,Q211346,P106,P27,0,psychiatrist,"精神科医。WDQS 実測(2026-11-25, 日本・P856 あり)8件",50
+mental-health,Q210999,P31,P17|P495,0,psychiatric hospital,"精神科病院。WDQS 実測(2026-11-25, 日本・P856 あり)5件",50
+ceremonies,Q1466031,P31,P17|P495,0,funeral home,"葬祭場。WDQS 実測(2026-11-25, 日本・P856 あり)4件",50
+pets,Q220142,P31,P17|P495,0,pet store,"ペットショップ。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
+telecom,Q2401749,P31,P17|P495,0,telecommunications company,"通信事業者。WDQS 実測(2026-11-25, 日本・P856 あり)1件",50
