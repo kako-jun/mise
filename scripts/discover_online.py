@@ -4,7 +4,7 @@
 ローカルに状態を持たない(SQLite の frontier・CSV・JSONL・キャッシュ・チェックポイントを作らない)。
 続きの位置とリースは D1 の discovery_cursors(migration 0037)に置く。標準出力のレポートだけが出力。
 
-  uv run python scripts/discover_online.py --source wikidata|wikidata-classes|official|links|cc|all [--limit N] [--dry-run | --apply]
+  uv run python scripts/discover_online.py --source wikidata|wikidata-classes|wikidata-leaves|official|links|cc|all [--limit N] [--dry-run | --apply]
 
 既定は --dry-run(D1 を読み、供給元を取得し、入れるはずの件数をカテゴリ別に出す。何も書かない)。
 Cloudflare REST は scripts/media_online.py の Cloudflare クライアント(CLOUDFLARE_API_TOKEN 必須)。
@@ -35,13 +35,14 @@ from hostnames import normalize_host, platform_page, registrable
 
 MAX_PARAMS = 90               # D1 は 1 文 100 個まで。余裕を持たせる
 INSERT_ROWS = 30              # 1 INSERT の行数(2 パラメータ/行)
+HINT_ROWS = 15                # hint_leaf つき upsert の 1 文の行数(5 パラメータ/行)
 BATCH_STATEMENTS = 5          # client.batch 1 回の文の数
 LEASE_TTL = 1800              # 秒
 REQUEST_INTERVAL = 0.3        # D1 へのリクエスト間隔(秒)
 DIRECTORY_WAIT = 2.0          # 公式ディレクトリのページ取得間隔(秒)
 WDQS_ABORT_EXIT = 3
 LEASE_LOST_EXIT = 4
-SOURCES = ('wikidata', 'wikidata-classes', 'official', 'links', 'cc')
+SOURCES = ('wikidata', 'wikidata-classes', 'wikidata-leaves', 'official', 'links', 'cc')
 
 INTERNAL_SUFFIXES = ('.local', '.localhost', '.internal', '.intranet', '.lan', '.home', '.corp', '.test', '.example', '.invalid', '.onion')
 # 会員一覧から出る外部リンクのうち、会員の公式サイトではないもの(SNS・検索・動画・共有)
@@ -175,6 +176,7 @@ class Stats:
         self.categories = collections.defaultdict(lambda: collections.Counter())   # (source, category) -> Counter(added/known)
         self.notes = []
         self.mismatch = 0
+        self.leaves = collections.defaultdict(lambda: collections.Counter())   # 葉 -> deficit/fetched/known/added/tagged(葉狙いの発見)
 
 
 class Sink:
@@ -183,6 +185,7 @@ class Sink:
         self.client, self.apply, self.stats, self.lease, self.limit = client, apply, stats, lease, limit
         self.seen = set()          # このラン内で見た identity_key(メモリのみ)
         self.pending = []          # (key, url, source, category)
+        self.hints = {}            # identity_key -> 狙った葉(hint_leaf)。最初に出した葉を優先する
         self.added = collections.Counter()   # source -> 追加(予定)数
 
     def room_left(self, source):
@@ -195,9 +198,11 @@ class Sink:
         left = self.room_left(source)
         return left is None or left > 0
 
-    def offer(self, source, category, url, keep_path=False):
+    def offer(self, source, category, url, keep_path=False, hint_leaf=None):
         st = self.stats.rows[source]
         st['fetched'] += 1
+        if hint_leaf:
+            self.stats.leaves[hint_leaf]['fetched'] += 1
         cand = candidate_from_url(url, keep_path)
         if not cand:
             st['invalid'] += 1
@@ -208,6 +213,8 @@ class Sink:
             return False
         self.seen.add(key)
         self.pending.append((key, out, source, category))
+        if hint_leaf:
+            self.hints[key] = hint_leaf
         return True
 
     def _known(self, keys):
@@ -232,21 +239,28 @@ class Sink:
             self.lease.renew()
         known = self._known([p[0] for p in pending])
         fresh = []
+        known_hinted = []   # 既知だが hint を付けたい行(url_progress が discovered で hint が無いものだけ後で付ける)
         for key, url, source, category in pending:
             st = self.stats.rows[source]
             if key in known:
                 st['already_known'] += 1
                 self.stats.categories[(source, category)]['known'] += 1
+                if key in self.hints:
+                    self.stats.leaves[self.hints[key]]['known'] += 1
+                    known_hinted.append((key, url, source))
                 continue
             if self.limit is not None and self.added[source] >= self.limit:
                 st['over_limit'] += 1
                 continue
             fresh.append((key, url, source, category))
             self.added[source] += 1
+            if key in self.hints:
+                self.stats.leaves[self.hints[key]]['added'] += 1
             self.stats.categories[(source, category)]['added' if self.apply else 'would_add'] += 1
         if not self.apply:
             for _, _, source, _ in fresh:
                 self.stats.rows[source]['would_add'] += 1
+            self._tag_known(known_hinted, write=False)
             return
         stmts = []
         for c in chunks(fresh, INSERT_ROWS):
@@ -269,6 +283,53 @@ class Sink:
                 self.stats.rows[source]['added'] += 1
                 self.stats.mismatch += 1
                 self.stats.notes.append(f'verify mismatch: {key}')
+        if self.stats.mismatch:
+            return
+        self._write_hints([(k, u, s) for k, u, s, _ in fresh if k in self.hints])
+        self._tag_known(known_hinted, write=True)
+
+    def _write_hints(self, rows):
+        """url_candidates に hint_leaf を upsert する(既存の hint・取得・判定の列は上書きしない)。書いたあと読み戻して検証する。"""
+        stmts = []
+        for c in chunks(rows, HINT_ROWS):
+            vals = ','.join("(?,?,?,?,datetime('now'),?,datetime('now'))" for _ in c)
+            stmts.append((f'INSERT INTO url_candidates(identity_key,url,source,host,discovered_at,hint_leaf,updated_at) VALUES{vals} '
+                          'ON CONFLICT(identity_key) DO UPDATE SET hint_leaf=COALESCE(url_candidates.hint_leaf, excluded.hint_leaf)',
+                          [x for k, u, s in c for x in (k, u, s, urllib.parse.urlsplit(u).hostname, self.hints[k])]))
+        for group in chunks(stmts, BATCH_STATEMENTS):
+            self.client.batch(group)
+        vstmts = [(f'SELECT identity_key AS k FROM url_candidates WHERE hint_leaf IS NOT NULL AND identity_key IN ({",".join("?" * len(c))})', [k for k, *_ in c])
+                  for c in chunks(rows, MAX_PARAMS)]
+        present = set()
+        for group in chunks(vstmts, BATCH_STATEMENTS):
+            for got in self.client.batch(group):
+                present |= {r['k'] for r in got}
+        for k, _, _ in rows:
+            if k not in present:
+                self.stats.mismatch += 1
+                self.stats.notes.append(f'verify mismatch (hint_leaf): {k}')
+
+    def _tag_known(self, known_hinted, write):
+        """既知の行のうち、まだ discovered で url_candidates に hint が無いものへ今回の葉を付ける(付けた数は tagged として別に数える)。"""
+        if not known_hinted:
+            return
+        info = {}
+        try:
+            for c in chunks(known_hinted, MAX_PARAMS):
+                for r in self.client.query(
+                        'SELECT p.identity_key AS k, p.state AS s, c.hint_leaf AS h FROM url_progress p LEFT JOIN url_candidates c ON c.identity_key=p.identity_key '
+                        f'WHERE p.identity_key IN ({",".join("?" * len(c))})', [k for k, *_ in c]):
+                    info[r['k']] = (r['s'], r['h'])
+        except RuntimeError as e:
+            if 'no such table' in str(e):
+                self.stats.notes.append('url_candidates が未適用(migration 0036)。hint_leaf は付けない')
+                return
+            raise
+        todo = [(k, u, s) for k, u, s in known_hinted if info.get(k, (None, 'x'))[0] == 'discovered' and info[k][1] is None]
+        for k, _, _ in todo:
+            self.stats.leaves[self.hints[k]]['tagged'] += 1
+        if write and todo:
+            self._write_hints(todo)
 
 
 # ------------------------------------------------------------------ 供給元: Wikidata
@@ -589,6 +650,9 @@ def report(stats, apply, out=print):
     out('== category (source / category: new / already known)')
     for (source, cat), c in sorted(stats.categories.items()):
         out(f'{source:9} {cat:22} new={c["added"] + c["would_add"]} known={c["known"]}')
+    if stats.leaves:
+        import discover_leaf_directed
+        discover_leaf_directed.report_leaves(stats, apply, out)
     for n in stats.notes:
         out(f'note: {n}')
     out('== 未確認の公式ディレクトリ(推測で URL を作らない)')
@@ -598,7 +662,7 @@ def report(stats, apply, out=print):
         out(f'!! verify mismatch: {stats.mismatch} 件')
 
 
-def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None, extra=None, class_rows=None):
+def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=None, out=print, lease=None, extra=None, class_rows=None, leaf_rows=None):
     stats = Stats()
     lease = lease or Lease(client)
     if apply and not lease.acquire():
@@ -620,6 +684,15 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
                 aborted = run_wikidata_classes(sink, cursors, wdqs, class_rows if class_rows is not None else WIKIDATA_CLASSES, max_rows)
                 if aborted:
                     stats.notes.append(f'wikidata-classes 中断: {aborted}')
+        if 'wikidata-leaves' in sources and not aborted:
+            if stats.mismatch:
+                stats.notes.append('wikidata-leaves: 照合不一致のため書き込みを止めた')
+            else:
+                import discover_leaf_directed   # 不足のある葉だけを狙う(scripts/discover_leaf_directed.py)
+                aborted = discover_leaf_directed.run_wikidata_leaves(sink, cursors, wdqs, leaf_rows if leaf_rows is not None else dw.load_map(), max_rows,
+                                                                     client, build_urls_query, parse_item_ids)
+                if aborted:
+                    stats.notes.append(f'wikidata-leaves 中断: {aborted}')
         if cursors.missing_table:
             stats.notes.append('discovery_cursors が未適用(migration 0037)。カーソルは先頭扱い')
         if 'official' in sources:
@@ -650,10 +723,13 @@ def run(client, sources, apply, limit, max_rows=1000, wdqs=None, pf=None, rows=N
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--source', choices=['wikidata', 'wikidata-classes', 'official', 'links', 'cc', 'all'], default='all')
+    ap.add_argument('--source', choices=['wikidata', 'wikidata-classes', 'wikidata-leaves', 'official', 'links', 'cc', 'all'], default='all')
     ap.add_argument('--limit', type=int, default=None, help='供給元ごとの追加(予定)件数の上限')
     ap.add_argument('--max-rows', type=int, default=1000, help='wikidata / wikidata-classes: 1 回に取る SPARQL 行数(項目数)の合計の上限')
     ap.add_argument('--max-sites', type=int, default=100, help='links: 1 回に処理する公開済みサイト数の上限(sites.id 昇順で続きから)')
+    ap.add_argument('--leaf-seeds', action=argparse.BooleanOptionalAction, default=True,
+                    help='links: 公開が 100 件未満の葉のサイトを、不足の大きい葉から順にリンク元にし、見つけた URL に hint_leaf を付ける(既定)。--no-leaf-seeds で従来の sites.id 昇順')
+    ap.add_argument('--report-unmapped', action='store_true', help='Wikidata の対応が無く公開が 100 件未満の葉を一覧する(何も書かない。人が見る報告)')
     ap.add_argument('--cc-sample-every', type=int, default=1000, help='cc: ホスト名ハッシュで 1/N を決定論的に抽出')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--dry-run', action='store_true', help='既定。何も書かない')
@@ -665,8 +741,13 @@ def main(argv=None):
         ap.error('--cc-sample-every は 1 以上')
     import media_online
     client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
+    if a.report_unmapped:
+        import discover_leaf_directed
+        discover_leaf_directed.report_unmapped(client, dw.load_map())
+        return 0
     sources = SOURCES if a.source == 'all' else (a.source,)
-    code, _ = run(client, sources, a.apply, a.limit, a.max_rows, extra={'max_sites': a.max_sites, 'cc_sample_every': a.cc_sample_every})
+    code, _ = run(client, sources, a.apply, a.limit, a.max_rows,
+                  extra={'max_sites': a.max_sites, 'cc_sample_every': a.cc_sample_every, 'leaf_seeds': a.leaf_seeds})
     return code
 
 

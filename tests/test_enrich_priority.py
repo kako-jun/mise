@@ -79,8 +79,8 @@ class Deficits(unittest.TestCase):
 
     def test_leaves_only_and_all_present(self):
         defs = pr.leaf_deficits(self.d)
-        self.assertEqual(sorted(defs), self.d.leaves)
-        self.assertEqual(len(defs), 132)
+        self.assertEqual(sorted(defs), [l for l in self.d.leaves if l not in pr.rule_leaf_ids()])   # assign=rule の葉は含めない
+        self.assertFalse(set(defs) & pr.rule_leaf_ids())
         self.assertTrue(all(v == pr.FLOOR for v in defs.values()))
 
     def test_published_and_inflight_reduce_deficit(self):

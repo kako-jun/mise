@@ -8,7 +8,9 @@ rank 2 = ヒントの葉が既に FLOOR 以上。identity_key 順。(落とさ�
 不足 = max(0, FLOOR - 掲載数(site_categories) - 処理中(url_progress が fetched/reviewing/approved/queued の行))。
 """
 import collections
+import csv
 import re
+from pathlib import Path
 
 FLOOR = 100                # 葉 1 つあたりの掲載数の目標
 FAIRNESS_EVERY = 5         # この回数に 1 回は identity_key の機械順だけで選ぶ
@@ -27,9 +29,20 @@ def _safe(ids):
     return ids
 
 
+CATEGORIES_CSV = Path(__file__).resolve().parents[2] / 'data' / 'categories.csv'
+
+
+def rule_leaf_ids(path=CATEGORIES_CSV):
+    """assign=rule の葉(国の機関・都道府県・市・町・村など。発見ではなく規則で埋める)。D1 の categories に assign 列は無いので CSV を正本にする。
+    葉の不足の定義(優先順・葉狙いの発見・未対応レポート)は全部この集合を除く。"""
+    with open(path, encoding='utf-8', newline='') as f:
+        return {r['id'] for r in csv.DictReader(f) if r['assign'] == 'rule'}
+
+
 def leaf_ids(client):
     rows = client.query("SELECT id FROM categories WHERE id NOT IN (SELECT parent_id FROM categories WHERE parent_id IS NOT NULL) ORDER BY id")
-    return _safe([r['id'] for r in rows])
+    rule = rule_leaf_ids()
+    return _safe([r['id'] for r in rows if r['id'] not in rule])
 
 
 def leaf_deficits(client):
