@@ -367,68 +367,116 @@ REAL = [
 
 
 class Recompute(Base):
-    """names --recompute: (a) rows still failing the check, (b) rows an earlier run rewrote (the stored name is a piece of the original title, or differs from
-    the rule's result while being shorter than the title). Rows already equal to the rule's result are untouched."""
+    """names --recompute: ONLY rows whose current name fails the length / quality check. names --ids: exactly the listed rows, re-derived from the
+    original title (also when the stored name passes the check)."""
     def seed(self):
         for n, (title, host, old, _new, _ja, _en) in enumerate(REAL):
             add_site(self.d1, f'r{n}', old, title=title, url=f'https://{host}/')
-        add_site(self.d1, 'good', '山田屋', title='山田屋', url='https://yamada.example.jp/')             # name == title: not selected
-        add_site(self.d1, 'plain', '山田屋', url='https://plain.example.jp/')                              # no title at all: not selected
+        add_site(self.d1, 'good', '山田屋', title='山田屋', url='https://yamada.example.jp/')             # name == title
+        add_site(self.d1, 'plain', '山田屋', url='https://plain.example.jp/')                              # no title at all
 
-    def test_dry_run_prints_every_row_with_ja_en_and_writes_nothing(self):
+    def ids(self, n=None):
+        return [f'r{i}' for i in range(len(REAL) if n is None else n)]
+
+    def test_recompute_leaves_good_short_names_alone(self):
+        add_site(self.d1, 'daikin', 'ダイキン工業株式会社', title='個人のお客様｜ダイキン工業株式会社個人のお客様｜ダイキン工業株式会社', url='https://d.example.jp/')
+        add_site(self.d1, 'adobe', 'Adobe', title='Adobe: Creative, marketing and document management solutions', url='https://adobe.example.jp/')
+        add_site(self.d1, 'esaka', '江坂広告', title='江坂広告 | 大阪の広告制作会社', url='https://esaka.example.jp/')
         self.seed()
         before = self.snapshot()
         code, st = self.go('names-recompute', apply=False, limit=1000)
+        self.assertEqual((code, st['selected']), (0, 0), self.text())
+        code, st = self.go('names-recompute', limit=1000)
+        self.assertEqual((st['updated'], st['needs_human']), (0, 0))
+        self.assertEqual(self.snapshot()['sites'], before['sites'])
+
+    def test_recompute_still_fixes_a_name_that_fails_the_check(self):
+        add_site(self.d1, 'bad', 'x' * 30 + ' | ' + 'y' * 30, title='山田屋 | ホーム', url='https://bad.example.jp/')
+        code, st = self.go('names-recompute', limit=1000)
+        self.assertEqual((st['updated'], self.name_of('bad')), (1, '山田屋'))
+
+    def test_ids_dry_run_prints_every_row_with_ja_en_and_writes_nothing(self):
+        self.seed()
+        before = self.snapshot()
+        code, st = self.go('names-ids', apply=False, ids=self.ids())
         self.assertEqual(code, 0, self.text())
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.d1.writes, 0)
-        self.assertEqual(st['selected'], len(REAL))
-        self.assertEqual(st['would_llm'], 0)
+        self.assertEqual((st['selected'], st['would_llm'], st['ids_given'], st['ids_found'], st['ids_unknown']), (len(REAL), 0, len(REAL), len(REAL), 0))
         for _t, _h, old, new, ja, en in REAL:
             self.assertIn(f'- {old}', self.text())
             self.assertIn(f'+ {new}', self.text())
         self.assertIn("ja='ジープ厚木' en='Jeep Official Dealer Site'", self.text())
 
-    def test_apply_gives_the_literal_rule_results_and_is_idempotent(self):
+    def test_ids_apply_gives_the_rule_results_and_is_idempotent(self):
         self.seed()
-        code, st = self.go('names-recompute', limit=1000)
+        code, st = self.go('names-ids', ids=self.ids())
         self.assertEqual((code, st['updated'], st['needs_human']), (0, len(REAL), 0), self.text())
         for n, (_t, _h, _old, new, ja, en) in enumerate(REAL):
             self.assertEqual(dump(self.d1, f'r{n}'), (new, ja, en), n)
         self.assertEqual(dump(self.d1, 'good'), ('山田屋', None, None))
-        code, st2 = self.go('names-recompute', limit=1000, restart=True)
-        self.assertEqual((st2['selected'], st2['updated']), (0, 0))
+        code, st2 = self.go('names-ids', ids=self.ids())
+        self.assertEqual((st2['selected'], st2['updated']), (0, 0))                 # new == current: untouched
+        self.assertEqual(cq.get_cursor(self.d1, 'names-ids'), '')                   # no cursor, no skip list for an explicit list
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM discovery_cursors WHERE source='cleanup-skip'")[0], 0)
 
-    def test_a_row_equal_to_the_rule_is_untouched(self):
-        t = '愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY'
-        add_site(self.d1, 'same', t, title=t, url='https://same.example.jp/', name_ja='愛知工業大学', name_en='AICHI INSTITUTE OF TECHNOLOGY')
-        before = self.snapshot()
-        code, st = self.go('names-recompute', limit=1000)
-        self.assertEqual((st['selected'], st['updated']), (0, 0))
-        self.assertEqual(self.snapshot()['sites'], before['sites'])
-
-    def test_a_shorter_name_that_is_not_a_piece_of_the_title_is_also_recomputed(self):
-        add_site(self.d1, 'x', 'アラヤ接骨院', title='アラヤ接骨院 | 肩こり・腰痛', url='https://x.example.jp/')
-        add_site(self.d1, 'y', '別名のお店', title='アラヤ接骨院 | 肩こり・腰痛', url='https://y.example.jp/')        # not a substring, but shorter and different
-        self.go('names-recompute', limit=1000)
-        self.assertEqual((self.name_of('x'), self.name_of('y')), ('アラヤ接骨院 | 肩こり・腰痛', 'アラヤ接骨院 | 肩こり・腰痛'))
-
-    def test_the_host_name_is_never_the_name(self):
-        add_site(self.d1, 'h', '100s', title='100s.jp | ホーム', url='https://100s.jp/')
-        code, st = self.go('names-recompute', limit=1000)
-        self.assertEqual((self.name_of('h'), st['needs_human'], st['updated']), ('100s', 1, 0))
-
-    def test_old_rewritten_name_is_kept_nowhere_but_the_original_title_stays(self):
+    def test_ids_only_touch_the_listed_rows_and_ignore_unknown_ids(self):
         self.seed()
-        self.go('names-recompute', limit=1000)
-        self.assertEqual(self.d1.one("SELECT title FROM url_candidates WHERE host='r4'")[0], REAL[4][0])
+        code, st = self.go('names-ids', ids=['r0', 'no-such-id', 'also-missing'])
+        self.assertEqual((st['updated'], st['ids_given'], st['ids_found'], st['ids_unknown']), (1, 3, 1, 2))
+        self.assertEqual(self.name_of('r1'), REAL[1][2])                           # not listed: unchanged
+        self.assertIn('ids_unknown', self.text())
 
-    def test_recompute_guard_uses_stored_value(self):
+    def test_ids_never_overwrite_existing_ja_en(self):
+        t = '愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY'
+        add_site(self.d1, 'k', '愛知工業大学', title=t, url='https://k.example.jp/', name_ja='手書き', name_en='Hand')
+        self.go('names-ids', ids=['k'])
+        self.assertEqual(dump(self.d1, 'k'), (t, '手書き', 'Hand'))
+
+    def test_ids_guard_uses_stored_value(self):
         add_site(self.d1, 'g', 'アラヤ接骨院', title='アラヤ接骨院 | 肩こり・腰痛', url='https://g.example.jp/')
         orig = self.d1.batch
         self.d1.batch = lambda s: (self.d1.db.execute("UPDATE sites SET name='人が直した' WHERE id='g'"), orig(s))[1]
-        code, st = self.go('names-recompute')
+        code, st = self.go('names-ids', ids=['g'])
         self.assertEqual((self.name_of('g'), st['skipped_changed']), ('人が直した', 1))
+
+    def test_ids_host_name_is_never_the_name(self):
+        add_site(self.d1, 'h', '100s', title='100s.jp | ホーム', url='https://100s.jp/')
+        code, st = self.go('names-ids', ids=['h'])
+        self.assertEqual((self.name_of('h'), st['needs_human'], st['updated']), ('100s', 1, 0))
+
+    def test_ids_limit_is_two_thousand(self):
+        with self.assertRaises(ValueError):
+            cq.run(self.d1, 'names-ids', ids=[f'i{n}' for n in range(2001)], out=self.out.append)
+        with self.assertRaises(ValueError):
+            cq.run(self.d1, 'names-ids', ids=[], out=self.out.append)
+
+    def test_main_reads_ids_from_a_file_and_stdin(self):
+        import io
+        import contextlib
+        self.seed()
+        before = self.snapshot()
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / 'ids.txt'
+            f.write_text('r0\n\n r1 \nr0\n', encoding='utf-8')
+            self.assertEqual(cq.main(['names', '--ids', str(f)], client=self.d1), 0)          # dry-run by default
+        self.assertEqual(self.snapshot(), before)
+        old_in, sys.stdin = sys.stdin, io.StringIO('r2\nr3\n')
+        try:
+            self.assertEqual(cq.main(['names', '--ids', '-', '--apply'], client=self.d1, llm=FakeLLM()), 0)
+        finally:
+            sys.stdin = old_in
+        self.assertEqual((self.name_of('r2'), self.name_of('r3')), (REAL[2][3], REAL[3][3]))
+        self.assertEqual(self.name_of('r4'), REAL[4][2])
+        for bad in (['names', '--ids', '-', '--recompute'], ['descriptions', '--ids', '-']):
+            with self.assertRaises(SystemExit):
+                cq.main(bad, client=self.d1)
+        old_in, sys.stdin = sys.stdin, io.StringIO('\n'.join(f'i{n}' for n in range(2001)))
+        try:
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                cq.main(['names', '--ids', '-'], client=self.d1)
+        finally:
+            sys.stdin = old_in
 
     def test_llm_is_off_unless_asked(self):
         add_site(self.d1, 'u', 'あ' * 90, title='あ' * 40 + '(山田屋)' + 'い' * 45, url='https://u.example.jp/')

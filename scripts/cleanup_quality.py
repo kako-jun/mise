@@ -301,6 +301,23 @@ DESC_SQL = ("SELECT id, description_ja, description_en FROM sites WHERE id > ? A
             "ORDER BY id LIMIT ?")
 
 
+IDS_MAX = 2000
+IDS_SQL = ("SELECT s.id AS id, s.name AS name, s.name_ja AS name_ja, s.name_en AS name_en, s.url AS url, s.adult_content AS adult_content, "
+           "s.progress_key AS progress_key, c.identity_key AS identity_key, c.title AS title, c.site_name AS cand_site_name "
+           "FROM sites s LEFT JOIN url_candidates c ON c.identity_key=s.progress_key WHERE s.id IN ({}) ORDER BY s.id")
+
+
+def fetch_ids(client, ids, st):
+    """The rows of the given site ids (in chunks of READ_CHUNK). Unknown ids are ignored and counted (ids_unknown)."""
+    rows = []
+    for i in range(0, len(ids), READ_CHUNK):
+        part = ids[i:i + READ_CHUNK]
+        rows.extend(client.query(IDS_SQL.format(','.join('?' * len(part))), part))
+    st['ids_given'], st['ids_found'] = len(ids), len(rows)
+    st['ids_unknown'] = len(ids) - len(rows)
+    return rows
+
+
 def snippet_of(client, identity_key):
     if not identity_key:
         return ''
@@ -326,7 +343,7 @@ def load_skips(client, kind):
 def human(ctx, kind, sid, why):
     ctx.st['needs_human'] += 1
     ctx.st['needs_human_ids'].append(sid)
-    if ctx.apply:
+    if ctx.apply and ctx.mark_skips:
         mark_skip(ctx.client, kind, sid, why)
 
 
@@ -335,6 +352,7 @@ class Ctx:
     def __init__(self, client, asker, apply, st, samples, emit, llm_fallback=False):
         self.client, self.asker, self.apply, self.st, self.samples, self.emit = client, asker, apply, st, samples, emit
         self.llm_fallback = llm_fallback
+        self.mark_skips = True           # False for --ids (an explicit list is never put on the skip list)
         self.buf = []
         self.sample_max = SAMPLES        # None = keep every before/after pair (names --recompute dry-run shows them all)
 
@@ -607,14 +625,9 @@ def keep_names(r):
 
 
 def keep_recompute(r):
-    """(a) plus (b) rows an earlier run rewrote: the original title is known, and the stored name is a strict substring of it, or differs from
-    what the rule gives while being shorter than the title."""
-    if keep_names(r):
-        return True
-    t, n = collapse(r.get('title')), collapse(r['name'])
-    if not t or not n or n == t or js.placeholder_title(t):
-        return False
-    return (n in t or len(n) < len(t)) and changes_name(r)
+    """names --recompute: ONLY rows whose current name fails the length / quality check (check_name, NAME_LONG_MAX) and that the rule would change.
+    A good short name is never replaced by a longer title (rows an earlier run rewrote are re-derived with --ids)."""
+    return keep_names(r)
 
 
 def keep_descriptions(r):
@@ -624,6 +637,7 @@ def keep_descriptions(r):
 KINDS = {
     'names': dict(sql=NAMES_SQL, column='name', keep=keep_names, plan=plan_names),
     'names-recompute': dict(sql=NAMES_SQL, column='name', keep=keep_recompute, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
+    'names-ids': dict(sql=NAMES_SQL, column='name', keep=changes_name, plan=lambda ctx, rows: plan_names(ctx, rows, True)),
     'descriptions': dict(sql=DESC_SQL, column='description_ja', keep=keep_descriptions, plan=plan_descriptions),
 }
 
@@ -641,12 +655,12 @@ def set_cursor(client, kind, value):
 def new_stats(apply):
     return {'mode': 'apply' if apply else 'dry-run', 'scanned': 0, 'selected': 0, 'by_rule': 0, 'by_adult_host': 0, 'by_stored': 0, 'by_llm': 0,
             'would_llm': 0, 'llm_calls': 0, 'needs_human': 0, 'skip_listed': 0, 'updated': 0, 'skipped_changed': 0,
-            'verify_mismatch': 0, 'not_reached': 0, 'same': 0, 'est_cost_usd_max': 0.0, 'cost_usd': 0.0, 'stopped': None,
+            'verify_mismatch': 0, 'not_reached': 0, 'same': 0, 'ids_given': 0, 'ids_found': 0, 'ids_unknown': 0, 'est_cost_usd_max': 0.0, 'cost_usd': 0.0, 'stopped': None,
             'needs_human_ids': [], 'verify_mismatch_ids': []}
 
 
 def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_month, hb, run_id, retry_skipped=False, allow_no_bookmark=False,
-              llm_fallback=False):
+              llm_fallback=False, ids=None):
     """One run of `names` / `descriptions`. -> (exit code, stats)."""
     spec = KINDS[kind]
     st, samples, code = new_stats(apply), [], 0
@@ -689,15 +703,21 @@ def clean_one(client, kind, *, limit, apply, restart, out, llm, lease, budget_mo
 
     after = '' if restart else get_cursor(client, kind)
     out(f'cleanup {kind}: {st["mode"]}, limit={limit}, cursor={after!r}, model={CHEAP_MODEL}, month spend ${eo.month_spent(client):.4f} (cap ${budget_month:.2f})')
-    rows, end, st['scanned'] = scan(client, spec['sql'], keep, after, limit, beat)
+    if kind == 'names-ids':                          # an explicit list: only these rows, check or no check; no cursor
+        rows, end = fetch_ids(client, ids or [], st), False
+        st['scanned'] = st['ids_found']
+        rows = [r for r in rows if keep(r)]
+    else:
+        rows, end, st['scanned'] = scan(client, spec['sql'], keep, after, limit, beat)
     st['selected'] = len(rows)
     ctx = Ctx(client, asker, apply, st, samples, emit if apply else (lambda chunk: None), llm_fallback)
-    if kind == 'names-recompute' and not apply:
+    if kind in ('names-recompute', 'names-ids') and not apply:
         ctx.sample_max = None
+    ctx.mark_skips = kind != 'names-ids'
     stopped = False
     try:
         stopped = spec['plan'](ctx, rows)
-        if apply and code != 5:
+        if apply and code != 5 and kind != 'names-ids':
             # 次回の走査位置: 選んだ最後の行の id。表の終わりまで走査したなら先頭へ戻る(止まった回は進めない)
             set_cursor(client, kind, after if stopped else ('' if end else (rows[-1]['id'] if rows else after)))
     except do.LeaseLost:
@@ -732,8 +752,10 @@ def report(kind, st, samples, apply, out):
 
 
 def run(client, kind, *, limit=DEFAULT_LIMIT, apply=False, restart=False, out=print, llm=None, lease=None, budget_month=js.MONTHLY_CAP_USD,
-        clock=time.monotonic, retry_skipped=False, allow_no_bookmark=False, llm_fallback=False):
+        clock=time.monotonic, retry_skipped=False, allow_no_bookmark=False, llm_fallback=False, ids=None):
     """-> (exit code, stats | None). Tests inject llm / lease / clock."""
+    if ids is not None and not 1 <= len(ids) <= IDS_MAX:
+        raise ValueError(f'ids は 1〜{IDS_MAX} 件')
     if not 1 <= limit <= MAX_LIMIT:
         raise ValueError(f'limit は 1〜{MAX_LIMIT}')
     lease = lease or do.Lease(client, ttl=LEASE_TTL, key=LEASE_KEY)
@@ -745,7 +767,7 @@ def run(client, kind, *, limit=DEFAULT_LIMIT, apply=False, restart=False, out=pr
         hb = eo.Heartbeat(lease, clock) if apply else None
         code, st = clean_one(client, kind, limit=limit, apply=apply, restart=restart, out=out, llm=llm, lease=lease, budget_month=budget_month,
                              hb=hb, run_id='cleanup-' + uuid.uuid4().hex[:12], retry_skipped=retry_skipped, allow_no_bookmark=allow_no_bookmark,
-                             llm_fallback=llm_fallback)
+                             llm_fallback=llm_fallback, ids=ids)
     except do.LeaseLost as e:
         out(f'lease lost: {e}')
         code = do.LEASE_LOST_EXIT
@@ -770,8 +792,9 @@ def main(argv=None, *, client=None, **inject):
     ap.add_argument('--limit', type=int, default=DEFAULT_LIMIT, help=f'1 回に直す行数(既定 {DEFAULT_LIMIT}、最大 {MAX_LIMIT})')
     ap.add_argument('--budget-month', type=float, default=js.MONTHLY_CAP_USD, help='月の LLM 費用の上限(USD)')
     ap.add_argument('--restart', action='store_true', help='走査の位置を無視して先頭から(--apply なら位置も先頭に戻す)')
-    ap.add_argument('--recompute', action='store_true', help='names のみ: 書き換え済みの行(今の名前が元の title の一部・規則の結果より短い)も含めて今の規則で決め直し、結果が違う行だけ直す')
+    ap.add_argument('--recompute', action='store_true', help='names のみ: 今の名前が長さ/品質の検査に違反する行だけを規則で決め直す(良い短い名前は触らない)')
     ap.add_argument('--llm-fallback', action='store_true', help='names のみ: 規則で決まらず needs_human になる行だけ、LLM(検証つき)に回す。既定はオフ(LLM を呼ばない)')
+    ap.add_argument('--ids', metavar='FILE|-', help=f'names のみ: 指定した site id(1 行 1 件、- なら標準入力、最大 {IDS_MAX})の行だけを title から取り直す(今の名前が検査を通っていても対象。結果が今と同じ行は触らない)')
     ap.add_argument('--retry-skipped', action='store_true', help='needs_human として印を付けた行(source=cleanup-skip)も再び対象にする')
     ap.add_argument('--allow-no-bookmark', action='store_true', help='Time Travel の bookmark が取れなくても --apply を続ける(既定は中止)')
     mode = ap.add_mutually_exclusive_group()
@@ -785,7 +808,15 @@ def main(argv=None, *, client=None, **inject):
         client = media_online.Cloudflare(min_request_interval=REQUEST_INTERVAL)
     if (a.recompute or a.llm_fallback) and a.kind != 'names':
         ap.error('--recompute / --llm-fallback は names だけ')
-    code, _ = run(client, 'names-recompute' if a.recompute else a.kind, limit=a.limit, apply=a.apply, restart=a.restart, budget_month=a.budget_month,
+    ids = None
+    if a.ids is not None:
+        if a.kind != 'names' or a.recompute:
+            ap.error('--ids は names だけ(--recompute とは併用しない)')
+        text = sys.stdin.read() if a.ids == '-' else Path(a.ids).read_text(encoding='utf-8')
+        ids = list(dict.fromkeys(x.strip() for x in text.splitlines() if x.strip()))
+        if not 1 <= len(ids) <= IDS_MAX:
+            ap.error(f'--ids は 1〜{IDS_MAX} 件(今は {len(ids)} 件)')
+    code, _ = run(client, 'names-ids' if ids else ('names-recompute' if a.recompute else a.kind), ids=ids, limit=a.limit, apply=a.apply, restart=a.restart, budget_month=a.budget_month,
                   retry_skipped=a.retry_skipped, allow_no_bookmark=a.allow_no_bookmark, llm_fallback=a.llm_fallback, **inject)
     return code
 

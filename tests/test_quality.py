@@ -125,6 +125,12 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(derive('山田屋 【公式】｜Yamada'), ('山田屋｜Yamada', '山田屋', 'Yamada'))
         self.assertEqual(derive('【公式】山田屋 ｜ 木工所'), ('山田屋 ｜ 木工所', None, None))
 
+    def test_a_segment_that_is_two_other_segments_joined_is_dropped(self):
+        self.assertEqual(derive('個人のお客様｜ダイキン工業株式会社個人のお客様｜ダイキン工業株式会社'), ('個人のお客様｜ダイキン工業株式会社', None, None))
+        self.assertEqual(derive('ダイキン工業株式会社｜個人のお客様｜ダイキン工業株式会社個人のお客様'), ('ダイキン工業株式会社｜個人のお客様', None, None))
+        self.assertEqual(derive('A | B | BA'), ('A | B', None, None))                                # either order
+        self.assertEqual(derive('山田屋 | 木工 | 山田屋木工所'), ('山田屋 | 木工 | 山田屋木工所', None, None))   # not made of two other segments: kept
+
     def test_spelling_variants_are_kept_not_rewritten(self):
         self.assertEqual(derive('カンボジア旅行｜カンボディア旅行')[0], 'カンボジア旅行｜カンボディア旅行')
 
