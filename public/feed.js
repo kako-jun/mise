@@ -7,6 +7,7 @@
   const GLOBE_DEBOUNCE_MS = 280;   // 速くスクロールしている間は地球を動かさない
   const IN_VIEW_THRESHOLD = 0.6;   // カードがどれだけ見えたら「いまのカード」とみなすか(「見た」の判定にも使う)
   const AUTO_ADVANCE_MS = 12000;   // 自動送り(#199): 1 枚を見せる時間
+  const AUTO_TAP_PX = 24;          // 下端のこの高さのタップで自動送りを一時停止/再開する(バー自体はポインタを受けない)
   const AUTO_RESUME_MS = 4000;     // 展開・パネル・検索・フォーカス・hover が解けてから数え直しを始めるまでの待ち(閉じた直後に勝手に動かさない)。カードの切り替わり直後・タブ復帰・一時停止の解除では待たない(#292)
   const MAX_SITES = 500;         // 1 回の範囲選択で読み込むサイト数の上限(100 件ずつ取得 = 最大 5 リクエスト)
   const MILESTONES = [10, 50, 100, 300, 1000]; // 節目
@@ -504,7 +505,16 @@
   function startAuto() {
     addEventListener('visibilitychange', () => { if (!document.hidden) { auto.restart(); kick(); } }); // タブ復帰: 待たず 0 から数え直す(非表示中は rAF が止まるので、gap でも同じ扱い)
     const barEl = $('.f-progress'), fill = barEl.firstChild; let shown = '';
-    barEl.addEventListener('click', () => setPaused(!autoPaused));
+    // バーは固定レイヤーで .f-scroll の兄弟なので、ポインタを受けるとそこから始めたスワイプを飲み込む。ポインタは受けず(CSS)、
+    // 下端 24px(バーの幅の範囲)のタップ(click。スワイプ・ドラッグでは出ない)をスクロール面で拾って一時停止/再開する。リンク・ボタンの上は除く
+    const inStrip = (x, y) => { const r = barEl.getBoundingClientRect(); return !barEl.inert && y >= r.bottom - AUTO_TAP_PX && y <= r.bottom && x >= r.left && x <= r.right; };
+    const onLink = (x, y) => { const el = document.elementFromPoint(x, y); return !!el && !!el.closest('a, button, input, textarea, select, summary'); };
+    // マウス: click。タッチ: ブラウザは指の近くのリンクへ click を寄せる(touch adjustment)ので、下端の短いタップは touchend で拾い、click を止めて奪う(リンクの真上は除く)
+    let tap = null;
+    scroller.addEventListener('touchstart', e => { const c = e.touches[0]; tap = e.touches.length === 1 && inStrip(c.clientX, c.clientY) && !onLink(c.clientX, c.clientY) ? { x: c.clientX, y: c.clientY, t: e.timeStamp } : null; }, { passive: true });
+    scroller.addEventListener('touchmove', e => { const c = e.touches[0]; if (tap && Math.hypot(c.clientX - tap.x, c.clientY - tap.y) > 10) tap = null; }, { passive: true });
+    scroller.addEventListener('touchend', e => { const t0 = tap; tap = null; if (t0 && !e.touches.length && e.timeStamp - t0.t < 500 && e.cancelable) { e.preventDefault(); setPaused(!autoPaused); } });
+    scroller.addEventListener('click', e => { if (e.detail !== 0 && inStrip(e.clientX, e.clientY) && !e.target.closest('a, button, input, textarea, select, summary')) setPaused(!autoPaused); });
     barEl.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setPaused(!autoPaused); } });
     reduced.addEventListener('change', kick); // 動きを減らす設定の切り替えを即時に反映する
     const frame = now => {
@@ -548,8 +558,8 @@
     prev.addEventListener('click', () => step(-1)); next.addEventListener('click', () => step(1));
     const pos = mk('div', 'f-pos', { 'aria-live': 'off' }); pos.hidden = true;
     nav.append(prev, pos, next);
-    // 進行バーは、読んでいる人が自動送りを止める手段(WCAG 2.2.2)。見た目は細いバーのまま、タップ/クリック・Enter/Space で一時停止・再開。当たり判定は CSS で 24px 以上
-    const progress = mk('div', 'f-progress', { role: 'button', tabindex: '0', 'aria-label': t('autoPause'), 'aria-pressed': 'false', title: t('autoPauseTitle')(false) }); progress.append(mk('i'));
+    // 進行バーは、読んでいる人が自動送りを止める手段(WCAG 2.2.2)。見た目は細いバーのまま。ポインタは受けず(スワイプを飲み込まない)、下端 24px のタップはスクロール面で拾う。キーボード/読み上げは Enter/Space
+    const progress = mk('div', 'f-progress', { role: 'button', tabindex: '0', 'aria-label': t('autoPause'), 'aria-pressed': 'false', title: t('autoPauseTitle')(false) }); progress.inert = true; progress.append(mk('i')); // 最初のフレームまで・reduced-motion のときは Tab で入れない
     const hint = mk('p', 'f-hint'); hint.setAttribute('aria-hidden', 'true'); hint.textContent = t('hint');
     const panel = mk('div', 'f-panel', { id: 'f-panel', role: 'region', 'aria-label': t('seen'), hidden: '' });
     path = requestedPath;

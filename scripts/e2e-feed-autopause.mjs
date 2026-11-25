@@ -35,18 +35,21 @@ const bar = page => page.evaluate(() => { const b = document.querySelector('.f-p
 const log = (k, v) => console.log(k.padEnd(34), typeof v === 'string' ? v : JSON.stringify(v));
 try {
   // 1. 動きを減らす設定: 自動送りしない・バーは出ない/押せない
-  { const { ctx, page } = await open({ reducedMotion: 'reduce' }); const i0 = await idx(page); await page.waitForTimeout(INTERVAL * 2 + 500);
+  { const { ctx, page } = await open({ reducedMotion: 'reduce' }); const i0 = await idx(page); assert.ok(await page.evaluate(() => document.querySelector('.f-progress').inert), 'reduce は作成時点から inert'); await page.waitForTimeout(INTERVAL * 2 + 500);
     const b = await bar(page); log('reduce', { i0, i1: await idx(page), ...b }); assert.equal(await idx(page), i0); assert.equal(b.state, 'off'); assert.equal(b.op, '0'); assert.ok(b.inert);
     await page.emulateMedia({ reducedMotion: 'no-preference' }); await page.waitForTimeout(INTERVAL + 1500); log('reduce -> no-preference(即時反映)', await idx(page)); assert.ok(await idx(page) > i0, '設定を戻すと自動送りが動く');
     await page.emulateMedia({ reducedMotion: 'reduce' }); await page.waitForTimeout(300); const i2 = await idx(page); await page.waitForTimeout(INTERVAL + 800); assert.equal(await idx(page), i2, '設定を変えると即止まる'); assert.equal((await bar(page)).state, 'off'); await ctx.close(); }
   // 2. バーのタップ・Space で一時停止/再開。当たり判定・ラベル
-  { const { ctx, page } = await open(); const h = await page.evaluate(() => { const b = document.querySelector('.f-progress'); const r = b.getBoundingClientRect(); return { top: r.top, hit: document.elementFromPoint(195, 844 - 20) === b, hit2: document.elementFromPoint(195, 844 - 2) === b, role: b.getAttribute('role'), label: b.getAttribute('aria-label'), tab: b.tabIndex }; });
-    log('bar', h); assert.ok(h.hit && h.hit2 && h.role === 'button' && h.label && h.tab === 0);
+  { const { ctx, page } = await open(); const h = await page.evaluate(() => { const b = document.querySelector('.f-progress'); const r = b.getBoundingClientRect(); return { top: r.top, pe: getComputedStyle(b).pointerEvents, role: b.getAttribute('role'), label: b.getAttribute('aria-label'), tab: b.tabIndex }; });
+    log('bar', h); assert.ok(h.pe === 'none' && h.role === 'button' && h.label && h.tab === 0);
     assert.ok((await bar(page)).h <= 4.01, '見た目は 4px のまま');
+    { const c2 = await ctx.newCDPSession(page); const sc0 = await page.evaluate(() => document.querySelector('.f-scroll').scrollTop); const tp = y => [{ x: 195, y, id: 1 }];
+      await c2.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: tp(830) }); for (let y = 800; y >= 430; y -= 30) { await c2.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: tp(y) }); await page.waitForTimeout(8); } await c2.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(900); const sc1 = await page.evaluate(() => document.querySelector('.f-scroll').scrollTop); log('swipe from y=830 (400px)', { sc0, sc1, pressed: (await bar(page)).pressed }); assert.ok(sc1 > sc0 + 400, '下端 24px から始めたスワイプでスクロールする'); assert.equal((await bar(page)).pressed, 'false', 'スワイプは一時停止にならない'); }
     await page.waitForTimeout(1000); const i0 = await idx(page);
-    await page.touchscreen.tap(195, 844 - 20); await page.waitForTimeout(100); const b1 = await bar(page); await page.waitForTimeout(INTERVAL + 1500); const b2 = await bar(page);
+    await page.touchscreen.tap(195, 835); await page.waitForTimeout(100); const b1 = await bar(page); await page.waitForTimeout(INTERVAL + 1500); const b2 = await bar(page);
     log('tap pause', { b1, b2, same: await idx(page) === i0 }); assert.equal(b1.pressed, 'true'); assert.equal(b2.state, 'paused'); assert.ok(Math.abs(b2.p - b1.p) < 0.001, '現在位置で止まる'); assert.equal(await idx(page), i0);
-    await page.touchscreen.tap(195, 844 - 20); await page.waitForTimeout(100); assert.equal((await bar(page)).pressed, 'false'); const t0 = Date.now();
+    await page.touchscreen.tap(195, 835); await page.waitForTimeout(100); assert.equal((await bar(page)).pressed, 'false'); const t0 = Date.now();
     await page.waitForFunction(i => Number(document.querySelector('.f-card.is-active')?.dataset.index) !== i, i0, { timeout: INTERVAL + 2000 }); log('tap resume -> advance ms', String(Date.now() - t0)); assert.ok(Date.now() - t0 < INTERVAL, '位置から続くので 1 周より短い');
     // Space / Enter
     await page.waitForTimeout(500); await page.focus('.f-progress'); await page.keyboard.press('Space'); await page.waitForTimeout(100); assert.equal((await bar(page)).pressed, 'true'); const i1 = await idx(page); await page.waitForTimeout(INTERVAL + 1000); assert.equal(await idx(page), i1);

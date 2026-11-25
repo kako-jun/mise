@@ -243,7 +243,8 @@ test('feed(#292): 「自動」ボタンはなく自動送りは常に有効・�
   assert.match(appJs, /\|\| reduced\.matches;/, '動きを減らす設定では自動送りしない'); assert.match(appJs, /reduced\.addEventListener\('change', kick\)/);
   assert.match(appJs, /role: 'button', tabindex: '0', 'aria-label': t\('autoPause'\), 'aria-pressed': 'false'/, 'バーが一時停止の操作になる(WCAG 2.2.2)');
   assert.match(appJs, /ae !== c && c\.contains\(ae\)\) return true/, 'カード内のフォーカスで進めない(:focus-visible の条件なし)');
-  assert.match(feedCss, /\.f-progress::before \{[^}]*height: 24px/, '当たり判定は 24px');
+  assert.ok(/\.f-progress \{[^}]*pointer-events: none/.test(feedCss) && !/f-progress::before/.test(feedCss), 'バーはポインタを受けない(下端のスワイプを飲み込まない)');
+  assert.match(appJs, /AUTO_TAP_PX = 24/); assert.match(appJs, /scroller\.addEventListener\('click'/, '下端のタップはスクロール面で拾う'); assert.match(appJs, /progress\.inert = true/, '最初から inert');
   assert.match(appJs, /moving: !atEnd && autoMoving\(now\)/); assert.match(appJs, /!!touch \|\| !!settleRaf \|\| now - lastScrollAt < 150/);
   assert.match(feedCss, /\.f-progress\[data-state="moving"\]/);
 });
