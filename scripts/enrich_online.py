@@ -187,6 +187,12 @@ def preflight(client, apply, bookmark_fn, out, judge_active=True, llm_active=Non
         if apply:
             raise Stop(1, msg)
         out('WARNING ' + msg)
+    cols = {r['name'] for r in client.query('PRAGMA table_info(url_candidates)')}
+    if 'site_name' not in cols:
+        msg = 'pre-flight: url_candidates.site_name が無い。migration 0040 を先に本番へ適用してから実行する'
+        if apply:
+            raise Stop(1, msg)
+        out('WARNING ' + msg)
     if apply:
         try:
             out(f'pre-flight: Time Travel bookmark = {bookmark_fn(client)}')
@@ -261,6 +267,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
         guard_lease()
         rq = judge_stage.requalify(client, limit=limits['requalify'], apply=apply, log=out, llm=llm, budget_month=budget_month, heartbeat=beat, llm_enabled=llm_on)
         res['requalify'] = rq
+        selected += rq.get('selected', 0) if llm_on else 0
         if rq.get('budget_stopped'):
             active.discard('requalify')
             out(f'requalify: 予算上限に達したため再資格化を止める({rq.get("stopped")})。他の段は続ける')
@@ -296,6 +303,7 @@ def run_round(client, n, active, limits, apply, out, *, budget_month, concurrenc
         if p.get('integrity'):
             raise integrity_stop(p)
         sel, err, held = p.get('selected', 0), p.get('errors', 0), p.get('held', 0)
+        held -= sum(v for k, v in (p.get('held_reasons') or {}).items() if k.startswith('gate:quality_'))   # 品質の保留は requalify 段が直す。異常の比率に数えない
         if apply and (err >= PUBLISH_MAX_ERRORS or (sel >= 4 and err / sel > PUBLISH_MAX_ERROR_RATIO)):
             raise Stop(1, f'publish: バッチ失敗が異常({err}/{sel})')
         if apply and sel >= 10 and held / sel > PUBLISH_MAX_HELD_RATIO:

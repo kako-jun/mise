@@ -78,6 +78,21 @@ class NameTests(unittest.TestCase):
         self.assertFalse(q.name_acceptable_long('私たちは地域を支える会社です。'))
         self.assertFalse(q.name_acceptable_long('A｜B'))
 
+    def test_generic_subdomain_words_are_not_brands(self):
+        self.assertIsNone(q.suggest_name('Blog | 山田の部屋 | 鉄道模型', 'blog.example.jp'))
+        self.assertIsNone(q.suggest_name('Shop | 山田の部屋 | 鉄道模型', 'shop.example.jp'))
+        self.assertIsNone(q.suggest_name('News | 山田の部屋 | 鉄道模型', 'news.example.co.jp'))
+        self.assertEqual(q.registrable_label('blog.example.co.jp'), 'example')
+        self.assertEqual(q.registrable_label('www.foo-bar.com'), 'foo-bar')
+        self.assertEqual(q.suggest_name('Blog | Yamada Room | 鉄道模型', 'blog.yamada.jp'), 'Yamada Room')     # the registrable label matches
+        self.assertIsNone(q.suggest_name('Smart | 山田の部屋 | 鉄道模型', 'art.example.jp'))                       # art is not Smart (whole word)
+
+    def test_long_slogans_are_not_names(self):
+        for t in ('GitHub · Build and ship software on a single, collaborative platform', 'Yamada Tools: the best place to buy tools for you',
+                  '私たちは地域の暮らしを支える会社です', '山田製作所は精密部品の製造に取り組んでいます毎日更新中のページ', 'みなさんの毎日を少しだけ楽しくするためのお手伝いをしてきた'):
+            self.assertFalse(q.name_acceptable_long(t) and len(t) > 40, t)
+        self.assertTrue(q.name_acceptable_long('一般社団法人日本' + 'あ' * 40 + '協会'))
+
     def test_fragments_are_never_returned(self):
         self.assertIsNone(q.suggest_name('山田太郎のホームページ | 鉄道模型 | 写真', 't.jp'))
         for t in ('GitHub · Build and ship software on a single, collaborative platform', 'Homepage of the Springfield Model Railroad Club Association',
@@ -125,11 +140,32 @@ class DescriptionTests(unittest.TestCase):
     def test_dictionary_and_past_forms_are_plain(self):
         for d in ('伝統の技を行う。', '風景を描く。', '荷物を届ける。', '写真を載せた。', '資料を集めてきた。', '情報を扱う。', '地図を作った。', '歌を歌う。'):
             self.assertEqual(q.check_description_style(d), ['description_style'], d)
-        for d in ('ふくろうの会。', 'ふくろう。', 'からだ。', '体の悩みの相談窓口。', '手づくりのくつ。'):
+        for d in ('ふくろうの会。', 'ふくろう。', '体の悩みの相談窓口。', '手づくりのくつ。', 'おやつ。', 'ほたる。', 'みんなのうた。', '世界のおやつ。', '夏のほたる。'):
             self.assertEqual(q.check_description_style(d), [], d)
+        self.assertEqual(q.check_description_style('体を守る理由だからだ。'), ['description_style'])     # 「〜からだ。」型の文末は常体のまま
         self.assertEqual(q.to_polite('荷物を届ける。'), '荷物を届けます。')
         self.assertEqual(q.to_polite('資料を集める。'), '資料を集めます。')
         self.assertIsNone(q.to_polite('伝統の技を行う。'))          # godan: not converted for sure -> requalify
+
+    def test_hiragana_godan_verbs_are_not_converted(self):
+        for core in ('しゃべる', 'あせる', 'かえる', 'こする', '登録がいる', '話をしゃべる'):
+            self.assertIn(q._polite_sentence(core), (None, core), core)       # never 'しゃべます' / 'あせます' / 'こします'
+        self.assertIsNone(q.to_polite('登録がいる。'))
+        self.assertEqual(q.to_polite('そこで暮らしている。'), 'そこで暮らしています。')
+
+    def test_dictionary_and_past_forms_are_plain(self):
+        for d in ('伝統の技を行う。', '風景を描く。', '荷物を届ける。', '写真を載せた。', '資料を集めてきた。', '情報を扱う。', '地図を作った。', '歌を歌う。'):
+            self.assertEqual(q.check_description_style(d), ['description_style'], d)
+        for d in ('ふくろうの会。', 'ふくろう。', '体の悩みの相談窓口。', '手づくりのくつ。', 'おやつ。', 'ほたる。', 'みんなのうた。', '世界のおやつ。', '夏のほたる。'):
+            self.assertEqual(q.check_description_style(d), [], d)
+        self.assertEqual(q.check_description_style('体を守る理由だからだ。'), ['description_style'])     # 「〜からだ。」型の文末は常体のまま
+        self.assertEqual(q.to_polite('荷物を届ける。'), '荷物を届けます。')
+        self.assertEqual(q.to_polite('資料を集める。'), '資料を集めます。')
+        self.assertIsNone(q.to_polite('伝統の技を行う。'))          # godan: not converted for sure -> requalify
+
+    def test_kanji_stem_conversions(self):
+        self.assertEqual(q.to_polite('登録する。'), '登録します。')
+        self.assertEqual(q.to_polite('ダウンロードする。'), 'ダウンロードします。')
 
     def test_to_polite_is_conservative(self):
         for d in ('地域で活動を行った。', '本を読んだ。', '情報はまだ少ない。', '作品を作った。'):
@@ -262,3 +298,13 @@ class IntegrityReportTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SourceValuesTests(unittest.TestCase):
+    def test_site_name_must_come_from_values_not_from_labels(self):
+        import judge
+        rendered = judge.render_candidate({'url': 'https://example.jp/', 'title': 'あおぞら工房', 'meta_description': None, 'lang': 'ja', 'body_excerpt': '木の家具', 'features': {}})
+        self.assertEqual(q.check_site_name('あおぞら工房', rendered), [])
+        self.assertEqual(q.check_site_name('title', rendered), ['name_not_in_source'])      # the label 'title:' is not the site's text
+        self.assertEqual(q.check_site_name('example', rendered), ['name_not_in_source'])    # nor the url
+        self.assertEqual(q.check_site_name(None, rendered), [])

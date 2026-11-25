@@ -129,14 +129,30 @@ def _strip_corp(s):
     return s
 
 
+GENERIC_LABELS = frozenset("""www web site home info mail store shop cart member members app apps cloud blog news online page pages net com org
+    portal service services official top main index html blogs wiki forum bbs""".split())
+_SLD = frozenset(["co", "or", "ne", "ac", "go", "ed", "lg", "gr", "ad", "com", "net", "org", "gov", "edu"])
+
+
+def registrable_label(host):
+    """The label of the registrable domain (blog.example.co.jp -> example; shop.foo.jp -> foo). Simple public-suffix rule: a two-letter ccTLD
+    with a second-level word (co / or / ne ...) takes the label before them."""
+    labels = [x for x in (host or "").lower().strip(".").split(".") if x]
+    if len(labels) < 2:
+        return labels[0] if labels else ""
+    if len(labels[-1]) == 2 and len(labels) >= 3 and labels[-2] in _SLD:
+        return labels[-3]
+    return labels[-2]
+
+
 def _brand_tokens(host):
-    labels = [x for x in (host or "").lower().split(".") if x and x not in ("www", "com", "net", "org", "jp", "co", "or", "ne", "ac", "go", "ed", "lg", "gr", "info", "biz")]
-    toks = []
-    for lab in labels:
-        for t in re.split(r"[-_]", lab):
-            if len(t) >= 3:
-                toks.append(t)
-    return toks
+    """Tokens of the registrable domain label only (never a subdomain word such as blog / shop / news), without generic words."""
+    return [t for t in re.split(r"[-_]", registrable_label(host)) if len(t) >= 3 and t not in GENERIC_LABELS]
+
+
+def _has_token(text, tok):
+    """Whole-word match (art does not match Smart)."""
+    return re.search(r"(?<![a-z0-9])" + re.escape(tok) + r"(?![a-z0-9])", text) is not None
 
 
 def _shorten(s):
@@ -153,7 +169,11 @@ def _shorten(s):
 def name_acceptable_long(title):
     """A single-clause title (a long formal name) up to NAME_LONG_MAX characters, no promo phrase, not a sentence: kept as the name."""
     t = collapse(title)
-    return bool(t) and len(t) <= NAME_LONG_MAX and len(split_clauses(t)) == 1 and not promo_hit(t) and not sentence_like(t) and not is_fragment(t)
+    if not t or len(t) > NAME_LONG_MAX or len(split_clauses(t)) != 1 or promo_hit(t) or sentence_like(t) or is_fragment(t):
+        return False
+    if "·" in t or ": " in t or "：" in t or _POLITE_END.search(t) or _plain(t, True):     # a slogan / a statement, not a name
+        return False
+    return True
 
 
 def suggest_name(title, host=""):
@@ -183,7 +203,7 @@ def suggest_name(title, host=""):
     toks = _brand_tokens(host)
     folded = lambda c: unicodedata.normalize("NFKC", c).casefold()
     corp = [c for c in cands if _corp_form(c)]
-    brand = [c for c in cands if any(tk in folded(c) for tk in toks)]
+    brand = [c for c in cands if any(_has_token(folded(c), tk) for tk in toks)]
     if len(brand) == 1:
         pick = brand[0]
     elif len(corp) == 1 and not brand:
@@ -207,15 +227,26 @@ _PLAIN_END = re.compile(
     r"できる|ならない|ない|なる|いく|くる|たい|だ)$")
 # A terminated (。) sentence that ends in a hiragana dictionary form (う く ぐ す つ ぬ ぶ む る) or a past た / だ is plain (行う・描く・届ける・載せた・集めてきた);
 # hiragana nouns that happen to end like that are listed (a noun ending needs no 。-less test: the plain list above covers the common forms).
-_DICT_END = re.compile(r"[ぁ-んァ-ヶ一-龥][うくぐすつぬぶむる]$|[ぁ-んァ-ヶ一-龥][たダだ]$")
-_NOUN_EXCEPT = ("ふくろう", "こころ", "くつ", "からだ", "あなた", "ひなた", "ただ", "いただ", "からくる", "うるう", "おもう")
 _POLITE_END = re.compile(r"(です|ます|でした|ました|ません|でしょう|ください)$")
+_HIRA_RUN = re.compile(r"[ぁ-ん]+$")
+
+
+def _dictionary_or_past(core):
+    """A sentence ending in a dictionary form (う く ぐ す つ ぬ ぶ む る) or a past た that is a VERB: the trailing hiragana run is an okurigana
+    after a kanji / katakana stem (行う・描く・届ける・集めてきた). An all-hiragana word (おやつ・ほたる・みんなのうた) or a run that holds a particle
+    followed by more text (世界のおやつ) is a noun and is left alone."""
+    m = _HIRA_RUN.search(core)
+    if not m or m.group()[-1] not in "うくぐすつぬぶむるた":
+        return False
+    if not re.search(r"[一-龥ァ-ヶー]$", core[:m.start()]):
+        return False
+    return not re.search(r"[のがをはにとでも].{2,}$", m.group())
 
 
 def _plain(core, terminated):
-    if _POLITE_END.search(core) or core.endswith(_NOUN_EXCEPT):
+    if _POLITE_END.search(core):
         return False
-    return bool(_PLAIN_END.search(core)) or (terminated and bool(_DICT_END.search(core)))
+    return bool(_PLAIN_END.search(core)) or (terminated and _dictionary_or_past(core))
 
 
 def _sentences(text):
@@ -247,8 +278,8 @@ def check_description_style(text):
 _POLITE_RULES = (  # (regex on the sentence core, replacement); first match wins; order matters
     (r"であった$", "でした"), (r"だった$", "でした"), (r"である$", "です"), 
     (r"ていた$", "ていました"), (r"ている$", "ています"), (r"ではない$", "ではありません"), (r"がない$", "がありません"),
-    (r"される$", "されます"), (r"された$", "されました"), (r"します$", "します"), (r"する$", "します"), (r"した$", "しました"),
-    (r"れる$", "れます"), (r"れた$", "れました"), (r"できる$", "できます"), (r"(?<=[えけせてねへめべげぜでぺ])る$", "ます"), (r"ある$", "あります"), (r"なる$", "なります"),
+    (r"される$", "されます"), (r"された$", "されました"), (r"します$", "します"), (r"(?<=[一-龥ァ-ヶー])する$", "します"), (r"した$", "しました"),
+    (r"れる$", "れます"), (r"れた$", "れました"), (r"できる$", "できます"), (r"(?<=[一-龥][えけせてねへめべげぜでぺ])る$", "ます"), (r"ある$", "あります"), (r"なる$", "なります"),
 )
 _DA_OK_PREV = re.compile(r"[^ぁ-ゖ]$|[のめろとこ]$")
 
@@ -480,11 +511,25 @@ def _fold(s):
     return re.sub(r"\s+", "", unicodedata.normalize("NFKC", s or "")).casefold()
 
 
+def source_values(rendered):
+    """The title / meta description / body values of a rendered <candidate> block, without its labels (url:, title:, lang:, features:)."""
+    out = []
+    for line in rendered.splitlines():
+        if line.startswith(("<candidate", "</candidate", "url: ", "lang: ", "features: ", "body_excerpt:")):
+            continue
+        for lab in ("title: ", "meta_description: "):
+            if line.startswith(lab):
+                line = line[len(lab):]
+        if line.strip() and line.strip() != "(none)":
+            out.append(line)
+    return "\n".join(out)
+
+
 def check_site_name(name, source):
     """The LLM's `sn` (None is allowed = not shown): check_name rules, and it must be copied from the source text (nothing invented)."""
     if name is None:
         return []
     errs = check_name(name)
-    if not errs and _fold(name) not in _fold(source):
+    if not errs and _fold(name) not in _fold(source_values(source)):
         errs = ["name_not_in_source"]
     return errs

@@ -97,7 +97,8 @@ class JudgeQuality(unittest.TestCase):
         s = self.go(ScriptedLLM({('triage', 'cat'): (['reference'], None)}))
         for k in ('a.example', 'b.example'):
             self.assertEqual(self.d1.state(k), 'candidate')
-            self.assertEqual(self.d1.cand(k)['review_reason'], 'quality:categories')
+            self.assertEqual(self.d1.cand(k)['review_reason'], 'no_description')          # the policy's own reason is kept ...
+            self.assertIn('[quality:categories]', self.d1.cand(k)['notes'])             # ... and the violation is noted
         self.assertEqual((s['quality_held'], s['quality_retries']), (2, 2))
         self.assertEqual(self.describe_calls(), [])                      # no money spent on a describe for a row a human must look at
 
@@ -266,10 +267,21 @@ class Requalify(unittest.TestCase):
 
     def test_held_rows_of_the_gate_and_of_the_judge_are_requalified(self):
         cand(self.d1, tags=json.dumps(['craft']), state='candidate', review_state='pending', review_reason='gate:quality_tags')
-        cand(self.d1, 'b.example.jp', description_ja='作品を紹介している。', state='candidate', review_state='pending', review_reason='quality:description')
+        good = dict(confidence='high', site_kind='business', freshness='active', exempt='none', spam_kind='none')
+        cand(self.d1, 'b.example.jp', description_ja='作品を紹介している。', state='candidate', review_state='pending', review_reason='quality:description', **good)
         s = self.rq()
         self.assertEqual((s['selected'], s['requalified']), (2, 2))
         self.assertEqual({self.row(k)['st'] for k in ('alpha.example.jp', 'b.example.jp')}, {'approved'})
+
+    def test_a_judge_hold_is_not_promoted_when_the_policy_says_a_human_looks(self):
+        # low confidence: the approval policy decides again after the fix and keeps the row with the humans / the cats, with ITS reason
+        cand(self.d1, description_ja='作品を紹介している。', state='candidate', review_state='pending', review_reason='quality:description',
+             confidence='low', site_kind='business', freshness='active', exempt='none', spam_kind='none')
+        s = self.rq()
+        r = self.row('alpha.example.jp')
+        self.assertEqual((s['requalified'], r['st'], r['rs']), (1, 'candidate', 'pending'))
+        self.assertNotEqual(r['why'], 'requalified')
+        self.assertNotEqual(r['why'], 'quality:description')
 
     def test_name_that_cannot_be_repaired_gets_the_llm_name(self):
         cand(self.d1, 'name.example.jp', title='ホーム｜新着情報｜お問い合わせ｜アクセス', text_head='あおぞら工房へようこそ。木の家具を作っています。')
@@ -297,12 +309,59 @@ class Requalify(unittest.TestCase):
         self.rq(limit=1)
         self.assertEqual(self.row('a-stuck.example.jp')['notes'].count('requalify_attempts=2'), 1)
         self.assertEqual(self.rq(limit=5)['selected'], 0)        # attempts used up: only a human moves it now
+        self.assertTrue(self.row('a-stuck.example.jp')['notes'].startswith('requalify_attempts=2;'))
+
+    def test_used_up_rows_do_not_starve_a_new_one(self):
+        for i in range(81):
+            cand(self.d1, f'old{i:02d}.example.jp', tags=json.dumps(['craft']), state='candidate', review_state='pending', review_reason='gate:quality_tags',
+                 notes='requalify_attempts=2; judge note')
+        cand(self.d1, 'zz-new.example.jp', tags=json.dumps(['craft']), state='candidate', review_state='pending', review_reason='gate:quality_tags')
+        s = self.rq(limit=1)
+        self.assertEqual((s['selected'], s['requalified']), (1, 1))
+        self.assertEqual(self.row('zz-new.example.jp')['st'], 'approved')
+
+    def test_clean_approved_rows_do_not_hide_a_row_that_needs_fixing(self):
+        for i in range(81):
+            cand(self.d1, f'clean{i:02d}.example.jp')
+        cand(self.d1, 'zz-fix.example.jp', tags=json.dumps(['craft']))
+        s = self.rq(limit=1)
+        self.assertEqual((s['selected'], s['requalified']), (1, 1))
+
+    def test_failure_keeps_the_old_notes_after_the_attempt_prefix(self):
+        cand(self.d1, 'a-stuck.example.jp', tags=json.dumps(['craft']), notes='judge_attempts=1; kept')
+        self.rq()
+        n = self.row('a-stuck.example.jp')['notes']
+        self.assertEqual(n, 'requalify_attempts=1; judge_attempts=1; kept')
+        self.rq()
+        self.assertEqual(self.row('a-stuck.example.jp')['notes'], 'requalify_attempts=2; judge_attempts=1; kept')
+
+    def test_no_answer_is_not_an_attempt_and_three_failures_in_a_row_stop(self):
+        class Silent(tj.FakeLLM):
+            def __call__(self, params):
+                raise TimeoutError('slow')
+        for i in range(5):
+            cand(self.d1, f'a{i}.example.jp', tags=json.dumps(['craft']))
+        s = js.requalify(self.d1, limit=5, apply=True, log=self.logs.append, llm=Silent())
+        self.assertEqual(s['no_answer'], 3)
+        self.assertIn('3 consecutive', s['stopped'])
+        for i in range(5):
+            self.assertNotIn('requalify_attempts', self.row(f'a{i}.example.jp')['notes'] or '')
 
     def test_dry_run_calls_nothing_and_writes_nothing(self):
         cand(self.d1, tags=json.dumps(['craft']))
         w = self.d1.writes
         s = js.requalify(self.d1, limit=5, apply=False, log=self.logs.append, llm=self.llm)
         self.assertEqual((s['selected'], self.llm.calls, self.d1.writes), (1, [], w))
+
+    def test_original_reason_of_a_waiting_row_is_not_overwritten_by_the_judge(self):
+        d1 = tj.FakeD1()
+        d1.add('thin.example')                 # 'thin' -> the fake LLM answers low confidence: the policy says pending
+        llm = ScriptedLLM({('describe', 'dj'): ('作品を紹介している。', None)})
+        js.run(d1, limit=5, apply=True, log=print, llm=llm)
+        c = d1.cand('thin.example')
+        self.assertEqual((d1.state('thin.example'), c['review_state']), ('candidate', 'pending'))
+        self.assertNotIn('quality', c['review_reason'] or '')           # its own reason (not_pass / low_confidence ...)
+        self.assertIn('[quality:description]', c['notes'])
 
     def test_clean_approved_rows_are_not_selected(self):
         cand(self.d1)

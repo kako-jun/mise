@@ -352,15 +352,18 @@ def judged_statements(row, cand, out, model, stamp, ctx):
         "description_en": out["description_en"], "categories": cats, "site_kind": out["site_kind"],
         "freshness": out["freshness"], "exempt": out["exempt"], "freshness_signal_at": row.get("freshness_signal_at"),
         "freshness_source": row.get("freshness_source")})
-    if hold and rs in ("approved", "pending"):     # a quality violation that survived the retry: a human looks (never auto approved); a rejection stays one
+    note = out["notes"]
+    if hold and rs == "approved":     # a quality violation that survived the retry: a human looks (never auto approved); a rejection stays one
         rs, why, ps = "pending", hold, "candidate"
+    elif hold and rs == "pending":    # the policy already sends it to a human / the cats: keep ITS reason, only note the violation
+        note = (note + " " if note else "") + f"[{hold}]"
     params = [input_hash(model, judge.render_candidate(cand)), ORIGIN, model, stamp, stamp,
               out["spam"]["verdict"], out["spam"]["kind"], out["spam"]["reason"], out["description_ja"], out["description_en"],
               None if hide else out["long_description_ja"], None if hide else out["long_description_en"],
               None if hide else json.dumps(out["long_description_evidence"], ensure_ascii=False),
               cats, json.dumps(out["tags"], ensure_ascii=False), out["adult"]["value"], out["site_kind"],
               out["site_kind_reason"], out["site_scope"], out["confidence"], loc["country_code"], loc["region_code"],
-              out["notes"], rs, stamp if rs in ("approved", "rejected") else None, out["freshness"], out["exempt"], why,
+              note, rs, stamp if rs in ("approved", "rejected") else None, out["freshness"], out["exempt"], why,
               out.get("site_name"), row["identity_key"]]
     return [(JUDGE_SQL, params), (PROGRESS_SQL, [ps, row["identity_key"]])], ps
 
@@ -633,34 +636,49 @@ def described_assignments(out, row, regenerate_categories):
 
 # ------------------------------------------------------------------ requalify (quality violations that need a new describe)
 REQUALIFY_MAX_ATTEMPTS = 2       # per row; after that only a human moves it (it never blocks the queue)
-REQUALIFY_SCAN = 4               # rows scanned per selected row (the gate decides which of them are really eligible)
-REQUALIFY_COLUMNS = ("c.*",)
 
 
 def requalify_attempts(notes):
-    m = re.search(r"requalify_attempts=(\d+)", notes or "")
+    m = re.match(r"requalify_attempts=(\d+);", notes or "")
     return int(m.group(1)) if m else 0
 
 
+def _strip_attempts(notes):
+    return re.sub(r"^requalify_attempts=\d+;\s*", "", notes or "")
+
+
+# The attempt count is the prefix 'requalify_attempts=N;' of notes (the old notes follow it). SQL compares it (GLOB), so rows whose attempts are used
+# up never take a place in the selection: nothing is discarded in Python after a LIMIT.
+ATTEMPTS_LEFT_SQL = ("COALESCE(c.notes,'') NOT GLOB 'requalify_attempts=[" + str(REQUALIFY_MAX_ATTEMPTS) + "-9];*' AND "
+                     "COALESCE(c.notes,'') NOT GLOB 'requalify_attempts=[1-9][0-9]*;*'")
+REQUALIFY_PAGE = 200
+REQUALIFY_SCAN_MAX = 2000        # approved rows looked at per run (clean ones are the publish stage's)
+HELD_SQL = ("SELECT p.identity_key AS identity_key, p.state AS progress_state, p.updated_at AS progress_updated_at, c.* FROM url_progress p "
+            "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='candidate' AND c.review_state='pending' "
+            "AND (c.review_reason LIKE 'gate:quality_%' OR c.review_reason LIKE 'quality:%') AND " + ATTEMPTS_LEFT_SQL +
+            " ORDER BY p.updated_at, p.identity_key LIMIT ?")
+APPROVED_SQL = ("SELECT p.identity_key AS identity_key, p.state AS progress_state, p.updated_at AS progress_updated_at, c.* FROM url_progress p "
+                "JOIN url_candidates c ON c.identity_key=p.identity_key WHERE p.state='approved' AND c.review_state='approved' AND " + ATTEMPTS_LEFT_SQL +
+                " AND (p.updated_at > ? OR (p.updated_at = ? AND p.identity_key > ?)) ORDER BY p.updated_at, p.identity_key LIMIT ?")
+
+
 def requalify_candidates(client, limit):
-    """-> [(row, gate reason | None)] oldest first. Eligible: state 'approved' rows (review_state approved) that the publish gate would hold for a
-    quality reason, and state 'candidate' rows whose review_reason is gate:quality_* / quality:* (a hold of the judge or of the gate)."""
+    """-> [(row, gate reason | None)]. Eligible: 'candidate' rows held for a quality reason (gate:quality_* from the publish gate, quality:* from the
+    judge; attempts left, oldest first) and 'approved' rows the publish gate would hold for a quality reason (scanned page by page from the oldest;
+    a clean row is skipped, so a long run of clean rows never hides the one behind it)."""
     import publish_stage
-    rows = client.query(
-        "SELECT p.identity_key AS identity_key, p.state AS progress_state, c.* FROM url_progress p JOIN url_candidates c ON c.identity_key=p.identity_key "
-        "WHERE (p.state='approved' AND c.review_state='approved') OR (p.state='candidate' AND c.review_state='pending' "
-        "AND (c.review_reason LIKE 'gate:quality_%' OR c.review_reason LIKE 'quality:%')) ORDER BY p.updated_at, p.identity_key LIMIT ?",
-        [int(limit) * REQUALIFY_SCAN])
-    out = []
-    for r in rows:
-        if requalify_attempts(r.get("notes")) >= REQUALIFY_MAX_ATTEMPTS:
-            continue
-        g = publish_stage.gate_reason(dict(r))
-        if r["progress_state"] == "approved" and not (g or "").startswith("gate:quality_"):
-            continue
-        out.append((r, g))
-        if len(out) >= limit:
+    out = [(r, publish_stage.gate_reason(dict(r))) for r in client.query(HELD_SQL, [int(limit)])]
+    seen, after = 0, ("", "")
+    while len(out) < limit and seen < REQUALIFY_SCAN_MAX:
+        rows = client.query(APPROVED_SQL, [after[0], after[0], after[1], REQUALIFY_PAGE])
+        if not rows:
             break
+        for r in rows:
+            g = publish_stage.gate_reason(dict(r))
+            if (g or "").startswith("gate:quality_") and len(out) < limit:
+                out.append((r, g))
+        seen += len(rows)
+        after = (rows[-1]["progress_updated_at"], rows[-1]["identity_key"])
     return out
 
 
@@ -669,14 +687,17 @@ def requalify_note(gate, row):
             "rule passes. " + quality.PROMPT_DESCRIBE_RULES + " " + quality.PROMPT_TRIAGE_RULES)
 
 
-def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, concurrency=1, heartbeat=None, llm_enabled=True):
+def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY_CAP_USD, heartbeat=None, llm_enabled=True):
     """One describe (and a triage when the categories are unusable) per row whose stored result breaks a quality rule, with the violation
-    stated; then the publish gate again on the result. Passes -> state 'approved' (review_reason 'requalified'); fails -> state 'candidate'
-    / 'pending' with the new reason, attempts counted (requalify_attempts=N in notes, max REQUALIFY_MAX_ATTEMPTS), and the row goes to the back
-    of the queue (url_progress.updated_at), so it never blocks the rows behind it. Same ledger / cap / defanging as the judge."""
+    stated; then the publish gate again on the result. A row the judge held (review_reason 'quality:*') goes through the approval policy
+    (decide) again and is promoted only if the policy approves it; a row the publish gate held was approved before and is approved again.
+    The original review_reason of a human / deliberation waiting row is never overwritten (the judge keeps it and only notes the violation).
+    Fails -> 'candidate'/'pending' with the new reason; the attempt is counted in the notes PREFIX (requalify_attempts=N; the old notes follow),
+    max REQUALIFY_MAX_ATTEMPTS, and the row goes to the back of the queue (url_progress.updated_at). A request without an answer (timeout) is not an
+    attempt; 3 requests in a row without a usable result stop the run. Same ledger / cap / defanging as the judge."""
     import publish_stage
-    stats = {"selected": 0, "requalified": 0, "still_held": 0, "describe_failed": 0, "cost_usd": 0.0, "stopped": None, "budget_stopped": False,
-             "dry_run": not apply}
+    stats = {"selected": 0, "requalified": 0, "still_held": 0, "describe_failed": 0, "no_answer": 0, "cost_usd": 0.0, "stopped": None,
+             "budget_stopped": False, "dry_run": not apply}
     rows = requalify_candidates(client, limit)
     stats["selected"] = len(rows)
     if not apply or not llm_enabled or not rows:
@@ -688,28 +709,25 @@ def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY
         llm = default_llm
     ledger = Ledger(client, judge.new_run_id(), budget_month)
     ctx = Ctx(llm, ledger, log, judge.load_categories())
+    failures = 0
     for row, gate in rows:
         if heartbeat:
             heartbeat()
-        k, pstate = row["identity_key"], row["progress_state"]
+        k, pstate, reason = row["identity_key"], row["progress_state"], row.get("review_reason") or ""
         gate_now = gate or ""
-        need_cat = gate_now == "gate:quality_categories" or (row.get("review_reason") or "") == "quality:categories" or not _leaf_usable(row, ctx)
+        need_cat = gate_now == "gate:quality_categories" or reason == "quality:categories" or not _leaf_usable(row, ctx)
         ctx.need_name = gate_now == "gate:quality_name"
         n = requalify_attempts(row.get("notes")) + 1
-        note_sql = f"requalify_attempts={n}"
+        out, problem, over, gate2 = None, None, {}, gate
         try:
-            if gate is None:      # the gate already passes (it repairs the form itself): no LLM needed
-                out, problem, over, gate2 = None, None, {}, None
-            else:
+            if gate is not None:
                 out, problem = describe_row(ctx, defang_row(row), need_categories=need_cat, note=requalify_note(gate, row))
-                over, gate2 = {}, gate
                 if out is not None:
                     _sets, _params, over = described_assignments(out, row, need_cat)
                     gate2 = publish_stage.gate_reason(dict(row, **over))
         except BudgetExceeded as e:
             ctx.stop = ctx.stop or str(e)
             problem = STOP
-            out, over, gate2 = None, {}, gate
         except LedgerSettleError:
             stats["stopped"] = "ledger error"
             raise
@@ -717,23 +735,45 @@ def requalify(client, *, limit, apply, log=print, llm=None, budget_month=MONTHLY
             stats["stopped"] = ctx.stop
             stats["budget_stopped"] = bool(ctx.stop) and str(ctx.stop).startswith("monthly cap")
             break
+        if gate is not None:
+            failures = 0 if out is not None else failures + 1
         if gate is not None and out is None:
-            stats["describe_failed"] += 1
             log(f"requalify: describe of {k} failed ({problem})"[:300])
+            if (problem or "").startswith("no answer"):
+                stats["no_answer"] += 1           # a timeout is not the row's fault: no attempt, no write
+                if failures >= 3:
+                    stats["stopped"] = "3 consecutive requests without a usable result"
+                    break
+                continue
+            stats["describe_failed"] += 1
+        if failures >= 3:
+            stats["stopped"] = "3 consecutive requests without a usable result"
         stamp = now_iso()
+        rs, why = "approved", "requalified"
+        if gate2 is None and reason.startswith("quality:"):      # the judge's own hold: the approval policy decides again, never a promotion by itself
+            rs, why, _ps = decide(dict(row, key=k, **over))
         sets = ", ".join(f"{c}=?" for c in over)
-        if gate2 is None:
+        if gate2 is None and rs == "approved":
             stmts = [("UPDATE url_candidates SET " + (sets + ", " if sets else "") + "review_state='approved', reviewed_at=?, review_reason='requalified', "
-                      "updated_at=datetime('now') WHERE identity_key=? AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
-                      list(over.values()) + [stamp, k, k, pstate]),
+                      "notes=?, updated_at=datetime('now') WHERE identity_key=? AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      list(over.values()) + [stamp, _strip_attempts(row.get("notes")), k, k, pstate]),
                      ("UPDATE url_progress SET state='approved', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
+            stats["requalified"] += 1
+        elif gate2 is None:                                      # fixed, but the policy says a human / the cats look: back to their queue with its own reason
+            stmts = [("UPDATE url_candidates SET " + (sets + ", " if sets else "") + "review_state='pending', review_reason=?, notes=?, "
+                      "updated_at=datetime('now') WHERE identity_key=? AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      list(over.values()) + [why, _strip_attempts(row.get("notes")), k, k, pstate]),
+                     ("UPDATE url_progress SET state='candidate', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
             stats["requalified"] += 1
         else:
             stmts = [("UPDATE url_candidates SET review_state='pending', review_reason=?, notes=?, updated_at=datetime('now') WHERE identity_key=? "
-                      "AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)", [gate2 or gate_now, note_sql, k, k, pstate]),
+                      "AND EXISTS (SELECT 1 FROM url_progress WHERE identity_key=? AND state=?)",
+                      [gate2 or gate_now, f"requalify_attempts={n}; " + _strip_attempts(row.get("notes")), k, k, pstate]),
                      ("UPDATE url_progress SET state='candidate', updated_at=datetime('now') WHERE identity_key=? AND state=?", [k, pstate])]
             stats["still_held"] += 1
         write(client, stmts)
+        if stats["stopped"]:
+            break
     stats["cost_usd"] = round(ledger.spent, 6)
     log(f"requalify: {stats}")
     return stats

@@ -227,6 +227,22 @@ class Runner(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('ゲート保留が異常', self.text())
 
+    def test_quality_holds_do_not_trip_the_held_ratio_and_requalify_fixes_them(self):
+        import json as _json
+        for i in range(12):
+            add_candidate(self.d1, f'zq{i}.example.jp', tags=_json.dumps(['craft']))     # an English-only tag: gate:quality_tags
+        code, _, _ = self.go(stages=('publish',))
+        self.assertEqual(code, 0)                                                         # held for quality: not an anomaly
+        code, _, _ = self.go(stages=('requalify', 'publish'), limits={'requalify': 20, 'publish': 20})
+        self.assertEqual(code, 0, self.text())
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM url_progress WHERE state='published' AND identity_key LIKE 'zq%'")[0], 12)
+
+    def test_missing_site_name_column_stops_before_anything_runs(self):
+        self.d1.db.execute('ALTER TABLE url_candidates DROP COLUMN site_name')
+        code, _, _ = self.go(stages=('publish',))
+        self.assertEqual(code, 1)
+        self.assertIn('migration 0040', self.text())
+
     def test_integrity_violation_exit_1_with_ids(self):
         add_candidate(self.d1)
         orig = ps.post_check

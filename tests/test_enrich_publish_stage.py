@@ -45,7 +45,7 @@ class FakeD1:
             raise RuntimeError(str(e))
 
     def query(self, sql, params=()):
-        if not sql.lstrip().upper().startswith('SELECT'):
+        if not sql.lstrip().upper().startswith(('SELECT', 'PRAGMA')):
             self.writes += 1
         return self._exec(sql, params)
 
