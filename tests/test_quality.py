@@ -67,6 +67,55 @@ def derive(title, host=''):
     return None if d is None else (d['name'], d['name_ja'], d['name_en'])
 
 
+class ReviewRegressionTests(unittest.TestCase):
+    """The ten cases the review of PR #286 found (150 real rows: 124 good / 14 doubtful / 12 bad)."""
+
+    def test_good_pairs_stay_split(self):
+        for t, ja, en in (('日本語財団 | Japan Textbook Research Center', '日本語財団', 'Japan Textbook Research Center'),
+                          ('服部公益財団 | Hattori Foundation', '服部公益財団', 'Hattori Foundation'),
+                          ('株式会社フィレール | Fhilart', '株式会社フィレール', 'Fhilart'),
+                          ('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', '愛知工業大学', 'AICHI INSTITUTE OF TECHNOLOGY'),
+                          ('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine', '日本抗加齢医学会', 'Japanese Society of Anti-aging Medicine')):
+            self.assertEqual(derive(t), (t, ja, en), t)
+        self.assertEqual(derive('湘南ビーチFM'), ('湘南ビーチFM', None, None))
+
+    def test_brand_plus_tag_line_is_not_a_translation_pair(self):
+        for t in ('PEAK – 神戸の多様なイベント情報をまとめたポータルサイト', 'Bitfan - ファンクラブをつくるならBitfan', 'TIGET | ライブイベントのチケット販売・電子チケット…',
+                  '&AND HOSTEL | 「自分らしく」泊まれる宿', '3 Out Change | 働き方を変える、人と組織のためのメディア', 'QUIZ JAPAN - クイズの総合サイト「QUIZ JAPAN」',
+                  '株式会社近藤設備｜konsetsu - （株）近藤設備｜給排水・空調設備工事'):
+            d = q.derive_name(t)
+            self.assertEqual((d['name_ja'], d['name_en']), (None, None), t)
+            self.assertEqual(d['name'], t, t)                                  # the name itself is still the title as it is
+
+    def test_long_or_sentence_like_segments_do_not_split(self):
+        self.assertEqual(derive('あ' * 31 + ' | Foo')[1:], (None, None))        # ja segment over 30
+        self.assertEqual(derive('山田屋 | ' + 'A' * 51)[1:], (None, None))     # latin segment over 50
+        self.assertEqual(derive('山田屋 | We make small wooden chairs for you.')[1:], (None, None))
+
+    def test_edge_phrases_inside_a_segment(self):
+        self.assertEqual(derive('京都府建築士会 - TOPページ - '), ('京都府建築士会', None, None))
+        self.assertEqual(derive('山田屋へようこそ'), ('山田屋', None, None))
+        self.assertEqual(derive('山田屋 Official Web Site | Yamada'), ('山田屋 | Yamada', '山田屋', 'Yamada'))
+        self.assertEqual(derive('Untitled Document | 山田屋'), ('山田屋', None, None))
+        self.assertEqual(derive('山田屋 トップページ'), ('山田屋', None, None))
+        self.assertEqual(derive('山田屋オフィシャルサイト'), ('山田屋', None, None))
+
+    def test_concatenated_untitled_document_is_cut_off(self):
+        self.assertEqual(derive('ライブチケット販売無題ドキュメント'), ('ライブチケット販売', None, None))
+        self.assertEqual(derive('ライブチケット販売無題ドキュメント｜無題ドキュメント'), ('ライブチケット販売', None, None))
+
+    def test_names_that_merely_contain_the_words_are_not_broken(self):
+        for t in ('サイトウ工房', 'トップページデザイン研究会', 'Topology Lab', '公式サイト制作所', 'Top Pagerank Inc'):
+            self.assertEqual(derive(t)[0], t, t)
+
+    def test_label_removal_leaves_clean_separators(self):
+        self.assertEqual(derive('山田屋 【公式】｜Yamada'), ('山田屋｜Yamada', '山田屋', 'Yamada'))
+        self.assertEqual(derive('【公式】山田屋 ｜ 木工所'), ('山田屋 ｜ 木工所', None, None))
+
+    def test_spelling_variants_are_kept_not_rewritten(self):
+        self.assertEqual(derive('カンボジア旅行｜カンボディア旅行')[0], 'カンボジア旅行｜カンボディア旅行')
+
+
 class DeriveNameTests(unittest.TestCase):
     """The plain rule (owner direction 2026-11-25): split, drop boilerplate segments, drop repeats, keep the rest in order up to NAME_SOFT_MAX.
     Every assertion is the literal result of the rules; where that result is not pretty it is said so."""
@@ -85,9 +134,9 @@ class DeriveNameTests(unittest.TestCase):
         t = '石川県白山市にあるアラヤ接骨院 | 肩こり・腰痛・体の歪み・マッサージ'
         self.assertEqual(derive(t), (t, None, None))
 
-    def test_top_label_dropped_company_site_word_stays(self):
-        # TOP is a whole boilerplate segment. 「朝倉真弓公式サイト」 is NOT one (the page-kind word is only part of that segment): kept as written.
-        self.assertEqual(derive('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家'), ('朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', None, None))
+    def test_top_label_and_trailing_site_word_dropped(self):
+        # TOP is a whole boilerplate segment; 公式サイト FOLLOWING a name is an edge phrase and goes (S2)
+        self.assertEqual(derive('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家'), ('朝倉真弓｜ウォーキング講師・文筆家・講演家', None, None))
 
     def test_phone_number_removed_and_toppage_dropped(self):
         self.assertEqual(derive('トップページ｜富山県中央植物園ウェブサイト076-466-4187'), ('富山県中央植物園ウェブサイト', None, None))
@@ -114,7 +163,7 @@ class DeriveNameTests(unittest.TestCase):
                          ('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', '愛知工業大学', 'AICHI INSTITUTE OF TECHNOLOGY'))
         self.assertEqual(derive('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine'),
                          ('日本抗加齢医学会 | Japanese Society of Anti-aging Medicine', '日本抗加齢医学会', 'Japanese Society of Anti-aging Medicine'))
-        self.assertEqual(derive('愛知 | AICHI | 日本'), ('愛知 | AICHI | 日本', '愛知 | 日本', 'AICHI'))      # in order, each joined with its own separator
+        self.assertEqual(derive('愛知 | AICHI | 日本'), ('愛知 | AICHI | 日本', None, None))      # two ja segments: not a plain pair
         self.assertEqual(derive('山田屋 | 2024'), ('山田屋 | 2024', None, None))                          # a digit-only segment is neither language
 
     def test_one_language_leaves_ja_en_empty(self):
@@ -131,7 +180,7 @@ class DeriveNameTests(unittest.TestCase):
     def test_error_placeholder_is_a_whole_segment_rule(self):
         # 'not found HGU' is NOT the whole placeholder, so by the literal rule it stays (the owner prefers verbose-but-correct to clever-but-wrong)
         self.assertEqual(derive('not found HGU – 北海学園大学受験生向けWEBサイト'),
-                         ('not found HGU – 北海学園大学受験生向けWEBサイト', '北海学園大学受験生向けWEBサイト', 'not found HGU'))
+                         ('not found HGU – 北海学園大学受験生向けWEBサイト', None, None))      # the ja segment holds Latin letters (WEB): no ja/en split
         self.assertEqual(derive('404 Not Found | 山田屋'), ('山田屋', None, None))
         self.assertEqual(derive('404 Gallery'), ('404 Gallery', None, None))
         self.assertEqual(derive('Home Sweet Home Bakery'), ('Home Sweet Home Bakery', None, None))

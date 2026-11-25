@@ -354,7 +354,7 @@ REAL = [
      '木更津市の不動産会社｜アクアエステート木更津｜千葉県袖ケ浦・木更津・君津・富津の不動産・住宅情報', None, None),
     ('石川県白山市にあるアラヤ接骨院 | 肩こり・腰痛・体の歪み・マッサージ', 'araya.example.jp', 'アラヤ接骨院',
      '石川県白山市にあるアラヤ接骨院 | 肩こり・腰痛・体の歪み・マッサージ', None, None),
-    ('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', 'asakura.example.jp', '朝倉真弓', '朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', None, None),
+    ('TOP│朝倉真弓公式サイト｜ウォーキング講師・文筆家・講演家', 'asakura.example.jp', '朝倉真弓', '朝倉真弓｜ウォーキング講師・文筆家・講演家', None, None),
     ('トップページ｜富山県中央植物園ウェブサイト076-466-4187', 'toyama.example.jp', '富山県中央植物園', '富山県中央植物園ウェブサイト', None, None),
     ('ジープ厚木｜Jeep Official Dealer Site', 'jeep.example.jp', 'ジープ厚木', 'ジープ厚木｜Jeep Official Dealer Site', 'ジープ厚木', 'Jeep Official Dealer Site'),
     ('愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', 'ait.example.jp', '愛知工業大学', '愛知工業大学 | AICHI INSTITUTE OF TECHNOLOGY', '愛知工業大学', 'AICHI INSTITUTE OF TECHNOLOGY'),

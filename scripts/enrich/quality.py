@@ -286,19 +286,47 @@ def boilerplate_segment(seg, shared=False):
     return (not f or f in _BOILER_EXACT or bool(_ERROR_PAGE.fullmatch(f)) or (shared and service_name_clause(seg)))
 
 
+# Page-kind phrases hanging on the edge of a segment (S2): removed, the name in front / behind stays. Whole words only (ASCII ones are not
+# cut out of a longer word); only at the END or the START of the segment, never from the middle of a name. 公式サイト is removed only when it
+# FOLLOWS a name (a segment that is only 公式サイト is boilerplate anyway).
+_EDGE_TAIL = re.compile(r"(?:へようこそ|ようこそ|トップページ|(?<![A-Za-z0-9])(?:top\s*ページ|top\s*page|official\s+web\s*site|untitled\s+document)|"
+                        r"オフィシャルサイト|公式サイト|無題ドキュメント)\s*$", re.I)
+_EDGE_HEAD = re.compile(r"^(?:トップページ|top\s*ページ|top\s*page|無題ドキュメント|untitled\s+document)(?=\s|$)\s*", re.I)   # at the start only as a separate word
+_EDGE_DASH_TAIL = re.compile(r"(?:^|\s)[" + _DASHES + r"]+\s*$")
+_EDGE_DASH_HEAD = re.compile(r"^\s*[" + _DASHES + r"]+(?:\s|$)")
+
+
+def _strip_edges(piece):
+    """The phrases of _EDGE_TAIL / _EDGE_HEAD off the ends of one segment, repeatedly (a name must remain: '' when nothing does)."""
+    prev = None
+    while prev != piece:
+        prev = piece
+        piece = collapse(_EDGE_HEAD.sub("", _EDGE_TAIL.sub("", piece)))
+    return piece
+
+
+def _tidy_sep(raw):
+    """The separator as the title wrote it; a bar with a space on one side only ('X ｜Y', left over from a removed 【公式】) -> no spaces."""
+    if not raw.strip():
+        return " | "
+    return raw.strip() if raw[0].isspace() != raw[-1].isspace() else raw
+
+
 def split_segments(title):
-    """-> [(segment, separator in front of it)]: the segments of the title (noise removed, label decorations stripped, empty ones dropped); the
-    separator is the text the title itself used there ('' for the first, ' | ' when a joined-up gap has none). Full-width / vertical bars and
-    slashes always split; a dash / colon / middle dot only with spaces around it (アシザワ・ファインテック, 20th-Century stay whole)."""
-    t = collapse(_LABEL.sub(" ", _NOISE.sub("", collapse(title))))
+    """-> [(segment, separator in front of it)]: the segments of the title (noise removed, label decorations stripped, edge page-kind phrases
+    removed, empty ones dropped); the separator is the text the title itself used there ('' for the first, ' | ' when a joined-up gap has none).
+    Full-width / vertical bars and slashes always split (spaces or not); a dash / colon / middle dot only with spaces around it
+    (アシザワ・ファインテック, 20th-Century stay whole); a bare dash at either end of the title is dropped."""
+    t = collapse(_LABEL.sub("", _NOISE.sub("", collapse(title))))
+    t = collapse(_EDGE_DASH_HEAD.sub("", _EDGE_DASH_TAIL.sub("", t)))
     out, pos, sep = [], 0, ""
     for m in list(_SEG_SPLIT.finditer(t)) + [None]:
-        piece = collapse(t[pos:m.start()] if m else t[pos:])
+        piece = _strip_edges(collapse(t[pos:m.start()] if m else t[pos:]))
         if piece:
             out.append((piece, sep if out else ""))
-            sep = (m.group(0) if m and m.group(0).strip() else " | ") if m else ""
+            sep = _tidy_sep(m.group(0)) if m else ""
         elif m and not sep:                      # a gap with nothing in it (a removed phone number ...): the first separator of the run stands
-            sep = m.group(0) if m.group(0).strip() else " | "
+            sep = _tidy_sep(m.group(0))
         pos = m.end() if m else pos
     return out
 
@@ -325,7 +353,8 @@ def derive_name(title, host=""):
     Segments (split_segments) -> drop boilerplate (boilerplate_segment) -> drop repeats (NFKC + casefold) -> keep in order, each kept segment
     joined with the separator the title had in front of it, as many as fit in NAME_SOFT_MAX (cut only at a segment boundary; the first
     segment that does not fit ends the list); the first one always stays whole when it is at most NAME_LONG_MAX, else it is cut at the last
-    、。）」 or space (none -> None). name_ja / name_en are set only when BOTH a Japanese and a Latin-only segment remain (each = its segments
+    、。）」 or space (none -> None). name_ja / name_en are set only when exactly ONE Japanese and ONE Latin-only segment remain and both read as short names
+    (_short_ja_name / _short_en_name: 'brand + tag line' is not a translation pair; each = its segment
     joined); otherwise they are None. Digit-only segments belong to neither."""
     shared = shared_service_host(host)
     seen, keep = set(), []
@@ -354,8 +383,22 @@ def derive_name(title, host=""):
         return "".join((sep if i else "") + s for i, (s, sep) in enumerate(items))
     ja = [(s, sep) for s, sep in kept if _kind(s) == "ja"]
     en = [(s, sep) for s, sep in kept if _kind(s) == "en"]
-    both = bool(ja) and bool(en)
+    both = len(ja) == 1 and len(en) == 1 and _short_ja_name(ja[0][0]) and _short_en_name(en[0][0])
     return {"name": join(kept), "name_ja": join(ja) if both else None, "name_en": join(en) if both else None}
+
+
+_CATCH_MARK = re.compile(r"[、。！？!?「」『』〜~…]|なら|を")
+
+
+def _short_ja_name(seg):
+    """A Japanese segment that reads as a NAME (not a catch-phrase): at most 30 characters, no punctuation / quote / ellipsis, no 〜なら / 〜を,
+    and no Latin brand inside (a segment like 'ファンクラブをつくるならBitfan' is the tag line)."""
+    return len(seg) <= 30 and not _CATCH_MARK.search(seg) and not re.search(r"[A-Za-z]", unicodedata.normalize("NFKC", seg))
+
+
+def _short_en_name(seg):
+    """A Latin segment that reads as a name: at most 50 characters and not a sentence (a long phrase ending in . ! ?)."""
+    return len(seg) <= 50 and not (re.search(r"[.!?]$", seg) and len(seg.split()) >= 5)
 
 
 def suggest_name(title, host=""):
