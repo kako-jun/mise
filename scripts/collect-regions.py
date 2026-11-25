@@ -14,7 +14,7 @@ import json, re, ssl, sys, time, urllib.parse, urllib.request, datetime, pathlib
 
 ENDPOINT = 'https://query.wikidata.org/sparql'
 UA = 'mise-directory-region-collector/1.0 (https://github.com/kako-jun/mise)'
-# サイトが使う国（public/countries.js の MISE_FLAGS と同じ13か国）。国を足したらここにも足す。
+# サイトが使う国（区画表 public/regions.js を作る国。旗・国名は public/countries.js が全 ISO コード分を持つので、ここは区画を足す国だけ）。
 COUNTRIES = ['JP', 'US', 'GB', 'DE', 'FR', 'KR', 'CN', 'AU', 'CA', 'BR', 'IN', 'IT', 'RU']
 OUT = pathlib.Path(__file__).resolve().parent.parent / 'public' / 'regions.js'
 

@@ -2,8 +2,7 @@ const $ = selector => document.querySelector(selector);
 let categories = [], pickedSites = [], currentPath = [], currentSearch = null, currentTags = [], tagPath = [], pickIndex = 0, picksVisible = false, activityStats = null;
 // 範囲（scope）: 国コード（小文字 2 文字。jp）、区画（国コード-区画。jp-13。URL は /jp/13/）、または all。ルート `/` は既定範囲の日本として扱う。scopes は選べる国・区画（サイトが 1 件以上あるもの）と件数。
 const { DEFAULT_SCOPE, PAGE_SIZE }=globalThis.MiseFeedEntry;
-const INLINE_SCOPES = globalThis.MISE_INLINE_SCOPES; // countries.js（SSR と共有）
-let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [], regions: [] }, scopeToken = 0, scopesExpanded = false;
+let currentScope = DEFAULT_SCOPE, scopes = { total: 0, countries: [], regions: [] }, scopeToken = 0;
 const scopeCache = new Map();
 const storage = { get(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }, set(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* Preferences remain active for this page. */ } } };
 // 初期言語: 保存値（ja / en）を最優先。無ければ index.html の先頭インラインスクリプトがブラウザ言語から決めた <html data-initial-lang> を使う（判定は二重に持たない）。
@@ -18,8 +17,8 @@ let language = initialLanguage();
 const endI18nPending = () => document.documentElement.classList.remove('i18n-pending');
 let openExternalInNewTab = storage.get('mise-external-new-tab') === 'true';
 const words = {
-  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', about:'MISE について', progress:'進捗', github:'作者のGitHub', linksLabel:'リンク', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', checked:'最終チェック', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', moreScopes:MISE_SCOPE_MORE_WORDS.ja.more, lessScopes:MISE_SCOPE_MORE_WORDS.ja.less, loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, totalCapped:n=>`該当 ${formatCap(n)} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。', feedEntry:'縦フィード', feedEntryTitle:'縦フィードで見る', listView:'箇条書き' },
-  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', about:'About MISE', progress:'Progress', github:'Creator on GitHub', linksLabel:'Links', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', checked:'Last checked', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', moreScopes:MISE_SCOPE_MORE_WORDS.en.more, lessScopes:MISE_SCOPE_MORE_WORDS.en.less, loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, totalCapped:n=>`${formatCap(n)} matches`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.', feedEntry:'Vertical feed', feedEntryTitle:'Browse as a vertical feed', listView:'List view' }
+  ja: { tagline:'今だからこそ、ディレクトリ型検索エンジン。', recommendIntro:'サイトが見つからない場合は？', recommend:'推薦', searchLabel:'サイトを検索', top:'トップ', sample:'掲載サイト', noSites:'このカテゴリにサイトはありません。', noResults:'該当するサイトはありません。', back:'カテゴリ一覧に戻る', all:'すべてのサイト', results:q=>`「${q}」の検索結果`, concept:'広告や大手サイト多めの検索に疲れた人へ。\nまだ知らない独立サイトを見つける場所を提供しています。', author:'作者のサイト', about:'MISE について', progress:'進捗', github:'作者のGitHub', linksLabel:'リンク', categoriesLabel:'カテゴリ一覧', locationLabel:'現在の階層', heading:'MISE — 今だからこそ、ディレクトリ型検索エンジン。', idle:'No activity yet', theme:'ダーク/ライト', lang:'English', error:'データを取得できませんでした。再読み込みしてください。', fallback:'', belongs:'カテゴリ', uncategorized:'未分類', picks:'ピックアップ', checked:'最終チェック', tags:'属性', newTab:'新しいタブで開く', externalOn:'外部リンクを別タブで開く: オン', externalOff:'外部リンクを別タブで開く: オフ', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'範囲', allWorld:'全世界', loadingMore:'読み込み中…', loadMore:'もっと見る', retry:'再試行', listError:'読み込めませんでした。', listEnd:n=>`ここまで（全 ${n} 件）`, remaining:n=>`あと ${n} 件`, totalCapped:n=>`該当 ${formatCap(n)} 件`, prevPage:'‹ 前のページ', tagsLabel:'絞り込みのタグ', tagRemove:n=>`タグ「${n}」を外す`, tagFilter:n=>`タグ「${n}」で絞り込む`, taggedSites:n=>`${n} のサイト`, tagsMax:'タグは5個までです。', feedEntry:'縦フィード', feedEntryTitle:'縦フィードで見る', listView:'箇条書き' },
+  en: { tagline:'A directory search engine for today.', recommendIntro:'Can’t find a site?', recommend:'Recommend it', searchLabel:'Search sites', top:'Home', sample:'Listed sites', noSites:'No sites in this category.', noResults:'No sites found.', back:'Back to categories', all:'All sites', results:q=>`Results for “${q}”`, concept:'For those tired of search results dominated by ads and major sites.\nDiscover independent websites you have yet to find.', author:'Creator’s website', about:'About MISE', progress:'Progress', github:'Creator on GitHub', linksLabel:'Links', categoriesLabel:'Categories', locationLabel:'Current location', heading:'MISE — A directory search engine for today.', idle:'No activity yet', theme:'Dark / light', lang:'日本語', error:'Could not load data. Please reload.', fallback:' (Japanese)', belongs:'Categories', uncategorized:'Uncategorized', picks:'Featured sites', checked:'Last checked', tags:'Tags', newTab:'Open in new tab', externalOn:'Open external links in new tabs: on', externalOff:'Open external links in new tabs: off', summaryTitle:'SITE INDEX', historyTitle:'RECENT REGISTRATIONS', totalLabel:'SITES', unavailable:'UNAVAILABLE', scopeLabel:'Scope', allWorld:'All world', loadingMore:'Loading…', loadMore:'Load more', retry:'Retry', listError:'Could not load more sites.', listEnd:n=>`End of list (${n} total)`, remaining:n=>`${n} more`, totalCapped:n=>`${formatCap(n)} matches`, prevPage:'‹ Previous page', tagsLabel:'Tag filters', tagRemove:n=>`Remove tag “${n}”`, tagFilter:n=>`Filter by tag “${n}”`, taggedSites:n=>`Sites tagged ${n}`, tagsMax:'Up to 5 tags.', feedEntry:'Vertical feed', feedEntryTitle:'Browse as a vertical feed', listView:'List view' }
 };
 Object.assign(words.ja, { reqTitle:'申請', reqNote:'申請は依頼です。叶うとは限りません。管理者が確認するまで、掲載の状態は何も変わりません。', reqType:'種類', reqAdd:'サイトを載せてほしい(推薦)', reqRemove:'自分のサイトを外してほしい(取り下げ)', reqCorrect:'掲載内容を直してほしい(訂正)', reqUrl:'サイトの URL', reqReason:'理由・詳細(必須)', reqSubmit:'送信', reqSending:'送信中…', reqOk:'受け付けました。', reqErr_invalid_url:'URL を確認してください(https://example.com/ の形。IP アドレスや内部ホストは不可)。', reqErr_invalid_type:'種類を選んでください。', reqErr_reason_required:'内容を入力してください。', reqErr_reason_too_long:'理由が長すぎます(1000 字まで)。', reqErr_invalid_reason:'HTML は使えません。', reqErr_rate_limited:'送信が多すぎます。しばらくしてからもう一度お試しください。', reqErr_too_large:'入力が大きすぎます。短くしてください。', reqErr_other:'送信できませんでした。時間をおいてもう一度お試しください。' });
 Object.assign(words.en, { reqTitle:'Requests', reqNote:'A request is only a request. It may not be granted. Nothing changes until an administrator has reviewed it.', reqType:'Kind', reqAdd:'Add a site (recommend)', reqRemove:'Remove my site (opt out)', reqCorrect:'Correct a listing', reqUrl:'Site URL', reqReason:'Reason / details (required)', reqSubmit:'Send', reqSending:'Sending…', reqOk:'Received.', reqErr_invalid_url:'Check the URL (like https://example.com/; IP addresses and internal hosts are not accepted).', reqErr_invalid_type:'Choose a kind.', reqErr_reason_required:'Please enter the details.', reqErr_reason_too_long:'The reason is too long (max 1000 characters).', reqErr_invalid_reason:'HTML is not allowed.', reqErr_rate_limited:'Too many requests. Please try again later.', reqErr_too_large:'The input is too large. Please shorten it.', reqErr_other:'Could not send. Please try again later.' });
@@ -153,16 +152,14 @@ function regionInfo(site) {
 }
 // 区画（県・州）が分かるサイトだけ、旗の右に区画名を小さく出す。区画表に無ければ従来どおり旗のみ。
 function countryFlag(site) {
-  const code=site.country_code, info=window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(code||'') ? window.MISE_COUNTRIES[code] : null;
-  if(!info || !(window.MISE_FLAGS||[]).includes(code)) return null;
+  const code=site.country_code, info=window.MISE_COUNTRIES && /^[A-Z]{2}$/.test(code||'') ? (window.MISE_COUNTRIES[code] ?? { ja:code, en:code }) : null; // 旗の無いコードは国コードのバッジ（MiseCountry）で出す
+  if(!info) return null;
   const region=regionInfo(site);
   const label=region ? `${info.ja} ${region.ja} / ${info.en} ${region.en}` : `${info.ja} / ${info.en}`;
   const wrap=document.createElement('span'); wrap.className='site-place'; wrap.setAttribute('role','img'); wrap.setAttribute('aria-label',label); wrap.title=label; wrap.dataset.country=code;
   if(region) wrap.dataset.region=site.region_code;
   const flag=document.createElement('span'); flag.className='site-flag'; flag.setAttribute('aria-hidden','true');
-  const img=document.createElement('img'); img.alt=''; img.src=`/flags/${code.toLowerCase()}.svg`; img.loading='lazy'; img.decoding='async';
-  img.addEventListener('error',()=>{wrap.hidden=true;});
-  flag.append(img); wrap.append(flag);
+  flag.append(MiseCountry.el(code,{className:'',width:18,height:14,lazy:true})); wrap.append(flag);
   if(region) { const name=document.createElement('span'); name.className='site-region'; name.textContent=language==='ja'?region.ja:region.en; wrap.append(name); }
   return wrap;
 }
@@ -176,13 +173,13 @@ const releaseGlobe=()=>window.dispatchEvent(new CustomEvent('mise-fly-release'))
 function globeForScope(scope) {
   const region=scope.includes('-') ? window.MISE_REGIONS?.[scope.toUpperCase()] : null;
   const info=region || (scope==='all' ? null : window.MISE_COUNTRIES?.[scopeCountry(scope).toUpperCase()]);
-  if(info) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:region?'region':'country'}})); else resetGlobe();
+  if(info && Number.isFinite(info.lat)) window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:info.lat,lon:info.lon,hold:false,level:region?'region':'country'}})); else resetGlobe();
 }
 const HOVER_DELAY_MS=300;
 // 区画（県・州）が分かるサイトは区画の代表点（国より近い距離）、無ければ国の代表点。
 function flyToPlace(site,hold) {
-  const country=window.MISE_COUNTRIES && window.MISE_COUNTRIES[site.country_code]; if(!country) return;
-  const region=regionInfo(site), target=region||country;
+  const country=window.MISE_COUNTRIES && window.MISE_COUNTRIES[site.country_code];
+  const region=regionInfo(site), target=region||country; if(!target || !Number.isFinite(target.lat)) return; // 座標の無い国は地球を動かさない
   window.dispatchEvent(new CustomEvent('mise-fly-country',{detail:{lat:target.lat,lon:target.lon,hold,level:region?'region':'country'}}));
   logActivity(`look ${region?site.region_code:site.country_code}`);
 }
@@ -682,51 +679,129 @@ function setRequestOpen(open, focus) {
 }
 $('#recommend-link').addEventListener('click',e=>{e.preventDefault();setRequestOpen($('#recommend').hidden,true);});
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !e.defaultPrevented && !$('#recommend').hidden){ e.preventDefault(); setRequestOpen(false,true); } });
-// 範囲切替。国旗/国名のリンクは通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
+// 範囲切替。国は通常の <a href="/us/"> で、修飾キー付き・中クリックはブラウザ任せ。
 const SCOPE_ICON = '<svg class="scope-globe" aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2"/><path d="M1.8 8h12.4"/></svg>';
-// 国名: 表（日英）→ Intl.DisplayNames → コードの順。表に無い国（MC・RO・TD…）も読み上げで国名になる。
-const countryLabel = code => { const e=window.MISE_COUNTRIES?.[code]?.[language]; if(e) return e; try { return new Intl.DisplayNames([language],{type:'region'}).of(code)||code; } catch (_) { return code; } };
-const scopeAria = (label,count) => language==='ja' ? `${label} ${count}件` : `${label}, ${count} ${Number(count)===1?'site':'sites'}`;
-const codeIcon = code => { const el=document.createElement('span'); el.className='scope-code'; el.setAttribute('aria-hidden','true'); el.textContent=code; return el; };
-function scopeItem(code, label, count, icon) {
+const SCOPE_CARET = '<svg class="scope-dd-caret" aria-hidden="true" viewBox="0 0 16 16"><path d="M4 6.5 8 10.5 12 6.5"/></svg>';
+// 国名は Intl.DisplayNames（countries.js の MiseCountry.name）。全 ISO コードが国名になり、ISO に無いコードはコードのまま。
+const countryLabel = (code,lang=language) => MiseCountry.name(code,lang); // 国名は Intl.DisplayNames（countries.js）。表に無いコードはコードのまま
+const ddWords = () => window.MISE_SCOPE_DD_WORDS[language];
+const scopeIcon = code => MiseCountry.el(code); // 旗が無い・読めない国は国コードのバッジ（countries.js の MiseCountry に集約）
+const iconNode = icon => { if(icon instanceof Node) return icon; const tpl=document.createElement('template'); tpl.innerHTML=icon; return tpl.content.firstElementChild; };
+const scopeClickable = e => !(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey);
+function scopeItem(code, label, count, icon) { // 地球の項目と、国が 1 つ以下のときの国旗の項目
   const li=document.createElement('li'), a=document.createElement('a');
   a.className='scope-item'; a.href=scopePath(code); if(code===currentScope) a.setAttribute('aria-current','page'); else if(currentScope.includes('-') && code===scopeCountry(currentScope)) a.setAttribute('aria-current','true'); // 区画の範囲では、その国を「いま居る国」として示す
-  if(icon instanceof Node) a.append(icon); else a.insertAdjacentHTML('beforeend',icon);
-  a.setAttribute('aria-label',scopeAria(label,count)); a.title=label;
+  a.append(iconNode(icon));
+  const note=code==='all' ? ddWords().note : ''; // 全世界の件数には所在国が未設定のサイトも入る（国の合計と一致しない。#229）
+  a.setAttribute('aria-label',ddWords().row(label,count)+(note?`, ${note}`:'')); a.title=label+(note?` — ${note}`:'');
   const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
   a.append(c);
-  a.addEventListener('click',e=>{ if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; e.preventDefault(); chooseScope(code); });
+  a.addEventListener('click',e=>{ if(!scopeClickable(e)) return; e.preventDefault(); chooseScope(code); });
   li.append(a); return li;
 }
+// 国ドロップダウン（#291）。構造は src/seo.js の scopeNavHtml と同じ（scripts/check-scope-nav-parity.mjs が突き合わせる）。
+// 行は 全世界 + 国コード順。検索語は日本語名・英語名・国コード。開く/閉じるは hidden（style.css に [hidden]{display:none} を併記）。
+const ddNorm = s => String(s).normalize('NFKC').toLowerCase().trim();
+let ddRows = []; // [{ li, hay }]。いまの #scope-nav の行（検索で絞る対象）
+function ddEls() { const root=$('#scope-nav .scope-dd'); return root ? { root, btn:root.querySelector('.scope-dd-btn'), back:root.querySelector('.scope-dd-backdrop'), panel:root.querySelector('.scope-dd-panel'), input:root.querySelector('.scope-dd-search'), list:root.querySelector('.scope-dd-list'), empty:root.querySelector('.scope-dd-empty') } : null; }
+const ddIsOpen = () => { const d=ddEls(); return !!d && !d.panel.hidden; };
+const ddVisible = () => ddRows.filter(r=>!r.li.hidden).map(r=>r.li.firstElementChild);
+function ddSetActive(a) {
+  const d=ddEls(); if(!d) return;
+  d.list.querySelectorAll('.is-active').forEach(x=>x.classList.remove('is-active'));
+  if(a) { a.classList.add('is-active'); d.input.setAttribute('aria-activedescendant',a.id); a.scrollIntoView({block:'nearest'}); } else d.input.removeAttribute('aria-activedescendant');
+}
+function ddFilter(q) {
+  const d=ddEls(), n=ddNorm(q); let shown=0;
+  for(const r of ddRows) { r.li.hidden = !!n && !r.hay.includes(n); if(!r.li.hidden) shown++; }
+  d.empty.hidden = shown>0;
+  ddSetActive(ddVisible()[0] ?? null);
+}
+function ddOpen(prefill='') {
+  const d=ddEls(); if(!d || !d.panel.hidden) return;
+  d.panel.hidden=false; d.back.hidden=false; d.btn.setAttribute('aria-expanded','true');
+  d.input.value=prefill; ddFilter(prefill);
+  if(!prefill) { const sel=d.list.querySelector('[aria-selected="true"]'); if(sel && !sel.closest('li').hidden) ddSetActive(sel); }
+  if(matchMedia('(pointer: coarse)').matches) { d.list.tabIndex=-1; d.list.focus({preventScroll:true}); } else d.input.focus({preventScroll:true}); // タッチ端末は画面キーボードを勝手に出さない
+  d.list.querySelector('.is-active')?.scrollIntoView({block:'center'});
+}
+function ddClose(refocus=true) {
+  const d=ddEls(); if(!d || d.panel.hidden) return;
+  d.panel.hidden=true; d.back.hidden=true; d.btn.setAttribute('aria-expanded','false');
+  if(refocus) d.btn.focus({preventScroll:true});
+}
+function ddSelect(a) { ddClose(); chooseScope(a.getAttribute('href').replace(/\//g,'')); }
+function buildScopeDropdown() {
+  const W=ddWords(), cc=scopeCountry(currentScope).toUpperCase(), cur=currentScope==='all' ? null : scopes.countries.find(r=>r.code===cc);
+  const root=document.createElement('div'); root.className='scope-dd';
+  const btn=document.createElement('button'); btn.type='button'; btn.className='scope-dd-btn'+(cur?'':' is-placeholder');
+  btn.setAttribute('aria-haspopup','listbox'); btn.setAttribute('aria-expanded','false'); btn.setAttribute('aria-controls','scope-dd-panel');
+  const name=document.createElement('span'); name.className='scope-dd-name';
+  if(cur) { const label=countryLabel(cur.code); btn.setAttribute('aria-label',W.btn(label,cur.count)); btn.title=label; name.textContent=label; const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(cur.count); btn.append(scopeIcon(cur.code),name,c); }
+  else { btn.setAttribute('aria-label',W.pick); btn.title=W.pick; name.textContent=W.pick; btn.append(name); }
+  btn.insertAdjacentHTML('beforeend',SCOPE_CARET);
+  const back=document.createElement('div'); back.className='scope-dd-backdrop'; back.hidden=true;
+  const panel=document.createElement('div'); panel.className='scope-dd-panel'; panel.id='scope-dd-panel'; panel.hidden=true;
+  const input=document.createElement('input'); input.className='scope-dd-search'; input.id='scope-dd-search'; input.type='text';
+  input.setAttribute('role','combobox'); input.setAttribute('aria-expanded','true'); input.setAttribute('aria-controls','scope-dd-list'); input.setAttribute('aria-autocomplete','list'); input.setAttribute('aria-label',W.search);
+  input.placeholder=W.search; input.autocomplete='off'; input.setAttribute('autocapitalize','off'); input.spellcheck=false; input.setAttribute('enterkeyhint','go');
+  const list=document.createElement('ul'); list.className='scope-dd-list'; list.id='scope-dd-list'; list.setAttribute('role','listbox'); list.setAttribute('aria-label',W.pick);
+  const empty=document.createElement('p'); empty.className='scope-dd-empty'; empty.setAttribute('role','status'); empty.hidden=true; empty.textContent=W.none;
+  ddRows=[];
+  const row=(code,label,count,icon,selected,hay)=>{
+    const li=document.createElement('li'); li.setAttribute('role','presentation');
+    const a=document.createElement('a'); a.className='scope-dd-opt'; a.setAttribute('role','option'); a.id=`scope-opt-${code}`; a.href=scopePath(code);
+    const note=code==='all' ? W.note : '';
+    a.setAttribute('aria-label',W.row(label,count)+(note?`, ${note}`:'')); a.title=label+(note?` — ${note}`:''); a.setAttribute('aria-selected',String(selected));
+    const n=document.createElement('span'); n.className='scope-dd-name'; n.textContent=label;
+    if(note) { const sm=document.createElement('small'); sm.className='scope-dd-note'; sm.textContent=note; n.append(sm); }
+    const c=document.createElement('span'); c.className='scope-count'; c.textContent=String(count);
+    a.append(iconNode(icon),n,c);
+    a.addEventListener('click',e=>{ if(!scopeClickable(e)) return; e.preventDefault(); ddSelect(a); });
+    li.append(a); list.append(li); ddRows.push({ li, hay:ddNorm(hay) });
+  };
+  row('all',t('allWorld'),scopes.total,SCOPE_ICON,currentScope==='all','all world 全世界 世界');
+  [...scopes.countries].sort((a,b)=>a.code<b.code?-1:a.code>b.code?1:0).forEach(r=>{
+    row(r.code.toLowerCase(),countryLabel(r.code),r.count,scopeIcon(r.code),r.code===cc && currentScope!=='all',`${r.code} ${countryLabel(r.code,'ja')} ${countryLabel(r.code,'en')}`);
+  });
+  panel.append(input,list,empty); root.append(btn,back,panel);
+  btn.addEventListener('click',()=>ddIsOpen() ? ddClose() : ddOpen());
+  btn.addEventListener('keydown',e=>{
+    if(e.altKey||e.ctrlKey||e.metaKey) return;
+    if(e.key==='ArrowDown'||e.key==='ArrowUp') { e.preventDefault(); ddOpen(); }
+    else if(e.key.length===1 && e.key!==' ') { e.preventDefault(); ddOpen(e.key); } // 先頭文字の入力でそのまま検索を始める（タイプアヘッド）
+  });
+  back.addEventListener('click',()=>ddClose());
+  input.addEventListener('input',()=>ddFilter(input.value));
+  panel.addEventListener('keydown',e=>{
+    if(e.isComposing) return;
+    const vis=ddVisible(), cur=list.querySelector('.is-active'), i=vis.indexOf(cur);
+    if(e.key==='ArrowDown') { e.preventDefault(); ddSetActive(vis[Math.min(vis.length-1,i+1)]??null); }
+    else if(e.key==='ArrowUp') { e.preventDefault(); ddSetActive(vis[Math.max(0,i-1)]??null); }
+    else if(e.key==='Home' && e.target!==input) { e.preventDefault(); ddSetActive(vis[0]??null); }
+    else if(e.key==='End' && e.target!==input) { e.preventDefault(); ddSetActive(vis.at(-1)??null); }
+    else if(e.key==='Enter') { if(cur){ e.preventDefault(); ddSelect(cur); } else if(vis[0]) { e.preventDefault(); ddSelect(vis[0]); } }
+    else if(e.key==='Escape') { e.preventDefault(); e.stopPropagation(); ddClose(); }
+    else if(e.key==='Tab') ddClose();
+    else if(e.target!==input && e.key.length===1 && !e.ctrlKey && !e.metaKey && !e.altKey) { input.focus({preventScroll:true}); } // 一覧にフォーカスがあっても入力は検索欄へ
+  });
+  return root;
+}
+// 外側のクリック・タップで閉じる（フォーカスは触った先に任せる）。Esc はパネル内のキー処理（上）が受ける。
+document.addEventListener('pointerdown',e=>{ if(ddIsOpen() && !e.target.closest?.('.scope-dd')) ddClose(false); });
 function renderScopeNav() {
   syncFeedEntry();
   const nav=$('#scope-nav'); if(!nav) return;
-  // 作り直すとフォーカスが BODY に落ちるので、範囲ナビ内にあったなら同じ項目へ戻す。
-  const fa=document.activeElement, hadFocus=nav.contains(fa), focusMore=hadFocus && fa.classList?.contains('scope-more');
+  // 作り直すとフォーカスが BODY に落ちるので、範囲ナビ内にあったなら同じ項目へ戻す。ドロップダウン内にあったなら、開閉を問わずボタンへ。
+  const fa=document.activeElement, hadFocus=nav.contains(fa), inDd=hadFocus && !!fa.closest('.scope-dd'), wasOpen=ddIsOpen(), query=wasOpen?ddEls().input.value:'';
   const list=document.createElement('ul'); list.className='scope-list';
   list.append(scopeItem('all',t('allWorld'),scopes.total,SCOPE_ICON));
-  const extras=[];
-  scopes.countries.forEach((r,i)=>{
-    const code=r.code.toLowerCase();
-    let icon='';
-    if(window.MISE_FLAGS?.includes(r.code)) { const img=document.createElement('img'); img.className='scope-flag'; img.alt=''; img.width=16; img.height=12; img.src=`/flags/${code}.svg`; img.addEventListener('error',()=>img.replaceWith(codeIcon(r.code))); icon=img; }
-    else icon=codeIcon(r.code);
-    const li=scopeItem(code,countryLabel(r.code),r.count,icon);
-    if(i>=INLINE_SCOPES) { li.hidden=!scopesExpanded && code!==currentScope; extras.push(li); }
-    list.append(li);
-  });
   const parts=[list];
-  if(extras.length) {
-    if(extras.some(li=>li.querySelector('[aria-current]'))) { scopesExpanded=true; extras.forEach(li=>{li.hidden=false;}); }
-    const more=document.createElement('button'); more.type='button'; more.className='scope-more'; more.setAttribute('aria-expanded',String(scopesExpanded));
-    const label=scopesExpanded?t('lessScopes'):t('moreScopes'); // 文字は出さず、アイコン(⋯ / ▴)+ aria-label + title
-    more.setAttribute('aria-label',label); more.title=label;
-    more.innerHTML=scopesExpanded ? '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><path d="M3.5 10.5 8 6l4.5 4.5"/></svg>' : '<svg class="scope-more-icon" aria-hidden="true" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg>';
-    more.addEventListener('click',()=>{ scopesExpanded=!scopesExpanded; renderScopeNav(); });
-    parts.push(more);
-  }
+  if(scopes.countries.length>=globalThis.MISE_SCOPE_DD_MIN) parts.push(buildScopeDropdown());
+  else scopes.countries.forEach(r=>list.append(scopeItem(r.code.toLowerCase(),countryLabel(r.code),r.count,scopeIcon(r.code)))); // 国が 1 つ以下: 従来どおり国旗を並べるだけ
   nav.replaceChildren(...parts);
-  if(hadFocus) (focusMore ? nav.querySelector('.scope-more') : nav.querySelector('[aria-current="page"]'))?.focus();
+  if(inDd) { if(wasOpen) { ddOpen(query); } else ddEls().btn.focus({preventScroll:true}); }
+  else if(hadFocus) nav.querySelector('[aria-current="page"]')?.focus();
   $('#home-link').href=categoryUrl([]);
   // 地球儀へ「選べる国」と現在の範囲を伝える（目印の点と、背景クリックで国を選ぶ判定に使う）。
   window.MISE_SCOPE={ current:currentScope==='all'?'all':scopeCountry(currentScope), // 地球儀の目印は国単位（区画の範囲でもその国を強調）

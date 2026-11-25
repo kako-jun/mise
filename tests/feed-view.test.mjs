@@ -257,7 +257,7 @@ test('feed(#276): 戻る矢印(.f-directory)とスコア(.f-surf)に枠・輪郭
 test('feed.js: 国・地域は一覧と同じ規則(国名テキストを出さない)・タグは一覧の宛先へのリンク(#202)', () => {
   const place = appJs.slice(appJs.indexOf('function place(s)'), appJs.indexOf('// ---- カード ----'));
   assert.ok(!/info\[language\]/.test(place), '国名を表示テキストにしない');
-  assert.match(place, /MISE_FLAGS/, '旗が無い国は出さない');
+  assert.match(place, /MiseCountry.el/, '旗は MiseCountry に集約（旗が無いコードは国コードのバッジ）');
   assert.match(place, /region\[language\]/, '区画名だけを出す');
   assert.match(place, /aria-label/);
   assert.match(appJs, /className = 'f-tag'[\s\S]*a\.href = tagHref\(tg\.ja\)/, 'タグは a.f-tag で tagHref へ');

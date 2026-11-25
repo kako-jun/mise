@@ -389,5 +389,18 @@ class CliExitCodeTests(unittest.TestCase):
         self.assertIn("all error-level checks passed", out)
 
 
+class CountryCodeIsoTests(unittest.TestCase):
+    def test_non_iso_country_code_is_warned_and_iso_is_not(self):
+        db = new_db()
+        self.addCleanup(db.close)
+        add(db, "iso1", ["cities"], cc="JP")
+        add(db, "iso2", ["cities"], cc="XK")  # not ISO 3166-1 (user-assigned)
+        add(db, "iso3", ["cities"], cc=None)  # NULL is the separate no_country warn
+        db.commit()
+        rows = found(db, ["country_code_not_iso"])["country_code_not_iso"]
+        self.assertEqual(rows, [("iso2", "XK")])
+        self.assertEqual(len(integrity.ISO_3166_1), 249)
+
+
 if __name__ == "__main__":
     unittest.main()

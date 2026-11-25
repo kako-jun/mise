@@ -125,25 +125,36 @@ test('style.css: JS 有効では区画リンクの枠を隠し、JS なしでは
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../public/style.css', import.meta.url), 'utf8');
   assert.match(css, /@media \(scripting: enabled\) \{ \.region-row \{ display: none; \} \}/);
-  assert.match(css, /@media \(scripting: none\) \{ \.scope-list li\[hidden\] \{ display: list-item; \} \.scope-more \{ display: none; \} \}/);
+  assert.match(css, /@media \(scripting: none\) \{ \.scope-dd \{[^}]*\} \.scope-dd-btn, \.scope-dd-search, \.scope-dd-backdrop \{ display: none; \}/);
 });
 
-test('SSR: 範囲ナビは app.js と同じ構造（先頭 MISE_INLINE_SCOPES 件＋残りは hidden＋もっと見るボタン。現在の国が残りなら全部開く）（#177）', async () => {
-  const mk = n => ({ total: 9, regions: [], countries: Array.from({ length: n }, (_, i) => ({ code: ['JP','US','FR','GB','CN','DE','IT','KR','AU'][i], count: 1 })) });
-  const n = globalThis.MISE_INLINE_SCOPES;
-  assert.equal(n, 6);
+test('SSR: 範囲ナビは地球の項目 + 国ドロップダウン（国コード順・全世界が先頭・選択中の 1 件だけボタンに出す）。国が 1 つ以下ならドロップダウンなし（#291）', async () => {
+  const mk = n => ({ total: 9, regions: [], countries: Array.from({ length: n }, (_, i) => ({ code: ['JP','US','FR','GB','CN','DE','IT','KR','AU'][i], count: 1 + i })) });
+  assert.equal(globalThis.MISE_SCOPE_DD_MIN, 2);
   const html = scopeNavHtml(mk(9), 'jp');
-  assert.equal((html.match(/<li hidden>/g) ?? []).length, 3);
-  assert.match(html, /class="scope-more" aria-expanded="false"/);
-  const open = scopeNavHtml(mk(9), 'au'); // 7 番目以降が現在 → 全部開く
-  assert.doesNotMatch(open, /<li hidden>/);
-  assert.match(open, /class="scope-more" aria-expanded="true"/);
-  // 区画の範囲でも、その国の項目に aria-current="true"（範囲そのものは page ではない）。app.js と同じ。
+  assert.match(html, /<button type="button" class="scope-dd-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="scope-dd-panel"/);
+  assert.match(html, /<div class="scope-dd-panel" id="scope-dd-panel" hidden>/); // 閉じて出す
+  assert.match(html, /<input class="scope-dd-search"[^>]*role="combobox"/);
+  assert.match(html, /<ul class="scope-dd-list" id="scope-dd-list" role="listbox"/);
+  const ids = [...html.matchAll(/id="scope-opt-([a-z]+)"/g)].map(m => m[1]);
+  assert.deepEqual(ids, ['all', 'au', 'cn', 'de', 'fr', 'gb', 'it', 'jp', 'kr', 'us'], '全世界が先頭、あとは国コード順');
+  assert.equal((html.match(/aria-selected="true"/g) ?? []).length, 1);
+  assert.match(html, /id="scope-opt-jp"[^>]*aria-selected="true"/);
+  const btn = html.match(/<button[\s\S]*?<\/button>/)[0];
+  assert.match(btn, /Japan/);
+  assert.doesNotMatch(btn, /United States|France/, 'ボタンには選択中の 1 件だけ');
+  assert.match(html, /<li><a class="scope-item" href="\/all\/"[^>]*>/, '地球と全世界の件数はそのまま');
+  // 全世界を選んでいるとき: ボタンは「国を選ぶ」、全世界の行が選択中
+  const all = scopeNavHtml(mk(9), 'all');
+  assert.match(all, /class="scope-dd-btn is-placeholder"/);
+  assert.match(all, /id="scope-opt-all"[^>]*aria-selected="true"/);
+  // 区画の範囲でも、その国が選択中（範囲そのものは page ではない）
   const reg = scopeNavHtml(mk(9), 'jp-13');
-  assert.match(reg, /<a class="scope-item" href="\/jp\/"[^>]*aria-current="true"/);
-  assert.doesNotMatch(reg, /aria-current="page"/);
-  assert.doesNotMatch(scopeNavHtml(mk(9), 'jp'), /aria-current="true"/);
-  assert.doesNotMatch(scopeNavHtml(mk(n), 'jp'), /scope-more|<li hidden>/); // 残りが無ければボタンも無い
+  assert.match(reg, /id="scope-opt-jp"[^>]*aria-selected="true"/);
+  assert.match(reg, /<a class="scope-item" href="\/jp\/"|class="scope-dd-btn"/);
+  // 国が 1 つ以下: 従来どおり地球 + 国旗だけ
+  for (const n of [0, 1]) assert.doesNotMatch(scopeNavHtml(mk(n), 'jp'), /scope-dd|scope-more/);
+  assert.match(scopeNavHtml(mk(1), 'jp'), /<a class="scope-item" href="\/jp\/"[^>]*aria-current="page"/);
 });
 
 test('台湾は国コードの代わりに旗画像を表示する', () => {

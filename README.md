@@ -19,7 +19,7 @@ npm run check        # 構文確認 + API ヘッダ自己検査
 
 検索の履歴挙動（#102）の実ブラウザ検証は `node scripts/e2e-search-back.mjs`（`npm run db:migrate` と `node scripts/dev-seed-sites.mjs 30` 済みのローカル D1 で `npx wrangler dev --local --port 8799` を起動し、`PLAYWRIGHT_DIR` で playwright を、必要なら `CHROMIUM_PATH` で Chromium を指す。`npm test` には入れない）。
 
-範囲ナビの SSR と JS 描き直し後の DOM の一致（#177）は `node scripts/check-scope-nav-parity.mjs`（`npx wrangler dev --local --port 8799` 起動済みのローカル D1 が前提、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`npm test` には入れない）。
+範囲ナビの SSR と JS 描き直し後の DOM の一致（#177）は `node scripts/check-scope-nav-parity.mjs`（`npx wrangler dev --local --port 8799` 起動済みのローカル D1 が前提、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`npm test` には入れない）。国ドロップダウン（#291）と全 ISO コードの旗の表示は `node scripts/e2e-country-dropdown.mjs`（同じ前提。国の数を変えて `WIDTH_FILE` / `COMPARE_WIDTH` で幅の不変も比べる）。
 
 ピックアップの横スワイプ・ドラッグ・左右キー（#113）は `node scripts/e2e-pickup-swipe.mjs`（同じ前提のローカル D1 と `npx wrangler dev --local --port 8799`、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`/api/picks` はページ内で固定するので seed の中身に依存しない。`npm test` には入れない）。
 
@@ -40,7 +40,7 @@ Cloudflare Workers + D1。main へのマージで Workers Builds が自動デプ
 ## 同梱・利用している素材
 
 - 3D 表示には同梱の Three.js を使用し、バンドルに表記を残す（[MIT License](public/THREE-LICENSE.txt)）。
-- 国旗: [flag-icons](https://github.com/lipis/flag-icons)（[MIT License](public/licenses/flag-icons-MIT.txt)）。必要な国だけ `public/flags/` に置いている。
+- 国旗: [flag-icons](https://github.com/lipis/flag-icons)（[MIT License](public/licenses/flag-icons-MIT.txt)）。ISO 3166-1 の全 249 コード分を `public/flags/` に置いている（4x3、svgo 済み）。
 - 区画名（県・州）: 名前・座標は [Wikidata](https://www.wikidata.org/)（CC0）から `scripts/collect-regions.py` で生成した `public/regions.js`。
 - フォント: [Anton](https://github.com/google/fonts/tree/main/ofl/anton)（[SIL OFL](public/licenses/Anton-OFL.txt)、ロゴ）、[Noto Serif](https://github.com/google/fonts/tree/main/ofl/notoserif)（[SIL OFL](public/licenses/NotoSerif-OFL.txt)、発音記号）、[Press Start 2P](https://github.com/google/fonts/tree/main/ofl/pressstart2p)（[SIL OFL](public/licenses/PressStart2P-OFL.txt)、縦フィードの数字）。使う文字だけにサブセット化して `public/fonts/` に置いている。
 - GitHub アイコン: [GitHub Octicons](https://github.com/primer/octicons)（[MIT License](public/licenses/octicons-MIT.txt)）。
