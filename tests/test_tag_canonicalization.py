@@ -118,11 +118,13 @@ class Canonical(unittest.TestCase):
 
     def test_ties_go_to_the_highest_use_count_then_the_shorter_label_then_alphabetical(self):
         v = quality.TagVocab([('動画', 'video', 5), ('映像', 'video', 9)])
-        self.assertEqual(quality.canonical_tag('movie', 'video', v), ('映像', 'video'))     # same group, more uses
+        self.assertEqual(quality.canonical_tag('movie', 'video', v), ('動画', 'video'))     # same group, close uses: the general word (data/tag-general-words.csv)
+        v = quality.TagVocab([('動画', 'video', 5), ('映像', 'video', 90)])
+        self.assertEqual(quality.canonical_tag('movie', 'video', v), ('映像', 'video'))     # not close (more than 3 times): the most used
         v = quality.TagVocab([('動画', 'video', 5), ('映像', 'video', 5)])
         self.assertEqual(quality.canonical_tag('movie', 'video', v), ('動画', 'video'))     # equal uses, equal length: alphabetical
-        v = quality.TagVocab([('絵', 'picture', 9), ('画', 'picture', 3)])
-        self.assertEqual(quality.canonical_tag('picture', 'picture', v), ('絵', 'picture'))   # unrelated labels: the dominant one (75%)
+        v = quality.TagVocab([('絵', 'picture', 20), ('画', 'picture', 3)])
+        self.assertEqual(quality.canonical_tag('picture', 'picture', v), ('絵', 'picture'))   # unrelated labels: the dominant one (87%)
 
     def test_list_vocabulary_is_indexed_once(self):
         n = []
@@ -142,18 +144,53 @@ class Canonical(unittest.TestCase):
         self.assertEqual(a, b)
         self.assertIsNone(a[2])
 
-    def test_foreign_pairs_meet_only_their_spelling_variants(self):
+    def test_foreign_pairs_meet_only_their_word_forms(self):
         v = quality.TagVocab()
-        for ja, n in (('music', 40), ('temple', 30), ('association alumni', 9), ('manager', 9), ('managed', 9)):
+        for ja, n in (('music', 40), ('temple', 30), ('association alumni', 9), ('manager', 9), ('trailer', 5), ('home care', 5)):
             v.add_foreign(ja, ja, n)
-        self.assertEqual(v.find_foreign('musci', 'musci', own=1), ('music', 'music'))          # typo of a common word
         self.assertEqual(v.find_foreign('temples', 'Temples'), ('temple', 'temple'))
-        self.assertEqual(v.find_foreign('alumni association', 'alumni association'), ('association alumni', 'association alumni'))   # word order
-        self.assertIsNone(v.find_foreign('managers', 'managers x'))
-        self.assertIsNone(v.find_foreign('cap', 'cap'))                                          # short words are never fuzzy
-        self.assertIsNone(v.find_foreign('musci', 'musci', own=5))                               # not rare: left to the translator
+        self.assertEqual(v.find_foreign('Music', 'Music'), ('music', 'music'))
+        for ja in ('musci', 'educaton', 'alumni association', 'trainer', 'care home', 'managed', 'radiko'):
+            self.assertIsNone(v.find_foreign(ja, ja), ja)                                       # no spelling / word-order matching
         self.assertIsNone(v.find_foreign('音楽', '音楽'))                                          # a Japanese tag is not foreign
 
+    def test_review_errors_stay_separate(self):
+        v = quality.TagVocab([('セキュリティ', 'security', 100), ('老人ホーム', 'nursing home', 30), ('ラジオ', 'radio', 40), ('お手入れ', 'maintenance', 45),
+                              ('保守', 'maintenance', 25), ('博物館', 'museum', 60)])
+        for ja, en in [('securities', 'securities'), ('home nursing', 'home nursing'), ('trainer', 'trainer'), ('radiko', 'radiko'),
+                       ('maintenance', 'maintenance'), ('証券', 'securities')]:
+            self.assertIsNone(quality.canonical_tag(ja, en, v), (ja, en))                        # (maintenance: 45 / 70 rows = 64%, below 80%)
+        v.add_foreign('home care', 'home care', 3)
+        self.assertIsNone(v.find_foreign('care home', 'care home'))
+        v.add_foreign('trailer', 'trailer', 1)
+        self.assertIsNone(v.find_foreign('trainer', 'trainer'))
+
+    def test_plural_exceptions_are_not_folded(self):
+        for w in ('securities', 'goods', 'customs', 'works', 'sales', 'times', 'news'):
+            self.assertEqual(quality.tag_tokens(w), [w], w)
+        self.assertEqual(quality.tag_tokens('arts'), ['art'])
+        self.assertEqual(quality.tag_tokens('universities'), ['university'])
+        self.assertNotEqual(quality.normalize_tag_key('securities'), quality.normalize_tag_key('security'))
+
+    def test_english_only_label_needs_five_rows_and_eighty_percent(self):
+        self.assertIsNone(quality.canonical_tag('maintenance', 'maintenance', quality.TagVocab([('お手入れ', 'maintenance', 4)])))      # fewer than 5 rows
+        self.assertEqual(quality.canonical_tag('maintenance', 'maintenance', quality.TagVocab([('お手入れ', 'maintenance', 5)])), ('お手入れ', 'maintenance'))
+        v = quality.TagVocab([('お手入れ', 'maintenance', 79), ('保守', 'maintenance', 21)])
+        self.assertIsNone(quality.canonical_tag('maintenance', 'maintenance', v))                                              # 79%
+        v = quality.TagVocab([('お手入れ', 'maintenance', 80), ('保守', 'maintenance', 20)])
+        self.assertEqual(quality.canonical_tag('maintenance', 'maintenance', v), ('お手入れ', 'maintenance'))                    # 80%
+
+    def test_canonical_form_general_word_and_lower_case(self):
+        c = {('花', 'Flowers'): 50, ('花', 'flowers'): 10}
+        self.assertEqual(quality.pick_canonical(list(c), c), ('花', 'flowers'))                 # a general word is lower case
+        c = {('ミュージアム', 'museum'): 60, ('博物館', 'museum'): 25}
+        self.assertEqual(quality.pick_canonical(list(c), c), ('博物館', 'museum'))              # close uses: the general word
+        c = {('ミュージアム', 'museum'): 100, ('博物館', 'museum'): 25}
+        self.assertEqual(quality.pick_canonical(list(c), c), ('ミュージアム', 'museum'))
+        c = {('NPO', 'npo'): 3, ('npo', 'npo'): 50}
+        self.assertEqual(quality.pick_canonical(list(c), c), ('NPO', 'npo'))                   # an abbreviation keeps its capitals
+        c = {('サイト', 'site'): 9, ('網', 'site'): 4}
+        self.assertEqual(quality.pick_canonical(list(c), c), ('網', 'site'))                     # no dictionary entry: the shorter label
 
 class Canonicalize(unittest.TestCase):
     def setUp(self):
@@ -303,6 +340,9 @@ class Merge(Base):
         add_tags(self.d1, 's5', ('大学', 'university'), ('映像', 'video'), ('university', 'university'), ('銀行', 'bank'), ('土手', 'bank'))
         add_tags(self.d1, 's6', ('大学', 'university'), ('同窓会', 'alumni association'), ('university', 'university'))
         add_tags(self.d1, 's2', ('同窓会', 'association alumni'))
+        for i in range(6):                                                                   # the Japanese label that 'university' means (6 rows, 100%)
+            add_site(self.d1, f'k{i}', '山田屋')
+            add_tags(self.d1, f'k{i}', ('大学', 'university'))
 
     def merge(self, **kw):
         return self.go('tags-merge', llm=None, **kw)
@@ -377,19 +417,49 @@ class Merge(Base):
         self.assertEqual(st['verify_mismatch'], 0)
         self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_en='universities'")[0], 0)
 
-    def test_misspelling_merges_only_between_english_only_tags_when_rare_and_the_target_common(self):
-        add_site(self.d1, 't1', '山田屋')
-        add_site(self.d1, 'm1', '山田屋')
-        add_site(self.d1, 'm2', '山田屋')
-        for i in range(8):
-            add_site(self.d1, f'u{i}', '山田屋')
-            add_tags(self.d1, f'u{i}', ('telescope', 'telescope'))
-        add_tags(self.d1, 't1', ('telescpoe', 'telescpoe'))
-        add_tags(self.d1, 'm1', ('manager', 'manager'))
-        add_tags(self.d1, 'm2', ('managed', 'managed'))                                       # two real words one edit apart: never merged
+    def test_spelling_and_word_order_variants_are_never_merged(self):
+        pairs = [(('telescope', 'telescope'), ('telescpoe', 'telescpoe')), (('trailer', 'trailer'), ('trainer', 'trainer')),
+                 (('home care', 'home care'), ('care home', 'care home'))]
+        for i, (a, b2) in enumerate(pairs):
+            for j in range(6):
+                add_site(self.d1, f'p{i}x{j}', '山田屋')
+                add_tags(self.d1, f'p{i}x{j}', a)
+            add_site(self.d1, f'p{i}y', '山田屋')
+            add_tags(self.d1, f'p{i}y', b2)
+        _c, st = self.merge()
+        self.assertEqual(st['labels_to_move'], 0)
+
+    def test_english_only_word_forms_are_merged(self):
+        add_site(self.d1, 'f1', '山田屋')
+        add_site(self.d1, 'f2', '山田屋')
+        add_tags(self.d1, 'f1', ('zebra', 'zebra'))
+        add_tags(self.d1, 'f2', ('zebras', 'zebras'))
         self.merge()
-        self.assertEqual(tags_of(self.d1, 't1'), [('telescope', 'telescope')])
-        self.assertEqual((tags_of(self.d1, 'm1'), tags_of(self.d1, 'm2')), ([('manager', 'manager')], [('managed', 'managed')]))
+        self.assertEqual(tags_of(self.d1, 'f2'), [('zebra', 'zebra')])
+
+    def test_securities_stays_apart_from_security_and_maintenance_stays_wide(self):
+        for i in range(5):
+            add_site(self.d1, f'z{i}', '山田屋')
+            add_tags(self.d1, f'z{i}', ('セキュリティ', 'security'), ('お手入れ', 'maintenance'))
+        add_site(self.d1, 'zz', '山田屋')
+        add_tags(self.d1, 'zz', ('securities', 'securities'), ('maintenance', 'maintenance'))
+        add_site(self.d1, 'zk', '山田屋')
+        add_tags(self.d1, 'zk', ('保守', 'maintenance'))
+        add_site(self.d1, 'zl', '山田屋')
+        add_tags(self.d1, 'zl', ('保守', 'maintenance'))
+        add_site(self.d1, 'zm', '山田屋')
+        add_tags(self.d1, 'zm', ('保守', 'maintenance'))
+        self.merge()
+        self.assertEqual(tags_of(self.d1, 'zz'), [('maintenance', 'maintenance'), ('securities', 'securities')])
+
+    def test_the_general_lower_case_form_becomes_the_canonical(self):
+        for i in range(4):
+            add_site(self.d1, f'fl{i}', '山田屋')
+            add_tags(self.d1, f'fl{i}', ('花', 'Flowers'))
+        add_site(self.d1, 'fl9', '山田屋')
+        add_tags(self.d1, 'fl9', ('花', 'flowers'))
+        self.merge()
+        self.assertEqual({tuple(r) for r in self.d1.db.execute("SELECT label_ja,label_en FROM site_tags WHERE label_ja='花'")}, {('花', 'flowers')})
 
     def test_japanese_tags_are_never_merged_by_spelling_or_word_order(self):
         for sid, t in (('a', ('赤牛', 'akaushi')), ('b', ('明石', 'akashi')), ('c', ('老人ホーム', 'nursing home')), ('d', ('介護', 'home nursing'))):

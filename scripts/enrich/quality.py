@@ -532,7 +532,7 @@ _PLURAL_ONLY = frozenset(("news", "series", "species", "lens", "bus", "gas", "pl
 
 
 def _stem_word(w):
-    if w in _PLURAL_ONLY or w.endswith(("ics", "ous")):
+    if w in _PLURAL_ONLY or w.endswith(("ics", "ous")) or w in _data_set("tag-plural-exceptions"):
         return w
     if len(w) > 4 and w.endswith("ies"):
         return w[:-3] + "y"
@@ -721,11 +721,9 @@ TAG_NEW_MAX = 2              # new (matching nothing) tags kept per site
 VOCAB_TOP_N = 3000           # existing tags (by use count) the matcher knows
 VOCAB_REFRESH_ROWS = 500     # sites between two reloads of the vocabulary in one run
 VOCAB_MIN = 50               # a vocabulary smaller than this (an empty / fresh table) is no basis for reuse: tags pass unchanged
-TYPO_MIN_LEN = 5             # a word is fuzzy-matched (edit distance 1) only from this length, and only between tags whose label_ja is still English
-KNOWN_WORD_MIN = 3           # a word used by this many existing tags is a real word, never "corrected"
-MERGE_TYPO_RARE_MAX = 2      # `tags --merge`: the misspelt side has at most this many rows ...
-MERGE_TYPO_RATIO = 5         # ... and the other side at least this many times more
-AMBIGUOUS_SHARE = 0.6        # an English label that several different Japanese labels carry (bank: 銀行 / 土手) is mapped only when one has this share
+DOMINANT_SHARE = 0.8         # an English-only label is moved onto a Japanese tag only when that Japanese label holds this share of the English label's converted rows ...
+DOMINANT_MIN_ROWS = 5        # ... and at least this many rows (お手入れ / maintenance is not what every 'maintenance' means)
+CLOSE_COUNT_RATIO = 3        # two Japanese labels within this ratio of uses: the more general one (data/tag-general-words.csv, else the shorter) is the canonical
 NEGATION_WORDS = frozenset(("no", "not", "non", "anti", "without", "free", "less", "un", "nor", "never"))
 NEGATION_PREFIXES = ("un", "in", "im", "il", "ir", "non", "anti", "dis", "mis", "de")
 _KATA = re.compile(r"[ァ-ヶ]")
@@ -742,40 +740,6 @@ def ja_tag_key(label):
     if len(s) >= 3 and s.endswith("の"):
         s = s[:-1]
     return s
-
-
-def _within_one(a, b):
-    """Edit distance <= 1 (substitution, insertion, deletion) or one adjacent transposition."""
-    if a == b:
-        return True
-    if abs(len(a) - len(b)) > 1:
-        return False
-    if len(a) == len(b):
-        d = [i for i in range(len(a)) if a[i] != b[i]]
-        return len(d) == 1 or (len(d) == 2 and d[1] == d[0] + 1 and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]])
-    if len(a) > len(b):
-        a, b = b, a
-    i = 0
-    while i < len(a) and a[i] == b[i]:
-        i += 1
-    return a[i:] == b[i + 1:]
-
-
-def _typo_of(t, c):
-    """t is a misspelling of the known word c: one edit away, c at least TYPO_MIN_LEN long, the first 3 letters kept, and not a different word form
-    (c = t + a letter, or only the last two letters differ: manager / managed, manage / managed)."""
-    if len(c) < TYPO_MIN_LEN or t[:3] != c[:3] or not _within_one(t, c):
-        return False
-    if c.startswith(t) or t.startswith(c):
-        return False
-    return not (len(t) == len(c) and t[:-2] == c[:-2] and t[-2:] != c[-2:][::-1])      # (a swap of the last two letters is a typo: musci / music)
-
-
-def _forms(tok, swaps):
-    out = {tok} | {tok[:i] + tok[i + 1:] for i in range(len(tok))}
-    if swaps:
-        out |= {tok[:i] + tok[i + 1] + tok[i] + tok[i + 2:] for i in range(len(tok) - 1)}
-    return out
 
 
 def _neg_conflict(ta, tb):
@@ -805,59 +769,60 @@ def _en_related(a, b):
     return bool(ta & tb) and not (ta <= tb or tb <= ta)
 
 
-class _Fuzzy:
-    """Spelling (one misspelt word) and word-order index over tags whose label_ja is still English (`tags --merge` only; never over tags with a
-    Japanese label: 赤牛 / akaushi is not 明石 / akashi, home nursing is not 老人ホーム / nursing home)."""
+class _Foreign:
+    """Tags whose label_ja is still English (`tags --merge` only), grouped by English word form (plural, case, hyphen, width: the same normalized key).
+    No spelling or word-order matching anywhere: it merged unrelated tags (trailer / trainer, home care / care home, securities / security)."""
 
     def __init__(self):
-        self.count, self.words, self.key, self.set, self.typo = {}, {}, {}, {}, {}
+        self.count, self.key = {}, {}
 
     def add(self, ja, en, n):
         k = (ja, en)
         self.count[k] = self.count.get(k, 0) + int(n)
-        toks = tag_tokens(en)
-        for t in toks:
-            self.words[t] = self.words.get(t, 0) + int(n)
         self.key.setdefault(normalize_tag_key(en), set()).add(k)
-        if len(toks) > 1:
-            self.set.setdefault(tuple(sorted(toks)), set()).add(k)
-        for i, t in enumerate(toks):
-            if len(t) >= TYPO_MIN_LEN and t.isalpha():
-                rest = tuple(sorted(toks[:i] + toks[i + 1:]))
-                for f in _forms(t, False):
-                    self.typo.setdefault((rest, f), set()).add(k)
 
-    def best(self, cands):
+    def find(self, en):
+        toks = tag_tokens(en)
+        cands = [k for k in self.key.get(normalize_tag_key(en), ()) if not _neg_conflict(toks, tag_tokens(k[1]))]
         return min(cands, key=lambda k: (-self.count[k], len(k[1]), k[0], k[1])) if cands else None
 
-    def find(self, en, own):
-        toks = tag_tokens(en)
-        if not toks:
-            return None
-        hit = self.best([k for k in self.key.get(normalize_tag_key(en), ()) if not _neg_conflict(toks, tag_tokens(k[1]))])
-        if hit:
-            return hit
-        if len(toks) > 1:
-            hit = self.best([k for k in self.set.get(tuple(sorted(toks)), ()) if not _neg_conflict(toks, tag_tokens(k[1]))])
-            if hit:
-                return hit
-        for i, t in enumerate(toks):                                    # one misspelt word (>= 6 letters, not a known word)
-            if len(t) < TYPO_MIN_LEN or not t.isalpha() or self.words.get(t, 0) >= KNOWN_WORD_MIN:
-                continue
-            rest = tuple(sorted(toks[:i] + toks[i + 1:]))
-            found = set()
-            for f in _forms(t, True):
-                for k in self.typo.get((rest, f), ()):
-                    ct = tag_tokens(k[1])
-                    diff = [c for c in ct if c not in toks]
-                    if len(ct) == len(toks) and len(diff) == 1 and diff[0] != t and _typo_of(t, diff[0]) and not _neg_conflict(toks, ct):
-                        found.add(k)
-            if own is not None:
-                found = {k for k in found if own <= MERGE_TYPO_RARE_MAX and self.count[k] >= MERGE_TYPO_RATIO * max(own, 1)}
-            hit = self.best(found)
-            if hit:
-                return hit
+
+_LISTS = {}
+
+
+def _data_set(name):
+    """data/<name>.csv (column term), casefolded; loaded once. Missing file = empty."""
+    if name not in _LISTS:
+        out = set()
+        try:
+            with open(__import__("os").path.join(DATA, name + ".csv"), encoding="utf-8", newline="") as f:
+                out = {unicodedata.normalize("NFKC", (r.get("term") or "")).strip().casefold() for r in csv.DictReader(f)} - {""}
+        except OSError:
+            pass
+        _LISTS[name] = frozenset(out)
+    return _LISTS[name]
+
+
+def pick_canonical(cands, count):
+    """The canonical of tags that are the same tag. A capitalised Latin label (NPO, WordPress) wins over a lower-case one. Otherwise the Japanese label
+    (within CLOSE_COUNT_RATIO of the most used one: the more general: data/tag-general-words.csv, else the shorter), then its English label in lower
+    case (a general word is lower case: 花 / flowers; a capitalised Latin label_ja marks a proper noun and keeps its English as it is), then uses,
+    shorter label_en, alphabetical."""
+    cands = list(cands)
+    if not cands:
         return None
+    cased = [k for k in cands if not has_japanese(k[0]) and k[0] != k[0].casefold()]
+    if cased:
+        return min(cased, key=lambda k: (-count.get(k, 0), len(k[1]), k[0], k[1]))
+    jas = {}
+    for k in cands:
+        jas[k[0]] = jas.get(k[0], 0) + count.get(k, 0)
+    top = max(jas.values())
+    general = _data_set("tag-general-words")
+    near = [j for j, n in jas.items() if n * CLOSE_COUNT_RATIO >= top]
+    ja = min(near, key=lambda j: (unicodedata.normalize("NFKC", j).casefold() not in general, len(j), -jas[j], j))
+    mine = [k for k in cands if k[0] == ja]
+    return min(mine, key=lambda k: (k[1] != k[1].casefold(), -count.get(k, 0), len(k[1]), k[0], k[1]))
 
 
 def _cased(ja):
@@ -876,7 +841,7 @@ class TagVocab:
         self.count = {}                                    # (ja, en) -> use count, valid tags only
         self._en_rows, self._noted = {}, set()             # English key -> Japanese class -> rows (every valid tag; see prefill)
         self._en, self._ja, self._syn, self._exact = {}, {}, {}, {}
-        self._foreign = _Fuzzy()
+        self._foreign = _Foreign()
         for t in entries:
             ja, en, n = _entry_of(t)
             self.add(ja, en, n)
@@ -922,10 +887,10 @@ class TagVocab:
         if self.is_foreign(ja, en):
             self._foreign.add(ja, en, n)
 
-    def find_foreign(self, ja, en, own=None):
-        """-> an earlier added foreign tag this one is a spelling / word order / word form variant of (both labels still English), or None."""
+    def find_foreign(self, ja, en):
+        """-> an earlier added tag whose labels are still English and whose English label is a word form of this one (plural, case, hyphen), or None."""
         ja, en = collapse(ja or ""), collapse(en or "")
-        return self._foreign.find(en, own) if self.is_foreign(ja, en) else None
+        return self._foreign.find(en) if self.is_foreign(ja, en) else None
 
     def _note(self, ja, en, n):
         """Use counts of the English key's Japanese classes (the polysemy guard)."""
@@ -950,15 +915,15 @@ class TagVocab:
         return ("syn", g) if g else ("ja", ja_tag_key(ja))
 
     def _best(self, cands):
-        """A capitalised Latin label (NPO, iOS) before a lower-case one, then the highest use count (tie: shorter label_en, then alphabetical)."""
-        return min(cands, key=lambda k: (not _cased(k[0]), -self.count[k], len(k[1]), k[0], k[1])) if cands else None
+        """pick_canonical over the candidates' use counts."""
+        return pick_canonical(cands, self.count)
 
-    def find(self, ja, en, own=None):
+    def find(self, ja, en):
         """-> the existing (label_ja, label_en) this tag is the same tag as, or None. Conservative: a wrong merge is worse than none.
         - a tag with a Japanese label_ja is merged only when its Japanese label is the same (same normalized key, or the same synonym-table group)
           AND its English label is a word form of the other's (same key) or shares a word without containing / being contained;
         - a tag whose label_ja is still English meets a Japanese tag only by its English label (same key), when one Japanese sense clearly dominates;
-        - no spelling / word-order matching here (only find_foreign, between tags that are both still English);
+        - NO spelling or word-order matching anywhere (trailer / trainer, home care / care home, securities / security are different tags);
         - negation words, abbreviations / proper nouns (exact, capitalised form preferred) and the synonym table as in the module docs."""
         ja, en = collapse(ja or ""), collapse(en or "")
         en_ok = bool(en) and not has_japanese(en)
@@ -983,7 +948,7 @@ class TagVocab:
         elif by_en:                                                                         # English-only label -> an existing Japanese tag
             rows = self._en_rows.get(key, {})
             top = max(rows, key=lambda c: (rows[c], c))
-            if rows[top] >= AMBIGUOUS_SHARE * sum(rows.values()):                           # one Japanese sense clearly dominates (bank: 銀行 / 土手)
+            if rows[top] >= DOMINANT_MIN_ROWS and rows[top] >= DOMINANT_SHARE * sum(rows.values()):   # one Japanese label clearly dominates (bank: 銀行 / 土手)
                 return self._best([k for k in by_en if self._ja_class(k[0]) == top])
         hit = self._table(ja, en, with_en=foreign_in)                                       # (c) synonym table
         if hit and not foreign_in and ja_tag_key(hit[0]) == ja_tag_key(ja) and not _en_related(en, hit[1]):

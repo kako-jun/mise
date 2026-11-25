@@ -1019,7 +1019,7 @@ def merge_plan(groups, syn, proper):
     mapping, foreign = {}, []
     for k in order:
         if vocab.valid(*k):
-            hit = vocab.find(k[0], k[1], own=rows[k])
+            hit = vocab.find(k[0], k[1])
             if hit and hit != k:
                 mapping[k] = hit
             else:
@@ -1027,16 +1027,28 @@ def merge_plan(groups, syn, proper):
         elif quality.check_tags([{'label_ja': k[0], 'label_en': k[1]}], syn, proper) == ['tag_label_ja_not_japanese']:
             foreign.append(k)
     for k in foreign:
-        hit = vocab.find(k[0], k[1], own=rows[k])
+        hit = vocab.find(k[0], k[1])
         if hit:
             mapping[k] = hit
-            vocab.add_foreign(k[0], k[1], rows[k])     # its spelling variants follow it to the same target
+            vocab.add_foreign(k[0], k[1], rows[k])
             continue
-        hit = vocab.find_foreign(k[0], k[1], own=rows[k])
+        hit = vocab.find_foreign(k[0], k[1])              # still English: only a word form (plural, case, hyphen) of another English-only tag
         if hit:
             mapping[k] = mapping.get(hit, hit)
         else:
-            vocab.add_foreign(k[0], k[1], rows[k])     # still English: only its spelling / word order variants (never a Japanese tag's) meet it
+            vocab.add_foreign(k[0], k[1], rows[k])
+    clusters = {}
+    for src, dst in mapping.items():
+        clusters.setdefault(dst, []).append(src)
+    for dst, members in clusters.items():                  # the most used is not always the best canonical: 花 / flowers, 博物館 over ミュージアム
+        if dst not in rows:
+            continue
+        best = quality.pick_canonical([dst] + [m for m in members if vocab.valid(*m)], rows)
+        if best != dst:
+            for m in [dst] + members:
+                if m != best:
+                    mapping[m] = best
+            mapping.pop(best, None)
     return mapping, rows, vocab
 
 
