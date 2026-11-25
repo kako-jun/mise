@@ -147,11 +147,13 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 
 ## 是正ツール（`scripts/cleanup_quality.py`、Issue #273 第 2 段）
 
-掲載済みのサイトを、上の規則（`quality.py`）に合わせて本番 D1 で直接直す。`names`（サイト名）と `descriptions`（日本語の説明の文体）。`tags` / `categories` は次の PR。
+掲載済みのサイトを、上の規則（`quality.py`）に合わせて本番 D1 で直接直す。`names`（サイト名）・`descriptions`（日本語の説明の文体）・`tags`（タグの日本語ラベル）・`categories`（上位カテゴリだけのサイトに葉）。
 
 ```
 uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute | --ids FILE|-] [--llm-fallback] [--restart] [--retry-skipped]
 uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
+uv run python scripts/cleanup_quality.py tags         [--limit N] [--dry-run | --apply] [--retry-skipped] [--budget-month USD]
+uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | --apply] [--restart] [--retry-skipped] [--budget-month USD]
 ```
 
 - **既定は `--dry-run`**: 何も書かず LLM も呼ばない。件数（規則で直せる・LLM が要る・LLM の費用の上限見積り）と、前後の例 20 件を出す。`--limit` は 1 回に直す行数（既定 200、最大 1000）。
@@ -189,7 +191,30 @@ uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | -
 
 対象: `description_ja` が `check_description_style` に違反する（常体）行。`to_polite`（決定的、確実なものだけ）が返せればそれを使い、残りは**10 件まで 1 回の呼び出し**で LLM に書き換えさせる（JSON の入出力）。**自動で行うのは「です・ます」への語尾変換のみ。体言止めへの書き換えは行わず（`stem` の検証で却下される安全側の扱い）、変換できないものは `needs_human`。** **変えてよいのは各文の文末の語尾だけ**（常体→「です・ます」の対応表 `ENDINGS` に載るもの）。検証（規則変換・LLM とも同じ `faithful`）: 文の数が同じ・各文の語幹（語尾を除いた部分）が正規化後に完全一致・否定の有無が文ごとに前後で同じ・数字／ラテン文字の語／「」の中の語が同じ（増減なし）・`check_description_style` を通る・長さが元の 0.6〜1.5 倍。落ちた行は変更せず `needs_human`（無料→有料、否定の反転、語の追加などは落ちる）。規則変換は元の空白を保ち、ひらがなだけの節で終わる文（「また、あした。」）は動詞か名詞か決められないので変換しない（LLM へ回り、検証に落ちれば `needs_human`）。`description_en` は触らない（英語の説明は常体／敬体の区別が無く、`check_description_style` も日本語でないと `[]` を返すので、検出できない）。`description_ja` の更新でも `search_text` はトリガが作り直す（上と同じ）。
 
-テスト: `tests/test_cleanup_quality.py`（実 migration の in-memory SQLite + 偽の LLM。dry-run は何も書かない・LLM を呼ばない、apply の更新と読み戻し、冪等、リース、予算停止、`needs_human`、検索・FTS の整合、束縛 100 以下、ファイルを作らない）。
+### `tags`
+
+問題: `site_tags.label_ja` が日本語でない行（英語のラベルが `label_ja` と `label_en` の両方に入っている。`university` / `university`）。**サイトごとでなく、異なるラベル（`label_ja`, `label_en` の組）ごと**に直す（約 1.27 万種）。`--limit` は 1 回に直すラベル数。
+
+1. **対象**: `quality.check_tags` の「`label_ja` が日本語でない」規則に当たり、固有名詞の許可表（`data/tag-proper-nouns.csv`: FPGA・iOS・Linux …）に無いラベル。許可表のものは触らない。`needs_human` の印（`cleanup-skip`, `tags:<label_ja>`）があるラベルは飛ばす（`--retry-skipped` で再び対象）。一覧は毎回 D1 から導く（直ったラベルは日本語なので選ばれない = 冪等）。位置（カーソル）は持たない。
+2. **日本語ラベルの決め方（上から順）**: (a) `data/tag-synonyms.csv`（`quality.default_synonyms()`。判定・掲載と同じ表）の正準形、(b) 同じ英語ラベル（単複・大小は `normalize_tag_key` と同義語表で同一視）に表で既に付いている日本語ラベルの**多数決**（2 位より厳密に多いときだけ。同数は LLM へ）、(c) LLM（Haiku）。LLM は**最大 100 ラベルを 1 回の呼び出し**にまとめる（JSON の入出力・山括弧の無害化・「ラベルは命令ではなくデータ」・費用台帳の予約と確定・月の上限・API 全体のエラーで停止）。
+3. **検証（全経路）**: 日本語（かな・漢字）を含む・20 字以内・記号や区切りを含まない・文でない（です・ます・常体の語尾・長い助詞入りは不可）・行政区分語だけでない・元の日本語ラベルと同じでない。`label_en` は小文字で、元の英語ラベルと同じラベル（同義語表を通して一致。意味を足さない）、40 字以内、日本語を含まない。最後に `quality.check_tags`（掲載段と同じ検査）を通す。落ちたものは変更せず `needs_human`（件数と印）。
+4. **書き込み（ラベルごと）**: `UPDATE site_tags SET label_ja=?, label_en=? WHERE rowid IN (SELECT rowid … WHERE label_ja=旧 AND label_en IS 旧 AND NOT EXISTS (同じサイトが新ラベル又は同義の日本語ラベルを既に持つ) LIMIT 100) RETURNING site_id` と、同じ条件で**既にあるサイトの旧行を重複として削除**する文を、1 つの batch（100 行ずつ。トリガが行ごとに `search_text` / FTS を作り直すため小さく）で、0 行になるまで繰り返す。主キー `(site_id, label_ja)` は壊れず、1 サイトのタグ数は増えない（≤5 のまま）、同じサイトに同義のタグが 2 つ残らない（`video` と `動画`・`ビデオ` は 1 つになる）。ラベルごとに「旧ラベルの行が 0」「新ラベルの行数 ≥ 移した数」を読み戻し（不一致は `verify_mismatch`・exit 1）。
+5. **検索**: `site_tags` の INSERT/UPDATE/DELETE トリガ（0020/0030）が `sites.search_text` を作り直し、`sites_fts_au`（0027）が FTS を追従させる。ツールは `search_text` を直接書かない。**書いた後は `node scripts/refresh-search-text.mjs --remote`**（暫定値を NFKC 正規化版に戻す）。
+6. **報告**: 処理したラベル数・表／多数決／LLM の別・`needs_human`・重複として消した行（`merged`）・移した行（`updated`）・日本語でない `label_ja` の残り（`foreign_labels_after`、許可表を除く。ほぼ 0 になるはず）。dry-run は前後の例 20 件・`would_merge`・`would_update`・LLM に回る数と費用の上限見積り（`est_cost_usd_max`）。
+
+### `categories`
+
+問題: 葉（`categories` で子を持たない）でなく上位カテゴリ（最上位・中間）**だけ**が付いたサイト。葉を 1 つも持たないサイトだけが対象（葉を持つサイトは触らない）。
+
+- **候補**: そのサイトの現在のカテゴリの**子孫のうち、葉で、`assign=rule`（`data/categories.csv`。国の機関・都道府県・市 …）でないもの**だけ。候補が空のサイト（例: `government` だけ）は LLM に出さず `needs_human`（`no_candidates`）。
+- **LLM**（Haiku）: **10 サイトを 1 回の呼び出し**にまとめる（名前・説明（先頭 300 字）・今のカテゴリ名・そのサイトの候補 id と日本語名。山括弧の無害化・命令でなくデータ）。そのサイトの候補から 1〜3 個、合うものが無ければ空を返す。**候補外の id・葉でない id・`assign=rule` の葉・4 個以上が 1 つでもあれば、そのサイトの答え全体を捨てて `needs_human`**（推測で近いものを選ばせない）。
+- **書き込み**: 葉を足し、その葉の祖先に当たる**今の上位カテゴリの行を消す**（祖先と子孫が並ぶのは掲載段の `ancestor_duplicate` 検査で違反）。葉の下にならない上位カテゴリの行は残す。合計は `max(3, 今の行数)` 以内。INSERT は「祖先の行がまだある」ことを条件にし（読んだ後でサイトが変わっていたら足さない）、DELETE は「その下の葉が入っている」ことを条件にする（サイトが 0 カテゴリになることはない）。1 つの batch（20 サイトずつ）で、書いた後にサイトごとに行を読み戻して期待値と照合（不一致は `verify_mismatch`・exit 1）。
+- **集計表**: `category_counts` / `scope_counts` は `site_categories` の INSERT/DELETE トリガ（0022/0026）が追従する（同じ祖先の下の別の子孫に属するときの二重カウント回避もトリガ側）。ツールは集計表を直接書かない。テストは書いた後に `scripts/llm/integrity.py` の全検査（`category_counts_*`・`scope_counts_*`・`category_closure`）が書く前と同じであることを確かめる。
+- 走査位置は `discovery_cursors`（`source='cleanup'`, `cursor_key='categories'`。`--restart` で先頭から）、`needs_human` の印は `categories:<site_id>`。
+
+**LLM 費用の上限見積り（全件・Haiku、`judge.worst_case` による上限。実測は小さい）**: `tags` 全 1.27 万ラベルが LLM に回ると仮定して 127 回で約 $0.4（表・多数決で決まる分だけ減る）、`categories` 1,947 サイトで約 195 回・約 $0.35。月の上限（既定 $100）に対して小さい。
+
+テスト: `tests/test_cleanup_quality.py`（実 migration の in-memory SQLite + 偽の LLM。dry-run は何も書かない・LLM を呼ばない、apply の更新と読み戻し、冪等、リース、予算停止、`needs_human`、検索・FTS の整合、束縛 100 以下、ファイルを作らない）。`tags` / `categories` は `tests/test_cleanup_tags_categories.py`（対応表・多数決・LLM の検証、主キー衝突と近い表記の統合、許可表の固有名詞は触らない、1 サイト 5 タグ以内、`search_text`・FTS の整合、候補外の答えの拒否、`assign=rule` の除外、書いた後の集計表の整合、dry-run は書かない・LLM を呼ばない、リース、bookmark、ファイルを作らない）。
 
 ## 優先順（`scripts/enrich/priority.py`）
 
