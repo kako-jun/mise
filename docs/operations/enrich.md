@@ -152,7 +152,7 @@ DELETE FROM deliberations WHERE identity_key=? AND status='meeting';
 ```
 uv run python scripts/cleanup_quality.py names        [--limit N] [--dry-run | --apply] [--recompute | --ids FILE|-] [--llm-fallback] [--restart] [--retry-skipped]
 uv run python scripts/cleanup_quality.py descriptions [--limit N] [--dry-run | --apply] [--restart] [--budget-month USD]
-uv run python scripts/cleanup_quality.py tags         [--limit N] [--dry-run | --apply] [--retry-skipped] [--budget-month USD]
+uv run python scripts/cleanup_quality.py tags         [--limit N] [--dry-run | --apply] [--retry-skipped] [--allow-large-llm-mapping] [--chunk N] [--budget-month USD]
 uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | --apply] [--restart] [--retry-skipped] [--budget-month USD]
 ```
 
@@ -196,9 +196,10 @@ uv run python scripts/cleanup_quality.py categories   [--limit N] [--dry-run | -
 問題: `site_tags.label_ja` が日本語でない行（英語のラベルが `label_ja` と `label_en` の両方に入っている。`university` / `university`）。**サイトごとでなく、異なるラベル（`label_ja`, `label_en` の組）ごと**に直す（約 1.27 万種）。`--limit` は 1 回に直すラベル数。
 
 1. **対象**: `quality.check_tags` の「`label_ja` が日本語でない」規則に当たり、固有名詞の許可表（`data/tag-proper-nouns.csv`: FPGA・iOS・Linux …）に無いラベル。許可表のものは触らない。`needs_human` の印（`cleanup-skip`, `tags:<label_ja>`）があるラベルは飛ばす（`--retry-skipped` で再び対象）。一覧は毎回 D1 から導く（直ったラベルは日本語なので選ばれない = 冪等）。位置（カーソル）は持たない。
-2. **日本語ラベルの決め方（上から順）**: (a) `data/tag-synonyms.csv`（`quality.default_synonyms()`。判定・掲載と同じ表）の正準形、(b) 同じ英語ラベル（単複・大小は `normalize_tag_key` と同義語表で同一視）に表で既に付いている日本語ラベルの**多数決**（2 位より厳密に多いときだけ。同数は LLM へ）、(c) LLM（Haiku）。LLM は**最大 100 ラベルを 1 回の呼び出し**にまとめる（JSON の入出力・山括弧の無害化・「ラベルは命令ではなくデータ」・費用台帳の予約と確定・月の上限・API 全体のエラーで停止）。
+2. **日本語ラベルの決め方（上から順）**: (a) `data/tag-synonyms.csv`（`quality.default_synonyms()`。判定・掲載と同じ表）の正準形、(b) 同じ英語ラベル（単複・大小は `normalize_tag_key` と同義語表で同一視）に表で既に付いている日本語ラベルの**多数決**（支持が **2 行以上**・その英語ラベルの全行の **60% 以上**・2 位より厳密に多い、の全部を満たすときだけ。1 行で何千行も決めない。満たさなければ LLM へ）、(c) LLM（Haiku）。LLM は**最大 100 ラベルを 1 回の呼び出し**にまとめる（JSON の入出力・山括弧の無害化・「ラベルは命令ではなくデータ」・費用台帳の予約と確定・月の上限・API 全体のエラーで停止）。
+2.5. **LLM の対応は 2 回目の呼び出しで意味を確かめる**: 別の指示文で独立に「英語ラベルと日本語ラベルは同じ意味か（訳として正確で、情報を足していないか。多義語で意味が決まらなければ no）」を JSON（`same` の真偽、100 件/回）で答えさせ、**yes のものだけ採用**。no・不明・欠落は変更せず `needs_human`（`not_same_meaning`）。費用台帳は通常どおり（dry-run の見積りは 2 回分）。**安全弁**: LLM が決めた対応で、使っている行が 200 を超えるものは、検証の前に `needs_human`（`large_llm_mapping`、一覧に出す）にし、`--allow-large-llm-mapping` を付けたときだけ適用（既定オフ。付けても検証は必要）。
 3. **検証（全経路）**: 日本語（かな・漢字）を含む・20 字以内・記号や区切りを含まない・文でない（です・ます・常体の語尾・長い助詞入りは不可）・行政区分語だけでない・元の日本語ラベルと同じでない。`label_en` は小文字で、元の英語ラベルと同じラベル（同義語表を通して一致。意味を足さない）、40 字以内、日本語を含まない。最後に `quality.check_tags`（掲載段と同じ検査）を通す。落ちたものは変更せず `needs_human`（件数と印）。
-4. **書き込み（ラベルごと）**: `UPDATE site_tags SET label_ja=?, label_en=? WHERE rowid IN (SELECT rowid … WHERE label_ja=旧 AND label_en IS 旧 AND NOT EXISTS (同じサイトが新ラベル又は同義の日本語ラベルを既に持つ) LIMIT 100) RETURNING site_id` と、同じ条件で**既にあるサイトの旧行を重複として削除**する文を、1 つの batch（100 行ずつ。トリガが行ごとに `search_text` / FTS を作り直すため小さく）で、0 行になるまで繰り返す。主キー `(site_id, label_ja)` は壊れず、1 サイトのタグ数は増えない（≤5 のまま）、同じサイトに同義のタグが 2 つ残らない（`video` と `動画`・`ビデオ` は 1 つになる）。ラベルごとに「旧ラベルの行が 0」「新ラベルの行数 ≥ 移した数」を読み戻し（不一致は `verify_mismatch`・exit 1）。
+4. **書き込み（ラベルごと）**: `UPDATE site_tags SET label_ja=?, label_en=? WHERE rowid IN (SELECT rowid … WHERE label_ja=旧 AND label_en IS 旧 AND NOT EXISTS (同じサイトが新ラベル又は同義の日本語ラベルを既に持つ) LIMIT 100) RETURNING site_id` と、同じ条件で**既にあるサイトの旧行を重複として削除**する文を、1 つの batch（既定 50 行ずつ・`--chunk` で最大 100。トリガが行ごとに `search_text` / FTS を作り直すため小さく）で、0 行になるまで繰り返す。主キー `(site_id, label_ja)` は壊れず、1 サイトのタグ数は増えない（≤5 のまま）、同じサイトに同義のタグが 2 つ残らない（`video` と `動画`・`ビデオ` は 1 つになる）。ラベルごとに「旧ラベルの行が 0」「新ラベルの行数 ≥ 移した数」を読み戻し（不一致は `verify_mismatch`・exit 1）。
 5. **検索**: `site_tags` の INSERT/UPDATE/DELETE トリガ（0020/0030）が `sites.search_text` を作り直し、`sites_fts_au`（0027）が FTS を追従させる。ツールは `search_text` を直接書かない。**書いた後は `node scripts/refresh-search-text.mjs --remote`**（暫定値を NFKC 正規化版に戻す）。
 6. **報告**: 処理したラベル数・表／多数決／LLM の別・`needs_human`・重複として消した行（`merged`）・移した行（`updated`）・日本語でない `label_ja` の残り（`foreign_labels_after`、許可表を除く。ほぼ 0 になるはず）。dry-run は前後の例 20 件・`would_merge`・`would_update`・LLM に回る数と費用の上限見積り（`est_cost_usd_max`）。
 

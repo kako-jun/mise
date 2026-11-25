@@ -23,14 +23,17 @@ from test_cleanup_quality import Base, add_site
 
 class FakeLLM:
     """tags: script[label_ja] = (ja, en) | None. categories: script[site name] = [ids]. Records every call."""
-    def __init__(self, tags=None, cats=None):
+    def __init__(self, tags=None, cats=None, same=None, drop_verify=()):
         self.calls, self.tags, self.cats = [], tags or {}, cats or {}
+        self.same, self.drop_verify = same or {}, set(drop_verify)        # verification answers by the Japanese label (default: yes)
 
     def __call__(self, params):
         sysm, text = params['system'][0]['text'], params['messages'][0]['content']
         items = json.loads(re.search(r'<source>\n(.*)\n</source>', text, re.S).group(1))
         self.calls.append((sysm[:20], items))
-        if 'tag labels' in sysm:
+        if 'translations of English tag labels' in sysm:
+            out = {'r': [{'i': it['i'], 'same': self.same.get(it['ja'], True)} for it in items if it['ja'] not in self.drop_verify]}
+        elif 'tag labels' in sysm:
             out = {'r': [{'i': it['i'], 'ja': (self.tags.get(it['ja']) or (None, it['en']))[0], 'en': (self.tags.get(it['ja']) or (None, it['en']))[1]}
                          for it in items]}
         else:
@@ -94,7 +97,7 @@ class Tags(TagsBase):
         self.assertEqual(self.foreign(), 1)                                                        # only the allowlisted Linux is left
         self.assertEqual((st['verify_mismatch'], st['needs_human']), (0, 0))
         _c, st2 = self.go('tags', llm=llm)                                                         # idempotent: fixed labels stop matching
-        self.assertEqual((st2['selected'], st2['updated'], len(llm.calls)), (0, 0, 1))
+        self.assertEqual((st2['selected'], st2['updated'], len(llm.calls)), (0, 0, 2))
 
     def test_llm_answers_are_validated(self):
         add_site(self.d1, 'v', '山田屋')
@@ -171,15 +174,17 @@ class Tags(TagsBase):
         self.assertEqual(sorted(r[0] for r in hit), ['s5', 's6'])
 
     def test_large_label_is_moved_in_chunks_and_read_back(self):
+        self.assertEqual(cq.TAG_ROW_CHUNK, 50)
         n = cq.TAG_ROW_CHUNK * 2 + 17
         for i in range(n):
             add_site(self.d1, f'm{i}', '山田屋')
             add_tags(self.d1, f'm{i}', ('movie', 'movie'))
-        add_site(self.d1, 'ref', '山田屋')
-        add_tags(self.d1, 'ref', ('映画', 'movie'))
+        for r in ('ref1', 'ref2'):
+            add_site(self.d1, r, '山田屋')
+            add_tags(self.d1, r, ('映画', 'movie'))
         code, st = self.go('tags')
         self.assertEqual((code, st['updated'], st['verify_mismatch']), (0, n, 0), self.text())
-        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_ja='映画'")[0], n + 1)
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_ja='映画'")[0], n + 2)
         self.assertLessEqual(self.d1.max_params, 100)
 
     def test_limit_counts_distinct_labels(self):
@@ -219,6 +224,99 @@ class Tags(TagsBase):
             finally:
                 os.chdir(cwd)
         self.assertIn('bm-test', self.text())
+
+    # ---- review S1 / S2: meaning checks and the majority floor
+    def one_site(self, *tags):
+        add_site(self.d1, 'v', '山田屋')
+        add_tags(self.d1, 'v', *tags)
+
+    def test_reviewed_wrong_translations_are_rejected_by_the_second_call(self):
+        self.one_site(('bank', 'bank'), ('data science', 'data science'), ('lyon', 'lyon'), ('bird watching', 'bird watching'))
+        llm = FakeLLM(tags={'bank': ('土手', 'bank'), 'data science': ('機械学習', 'data science'), 'lyon': ('リヨン市の観光', 'lyon'),
+                            'bird watching': ('バードウォッチング', 'bird watching')},
+                      same={'土手': False, '機械学習': False, 'リヨン市の観光': False})
+        code, st = self.go('tags', llm=llm)
+        self.assertEqual(code, 0, self.text())
+        self.assertEqual(tags_of(self.d1, 'v'), sorted([('bank', 'bank'), ('data science', 'data science'), ('lyon', 'lyon'),
+                                                       ('バードウォッチング', 'bird watching')]))
+        self.assertEqual((st['by_llm'], st['verify_rejected'], st['verify_calls'], st['llm_calls']), (1, 3, 1, 1))
+        self.assertEqual(st['needs_human'], 3)
+        verify = [c for c in llm.calls if c[0].startswith('You check')]
+        self.assertEqual(len(verify), 1)                                                            # ONE verification call for the batch
+        self.assertEqual({it['ja'] for it in verify[0][1]}, {'土手', '機械学習', 'リヨン市の観光', 'バードウォッチング'})
+
+    def test_missing_or_unclear_verification_means_no_change(self):
+        self.one_site(('bank', 'bank'), ('lyon', 'lyon'))
+        llm = FakeLLM(tags={'bank': ('銀行', 'bank'), 'lyon': ('リヨン', 'lyon')}, drop_verify=['銀行'])
+        _c, st = self.go('tags', llm=llm)
+        self.assertIn(('bank', 'bank'), tags_of(self.d1, 'v'))                                      # no answer = not applied
+        self.assertIn(('リヨン', 'lyon'), tags_of(self.d1, 'v'))
+        self.assertEqual(st['verify_rejected'], 1)
+
+    def test_nothing_is_verified_or_written_in_dry_run_but_the_cost_covers_both_calls(self):
+        self.one_site(('bank', 'bank'))
+        llm = FakeLLM()
+        _c, st = self.go('tags', apply=False, llm=llm)
+        self.assertEqual(llm.calls, [])
+        solo = cq.judge.worst_case(cq.CHEAP_MODEL, cq.TAG_SYSTEM + json.dumps(cq.TAG_SCHEMA), cq.tag_user([(1, {'ja': 'bank', 'en': 'bank'})]),
+                                   cq.tag_max_tokens(1))[0]
+        self.assertGreater(st['est_cost_usd_max'], solo)
+
+    def big(self, n, label=('bank', 'bank')):
+        for i in range(n):
+            add_site(self.d1, f'b{i}', '山田屋')
+            add_tags(self.d1, f'b{i}', label)
+
+    def test_large_llm_mapping_needs_the_flag(self):
+        self.big(cq.LARGE_LLM_ROWS + 1)
+        llm = FakeLLM(tags={'bank': ('銀行', 'bank')})
+        _c, st = self.go('tags', llm=llm)
+        self.assertEqual((st['updated'], st['large_llm_mapping'], st['needs_human']), (0, 1, 1))
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_ja='bank'")[0], cq.LARGE_LLM_ROWS + 1)
+        self.assertIn('large LLM mapping NOT applied', self.text())
+        self.assertEqual(self.d1.one("SELECT cursor_value FROM discovery_cursors WHERE cursor_key='tags:bank'")[0][:18], 'large_llm_mapping ')
+        _c, st = self.go('tags', llm=llm, retry_skipped=True, allow_large_llm_mapping=True)
+        self.assertEqual((st['updated'], st['large_llm_mapping']), (cq.LARGE_LLM_ROWS + 1, 0))
+        self.assertEqual(self.d1.one("SELECT COUNT(*) FROM site_tags WHERE label_ja='銀行'")[0], cq.LARGE_LLM_ROWS + 1)
+
+    def test_exactly_the_threshold_is_applied_without_the_flag(self):
+        self.big(cq.LARGE_LLM_ROWS)
+        _c, st = self.go('tags', llm=FakeLLM(tags={'bank': ('銀行', 'bank')}))
+        self.assertEqual(st['updated'], cq.LARGE_LLM_ROWS)
+
+    def test_large_flag_still_needs_the_verification(self):
+        self.big(cq.LARGE_LLM_ROWS + 1)
+        _c, st = self.go('tags', llm=FakeLLM(tags={'bank': ('土手', 'bank')}, same={'土手': False}), allow_large_llm_mapping=True)
+        self.assertEqual((st['updated'], st['verify_rejected']), (0, 1))
+
+    def test_one_row_cannot_decide_a_majority(self):
+        add_site(self.d1, 'one', '山田屋')
+        add_tags(self.d1, 'one', ('土手', 'bank'))                                                   # a single supporting row
+        self.big(30, ('bank', 'bank'))
+        _c, st = self.go('tags', apply=False, llm=FakeLLM())
+        self.assertEqual((st['by_majority'], st['would_llm']), (0, 1))
+
+    def test_majority_needs_sixty_percent_and_a_strict_lead(self):
+        for i, ja in enumerate(['銀行'] * 5 + ['土手'] * 3 + ['堤'] * 2):                             # 50% / 30% / 20%: ahead but under 60%
+            add_site(self.d1, f'm{i}', '山田屋')
+            add_tags(self.d1, f'm{i}', (ja, 'bank'))
+        add_site(self.d1, 'f', '山田屋')
+        add_tags(self.d1, 'f', ('bank', 'bank'))
+        _c, st = self.go('tags', apply=False)
+        self.assertEqual((st['by_majority'], st['would_llm']), (0, 1))
+        for i in range(10, 20):
+            add_site(self.d1, f'm{i}', '山田屋')
+            add_tags(self.d1, f'm{i}', ('銀行', 'bank'))                                              # 15 / 20 = 75%
+        _c, st = self.go('tags', apply=False)
+        self.assertEqual(st['by_majority'], 1)
+        self.assertEqual(cq.MAJORITY_MIN_ROWS, 2)
+
+    def test_chunk_option_is_bounded(self):
+        with self.assertRaises(SystemExit):
+            cq.main(['tags', '--chunk', '101'], client=self.d1)
+        with self.assertRaises(SystemExit):
+            cq.main(['names', '--allow-large-llm-mapping'], client=self.d1)
+        self.assertEqual(cq.main(['tags', '--chunk', '100'], client=self.d1), 0)
 
     def test_main_default_is_dry_run(self):
         self.seed()
