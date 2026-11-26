@@ -518,8 +518,11 @@ function renderRecentFolder(folder) {
   head.append(bullet,icon,heading); div.append(head);
   return div;
 }
+// 描いたときの抽選結果と言語。検索の画面は入力のたびに呼ばれるので、どちらかが変わった（まだ描いていないを含む）ときだけ描き直す。
+let drawnPicks=null, drawnLanguage=null;
+function refreshPick() { if(drawnPicks!==pickedSites || drawnLanguage!==language) renderPick(); }
 function renderPick(dir=1) {
-  const list=$('#pick-list');
+  const list=$('#pick-list'); drawnPicks=pickedSites; drawnLanguage=language;
   list.classList.toggle('is-prev',dir<0);
   // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
   const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
@@ -612,7 +615,7 @@ function setResultTitle(query) {
 function showResultsNow(query) {
   syncFeedEntry();
   if(!keepRequestOpen) setRequestOpen(false);
-  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
+  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false; refreshPick();
   // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
   const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
   setResultTitle(query); $('#empty').hidden=true;

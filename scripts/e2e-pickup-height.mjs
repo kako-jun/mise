@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // ピックアップの高さの確保 (#297) の実ブラウザ検証。仕様は docs/design/ui.md の「ピックアップ」。
 // 検査: 長短の差が大きい 3 件を一巡しても、#picks の高さ・見出しの top・下の要素の top が変わらないこと。確保する高さは一番高い 1 件ぶん（それより大きくしない）。
+// 検索結果の画面: ?q= の直開き・範囲切替・言語切替でピックアップが追従し、入力のたびには描き直さないこと。
 // 条件: 幅 360/390（タッチ）・800/1280 × ja・en、同じページでの幅の変更（1200px の境界を含む）、非表示中の幅の変更、範囲切替、最小フォント 24px、ファビコンの読み込み前後。
 // 前提: `npm run db:migrate` 済みのローカル D1 で `npx wrangler dev --local --port 8799` が起動していること（--remote は使わない）。/api/picks はページ内で固定の 3 件に差し替える。
 // 実行: PLAYWRIGHT_DIR=<node_modules/playwright> node scripts/e2e-pickup-height.mjs [baseUrl=http://localhost:8799]
@@ -67,7 +68,7 @@ async function cycle(page, label) {
   assert.ok(Math.abs(seen[0].listH - Math.max(...Object.values(natural))) <= 0.5, `${label}: 確保する高さが一番高い 1 件と違う list=${seen[0].listH} ${JSON.stringify(natural)}`);
   return { layout: seen[0].layout, natural: Object.values(natural) };
 }
-async function open(browser, { width, lang = 'ja', touch = width < 600, iconDelay = 0 }) {
+async function open(browser, { width, lang = 'ja', touch = width < 600, iconDelay = 0, start = '/', ready = '#pick-list li a' }) {
   const ctx = await browser.newContext({ viewport: { width, height: 800 }, hasTouch: touch, isMobile: touch });
   const page = await ctx.newPage(); page.setDefaultTimeout(60000);
   await page.route((u) => u.hostname !== new URL(BASE).hostname, (r) => r.abort()); // 外部は読まない
@@ -78,8 +79,8 @@ async function open(browser, { width, lang = 'ja', touch = width < 600, iconDela
     localStorage.setItem('mise-language', l);
     const si = window.setInterval.bind(window); window.setInterval = (fn, ms, ...a) => (ms === 8000 ? -1 : si(fn, ms, ...a)); // 自動入れ替えは発火させない
   }, lang);
-  await page.goto(BASE + '/', { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__miseBooted && document.querySelector('#pick-list li a'), null, { timeout: T });
+  await page.goto(BASE + start, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction((s) => window.__miseBooted && document.querySelector(s), ready, { timeout: T });
   return { ctx, page, release };
 }
 let failed = 0;
@@ -142,6 +143,47 @@ await scenario('見えない行はフォーカスもクリックもできない�
   assert.equal(hit, 0);
   await page.focus('#pick-list li a'); await page.keyboard.press('ArrowRight'); await frames(page);
   assert.equal(await page.evaluate(() => document.querySelector('#pick-list li').contains(document.activeElement)), true);
+});
+// 検索結果の画面（showResultsNow）でもピックアップは描かれ、選び直し・言語の変更に追従する。入力のたびには描き直さない
+const settled = (p) => p.waitForFunction(() => document.querySelector('#pick-list li') && document.querySelector('#pick-list li').getAnimations().every((a) => a.playState === 'finished'), null, { timeout: T });
+const type = async (p, q) => { await p.fill('#query', q); await p.waitForFunction((v) => !document.querySelector('#results').hidden && document.querySelector('#result-title').textContent.includes(v), q, { timeout: T }); await frames(p); };
+const pickState = (p) => p.evaluate(() => { const li = document.querySelector('#pick-list li'); return li ? { name: li.querySelector('.site-title a').textContent, desc: li.querySelector('.site-content > p').textContent } : null; });
+const until = async (p, fn, arg, label) => { try { await p.waitForFunction(fn, arg, { timeout: 5000 }); } catch (_) { assert.fail(`${label}: ${JSON.stringify(await pickState(p))}`); } };
+const prefixIs = (x) => document.querySelector('#pick-list li a')?.textContent.startsWith(x);
+const toScope = (p, code) => p.evaluate((c) => window.dispatchEvent(new CustomEvent('mise-globe-pick', { detail: { code: c } })), code);
+for (const width of [390, 1280]) {
+  await scenario(`幅${width}: ?q= を直接開いてもピックアップが出る`, browser, { width, start: '/?q=llll', ready: '#results:not([hidden])' }, async (page) => {
+    await until(page, prefixIs, 'A ', '?q= 直開きでピックアップが空');
+    return summary(await cycle(page, '?q='));
+  });
+  await scenario(`幅${width}: 検索結果の画面で範囲を切り替えると、すぐ新しい組になり高さが一定`, browser, { width }, async (page) => {
+    await type(page, 'llll'); const a = await cycle(page, 'search jp');
+    await toScope(page, 'US'); await page.waitForFunction(() => location.pathname === '/us/', null, { timeout: T });
+    await until(page, prefixIs, 'B ', '範囲切替後も前の範囲のピックアップが残る');
+    const b = await cycle(page, 'search us');
+    assert.ok(b.layout.picksH < a.layout.picksH, `高さが新しい組になっていない ${a.layout.picksH} → ${b.layout.picksH}`);
+    return `${a.layout.picksH} → ${b.layout.picksH}`;
+  });
+}
+await scenario('検索の入力では描き直さない（同じ要素のまま・入場アニメなし・表示中の件とフォーカスは巻き戻らない）', browser, { width: 1280, touch: false }, async (page) => {
+  await next(page); await frames(page); await type(page, 'l'); await settled(page);
+  const before = await pickState(page); assert.ok(before.name.startsWith('A Very long'));
+  await page.evaluate(() => { window.__li = document.querySelector('#pick-list li'); window.__added = 0; new MutationObserver((ms) => { for (const m of ms) window.__added += m.addedNodes.length; }).observe(document.querySelector('#pick-list'), { childList: true }); });
+  for (const q of ['ll', 'lll', 'llll']) await type(page, q);
+  // フォーカスをピックアップに置いたまま、検索の入力イベントだけを起こす
+  await page.focus('#pick-list li a');
+  await page.evaluate(() => { const q = document.querySelector('#query'); q.value = 'lll'; q.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.waitForFunction(() => new URLSearchParams(location.search).get('q') === 'lll', null, { timeout: T }); await frames(page);
+  assert.deepEqual(await page.evaluate(() => ({ same: window.__li === document.querySelector('#pick-list li'), added: window.__added, running: window.__li.getAnimations().filter((a) => a.playState !== 'finished').length, focus: window.__li.contains(document.activeElement) })), { same: true, added: 0, running: 0, focus: true });
+  assert.deepEqual(await pickState(page), before);
+});
+await scenario('検索結果の画面の言語切替は、表示中の件を保ってピックアップの言語も変える', browser, { width: 390 }, async (page) => {
+  await type(page, 'llll'); await next(page); await frames(page);
+  const ja = await pickState(page);
+  await page.click('#language-toggle');
+  await until(page, () => document.querySelector('#pick-list li .site-content > p')?.textContent.startsWith('A long description'), null, '言語切替後もピックアップが前の言語のまま');
+  assert.equal((await pickState(page)).name, ja.name, '表示中の件が巻き戻った');
+  return summary(await cycle(page, 'search en'));
 });
 await browser.close();
 const big = await launch(['--blink-settings=minimumFontSize=24,minimumLogicalFontSize=24']);
