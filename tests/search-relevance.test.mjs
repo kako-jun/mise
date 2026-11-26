@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
-import { querySites, planQuery, decodeCursor, encodeCursor, siteOrder, SORT_KEYS, cleanQuery, searchText, RELEVANCE_MAX, RANK_REST } from '../src/sites.js';
+import { querySites, planQuery, decodeCursor, encodeCursor, siteOrder, SORT_KEYS, cleanQuery, searchText, relevanceKeys, RELEVANCE_MAX, RANK_REST } from '../src/sites.js';
 import { SQL, chunkRanges } from '../scripts/build-search-fts.mjs';
 
 // 検索の関連度（#301。migration 0041 の site_search_keys）。全 migration を適用したメモリ SQLite で、
@@ -67,6 +67,15 @@ add('dropbox', 'https://www.dropbox.com/', 'Dropbox', { reg: '2026-11-02T00:00:0
 add('sub-x', 'https://sub.x.com/', 'Sub', { reg: '2026-11-03T00:00:00Z', cc: 'US' }); // サブドメインは x.com とも x とも一致しない
 add('kanazawa', 'https://www4.city.kanazawa.lg.jp/', '金沢市', { reg: '2026-11-13 00:00:00', bulk: 1 });
 // 完全一致が 30 件（段をまたぐページ送り）。範囲・タグ・カテゴリも散らす。
+// URL の形の検索語（候補の鍵）: www あり / なしの Yahoo! JAPAN 風の 2 件。www なしの方は search_text に www.yahoo.co.jp を含まない（部分一致の集合の外）
+add('yahoo-www', 'https://www.yahoo.co.jp/', 'Yahoo! JAPAN', { reg: '2020-02-01T00:00:00Z' });
+add('yahoo-bare', 'https://yahoo.co.jp/', 'ヤフー', { reg: '2020-03-01T00:00:00Z' });
+// 完全一致がちょうど RELEVANCE_MAX 件（段あり）と RELEVANCE_MAX + 1 件（段なし）の境界
+for (let i = 0; i < RELEVANCE_MAX; i++) add('e100-' + String(i).padStart(3, '0'), `https://e100-${i}.example/`, 'edge hundred', { reg: `2024-0${1 + (i % 9)}-1${i % 9}T00:00:00Z`, desc: 'edge' });
+for (let i = 0; i < RELEVANCE_MAX + 1; i++) add('e101-' + String(i).padStart(3, '0'), `https://e101-${i}.example/`, 'edge overflow', { reg: `2024-0${1 + (i % 9)}-1${i % 9}T00:00:00Z`, desc: 'edge' });
+// 境界の語を紹介文にだけ含む（完全一致でない）新しいサイト。段があれば完全一致の 100 件の後ろ、段がなければ日付順で先頭に来る
+add('edge-desc-100', 'https://edge-desc-100.example/', 'edge note', { reg: '2026-11-20T00:00:00Z', desc: 'edge hundred の紹介' });
+add('edge-desc-101', 'https://edge-desc-101.example/', 'edge note 2', { reg: '2026-11-20T00:00:00Z', desc: 'edge overflow の紹介' });
 for (let i = 0; i < 30; i++) add('mid' + String(i).padStart(2, '0'), `https://mid${i}.example/`, i % 2 ? 'Mid Name' : 'mid name', { reg: `2025-0${1 + (i % 9)}-0${1 + (i % 7)}T00:00:00Z`, cc: i % 3 ? 'JP' : 'US', bulk: i % 7 === 0 ? 1 : 0, cat: i % 4 !== 0, common: i % 5 !== 0 });
 db.exec('COMMIT');
 // 完全一致が RELEVANCE_MAX を超える語（common name は 1100 / 9 = 123 件）
@@ -82,14 +91,19 @@ const hitsInOrder = ({ cc, category, q, tags = [] }) => {
   for (const t of tags) { w.push('(SELECT COUNT(*) FROM site_tags x WHERE x.site_id = s.id AND (x.label_ja = ? OR x.label_en = ?)) > 0'); a.push(t, t); }
   return db.prepare(`SELECT s.id FROM sites s ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ${siteOrder()}`).all(...a).map(r => r.id);
 };
+// 鍵を引く候補の参照実装: 検索語そのもの + scheme:// と末尾の / と（残りに . があれば）先頭の www. を除いた語
+const refCands = q => { let t = q; const m = t.match(/^[a-z][a-z0-9+.-]*:\/\//); if (m) t = t.slice(m[0].length); while (t.endsWith('/')) t = t.slice(0, -1); if (t.startsWith('www.') && t.slice(4).includes('.')) t = t.slice(4); return t && t !== q ? [q, t] : [q]; };
+// 完全一致の段: 候補のどれかの鍵を持つサイト（範囲・カテゴリ・タグで絞る。候補が検索語だけなら部分一致でも絞る）を rank → 今の並びで。その後に「部分一致 − 段」を今の並びで。
 const ref = o => {
   const plain = hitsInOrder(o);
   if (!o.q) return plain;
-  const byId = new Map(SITES.map(s => [s.id, refKeys(s)]));
-  const exactAll = SITES.filter(s => byId.get(s.id).has(o.q));
+  const cands = refCands(o.q), byId = new Map(SITES.map(s => [s.id, refKeys(s)]));
+  const rank = id => Math.min(...cands.map(c => byId.get(id).get(c) ?? RANK_REST));
+  const exactAll = SITES.filter(s => rank(s.id) < RANK_REST);
   if (exactAll.length === 0 || exactAll.length > RELEVANCE_MAX) return plain;
-  const rank = id => byId.get(id).get(o.q) ?? RANK_REST;
-  return plain.map((id, i) => [id, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  const pool = cands.length > 1 ? hitsInOrder({ ...o, q: null }) : plain; // 今の並び（候補が 2 つなら部分一致で絞らない母集団）
+  const exact = pool.map((id, i) => [id, i]).filter(([id]) => rank(id) < RANK_REST).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  return [...exact, ...plain.filter(id => rank(id) === RANK_REST)];
 };
 const pagesOf = async (o, limit) => {
   const ids = []; let cur = null, first;
@@ -163,6 +177,13 @@ const cases = [
   ['common name（完全一致が上限超え = 段なし）', { q: 'common name' }],
   ['名前の完全一致 1 件（n10）', { q: 'n10' }],
   ['完全一致なし（example）', { q: 'example' }],
+  ['URL の形 www.x.com（段の x.com は部分一致の外）', { q: 'www.x.com' }],
+  ['URL の形 https://x.com/', { q: 'https://x.com/' }],
+  ['URL の形 https://www.x.com/ + 範囲 US', { q: 'https://www.x.com/', cc: 'US' }],
+  ['URL の形 www.yahoo.co.jp', { q: 'www.yahoo.co.jp' }],
+  ['URL の形 www.yahoo.co.jp + タグ', { q: 'www.yahoo.co.jp', tags: ['common'] }],
+  ['完全一致ちょうど RELEVANCE_MAX 件（段あり）', { q: 'edge hundred' }],
+  ['完全一致 RELEVANCE_MAX + 1 件（段なし）', { q: 'edge overflow' }],
 ];
 for (const [label, o] of cases) {
   test(`全ページ連結が参照実装と一致（重複・欠落なし）: ${label}`, async () => {
@@ -177,8 +198,8 @@ for (const [label, o] of cases) {
   });
 }
 
-test('?page=N（offset）の各ページが参照実装の区切りと一致し、総件数は段の有無で変わらない', async () => {
-  for (const o of [{ q: 'mid name' }, { q: 'mid name', cc: 'JP' }, { q: 'x.com' }, { q: 'x' }]) {
+test('?page=N（offset）の各ページが参照実装の区切りと一致し、総件数は段の有無で変わらない（部分一致の外の段のサイトは足す）', async () => {
+  for (const o of [{ q: 'mid name' }, { q: 'mid name', cc: 'JP' }, { q: 'x.com' }, { q: 'x' }, { q: 'www.x.com' }, { q: 'www.yahoo.co.jp' }, { q: 'https://www.x.com/', cc: 'US' }]) {
     const want = ref(o), limit = 7;
     for (let p = 1; p <= Math.min(12, Math.ceil(want.length / limit) + 1); p++) {
       const r = await querySites(d, { ...o, limit, offset: (p - 1) * limit });
@@ -244,4 +265,29 @@ test('site_search_keys が無い（migration 未適用・ロールバック後�
   assert.equal((await planQuery(dt, { q: 'x' })).relevance, false);
   const r2 = await querySites(dt, { q: 'x', limit: 10, cursor: relCur }); // 段つきカーソル + 表なし: 例外にせず今の並びの位置として続ける
   assert.ok(Array.isArray(r2.items));
+});
+
+test('URL の形の検索語: https://x.com/・www.x.com・https://www.x.com/ で x.com が先頭、www.yahoo.co.jp で www なしの方も段に入る。総件数は部分一致 + 段の外の分', async () => {
+  for (const q of ['https://x.com/', 'www.x.com', 'https://www.x.com/', 'HTTPS://WWW.X.COM/']) assert.equal((await querySites(d, { q: cleanQuery(q), limit: 40 })).items[0].id, 'x-top', q);
+  const y = await querySites(d, { q: 'www.yahoo.co.jp', limit: 40 });
+  assert.deepEqual(y.items.map(i => i.id), ['yahoo-bare', 'yahoo-www']); // 同じ rank 0（ホスト一致・トップ）の中は今の並び（yahoo-bare の方が新しい）
+  assert.equal(y.total, 2); // 部分一致は yahoo-www の 1 件だけ。段の外の yahoo-bare を足す
+  const w = await querySites(d, { q: 'www.x.com', limit: 3 });
+  assert.equal(w.total, ref({ q: 'www.x.com' }).length); // 末尾に届かない先頭ページ（数える経路）でも段の外の分を足す
+  assert.ok(!hitsInOrder({ q: 'www.x.com' }).includes('x-top'));
+});
+
+test('候補の鍵（relevanceKeys）: scheme・末尾の /・先頭の www. を除いた語を足す。除いても同じなら検索語だけ', () => {
+  const cases = [['x.com', ['x.com']], ['x', ['x']], ['https://x.com/', ['https://x.com/', 'x.com']], ['www.x.com', ['www.x.com', 'x.com']], ['https://www.yahoo.co.jp/', ['https://www.yahoo.co.jp/', 'yahoo.co.jp']],
+    ['x.com/', ['x.com/', 'x.com']], ['www.com', ['www.com']], ['https://', ['https://']], ['///', ['///']], ['http://example.com/path/', ['http://example.com/path/', 'example.com/path']], ['金沢市', ['金沢市']]];
+  for (const [q, want] of cases) { assert.deepEqual(relevanceKeys(q), want, q); assert.deepEqual(refCands(q), want, 'ref ' + q); }
+});
+
+test('境界: 完全一致がちょうど RELEVANCE_MAX 件なら段を使い、RELEVANCE_MAX + 1 件なら使わない', async () => {
+  assert.equal((await planQuery(d, { q: 'edge hundred' })).relevance, true);
+  assert.equal((await planQuery(d, { q: 'edge overflow' })).relevance, false);
+  const h = (await querySites(d, { q: 'edge hundred', limit: 100 })).items.map(i => i.id);
+  assert.ok(h.every(id => id.startsWith('e100-')) && h.length === RELEVANCE_MAX); // 段の 100 件が先、紹介文だけの新しいサイトは次のページ
+  const o = (await querySites(d, { q: 'edge overflow', limit: 1 })).items.map(i => i.id);
+  assert.deepEqual(o, ['edge-desc-101']); // 段なし: 日付の新しい紹介文だけのサイトが先頭
 });

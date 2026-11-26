@@ -126,12 +126,21 @@ const ftsTerms = q => queryTerms(q).filter(t => [...t].length >= FTS_MIN_CHARS).
 // ---- 検索の関連度（#301。migration 0041 の site_search_keys）----
 // 検索語があるときだけ、検索語と「完全に一致する」サイトを段として先に出す（完全一致の段 > その他。同じ段の中は今の並び = 段は bulk_import より前）。
 // 完全一致の段の中の順（rank。小さいほど上）: 0 ホスト名（www. を除く）が一致・トップ / 1 ホスト名が一致・パスあり / 2・3 ドメインの主要部（x.com の x）が一致・トップ / パスあり / 4 サイト名（name・name_ja・name_en）が一致。
-// 鍵は sites のトリガが作る（定義は 0041 の先頭のコメント）。検索語との比較は「鍵 = 検索語（cleanQuery 済み = NFKC + 小文字）」の等値で、索引（主キー key, site_id）で引く。
+// 鍵は sites のトリガが作る（定義は 0041 の先頭のコメント）。検索語との比較は「鍵 = 検索語（cleanQuery 済み = NFKC + 小文字）」の等値（URL の形の語は下の relevanceKeys の候補も）で、索引（主キー key, site_id）で引く。
 // 前方一致・部分一致の段は作らない: 段の中を日付順に並べるには該当を全部読む必要があり（x の前方一致は数百〜数千件）、読み取りがヒット数に比例するため。
 // 完全一致が RELEVANCE_MAX 件を超える語（ありふれた名前）は段を使わず今の並び（段の中の並べ替えが該当数に比例するので上限を置く。100 件も同名なら「その 1 件を探す」検索ではない）。
 // 段のあとの「その他」は、今の並び・今の計画のまま、鍵が一致したサイトだけを相関の `NOT EXISTS`（主キーの点引き。ほかの条件を通った行だけを確かめ、一致しなければ読み取りは 0 行）で除く。
 //   `s.id NOT IN (SELECT …)` は走査する行ごとに一時表を引くぶん読み取りに数えられ、ローカル D1 で走査の読み取りがほぼ倍になった（1,490 → 2,984 行）。総件数は段の有無で変わらない（同じ集合）。
 // 表が無い（migration 未適用・ロールバック後）ときは段を使わない（今の並び）。
+// 鍵を引く候補（relevanceKeys）: 検索語そのものに加え、URL の形で打たれた語（`https://x.com/`・`www.x.com`・`www.yahoo.co.jp`）から scheme://・末尾の /・先頭の www.
+//   （残りに . があるときだけ。鍵の www. の扱いと同じ）を除いた語も引く。除いた語でだけ一致するサイトは、検索語の部分一致の集合（その他の段・総件数の母数）に
+//   入らないことがある（x.com の search_text に www.x.com は無い）。そのため候補が 2 つのときは、完全一致の段を部分一致で絞らず（範囲・カテゴリ・タグでは絞る）、
+//   部分一致に入らない段のサイトの数を総件数に足す（数え方は runQuery の total）。一覧は「完全一致の段 + （部分一致 − 段）」で重複・欠落はない。
+//   候補が検索語だけのときは、段も部分一致で絞る（鍵 = 検索語のサイトは部分一致に必ず入るので集合は今と同じ。総件数の読み足しもしない）。
+export const relevanceKeys = q => {
+  const s = q.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/\/+$/, ''), t = /^www\..*\./.test(s) ? s.slice(4) : s;
+  return t && t !== q ? [q, t] : [q];
+};
 export const RELEVANCE_MAX = 100;
 export const RANK_REST = 5; // カーソルの段の値で「その他」を表す（完全一致の段の rank は 0〜4）
 const relKeys = keys => [{ expr: 'k.rank', dir: 'ASC', type: 'number' }, ...keys];
@@ -164,9 +173,11 @@ export async function planQuery(db, { cc = null, region = null, category = null,
   // qMode: 'fts'（一覧も件数も索引）/ 'instr'。qOver: 索引の該当数が TOTAL_CAP を超えると分かった。qCountViaFts: 併用ありで総件数だけ索引から数える（該当が TOTAL_CAP 超〜FTS_EXTRA_PROBE 以下）。
   const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false, relevance: false };
   const jobs = [];
-  // 関連度の段（#301）: 検索語と等しい鍵を RELEVANCE_MAX + 1 件まで数える（鍵の索引で該当数 + 1 行まで）。1〜RELEVANCE_MAX 件なら段を使う。
+  // 関連度の段（#301）: 候補の鍵に一致するサイトを RELEVANCE_MAX + 1 件まで数える（鍵の索引で 候補数 × (RELEVANCE_MAX + 1) 行まで。1 サイトは候補ごとに高々 1 行なので、
+  // この行数で打ち切っても「異なるサイトが RELEVANCE_MAX 以下」は正しく判定できる）。1〜RELEVANCE_MAX 件なら段を使う。
   if (q) jobs.push((async () => {
-    try { const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM site_search_keys WHERE key = ?1 LIMIT ?2)`).bind(q, RELEVANCE_MAX + 1).first())?.n ?? 0; plan.relevance = n >= 1 && n <= RELEVANCE_MAX; }
+    const ks = relevanceKeys(q);
+    try { const n = (await db.prepare(`SELECT COUNT(DISTINCT site_id) AS n FROM (SELECT site_id FROM site_search_keys WHERE key IN (${ks.map(() => '?').join(', ')}) LIMIT ?)`).bind(...ks, ks.length * (RELEVANCE_MAX + 1)).first())?.n ?? 0; plan.relevance = n >= 1 && n <= RELEVANCE_MAX; }
     catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; /* 表なし → 段なし */ }
   })());
   if (category) jobs.push((async () => {
@@ -290,23 +301,37 @@ async function runQuery(db, o, basePlan) {
     try { results = await listRelevance(); }
     catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; console.error('site_search_keys が無いので段なしで続ける:', e.message); return runQuery(db, { ...o, cursor: hasCursor ? { vals: cursor.vals.slice(1) } : cursor }, { ...basePlan, relevance: false }); }
   }
+  // 完全一致の段の SQL。k は候補の鍵ごとの一致を 1 サイト 1 行（小さい rank）にまとめたもの。loose（候補が 2 つ）のときは部分一致で絞らない（relevanceKeys の説明）。
+  function exactParts() {
+    const ks = relevanceKeys(q), loose = ks.length > 1;
+    const ex = filters({ cc, region, category, q: loose ? null : q, tags, recent }, { ...plan, categoryMode: 'exists', driveTag: null, qMode: 'instr' });
+    const exactSql = (sel, extra = []) => `SELECT ${sel} FROM (SELECT site_id, MIN(rank) AS rank FROM site_search_keys WHERE key IN (${ks.map(() => '?').join(', ')}) GROUP BY site_id) k CROSS JOIN sites s ON s.id = k.site_id${[...ex.where, ...extra].length ? ' WHERE ' + [...ex.where, ...extra].join(' AND ') : ''}`;
+    return { ks, loose, ex, exactSql };
+  }
+  // 総件数に足す分: loose のとき、部分一致の集合に入らない完全一致の段のサイトの数（段は RELEVANCE_MAX 件以下なので、読むのも鍵と段のサイトだけ）。
+  const outsideHits = async () => {
+    if (!rel) return 0;
+    const { ks, loose, ex, exactSql } = exactParts();
+    if (!loose) return 0;
+    const terms = queryTerms(q);
+    return (await db.prepare(exactSql('COUNT(*) AS n', [`NOT (${terms.map(() => 'instr(s.search_text, ?) > 0').join(' AND ')})`])).bind(...ks, ...ex.args, ...terms).first())?.n ?? 0;
+  };
   // 完全一致の段 → その他 の順に limit + 1 行まで集める。完全一致の段は鍵の索引から引き（CROSS JOIN で鍵の表を外側に固定）、絞り込みは 1 行ずつ確かめる形（EXISTS・instr）にする。
   async function listRelevance() {
-    const ex = filters({ cc, region, category, q, tags, recent }, { ...plan, categoryMode: 'exists', driveTag: null, qMode: 'instr' });
-    const exactSql = (sel, extra = []) => `SELECT ${sel} FROM site_search_keys k CROSS JOIN sites s ON s.id = k.site_id WHERE ${['k.key = ?', ...ex.where, ...extra].join(' AND ')}`;
+    const { ex, exactSql, ks } = exactParts();
     const inExact = !hasCursor || cursor.vals[0] < RANK_REST;
     let exact = [];
     if (inExact) {
       const c = hasCursor ? afterCursor(cursor.vals, relKeys(keys)) : null;
       // 並べ替えは id と並びのキーだけで行い、画面の列（タグ・カテゴリの副問い合わせを含む）は残った 1 ページ分だけで作る（並べ替える全行で作ると、段の該当数 × タグ数を読む）。
       const page = `${exactSql('k.site_id AS sid, k.rank AS rk', c ? [c.sql] : [])} ${siteOrder(relKeys(keys))} LIMIT ? OFFSET ?`;
-      exact = (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)}, k.rk AS _r FROM (${page}) k CROSS JOIN sites s ON s.id = k.sid ${siteOrder(relKeys(keys)).replace('k.rank', 'k.rk')}`).bind(q, ...ex.args, ...(c?.args ?? []), limit + 1, start).all()).results;
+      exact = (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)}, k.rk AS _r FROM (${page}) k CROSS JOIN sites s ON s.id = k.sid ${siteOrder(relKeys(keys)).replace('k.rank', 'k.rk')}`).bind(...ks, ...ex.args, ...(c?.args ?? []), limit + 1, start).all()).results;
     }
     if (exact.length > limit) return exact;
     // ?page=N（offset）が完全一致の段を越えたら、段の件数を引いた位置から「その他」を読む（段は RELEVANCE_MAX 件以下）。
     let restOff = 0;
-    if (!hasCursor && start > 0 && !exact.length) restOff = Math.max(0, start - ((await db.prepare(exactSql('COUNT(*) AS n')).bind(q, ...ex.args).first())?.n ?? 0));
-    const rest = await listRest(hasCursor && !inExact ? cursor.vals.slice(1) : null, limit + 1 - exact.length, restOff, ['NOT EXISTS (SELECT 1 FROM site_search_keys x WHERE x.key = ? AND x.site_id = s.id)'], [q]);
+    if (!hasCursor && start > 0 && !exact.length) restOff = Math.max(0, start - ((await db.prepare(exactSql('COUNT(*) AS n')).bind(...ks, ...ex.args).first())?.n ?? 0));
+    const rest = await listRest(hasCursor && !inExact ? cursor.vals.slice(1) : null, limit + 1 - exact.length, restOff, [`NOT EXISTS (SELECT 1 FROM site_search_keys x WHERE x.key IN (${ks.map(() => '?').join(', ')}) AND x.site_id = s.id)`], ks);
     return [...exact, ...rest.map(r => ({ ...r, _r: RANK_REST }))];
   }
   const more = results.length > limit, rows = results.slice(0, limit);
@@ -321,11 +346,11 @@ async function runQuery(db, o, basePlan) {
     else if (plan.qOver && !category && !cc && !region && !tags?.length && !recent) { out.total = TOTAL_CAP; out.total_capped = true; } // q だけで索引の該当が上限超え: 数えない
     else if (plan.qCountViaFts) { // 併用ありで q の該当が上限超え〜FTS_EXTRA_PROBE 以下: 一覧は instr の走査のまま、総件数だけ索引から数える
       const f2 = filters({ cc, region, category, q, tags, recent }, { ...plan, qMode: 'fts' });
-      const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s WHERE ${f2.where.join(' AND ')} LIMIT ${TOTAL_CAP + 1})`).bind(...f2.args).first())?.n ?? 0;
+      const n = ((await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s WHERE ${f2.where.join(' AND ')} LIMIT ${TOTAL_CAP + 1})`).bind(...f2.args).first())?.n ?? 0) + await outsideHits();
       out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
     }
     else {
-      const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''} LIMIT ${TOTAL_CAP + 1})`).bind(...args).first())?.n ?? 0;
+      const n = ((await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM sites s ${where.length ? 'WHERE ' + where.join(' AND ') : ''} LIMIT ${TOTAL_CAP + 1})`).bind(...args).first())?.n ?? 0) + await outsideHits(); // 段の部分一致に入らない分（relevanceKeys）
       out.total = Math.min(n, TOTAL_CAP); out.total_capped = n > TOTAL_CAP;
     }
   }

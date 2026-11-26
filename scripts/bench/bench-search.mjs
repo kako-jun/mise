@@ -21,7 +21,9 @@ const topTag = tags[0], rareTag = tags.find(x => x.n >= 15 && x.n <= 25) ?? tags
 const api = p => async () => { const r = await querySites(db, p); return `items=${r.items.length} total=${r.total}${r.total_capped ? '+' : ''}`; };
 const Q = [['q 多ヒット「写真」', '写真'], ['q 多ヒット 3字+「プログラミング」', 'プログラミング'], ['q 少ヒット「tag1999」', 'tag1999'], ['q 0 ヒット', 'zzqqxx存在しない'],
   // 関連度の段（#301）: ドメイン・名前の完全一致がある語（合成データに x.com・金沢市などを足して測る）と、完全一致が多すぎて段を使わない語
-  ['q 関連度「x」', 'x'], ['q 関連度「x.com」', 'x.com'], ['q 関連度 名前「金沢市」', '金沢市'], ['q 名前の完全一致 30 件前後「blog official lab」', 'blog official lab'], ['q 名前の完全一致が多い「サイトブログ」', 'サイトブログ']];
+  ['q 関連度「x」', 'x'], ['q 関連度「x.com」', 'x.com'], ['q 関連度 名前「金沢市」', '金沢市'], ['q 名前の完全一致 30 件前後「blog official lab」', 'blog official lab'], ['q 名前の完全一致が多い「サイトブログ」', 'サイトブログ'],
+  // URL の形の語（#301 の候補の鍵）: 段の x.com は部分一致の外
+  ['q URL の形「https://www.x.com/」', 'https://www.x.com/'], ['q URL の形「www.x.com」', 'www.x.com']];
 for (const [lab, q] of Q) await m(`/api/sites?q= ${lab}`, api({ q: cleanQuery(q) }));
 await m('/api/sites 既定', api({})); await m('/api/sites scope=jp', api({ cc: 'JP' }));
 { const r = await querySites(db, { limit: 40 }); await m('/api/sites 既定 cursor 2 ページ目', api({ cursor: decodeCursor(r.next_cursor) })); }
