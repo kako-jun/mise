@@ -322,7 +322,7 @@ function renderSite(target, site, showCategories=false, position=null) {
       path.forEach((part,i)=>{
         if(i) row.append(' › ');
         const sub=path.slice(0,i+1);
-        row.append(link(name(categories.find(c=>c.id===part)),sub,()=>{logActivity(`cd /${sub.join('/')}`);showDirectory(sub);}));
+        row.append(link(name(categories.find(c=>c.id===part)),sub,()=>{logActivity(`cd /${sub.join('/')}`);openCategory(sub);}));
       });
     });
     content.append(row);
@@ -479,24 +479,26 @@ function swapView(viewKey, animate, fn, noVt=false) {
   fn(); fadeInView();
 }
 let viewShown=false;
-function showDirectory(path, updateHistory=true, preserveSsr=false) {
+function showDirectory(path, updateHistory=true, preserveSsr=false, {toTop=false}={}) {
   const first=!viewShown; viewShown=true;
   currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); // 描画が遅れても、以降の再描画（applyLanguage 等）は新しい画面を指す
   // URL は遷移の描画を待たず同期で確定する（遷移中に戻るを押しても URL と画面が食い違わない）
   if(updateHistory && location.pathname+location.search!==categoryUrl(path)) pushUrl(categoryUrl(path));
-  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>showDirectoryNow(path, updateHistory, preserveSsr), fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
+  swapView(`${currentScope}|${path.join('/')}|`, (!keepRequestOpen || animateRedraw) && !preserveSsr && !first, ()=>{ showDirectoryNow(path, updateHistory, preserveSsr); if(toTop) scrollTo(0,0); }, fromPop && !path.length); // 戻る/進むで一覧の無い画面（ブラウザ標準のスクロール復元）へ戻るときは、描画を同期にする
 }
+// 画面内の操作（link() のリンク・ロゴ・検索結果の「カテゴリに戻る」）でカテゴリ画面を開くときは、新しい画面を先頭から見せる。scrollTo は描画の中: pushUrl() が前の画面の位置を保存した後で、View Transition では startViewTransition のキャプチャ後。旧像の見え方は既存仕様（style.css の列の上端揃え）。
+function openCategory(path) { showDirectory(path,true,false,{toTop:true}); }
 function showDirectoryNow(path, updateHistory, preserveSsr) {
   syncFeedEntry();
   if(!keepRequestOpen) setRequestOpen(false);
   currentPath=path; currentSearch=null; currentTags=[]; tagPath=[]; renderChips(); updateTitle(); $('#directory').hidden=false; $('#results').hidden=true;
   const crumbs=$('#breadcrumbs'), box=$('#categories'), siteBox=$('#directory-sites'); crumbs.replaceChildren(); box.replaceChildren();
   if(path.length) {
-    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');showDirectory([]);resetGlobe();}));
-    path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);showDirectory(path.slice(0,i+1));})); });
+    crumbs.append(link(t('top'),[],()=>{logActivity('cd /');openCategory([]);resetGlobe();}));
+    path.forEach((id,i)=>{ crumbs.append(' › '); const c=categories.find(x=>x.id===id); if(i===path.length-1) crumbs.append(document.createTextNode(name(c))); else crumbs.append(link(name(c),path.slice(0,i+1),()=>{logActivity(`cd /${path.slice(0,i+1).join('/')}`);openCategory(path.slice(0,i+1));})); });
   }
   const children=categories.filter(c=>c.parent_id===(path.at(-1)??null));
-  for(const c of children) { if(c===globalThis.MiseFeedEntry.recentFolder) { box.append(renderRecentFolder(c)); continue; } const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); showDirectory(next);})); const hd=document.createElement('div'); hd.className='site-head'; const bl=document.createElement('span'); bl.className='site-bullet'; bl.setAttribute('aria-hidden','true'); const ci=document.createElement('span'); ci.className='site-icon cat-icon'; ci.setAttribute('aria-hidden','true'); hd.append(bl,ci,h); div.append(hd); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
+  for(const c of children) { if(c===globalThis.MiseFeedEntry.recentFolder) { box.append(renderRecentFolder(c)); continue; } const next=[...path,c.id], div=document.createElement('div'),h=document.createElement('h2'); div.className='category'+(c.site_count?'':' is-empty'); h.append(link(`${name(c)} (${c.site_count})`,next,()=>{logActivity(`cd /${next.join('/')}`); openCategory(next);})); const hd=document.createElement('div'); hd.className='site-head'; const bl=document.createElement('span'); bl.className='site-bullet'; bl.setAttribute('aria-hidden','true'); const ci=document.createElement('span'); ci.className='site-icon cat-icon'; ci.setAttribute('aria-hidden','true'); hd.append(bl,ci,h); div.append(hd); if(!path.length){const p=document.createElement('p');p.className='sub';categories.filter(x=>x.parent_id===c.id).forEach((x,k)=>{ if(k) p.append(' / '); const s=document.createElement('span'); s.textContent=name(x); p.append(s); });div.append(p);} box.append(div); }
   $('#picks').hidden=false; renderPick();
   const pageNo=path.length ? pageFromLocation() : 1;
   const listKey=`${currentScope}|${path.join('/')}|${pageNo}`;
@@ -660,8 +662,8 @@ $('#query').addEventListener('compositionend',()=>{composing=false;updateSearchS
 $('#query').addEventListener('input',event=>{if(!composing && !event.isComposing) updateSearchSoon();});
 $('#search-form').addEventListener('submit',e=>{e.preventDefault();clearTimeout(searchTimer);if(composing) return;const q=$('#query').value.trim();if(q) {logActivity(`search ${q}`);commitSearchUrl(q);showResults(q);} else if(currentTags.length) {commitSearchUrl(q);showResults(q);} else {if(!leaveSearchUrl()) showDirectory(currentPath,false);}});
 for(const ev of ['pointerdown','focus','contextmenu']) $('#feed-entry').addEventListener(ev,syncFeedEntry); // 押す直前・右クリック/フォーカスのときに href を今の状態へ
-$('#clear').addEventListener('click',e=>{e.preventDefault();showDirectory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
-$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';showDirectory([]);resetGlobe();});
+$('#clear').addEventListener('click',e=>{e.preventDefault();openCategory(currentPath);}); // カテゴリへ戻るとタグのチップも外れる
+$('#home-link').addEventListener('click',e=>{if(e.button!==0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)return;e.preventDefault();logActivity('cd /');$('#query').value='';openCategory([]);resetGlobe();});
 function renderReqStatus(){const st=$('#req-status');if(!reqStatus){st.textContent='';return;}st.textContent=t(reqStatus.key);st.dataset.state=reqStatus.state;}
 $('#request-form').addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.currentTarget, st=$('#req-status'), btn=$('#req-submit');
