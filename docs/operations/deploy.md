@@ -278,6 +278,18 @@ npx wrangler d1 execute mise --remote --command "DROP TRIGGER sites_search_keys_
 
 DROP しても `d1_migrations` に 0041 は残り、同じ 0041 は二度と流れない（入れ直すには同じ内容の新しい migration が要る。表・トリガは `IF NOT EXISTS` / `DROP TRIGGER IF EXISTS` で書いてあるので、`wrangler d1 execute --file migrations/0041_site_search_keys.sql` で流し直しても同じ結果になる）。
 
+## 前方一致の索引（0042）を本番へ適用する手順（Issue #301）
+
+0042 は `site_search_keys` に式インデックス `idx_site_search_keys_len (length(key), key)` を 1 本作るだけ（表・トリガ・既存の値は変えない）。**どちらが先でも壊れない**: 新しいコードは索引が無いと、前方一致の鍵が 100 行以下の語は主キーの範囲で前方一致の段を作り、100 行を超える語（1〜2 文字など）は前方一致の段を作らない（`INDEXED BY` の `no such index` を握る）。閲覧の途中で索引を作る・消すことがあっても、段の集合はカーソルの T で決まるので重複・欠落は出ない（消えている間は主キーの範囲で同じ集合を読む）。旧コードは索引を使わない。順序は通常どおり「migration → マージ」（短い語の前方一致の段が出るのは両方そろってから）。
+
+1. 未適用が 0042 だけであること: `node scripts/check-migrations-applied.mjs`
+2. プレビュー DB に適用（「プレビュー DB を本番に追従させる手順」の `migrations apply`）。
+3. 本番に適用: `npx wrangler d1 migrations apply mise --remote`（書き込みは鍵の行数ぶんの索引。本番 約 1.9 万サイトで約 5.6 万行）
+4. 読み取りだけで確かめる: `npx wrangler d1 execute mise --remote --command "SELECT key, site_id FROM site_search_keys INDEXED BY idx_site_search_keys_len WHERE length(key) IN (2,3,4,5,6) AND key > 'a' AND key < 'a' || char(1114111) ORDER BY length(key), key LIMIT 100"`（エラーなく返れば合格）
+5. マージ（自動デプロイ）。`/api/sites?scope=all&q=yaho` の先頭が Yahoo! JAPAN、`q=githu` の先頭が GitHub であること。
+
+**戻し方**: `npx wrangler d1 execute mise --remote --command "DROP INDEX idx_site_search_keys_len"`（コードは戻さなくてよい。短い語の前方一致の段が出なくなるだけ）。
+
 ## プレビュー DB を本番に追従させる手順
 
 `mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）。**`migrations list` / `migrations apply` だけは、一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。`d1 execute`・`d1 export`・`refresh-search-text.mjs` は `mise-preview` を名前で指定すればそのまま動く。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:

@@ -23,10 +23,14 @@ const Q = [['q 多ヒット「写真」', '写真'], ['q 多ヒット 3字+「�
   // 関連度の段（#301）: ドメイン・名前の完全一致がある語（合成データに x.com・金沢市などを足して測る）と、完全一致が多すぎて段を使わない語
   ['q 関連度「x」', 'x'], ['q 関連度「x.com」', 'x.com'], ['q 関連度 名前「金沢市」', '金沢市'], ['q 名前の完全一致 30 件前後「blog official lab」', 'blog official lab'], ['q 名前の完全一致が多い「サイトブログ」', 'サイトブログ'],
   // URL の形の語（#301 の候補の鍵）: 段の x.com は部分一致の外
-  ['q URL の形「https://www.x.com/」', 'https://www.x.com/'], ['q URL の形「www.x.com」', 'www.x.com']];
+  ['q URL の形「https://www.x.com/」', 'https://www.x.com/'], ['q URL の形「www.x.com」', 'www.x.com'],
+  // 前方一致の段（#301）: 鍵が少ない語と、PREFIX_MAX 行を超える短い語（式インデックス 0042 を引く）
+  ['q 前方一致「githu」', 'githu'], ['q 前方一致「yaho」', 'yaho'], ['q 前方一致「goo」', 'goo'], ['q 前方一致 1 文字「s」', 's'], ['q 前方一致が多い「サイ」', 'サイ']];
 for (const [lab, q] of Q) await m(`/api/sites?q= ${lab}`, api({ q: cleanQuery(q) }));
 await m('/api/sites 既定', api({})); await m('/api/sites scope=jp', api({ cc: 'JP' }));
 { const r = await querySites(db, { limit: 40 }); await m('/api/sites 既定 cursor 2 ページ目', api({ cursor: decodeCursor(r.next_cursor) })); }
+// ?page=N の深いページ（#301 PR #303 のレビュー）: 前方一致の段・その他の除外が offset の走査に乗る形
+for (const q of ['s', 'sa']) for (const page of [5, 20]) await m(`/api/sites?q=${q}&page=${page}（limit 40）`, api({ q: cleanQuery(q), limit: 40, offset: (page - 1) * 40 }));
 for (const q of ['x', 'x.com']) { const r = await querySites(db, { q: cleanQuery(q), limit: 40 }); await m(`/api/sites?q=${q} cursor 2 ページ目`, api({ q: cleanQuery(q), cursor: decodeCursor(r.next_cursor) })); }
 await m(`tag よく使う(${topTag.n}件)`, api({ tags: [topTag.t] })); await m(`tag 中程度(${midTag.n}件)`, api({ tags: [midTag.t] })); await m(`tag 稀(${rareTag.n}件)`, api({ tags: [rareTag.t] }));
 await m('tag よく使う + scope=jp', api({ tags: [topTag.t], cc: 'JP' }));
