@@ -34,7 +34,8 @@ const activeIs = (p, sel) => p.evaluate((s) => document.activeElement?.matches(s
 const rowIds = (p) => p.$$eval('.scope-dd-opt', (as) => as.map((a) => a.id.replace('scope-opt-', '')));
 const visibleIds = (p) => p.$$eval('.scope-dd-opt', (as) => as.filter((a) => getComputedStyle(a.closest('li')).display !== 'none').map((a) => a.id.replace('scope-opt-', '')));
 const open = async (p) => { await p.click('.scope-dd-btn'); await untilShown(p, '.scope-dd-panel', true); };
-const loadTop = async (p, u = '/jp/') => { await p.goto(BASE + u); await p.waitForSelector('.scope-dd-btn'); await p.waitForFunction(() => document.querySelector('.scope-dd-btn') && !document.documentElement.classList.contains('i18n-pending')); };
+// SSR の時点でボタンはあるが、操作を受けるのは起動処理が範囲ナビを描き直した後（__miseBooted）。i18n-pending は日本語表示でしか付かないので、それだけでは英語表示で描き直し前のボタンを押してしまう。
+const loadTop = async (p, u = '/jp/') => { await p.goto(BASE + u); await p.waitForFunction(() => window.__miseBooted === true && document.querySelector('.scope-dd-btn') && !document.documentElement.classList.contains('i18n-pending')); };
 const shot = (p, n) => SHOT && p.screenshot({ path: path.join(SHOT, `${n}.png`) });
 
 for (const view of ['phone', 'pc']) {
@@ -174,6 +175,8 @@ for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone'
       if (sel !== '.scope-dd-btn') return;
       const [b, g] = [await css(p, sel, 'backgroundColor'), await css(p, globe, 'backgroundColor')];
       if (b !== g || b !== CLEAR) bad.push(`[${state}] button background ${b}（地球の項目 ${g}）`);
+      const [bo, go] = [await css(p, sel, 'opacity'), await css(p, globe, 'opacity')]; // 薄さ
+      if (bo !== go) bad.push(`[${state}] button opacity ${bo}（地球の項目 ${go}）`);
       const want = await css(p, globe, 'color');
       for (const [part, prop] of [['', 'color'], [' .scope-dd-name', 'color'], [' .scope-dd-caret', 'stroke']]) {
         const got = await css(p, sel + part, prop);
@@ -228,6 +231,8 @@ for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone'
     await check('行を選んだ後');
     await p.hover('.scope-dd-btn'); await check('行を選んだ後の hover');
     assert.equal(bad.length, 0, `装飾・色の漏れが残っている ${bad.length} 件: ${[...new Set(bad)].join(' | ')}`);
+    // 下線が無いので border-color の transition は付けない。地球の項目の transition は残す
+    assert.deepEqual([await css(p, '.scope-dd-btn', 'transitionDuration'), await css(p, globe, 'transitionDuration'), await css(p, globe, 'transitionProperty')], ['0s', '0.15s', 'border-color']);
     // 残すもの: キーボードのフォーカス枠、地球の項目の hover の下線
     await p.focus('.scope-dd-btn'); await p.keyboard.press('Shift+Tab'); await p.keyboard.press('Tab');
     assert.equal(await activeIs(p, '.scope-dd-btn'), true);
@@ -286,6 +291,7 @@ await scenario('reduced-motion: ボトムシートのアニメと▾の回転が
   await loadTop(p); await open(p);
   assert.equal(await p.$eval('.scope-dd-panel', (e) => getComputedStyle(e).animationName), 'none');
   assert.equal(await p.$eval('.scope-dd-caret', (e) => getComputedStyle(e).transitionDuration), '0s');
+  for (const s of ['.scope-list .scope-item', '.scope-dd-btn']) assert.equal(await p.$eval(s, (e) => getComputedStyle(e).transitionDuration), '0s', s);
 });
 // JS 無効（SSR のまま）
 {
@@ -313,6 +319,9 @@ for (const view of ['phone', 'pc']) {
 // 全 ISO コードの旗（249）。旗を出す共通部品 MiseCountry を、実ブラウザで全コード分描く。
 for (const view of ['phone', 'pc']) {
   await scenario('全 249 コードの旗が表示される（未知コードは国コードのバッジ）', view, async (p) => {
+    const net = []; // 旗の読み込みの失敗（落ちたときに原因が分かるように出す）
+    p.on('requestfailed', (r) => r.url().includes('/flags/') && net.push(`${r.url().split('/').pop()} ${r.failure()?.errorText}`));
+    p.on('response', (r) => r.url().includes('/flags/') && r.status() >= 400 && net.push(`${r.url().split('/').pop()} HTTP ${r.status()}`));
     await loadTop(p);
     const res = await p.evaluate(async () => {
       const box = document.createElement('div'); box.id = 'flag-grid'; box.style.cssText = 'position:fixed;inset:0;z-index:99;background:#fff;overflow:auto;padding:6px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;font:9px monospace';
@@ -321,9 +330,9 @@ for (const view of ['phone', 'pc']) {
       await Promise.all([...box.querySelectorAll('img')].map((i) => i.complete ? 0 : new Promise((r) => { i.onload = i.onerror = r; })));
       await new Promise((r) => setTimeout(r, 300)); // error → バッジ差し替えを待つ
       const imgs = [...box.querySelectorAll('img')];
-      return { total: MISE_ISO.length, imgs: imgs.length, ok: imgs.filter((i) => i.naturalWidth > 0).length, badges: [...box.querySelectorAll('.scope-code')].map((b) => b.textContent) };
+      return { total: MISE_ISO.length, imgs: imgs.length, ok: imgs.filter((i) => i.naturalWidth > 0).length, zero: imgs.filter((i) => !i.naturalWidth).map((i) => `${i.src.split('/').pop()} complete=${i.complete}`), badges: [...box.querySelectorAll('.scope-code')].map((b) => b.textContent) };
     });
-    assert.deepEqual({ imgs: res.imgs, ok: res.ok, badges: res.badges }, { imgs: 249, ok: 249, badges: ['XX', 'ZZ'] });
+    assert.deepEqual({ imgs: res.imgs, ok: res.ok, badges: res.badges }, { imgs: 249, ok: 249, badges: ['XX', 'ZZ'] }, `実際の値 ${JSON.stringify({ imgs: res.imgs, ok: res.ok, badges: res.badges, zero: res.zero, net })}`); // 失敗の表示は先頭 3 行だけなので 1 行にまとめる
     console.log('     旗', res.ok, '/', res.total, '、バッジ', res.badges.join(','));
     if (SHOT) await p.screenshot({ path: path.join(SHOT, `${view}-all-flags.png`) });
   });
