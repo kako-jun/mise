@@ -109,9 +109,10 @@ test('total: 末尾まで届いた先頭ページは追加の読み取りなし�
   const n0 = (queries = 0, await querySites(counting, { q: cleanQuery('zzz') }), queries);
   assert.equal((await querySites(d, { q: cleanQuery('zzz') })).total, 0);
   // q の 0 件: 3 文字以上は索引の該当数を見る 1 本 + 一覧 1 本（#126 第3段）、1〜2 文字は一覧 1 本だけ。どちらも件数の数え直しはしない
-  assert.equal(n0, 2);
+  // どちらにも関連度の段の鍵を数える 1 本（#301。鍵の索引で該当数 + 1 行まで）が加わる
+  assert.equal(n0, 3);
   const n1 = (queries = 0, await querySites(counting, { q: cleanQuery('zz') }), queries);
-  assert.equal(n1, 1);
+  assert.equal(n1, 2);
   const want = ref({ q: cleanQuery('apple') }), last = Math.floor((want.length - 1) / PAGE_SIZE) * PAGE_SIZE;
   const r = await querySites(d, { q: cleanQuery('apple'), offset: last });
   assert.equal(r.total, want.length); assert.equal(r.next_cursor, null);
