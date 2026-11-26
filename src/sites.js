@@ -48,14 +48,18 @@ const keyCols = keys => keys.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
 // ---- 入力の解釈（不正は null → 呼び出し側が 400/404） ----
 export const parseLimit = raw => { if (raw == null || raw === '') return PAGE_SIZE; if (!/^-?\d{1,9}$/.test(raw)) return null; const n = Number(raw); return n >= 1 ? Math.min(n, MAX_LIMIT) : null; }; // 上限超は MAX_LIMIT に丸める
 // カーソルは全キー値の配列（id を含む）を JSON → base64url にしたもの。キーが増えても形式は変わらない。
+// 検索の関連度の段（#301。下の RELEVANCE_MAX）を使う検索では、先頭に段の値（rank。0〜RANK_REST の整数）を足した 1 つ長い配列になり、{ vals, rel: true } を返す。
+// 段の値の無いカーソル（段ができる前に発行したもの・段を使わない検索のもの）は今の並びのまま続ける（400 にしない。並びが途中で変わらないので重複・欠落も出ない）。
 export const encodeCursor = vals => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(vals)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 export function decodeCursor(raw, recent = false) {
   if (!raw) return { none: true };
   try {
     const b = atob(raw.replace(/-/g, '+').replace(/_/g, '/')), vals = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
-    const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS;
-    const ok = Array.isArray(vals) && vals.length === keys.length && vals.every((v, i) => v === null || (typeof v === keys[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
-    return ok && vals.at(-1) !== null ? { vals } : null;
+    const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS, rel = Array.isArray(vals) && vals.length === keys.length + 1;
+    if (rel && !(Number.isInteger(vals[0]) && vals[0] >= 0 && vals[0] <= RANK_REST)) return null;
+    const rest = rel ? vals.slice(1) : vals;
+    const ok = Array.isArray(vals) && rest.length === keys.length && rest.every((v, i) => v === null || (typeof v === keys[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
+    return ok && vals.at(-1) !== null ? (rel ? { vals, rel: true } : { vals }) : null;
   } catch (_) { return null; }
 }
 // 全角半角・大文字小文字をそろえる（検索語と sites.search_text の両方に同じ処理を使う）
@@ -119,6 +123,20 @@ export const FTS_EXTRA_PROBE = 3000;
 export const ftsQuery = q => '"' + q.replace(/"/g, '""') + '"';
 const ftsTerms = q => queryTerms(q).filter(t => [...t].length >= FTS_MIN_CHARS).map(ftsQuery).join(' AND ');
 
+// ---- 検索の関連度（#301。migration 0041 の site_search_keys）----
+// 検索語があるときだけ、検索語と「完全に一致する」サイトを段として先に出す（完全一致の段 > その他。同じ段の中は今の並び = 段は bulk_import より前）。
+// 完全一致の段の中の順（rank。小さいほど上）: 0 ホスト名（www. を除く）が一致・トップ / 1 ホスト名が一致・パスあり / 2・3 ドメインの主要部（x.com の x）が一致・トップ / パスあり / 4 サイト名（name・name_ja・name_en）が一致。
+// 鍵は sites のトリガが作る（定義は 0041 の先頭のコメント）。検索語との比較は「鍵 = 検索語（cleanQuery 済み = NFKC + 小文字）」の等値で、索引（主キー key, site_id）で引く。
+// 前方一致・部分一致の段は作らない: 段の中を日付順に並べるには該当を全部読む必要があり（x の前方一致は数百〜数千件）、読み取りがヒット数に比例するため。
+// 完全一致が RELEVANCE_MAX 件を超える語（ありふれた名前）は段を使わず今の並び（段の中の並べ替えが該当数に比例するので上限を置く。100 件も同名なら「その 1 件を探す」検索ではない）。
+// 段のあとの「その他」は、今の並び・今の計画のまま、鍵が一致したサイトだけを相関の `NOT EXISTS`（主キーの点引き。ほかの条件を通った行だけを確かめ、一致しなければ読み取りは 0 行）で除く。
+//   `s.id NOT IN (SELECT …)` は走査する行ごとに一時表を引くぶん読み取りに数えられ、ローカル D1 で走査の読み取りがほぼ倍になった（1,490 → 2,984 行）。総件数は段の有無で変わらない（同じ集合）。
+// 表が無い（migration 未適用・ロールバック後）ときは段を使わない（今の並び）。
+export const RELEVANCE_MAX = 100;
+export const RANK_REST = 5; // カーソルの段の値で「その他」を表す（完全一致の段の rank は 0〜4）
+const relKeys = keys => [{ expr: 'k.rank', dir: 'ASC', type: 'number' }, ...keys];
+const REL_ERR = /no such table: site_search_keys/i;
+
 // ---- 検索計画（#126 第2段）----
 // SQLite の計画器は件数を知らないので、重い経路は件数に応じてアプリが形を選ぶ。結果と並びはどの形でも同じ（読み取り行数だけが変わる）。
 //   カテゴリ: 小さい（直下の所属サイトが少ない）→ `IN (所属サイト)` で所属から引いて並べ替える / 大きい → 並びの索引を走査して `EXISTS` で確かめ、1 ページ分で止まる。
@@ -144,8 +162,13 @@ async function planFor(db, o, fresh) {
 }
 export async function planQuery(db, { cc = null, region = null, category = null, tags = [], q = null }) {
   // qMode: 'fts'（一覧も件数も索引）/ 'instr'。qOver: 索引の該当数が TOTAL_CAP を超えると分かった。qCountViaFts: 併用ありで総件数だけ索引から数える（該当が TOTAL_CAP 超〜FTS_EXTRA_PROBE 以下）。
-  const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false };
+  const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false, relevance: false };
   const jobs = [];
+  // 関連度の段（#301）: 検索語と等しい鍵を RELEVANCE_MAX + 1 件まで数える（鍵の索引で該当数 + 1 行まで）。1〜RELEVANCE_MAX 件なら段を使う。
+  if (q) jobs.push((async () => {
+    try { const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM site_search_keys WHERE key = ?1 LIMIT ?2)`).bind(q, RELEVANCE_MAX + 1).first())?.n ?? 0; plan.relevance = n >= 1 && n <= RELEVANCE_MAX; }
+    catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; /* 表なし → 段なし */ }
+  })());
   if (category) jobs.push((async () => {
     const scope = scopeKeyOf({ cc, region });
     const r = await db.prepare(`SELECT (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = 'all') AS n_all, (SELECT n FROM category_counts WHERE category_id = ?1 AND scope = ?2) AS n_scope, (SELECT n FROM scope_counts WHERE scope = ?2) AS n_base, EXISTS (SELECT 1 FROM categories WHERE parent_id = ?1) AS has_child`).bind(category, scope).first();
@@ -205,7 +228,7 @@ const COLUMNS = `s.id, s.name, s.name_ja, s.name_en, s.url, s.description_ja, s.
 // favicon_path は列の値のまま返す（app.js が favicon_url の無いときに静的な /icons/… の値へ戻す経路で読むため。消さない）。配信 URL を favicon_url に足す（取れていなければ null）。favicon_v は favicon_url の ?v= になるので出さない。
 // thumb_path（サイト固定のキー名）・thumb_captured_at は返さず、配信 URL（`?v=` に撮影時刻由来のバージョン）を thumb_url、極小プレースホルダを thumb_lqip に出す（どちらも無ければ null。画像が無いのにプレースホルダだけは出さない）。
 const LQIP = /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]{1,400}$/;
-const shape = ({ category_ids_json, favicon_v, thumb_path, thumb_lqip, thumb_captured_at, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; const thumb_url = thumbUrl(thumb_path, thumb_captured_at); return { ...r, favicon_url: faviconUrl(r.favicon_path, favicon_v), thumb_url, thumb_lqip: thumb_url && typeof thumb_lqip === 'string' && LQIP.test(thumb_lqip) ? thumb_lqip : null, category_ids: JSON.parse(category_ids_json || '[]') }; };
+const shape = ({ category_ids_json, favicon_v, thumb_path, thumb_lqip, thumb_captured_at, _r, ...r }) => { for (const k of Object.keys(r)) if (k.startsWith('_k')) delete r[k]; const thumb_url = thumbUrl(thumb_path, thumb_captured_at); return { ...r, favicon_url: faviconUrl(r.favicon_path, favicon_v), thumb_url, thumb_lqip: thumb_url && typeof thumb_lqip === 'string' && LQIP.test(thumb_lqip) ? thumb_lqip : null, category_ids: JSON.parse(category_ids_json || '[]') }; };
 
 // 1 ページ分。cursor は decodeCursor の結果、offset は ?page=N（SSR・直リンクの開始位置）用でカーソルが無いときだけ使う。
 // total は先頭ページ（カーソルなし）のときだけ入れる。q は cleanQuery 済み、tags は cleanTags 済みであること。
@@ -238,25 +261,56 @@ export async function querySites(db, o) {
   if (!await ftsReady(db)) return fallback('ready が 1 でない（作り直し中・表なし）');
   return res;
 }
-async function runQuery(db, { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0, recent = false }, basePlan) {
+async function runQuery(db, o, basePlan) {
+  const { cc = null, region = null, category = null, q = null, tags = [], limit = PAGE_SIZE, cursor = null, offset = 0, recent = false } = o;
   const hasCursor = cursor && !cursor.none, start = hasCursor ? 0 : offset;
+  // 関連度の段を使うか: 先頭ページは計画で決め、続きのページはカーソルの形（段の値の有無）に従う（途中で計画が変わっても並びを変えない）。
+  const rel = !!q && (hasCursor ? !!cursor.rel : !!basePlan.relevance);
+  if (hasCursor && cursor.rel && !rel) return runQuery(db, { ...o, cursor: { vals: cursor.vals.slice(1) } }, basePlan); // 検索語の無い段つきカーソル: 今の並びの位置として読む
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
   const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS;
   const { where, args } = filters({ cc, region, category, q, tags, recent }, plan);
-  const run = async (extra, extraArgs, lim, off, order = siteOrder(keys)) => {
-    const conds = [...where, ...extra];
-    return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...extraArgs, lim, off).all()).results;
+  // 「その他」の段（段を使わないときは全体）。excl は一覧だけに足す条件（完全一致の段のサイトを除く）。総件数の where には入れない。
+  const listRest = async (cur, lim, off, excl, exclArgs) => {
+    const run = async (extra, extraArgs, lim2, off2, order = siteOrder(keys)) => {
+      const conds = [...where, ...excl, ...extra];
+      return (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)} FROM sites s ${conds.length ? 'WHERE ' + conds.join(' AND ') : ''} ${order} LIMIT ? OFFSET ?`).bind(...args, ...exclArgs, ...extraArgs, lim2, off2).all()).results;
+    };
+    // IN（所属サイト・稀なタグの索引）で引く計画は、範囲条件を足すと SQLite が並びの索引の走査に切り替えて IN が効かなくなる。1 本の `A OR B OR C`（afterCursor）なら IN で引いたまま並べ替える。
+    const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag || plan.qMode === 'fts'; // 索引（MATCH）も IN で引く計画
+    if (cur && inDriven) { const c = afterCursor(cur, keys); return run([c.sql], c.args, lim, 0); }
+    if (cur) { const res = []; for (const t of cursorTerms(cur, keys)) { if (res.length >= lim) break; res.push(...await run([t.sql], t.args, lim - res.length, 0, t.order)); } return res; } // 項ごとに索引を引いて前から連結（cursorTerms）
+    return run([], [], lim, off);
   };
-  // IN（所属サイト・稀なタグの索引）で引く計画は、範囲条件を足すと SQLite が並びの索引の走査に切り替えて IN が効かなくなる。1 本の `A OR B OR C`（afterCursor）なら IN で引いたまま並べ替える。
-  const inDriven = (category && plan.categoryMode === 'in') || !!plan.driveTag || plan.qMode === 'fts'; // 索引（MATCH）も IN で引く計画
   let results;
-  if (hasCursor && inDriven) { const c = afterCursor(cursor.vals, keys); results = await run([c.sql], c.args, limit + 1, 0); }
-  else if (hasCursor) { results = []; for (const t of cursorTerms(cursor.vals, keys)) { if (results.length > limit) break; results.push(...await run([t.sql], t.args, limit + 1 - results.length, 0, t.order)); } } // 項ごとに索引を引いて前から連結（cursorTerms）
-  else results = await run([], [], limit + 1, start);
+  if (!rel) results = await listRest(hasCursor ? cursor.vals : null, limit + 1, start, [], []);
+  else {
+    try { results = await listRelevance(); }
+    catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; console.error('site_search_keys が無いので段なしで続ける:', e.message); return runQuery(db, { ...o, cursor: hasCursor ? { vals: cursor.vals.slice(1) } : cursor }, { ...basePlan, relevance: false }); }
+  }
+  // 完全一致の段 → その他 の順に limit + 1 行まで集める。完全一致の段は鍵の索引から引き（CROSS JOIN で鍵の表を外側に固定）、絞り込みは 1 行ずつ確かめる形（EXISTS・instr）にする。
+  async function listRelevance() {
+    const ex = filters({ cc, region, category, q, tags, recent }, { ...plan, categoryMode: 'exists', driveTag: null, qMode: 'instr' });
+    const exactSql = (sel, extra = []) => `SELECT ${sel} FROM site_search_keys k CROSS JOIN sites s ON s.id = k.site_id WHERE ${['k.key = ?', ...ex.where, ...extra].join(' AND ')}`;
+    const inExact = !hasCursor || cursor.vals[0] < RANK_REST;
+    let exact = [];
+    if (inExact) {
+      const c = hasCursor ? afterCursor(cursor.vals, relKeys(keys)) : null;
+      // 並べ替えは id と並びのキーだけで行い、画面の列（タグ・カテゴリの副問い合わせを含む）は残った 1 ページ分だけで作る（並べ替える全行で作ると、段の該当数 × タグ数を読む）。
+      const page = `${exactSql('k.site_id AS sid, k.rank AS rk', c ? [c.sql] : [])} ${siteOrder(relKeys(keys))} LIMIT ? OFFSET ?`;
+      exact = (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)}, k.rk AS _r FROM (${page}) k CROSS JOIN sites s ON s.id = k.sid ${siteOrder(relKeys(keys)).replace('k.rank', 'k.rk')}`).bind(q, ...ex.args, ...(c?.args ?? []), limit + 1, start).all()).results;
+    }
+    if (exact.length > limit) return exact;
+    // ?page=N（offset）が完全一致の段を越えたら、段の件数を引いた位置から「その他」を読む（段は RELEVANCE_MAX 件以下）。
+    let restOff = 0;
+    if (!hasCursor && start > 0 && !exact.length) restOff = Math.max(0, start - ((await db.prepare(exactSql('COUNT(*) AS n')).bind(q, ...ex.args).first())?.n ?? 0));
+    const rest = await listRest(hasCursor && !inExact ? cursor.vals.slice(1) : null, limit + 1 - exact.length, restOff, ['NOT EXISTS (SELECT 1 FROM site_search_keys x WHERE x.key = ? AND x.site_id = s.id)'], [q]);
+    return [...exact, ...rest.map(r => ({ ...r, _r: RANK_REST }))];
+  }
   const more = results.length > limit, rows = results.slice(0, limit);
-  const next_cursor = more ? encodeCursor(keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)) : null;
+  const next_cursor = more ? encodeCursor([...(rel ? [rows.at(-1)._r] : []), ...keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)]) : null;
   const out = { items: rows.map(shape), next_cursor };
   if (!hasCursor) {
     const plain = !category && !q && !tags?.length;

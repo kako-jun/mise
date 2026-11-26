@@ -20,7 +20,7 @@ cases.push([`タグ最多(${tags[0].n})`, { tags: [tags[0].t] }]);
 cases.push([`よく使うタグ5個AND`, { tags: tags.slice(0, 5).map(x => x.t) }]);
 const rare = tags.find(x => x.n >= 5 && x.n <= 40); if (rare) cases.push([`タグ稀(${rare.n})`, { tags: [rare.t] }]);
 const mid = tags.find(x => x.n >= 150 && x.n <= 700); if (mid) cases.push([`タグ中(${mid.n})`, { tags: [mid.t] }]);
-cases.push(['q「写真」', { q: '写真' }]);
+cases.push(['q「写真」', { q: '写真' }], ['q「x」（関連度 #301）', { q: 'x' }], ['q「x.com」（関連度 #301）', { q: 'x.com' }], ['q「金沢市」（関連度 #301）', { q: '金沢市' }], ['q「blog official lab」（関連度 #301）', { q: 'blog official lab' }]);
 const out = [];
 for (const [label, o] of cases) {
   const pages = []; let cur = null, ids = [], total;

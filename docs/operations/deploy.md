@@ -252,6 +252,31 @@ npx wrangler d1 execute mise --remote --command "DROP TRIGGER sites_fts_ai; DROP
 
 DROP しても `d1_migrations` には `0027_search_fts.sql` が残り、**同じ 0027 は二度と流れない**。入れ直すには、同じ内容の新しい migration（0028 以降）が要る。正本（`sites.search_text`）は変わらないので件数は失われない。Time Travel の bookmark でも戻せる。検索コードの instr の経路は残してある（消さない）。
 
+## 検索の関連度の鍵（0041）を本番へ適用する手順（Issue #301）
+
+**承認を取ってから実行する。** 0041 は `site_search_keys`（検索語と完全一致する鍵の表。[data-model.md](../design/data-model.md#インデックスと検索用列0018)）・`site_id` の索引・`sites` のトリガ 3 本を作り、既存行の鍵を 1 文で埋める。表・トリガを足すだけで既存の表は変えない。
+
+**順序は通常どおり「migration → マージ」**（検索結果に段が出るのは両方そろってから）。**どちらが先でも壊れない**: 新しいコードは表が無いと段を使わず従来の並びで返す（`planQuery()` が `no such table` を握る。段つきのカーソルが来ても既定の並びの位置として続ける）。旧コードは表を読まないので、migration だけ先に入っても画面は変わらない（トリガが鍵を保つだけ）。
+
+1. 未適用が 0041 だけであること（`node scripts/check-migrations-applied.mjs`）。バックアップは Time Travel の bookmark（`npx wrangler d1 time-travel info mise`）。
+2. **プレビュー DB で先に通す**（「プレビュー DB を本番に追従させる手順」）。トリガは 5 項の `UNION ALL` を含む（D1 本番は複合 SELECT の項数上限が低い前例があるので、プレビューで登録が通ることを確かめる）。
+3. 本番に適用: `npx wrangler d1 migrations apply mise --remote`。**書き込み量**: 1 サイトあたり鍵 1〜5 行（5 万件の合成データで平均 2.97 行）と `site_id` の索引。本番 約 1.9 万件（2026-11-26）なら鍵 約 5.6 万行 + 索引。以降はサイトの登録ごとに鍵 1〜5 行、url・名前を実際に変えたときに作り直し（同じ値の SET では書かない）。
+4. 読み取りだけで確かめる（`--remote --command` の SELECT。エラーなく返れば合格）:
+   - `SELECT (SELECT COUNT(DISTINCT site_id) FROM site_search_keys) AS keyed, (SELECT COUNT(*) FROM sites) AS sites`（URL の壊れた行が無ければ同数）
+   - `SELECT key, site_id, rank FROM site_search_keys WHERE key IN ('x.com', 'x', '金沢市')`
+   - 完全一致の段の形: `SELECT s.id FROM (SELECT k.site_id AS sid, k.rank AS rk FROM site_search_keys k CROSS JOIN sites s ON s.id = k.site_id WHERE k.key = '金沢市' AND instr(s.search_text, '金沢市') > 0 ORDER BY k.rank, s.bulk_import, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id LIMIT 41) k CROSS JOIN sites s ON s.id = k.sid`
+   - その他の段の形: `SELECT s.id FROM sites s WHERE instr(s.search_text, '金沢市') > 0 AND NOT EXISTS (SELECT 1 FROM site_search_keys x WHERE x.key = '金沢市' AND x.site_id = s.id) ORDER BY s.bulk_import, datetime(COALESCE(s.source_updated_at, s.registered_at)) DESC, s.id LIMIT 41`
+5. **マージ**（自動デプロイ）。マージ後、`/api/sites?scope=all&q=金沢市` の先頭が金沢市の公式サイト、`total`・`total_capped` が適用前と同じであること。
+6. 手元の dev DB でも `npm run db:migrate`（流さなくても検索は従来の並びで動く）。
+
+**戻し方**: 先にコードを戻さなくてよい（表が無ければ従来の並び）。トリガ → 表の順に消す（トリガを残して表だけ消すと `sites` の登録・更新・削除が失敗する）:
+
+```sh
+npx wrangler d1 execute mise --remote --command "DROP TRIGGER sites_search_keys_ai; DROP TRIGGER sites_search_keys_au; DROP TRIGGER sites_search_keys_ad; DROP TABLE site_search_keys;"
+```
+
+DROP しても `d1_migrations` に 0041 は残り、同じ 0041 は二度と流れない（入れ直すには同じ内容の新しい migration が要る。表・トリガは `IF NOT EXISTS` / `DROP TRIGGER IF EXISTS` で書いてあるので、`wrangler d1 execute --file migrations/0041_site_search_keys.sql` で流し直しても同じ結果になる）。
+
 ## プレビュー DB を本番に追従させる手順
 
 `mise-preview` は `wrangler.jsonc` の `d1_databases` に無く（`previews` ブロックにしか無い）。**`migrations list` / `migrations apply` だけは、一時的な wrangler 設定ファイルを作って `-c` で指定する（コミットしない）。`d1 execute`・`d1 export`・`refresh-search-text.mjs` は `mise-preview` を名前で指定すればそのまま動く。** 本番 `mise` には触れない（コマンドごとに対象が `mise-preview` であることを確かめる）。順序は 1 つ:

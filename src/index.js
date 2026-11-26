@@ -24,7 +24,7 @@ const scopeOf = c => { const raw = c.req.query('scope'); return parseScope(raw?.
 app.get('/api/scopes', async c => c.json(await loadScopes(c.env.DB)));
 app.get('/api/categories', async c => { const sc = scopeOf(c); return sc ? c.json(await loadCategories(c.env.DB, sc.region ?? sc.cc)) : c.json({ error: 'invalid scope' }, 400); });
 // カーソル方式。`limit`（既定 40、1〜100。100 を超える値は 100 に丸める。0・負数・数字以外は 400）+ `cursor`（前の応答の next_cursor。不正は 400）。
-// 絞り込みは `category`（そのカテゴリ直下。存在しない id は 404）・`q`（名前・紹介文・URL・タグ名（日英）の部分一致。NFKC + 小文字化で比較。100 文字まで）。
+// 絞り込みは `category`（そのカテゴリ直下。存在しない id は 404）・`q`（名前・紹介文・URL・タグ名（日英）の部分一致。NFKC + 小文字化で比較。100 文字まで。ドメイン・サイト名が完全一致するサイトを先に並べる = 関連度の段。#301）。
 // `page`（1〜999999。範囲外・数字以外は 400）は開始位置の指定（クロール用ページ番号URLと同じ区切り。カーソルが無いときだけ有効）。total は先頭の応答（cursor なし）だけに入る。q・tag・葉でないカテゴリの絞り込みでは TOTAL_CAP（1,000）までしか数えず、超えると total = 1000・total_capped = true（画面は「1,000+」。末尾まで届いたときは常に正確）。
 // `tag`（タグの日本語名か英語名。複数指定は AND。5 個まで・各 100 文字まで、超えると 400）は q・category・範囲と AND で絞る。
 // category=recent は登録日時に基づく仮想フォルダ。カテゴリ未所属のサイトも条件を満たせば出る。
