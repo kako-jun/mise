@@ -113,6 +113,95 @@ for (const view of ['phone', 'pc']) {
     await p.click('.scope-list .scope-item'); // 地球（全世界）のリンクは従来どおり
   });
 }
+// #296: ドロップダウンに装飾を付けない。ボタンは下線・背景・枠なし（通常・hover・開いた状態・タップ後。背景は隣の地球の項目と同じ）、一覧の行は左線なし。判定は computed style。
+// dark は保存済みの設定で開く場合、dark-toggle は画面のテーマ切替ボタンで切り替える場合。
+// el とその子孫に、見える枠線・下線・影・背景画像・疑似要素が無いかを調べて、見つかったものを返す（フォーカス枠の outline は対象外）。
+const decorations = (p, sel) => p.evaluate(async (s) => {
+  const out = [];
+  for (const root of document.querySelectorAll(s)) {
+    await Promise.all(root.getAnimations().map((a) => a.finished)); // border-color の transition の途中値を読まない
+    for (const e of [root, ...root.querySelectorAll('*')]) {
+      const c = getComputedStyle(e), who = `${root.id || root.className}${e === root ? '' : ' ' + e.tagName}`;
+      for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+        const color = c[`border${side}Color`];
+        if (parseFloat(c[`border${side}Width`]) > 0 && c[`border${side}Style`] !== 'none' && color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color)) out.push(`${who} border-${side.toLowerCase()} ${color}`);
+      }
+      if (c.textDecorationLine !== 'none') out.push(`${who} text-decoration ${c.textDecorationLine}`);
+      if (c.boxShadow !== 'none') out.push(`${who} box-shadow ${c.boxShadow}`);
+      if (c.backgroundImage !== 'none') out.push(`${who} background-image ${c.backgroundImage}`);
+      for (const pe of ['::before', '::after']) if (getComputedStyle(e, pe).content !== 'none') out.push(`${who}${pe}`);
+    }
+  }
+  return out;
+}, sel);
+const css = (p, sel, prop) => p.$eval(sel, (e, k) => getComputedStyle(e)[k], prop);
+const isHover = (p, sel) => p.$eval(sel, (e) => e.matches(':hover'));
+const CLEAR = 'rgba(0, 0, 0, 0)';
+for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone', 'pc']) {
+  await scenario(`#296 ${mode}: ボタンに下線・背景・枠が出ず、一覧の行に左線が出ない`, view, async (p) => {
+    const theme = mode === 'light' ? 'light' : 'dark';
+    if (mode === 'dark') await p.addInitScript(() => localStorage.setItem('mise-theme', 'dark'));
+    await loadTop(p);
+    if (mode === 'dark-toggle') {
+      assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), 'light');
+      await (view === 'phone' ? p.tap('#theme-toggle') : p.click('#theme-toggle'));
+    }
+    assert.equal(await p.evaluate(() => document.documentElement.dataset.theme), theme);
+    const bad = [];
+    const globe = '.scope-list .scope-item';
+    const check = async (state, sel = '.scope-dd-btn') => {
+      for (const d of await decorations(p, sel)) bad.push(`[${state}] ${d}`);
+      if (sel !== '.scope-dd-btn') return;
+      const [b, g] = [await css(p, sel, 'backgroundColor'), await css(p, globe, 'backgroundColor')];
+      if (b !== g || b !== CLEAR) bad.push(`[${state}] button background ${b}（地球の項目 ${g}）`);
+    };
+    const press = (sel) => (view === 'phone' ? p.tap(sel) : p.click(sel));
+    const away = () => p.mouse.move(1, 1);
+    await away(); await shot(p, `${view}-${mode}-296-closed`);
+    await check('通常');
+    await p.hover('.scope-dd-btn'); assert.equal(await isHover(p, '.scope-dd-btn'), true); await check('hover');
+    await press('.scope-dd-btn'); await untilShown(p, '.scope-dd-panel', true); await check('開いた状態');
+    await away(); await check('開いた状態（ポインタは外）');
+    await p.evaluate(() => Promise.all(document.querySelector('.scope-dd-panel').getAnimations().map((a) => a.finished)));
+    await shot(p, `${view}-${mode}-296-open`);
+    await check('一覧の行', '.scope-dd-opt');
+    const filled = await p.$$eval('.scope-dd-opt:not(.is-active):not(:hover)', (a, clear) => a.filter((e) => getComputedStyle(e).backgroundColor !== clear).map((e) => e.id), CLEAR);
+    assert.deepEqual(filled, [], 'hover・キーボード位置以外の行に背景は無い');
+    // 検索欄は入力欄なので自前の背景と枠を持つ（共通の button / input[type=search] の配色が漏れていないこと）
+    assert.deepEqual([await css(p, '.scope-dd-search', 'backgroundColor'), await css(p, '.scope-dd-search', 'borderTopColor')], theme === 'dark' ? ['rgb(7, 20, 28)', 'rgb(61, 98, 112)'] : ['rgb(255, 255, 255)', 'rgb(148, 181, 190)']);
+    const sel = '.scope-dd-opt[aria-selected="true"]';
+    assert.equal(await p.getAttribute(sel, 'id'), 'scope-opt-jp');
+    assert.equal(await css(p, sel, 'fontWeight'), '700', '選択行は太字');
+    await p.hover('#scope-opt-us'); assert.notEqual(await css(p, '#scope-opt-us', 'backgroundColor'), CLEAR, '行の hover の背景は残る');
+    await check('行の hover', '.scope-dd-opt');
+    await p.hover(sel); assert.notEqual(await css(p, sel, 'backgroundColor'), CLEAR); await check('選択行の hover', '.scope-dd-opt');
+    await away();
+    await p.focus('.scope-dd-search'); await p.keyboard.press('ArrowDown');
+    assert.notEqual(await css(p, '.scope-dd-opt.is-active', 'backgroundColor'), CLEAR, 'キーボード位置の行の背景は残る');
+    await check('キーボード位置の行', '.scope-dd-opt');
+    await p.keyboard.press('Escape'); await untilShown(p, '.scope-dd-panel', false); await check('Esc で閉じた後');
+    // タップ/クリックで開いて閉じた後と、行を選んだ後（描き直した新しいボタン）。ポインタ（スマホは残る hover）は動かさずに調べる。
+    await press('.scope-dd-btn'); await untilShown(p, '.scope-dd-panel', true);
+    if (view === 'phone') await p.touchscreen.tap(5, 5); else await p.click('.scope-dd-btn');
+    await untilShown(p, '.scope-dd-panel', false); await check('タップで閉じた後');
+    await p.hover('.scope-dd-btn'); await check('閉じた後の hover');
+    await press('.scope-dd-btn'); await untilShown(p, '.scope-dd-panel', true);
+    await press('#scope-opt-us'); await p.waitForFunction(() => location.pathname === '/us/'); await untilShown(p, '.scope-dd-panel', false);
+    await p.waitForFunction(() => document.querySelector('.scope-dd-btn')?.innerText.includes('アメリカ'));
+    await check('行を選んだ後');
+    await p.hover('.scope-dd-btn'); await check('行を選んだ後の hover');
+    assert.equal(bad.length, 0, `装飾が残っている ${bad.length} 件: ${[...new Set(bad)].join(' | ')}`);
+    // 残すもの: キーボードのフォーカス枠、地球の項目の hover の下線
+    await p.focus('.scope-dd-btn'); await p.keyboard.press('Shift+Tab'); await p.keyboard.press('Tab');
+    assert.equal(await activeIs(p, '.scope-dd-btn'), true);
+    assert.deepEqual([await css(p, '.scope-dd-btn', 'outlineStyle'), await css(p, '.scope-dd-btn', 'outlineWidth')], ['solid', '2px'], 'フォーカス枠は残る');
+    await p.hover(globe); assert.ok((await decorations(p, globe)).some((d) => d.includes('border-bottom')), '地球の項目の hover の下線は変えない');
+    // ドロップダウン以外のボタンの配色は変えない（共通の button の指定を、素のボタンで見る）
+    await p.evaluate(() => { const b = document.createElement('button'); b.id = 'probe-296'; b.textContent = 'probe'; b.style.cssText = 'position:fixed;left:0;top:50%;z-index:99'; document.body.append(b); });
+    await away(); assert.equal(await css(p, '#probe-296', 'backgroundColor'), theme === 'dark' ? 'rgb(23, 58, 71)' : 'rgb(239, 249, 250)');
+    await p.hover('#probe-296'); assert.equal(await css(p, '#probe-296', 'backgroundColor'), theme === 'dark' ? 'rgb(32, 85, 100)' : 'rgb(215, 240, 243)');
+  });
+}
 await scenario('キーボードだけで操作（矢印・Enter・Esc・タイプアヘッド）', 'pc', async (p) => {
   await loadTop(p);
   await p.focus('.scope-dd-btn'); await p.keyboard.press('ArrowDown'); await untilShown(p, '.scope-dd-panel', true);

@@ -253,12 +253,13 @@ html[data-theme="dark"] .search-icon { color: #82ddea; }
 html.logo-ready .logo span { opacity: 1; animation: none; }
 @keyframes logo-fallback { to { opacity: 1; } }
 
-/* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。現在の範囲は下線と濃さで示し、色の塊（ピル）は使わない。 */
+/* 範囲（国）の切替。HUD・ロゴと同じ等幅の控えめなラベル。地球・国旗の項目は現在の範囲を下線と濃さで示し、色の塊（ピル）は使わない。国のドロップダウンには下線・左線を付けない（#296）。 */
 .scope-nav { display: flex; justify-content: center; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; margin: 10px auto 2px; max-width: 100%; font: 11px/1.5 monospace; color: #087b90; }
 .scope-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 2px 6px; margin: 0; padding: 0; list-style: none; }
 .scope-list[hidden], .scope-list li[hidden] { display: none; }
 .scope-nav a.scope-item, .scope-nav a.scope-item:visited, .scope-dd-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 6px; min-height: 32px; min-width: 32px; box-sizing: border-box; color: inherit; text-decoration: none; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none; font: inherit; cursor: pointer; transition: border-color .15s; }
-.scope-nav a.scope-item:hover, .scope-dd-btn:hover { opacity: 1; background: none; border-bottom-color: currentColor; }
+.scope-nav a.scope-item:hover, .scope-dd-btn:hover { opacity: 1; background: none; }
+.scope-nav a.scope-item:hover { border-bottom-color: currentColor; }
 .scope-nav a.scope-item[aria-current="page"] { opacity: 1; border-bottom-color: #cc6f32; color: #12272c; }
 .scope-nav a.scope-item[aria-current="true"] { opacity: 1; border-bottom-color: currentColor; }
 .scope-nav a.scope-item:focus-visible, .scope-dd-btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
@@ -268,6 +269,8 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 .scope-code { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
+/* #296: 共通の html[data-theme="dark"] button(:hover) の背景・枠色が詳細度で勝つので、国のボタンは地球の項目と同じ背景・枠なしに打ち消す。 */
+html[data-theme="dark"] .scope-dd-btn, html[data-theme="dark"] .scope-dd-btn:hover { background: none; border-color: transparent; }
 html[data-theme="dark"] .scope-count { color: #b4d3d9; }
 @media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-dd-btn { min-height: 36px; min-width: 36px; } .scope-count { font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-dd-btn { transition: none; } }
@@ -377,7 +380,7 @@ html[data-theme="dark"] .install-banner { background: rgba(13, 36, 48, .97); col
 html[data-theme="dark"] .scope-dd-note { color: #b4d3d9; }
 .scope-dd-opt .scope-count { flex: none; margin-left: 0; font-size: 12px; }
 .scope-dd-opt:hover, .scope-dd-opt.is-active { background: #e3f4f7; }
-.scope-dd-opt[aria-selected="true"] { font-weight: 700; box-shadow: inset 3px 0 0 #cc6f32; }
+.scope-dd-opt[aria-selected="true"] { font-weight: 700; }
 .scope-dd-opt:focus-visible, .scope-dd-search:focus-visible { outline: 2px solid #087b90; outline-offset: -2px; }
 .scope-dd-empty { margin: 8px 4px 4px; color: #3b565c; }
 .scope-dd-empty[hidden] { display: none; }
