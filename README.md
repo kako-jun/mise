@@ -19,7 +19,7 @@ npm run check        # 構文確認 + API ヘッダ自己検査
 
 検索の履歴挙動（#102）の実ブラウザ検証は `node scripts/e2e-search-back.mjs`（`npm run db:migrate` と `node scripts/dev-seed-sites.mjs 30` 済みのローカル D1 で `npx wrangler dev --local --port 8799` を起動し、`PLAYWRIGHT_DIR` で playwright を、必要なら `CHROMIUM_PATH` で Chromium を指す。`npm test` には入れない）。
 
-範囲ナビの SSR と JS 描き直し後の DOM の一致（#177）は `node scripts/check-scope-nav-parity.mjs`（`npx wrangler dev --local --port 8799` 起動済みのローカル D1 が前提、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`npm test` には入れない）。国ドロップダウン（#291）と全 ISO コードの旗の表示、ドロップダウンに下線・左線・ボタンの背景と枠が出ないこと（#296。ライト/ダーク）は `node scripts/e2e-country-dropdown.mjs`（同じ前提。国の数を変えて `WIDTH_FILE` / `COMPARE_WIDTH` で幅の不変も比べる）。
+範囲ナビの SSR と JS 描き直し後の DOM の一致（#177）は `node scripts/check-scope-nav-parity.mjs`（`npx wrangler dev --local --port 8799` 起動済みのローカル D1 が前提、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`npm test` には入れない）。国ドロップダウン（#291）と全 ISO コードの旗の表示、ドロップダウンに下線・左線・ボタンの背景と枠が出ず、ダークの共通の文字色が漏れないこと（#296。ライト/ダーク）は `node scripts/e2e-country-dropdown.mjs`（同じ前提。国の数を変えて `WIDTH_FILE` / `COMPARE_WIDTH` で幅の不変も比べる）。
 
 ピックアップの横スワイプ・ドラッグ・左右キー（#113）は `node scripts/e2e-pickup-swipe.mjs`（同じ前提のローカル D1 と `npx wrangler dev --local --port 8799`、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`/api/picks` はページ内で固定するので seed の中身に依存しない。`npm test` には入れない）。
 

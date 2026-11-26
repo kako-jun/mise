@@ -114,6 +114,7 @@ for (const view of ['phone', 'pc']) {
   });
 }
 // #296: ドロップダウンに装飾を付けない。ボタンは下線・背景・枠なし（通常・hover・開いた状態・タップ後。背景は隣の地球の項目と同じ）、一覧の行は左線なし。判定は computed style。
+// 文字色も共通のダーク指定を受けない: ボタンと▾は地球の項目と同じ、行はパネルの文字色（訪問済みも同色）。
 // dark は保存済みの設定で開く場合、dark-toggle は画面のテーマ切替ボタンで切り替える場合。
 // el とその子孫に、見える枠線・下線・影・背景画像・疑似要素が無いかを調べて、見つかったものを返す（フォーカス枠の outline は対象外）。
 const decorations = (p, sel) => p.evaluate(async (s) => {
@@ -137,8 +138,27 @@ const decorations = (p, sel) => p.evaluate(async (s) => {
 const css = (p, sel, prop) => p.$eval(sel, (e, k) => getComputedStyle(e)[k], prop);
 const isHover = (p, sel) => p.$eval(sel, (e) => e.matches(':hover'));
 const CLEAR = 'rgba(0, 0, 0, 0)';
+// 訪問済み（:visited）の色は getComputedStyle に出ないので、CDP で :visited を強制して描画した画素を見る。返すのは背景（最多）の次に多い色 = 文字の地の色。
+const textPixel = async (p, sel) => {
+  const png = await p.locator(sel).screenshot();
+  return p.evaluate(async (d) => {
+    const i = new Image(); i.src = 'data:image/png;base64,' + d; await i.decode();
+    const c = document.createElement('canvas'); c.width = i.width; c.height = i.height; const x = c.getContext('2d'); x.drawImage(i, 0, 0);
+    const px = x.getImageData(0, 0, c.width, c.height).data, n = {};
+    for (let k = 0; k < px.length; k += 4) { const key = `rgb(${px[k]}, ${px[k + 1]}, ${px[k + 2]})`; n[key] = (n[key] || 0) + 1; }
+    return Object.entries(n).sort((a, b) => b[1] - a[1])[1]?.[0];
+  }, png.toString('base64'));
+};
+const forcePseudo = async (p, sel, classes) => {
+  const cdp = await p.context().newCDPSession(p);
+  await cdp.send('DOM.enable'); await cdp.send('CSS.enable');
+  const { root } = await cdp.send('DOM.getDocument');
+  const { nodeId } = await cdp.send('DOM.querySelector', { nodeId: root.nodeId, selector: sel });
+  await cdp.send('CSS.forcePseudoState', { nodeId, forcedPseudoClasses: classes });
+  return () => cdp.detach();
+};
 for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone', 'pc']) {
-  await scenario(`#296 ${mode}: ボタンに下線・背景・枠が出ず、一覧の行に左線が出ない`, view, async (p) => {
+  await scenario(`#296 ${mode}: ボタンに下線・背景・枠が出ず、一覧の行に左線が出ず、文字色が漏れない`, view, async (p) => {
     const theme = mode === 'light' ? 'light' : 'dark';
     if (mode === 'dark') await p.addInitScript(() => localStorage.setItem('mise-theme', 'dark'));
     await loadTop(p);
@@ -154,6 +174,11 @@ for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone'
       if (sel !== '.scope-dd-btn') return;
       const [b, g] = [await css(p, sel, 'backgroundColor'), await css(p, globe, 'backgroundColor')];
       if (b !== g || b !== CLEAR) bad.push(`[${state}] button background ${b}（地球の項目 ${g}）`);
+      const want = await css(p, globe, 'color');
+      for (const [part, prop] of [['', 'color'], [' .scope-dd-name', 'color'], [' .scope-dd-caret', 'stroke']]) {
+        const got = await css(p, sel + part, prop);
+        if (got !== want) bad.push(`[${state}] button${part} ${prop} ${got}（地球の項目 ${want}）`);
+      }
     };
     const press = (sel) => (view === 'phone' ? p.tap(sel) : p.click(sel));
     const away = () => p.mouse.move(1, 1);
@@ -165,6 +190,18 @@ for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone'
     await p.evaluate(() => Promise.all(document.querySelector('.scope-dd-panel').getAnimations().map((a) => a.finished)));
     await shot(p, `${view}-${mode}-296-open`);
     await check('一覧の行', '.scope-dd-opt');
+    const ink = await css(p, '.scope-dd-panel', 'color');
+    assert.equal(ink, theme === 'dark' ? 'rgb(239, 250, 255)' : 'rgb(18, 39, 44)');
+    for (const [id, got] of await p.$$eval('.scope-dd-opt', (a) => a.map((e) => [e.id, getComputedStyle(e).color]))) if (got !== ink) bad.push(`[一覧の行] ${id} color ${got}（パネル ${ink}）`);
+    await away();
+    for (const row of ['#scope-opt-us', '#scope-opt-jp']) { // 通常の行と選択中の行。未訪問・訪問済みの描画色
+      for (const [label, classes] of [['未訪問', []], ['訪問済み', ['visited']]]) {
+        const release = await forcePseudo(p, row, classes);
+        const got = await textPixel(p, `${row} .scope-dd-name`);
+        if (got !== ink) bad.push(`[${label}] ${row} の描画色 ${got}（パネル ${ink}）`);
+        await release();
+      }
+    }
     const filled = await p.$$eval('.scope-dd-opt:not(.is-active):not(:hover)', (a, clear) => a.filter((e) => getComputedStyle(e).backgroundColor !== clear).map((e) => e.id), CLEAR);
     assert.deepEqual(filled, [], 'hover・キーボード位置以外の行に背景は無い');
     // 検索欄は入力欄なので自前の背景と枠を持つ（共通の button / input[type=search] の配色が漏れていないこと）
@@ -190,15 +227,19 @@ for (const mode of ['light', 'dark', 'dark-toggle']) for (const view of ['phone'
     await p.waitForFunction(() => document.querySelector('.scope-dd-btn')?.innerText.includes('アメリカ'));
     await check('行を選んだ後');
     await p.hover('.scope-dd-btn'); await check('行を選んだ後の hover');
-    assert.equal(bad.length, 0, `装飾が残っている ${bad.length} 件: ${[...new Set(bad)].join(' | ')}`);
+    assert.equal(bad.length, 0, `装飾・色の漏れが残っている ${bad.length} 件: ${[...new Set(bad)].join(' | ')}`);
     // 残すもの: キーボードのフォーカス枠、地球の項目の hover の下線
     await p.focus('.scope-dd-btn'); await p.keyboard.press('Shift+Tab'); await p.keyboard.press('Tab');
     assert.equal(await activeIs(p, '.scope-dd-btn'), true);
     assert.deepEqual([await css(p, '.scope-dd-btn', 'outlineStyle'), await css(p, '.scope-dd-btn', 'outlineWidth')], ['solid', '2px'], 'フォーカス枠は残る');
     await p.hover(globe); assert.ok((await decorations(p, globe)).some((d) => d.includes('border-bottom')), '地球の項目の hover の下線は変えない');
-    // ドロップダウン以外のボタンの配色は変えない（共通の button の指定を、素のボタンで見る）
+    // ドロップダウン以外のボタン・リンクの配色は変えない（共通の button / a の指定を、素の要素で見る）
     await p.evaluate(() => { const b = document.createElement('button'); b.id = 'probe-296'; b.textContent = 'probe'; b.style.cssText = 'position:fixed;left:0;top:50%;z-index:99'; document.body.append(b); });
     await away(); assert.equal(await css(p, '#probe-296', 'backgroundColor'), theme === 'dark' ? 'rgb(23, 58, 71)' : 'rgb(239, 249, 250)');
+    assert.equal(await css(p, '#probe-296', 'color'), theme === 'dark' ? 'rgb(209, 249, 255)' : 'rgb(7, 83, 100)');
+    await p.evaluate(() => { const a = document.createElement('a'); a.id = 'probe-296-a'; a.href = '/probe-296'; a.textContent = 'MMMMMM'; a.style.cssText = 'position:fixed;left:0;top:60%;z-index:99;font:700 24px sans-serif;background:#000;padding:4px'; document.body.append(a); });
+    assert.equal(await css(p, '#probe-296-a', 'color'), theme === 'dark' ? 'rgb(138, 233, 255)' : 'rgb(0, 0, 204)');
+    if (theme === 'dark') { const release = await forcePseudo(p, '#probe-296-a', ['visited']); assert.equal(await textPixel(p, '#probe-296-a'), 'rgb(223, 170, 255)', '他のリンクの訪問済みの色は変えない'); await release(); }
     await p.hover('#probe-296'); assert.equal(await css(p, '#probe-296', 'backgroundColor'), theme === 'dark' ? 'rgb(32, 85, 100)' : 'rgb(215, 240, 243)');
   });
 }

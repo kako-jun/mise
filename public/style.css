@@ -269,8 +269,8 @@ html.logo-ready .logo span { opacity: 1; animation: none; }
 .scope-code { font-size: 10px; font-weight: 700; letter-spacing: .04em; }
 html[data-theme="dark"] .scope-nav { color: #82ddea; }
 html[data-theme="dark"] .scope-nav a.scope-item[aria-current="page"] { color: #effaff; border-bottom-color: #ff9a55; }
-/* #296: 共通の html[data-theme="dark"] button(:hover) の背景・枠色が詳細度で勝つので、国のボタンは地球の項目と同じ背景・枠なしに打ち消す。 */
-html[data-theme="dark"] .scope-dd-btn, html[data-theme="dark"] .scope-dd-btn:hover { background: none; border-color: transparent; }
+/* #296: 共通の html[data-theme="dark"] button(:hover) の背景・枠色・文字色が詳細度で勝つので、国のボタンは地球の項目と同じ背景・枠なし・文字色に打ち消す。 */
+html[data-theme="dark"] .scope-dd-btn, html[data-theme="dark"] .scope-dd-btn:hover { background: none; border-color: transparent; color: inherit; }
 html[data-theme="dark"] .scope-count { color: #b4d3d9; }
 @media (max-width: 700px) { .scope-nav { margin-top: 8px; font-size: 12px; } .scope-nav a.scope-item, .scope-dd-btn { min-height: 36px; min-width: 36px; } .scope-count { font-size: 12px; } }
 @media (prefers-reduced-motion: reduce) { .scope-nav a.scope-item, .scope-dd-btn { transition: none; } }
@@ -386,6 +386,8 @@ html[data-theme="dark"] .scope-dd-note { color: #b4d3d9; }
 .scope-dd-empty[hidden] { display: none; }
 html[data-theme="dark"] .scope-dd-panel { background: #0d2430; color: #effaff; border-color: #3d6270; box-shadow: 0 6px 24px rgba(0, 0, 0, .55); }
 html[data-theme="dark"] .scope-dd-search { background: #07141c; border-color: #3d6270; }
+/* #296: 共通の html[data-theme="dark"] a / a:visited より強くして、行はライトと同じくパネルの文字色（訪問済みも同色）にする。 */
+html[data-theme="dark"] .scope-dd-opt, html[data-theme="dark"] .scope-dd-opt:visited { color: inherit; }
 html[data-theme="dark"] .scope-dd-opt:hover, html[data-theme="dark"] .scope-dd-opt.is-active { background: #17394a; }
 html[data-theme="dark"] .scope-dd-opt .scope-count, html[data-theme="dark"] .scope-dd-empty { color: #b4d3d9; }
 @media (max-width: 700px) {
