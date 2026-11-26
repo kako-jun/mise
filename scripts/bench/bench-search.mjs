@@ -29,6 +29,8 @@ const Q = [['q 多ヒット「写真」', '写真'], ['q 多ヒット 3字+「�
 for (const [lab, q] of Q) await m(`/api/sites?q= ${lab}`, api({ q: cleanQuery(q) }));
 await m('/api/sites 既定', api({})); await m('/api/sites scope=jp', api({ cc: 'JP' }));
 { const r = await querySites(db, { limit: 40 }); await m('/api/sites 既定 cursor 2 ページ目', api({ cursor: decodeCursor(r.next_cursor) })); }
+// ?page=N の深いページ（#301 PR #303 のレビュー）: 前方一致の段・その他の除外が offset の走査に乗る形
+for (const q of ['s', 'sa']) for (const page of [5, 20]) await m(`/api/sites?q=${q}&page=${page}（limit 40）`, api({ q: cleanQuery(q), limit: 40, offset: (page - 1) * 40 }));
 for (const q of ['x', 'x.com']) { const r = await querySites(db, { q: cleanQuery(q), limit: 40 }); await m(`/api/sites?q=${q} cursor 2 ページ目`, api({ q: cleanQuery(q), cursor: decodeCursor(r.next_cursor) })); }
 await m(`tag よく使う(${topTag.n}件)`, api({ tags: [topTag.t] })); await m(`tag 中程度(${midTag.n}件)`, api({ tags: [midTag.t] })); await m(`tag 稀(${rareTag.n}件)`, api({ tags: [rareTag.t] }));
 await m('tag よく使う + scope=jp', api({ tags: [topTag.t], cc: 'JP' }));

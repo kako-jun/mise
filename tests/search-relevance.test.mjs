@@ -100,14 +100,17 @@ const hitsInOrder = ({ cc, category, q, tags = [] }) => {
 };
 // 鍵を引く候補の参照実装: 検索語そのもの + scheme:// と末尾の / と（残りに . があれば）先頭の www. を除いた語
 const refCands = q => { let t = q; const m = t.match(/^[a-z][a-z0-9+.-]*:\/\//); if (m) t = t.slice(m[0].length); while (t.endsWith('/')) t = t.slice(0, -1); if (t.startsWith('www.') && t.slice(4).includes('.')) t = t.slice(4); return t && t !== q ? [q, t] : [q]; };
-// 前方一致の段の集合の参照実装: 最後の候補 c で始まり c より長い鍵（長さ KEY_LEN_MAX まで）を（長さ, 鍵, サイト id）の順に並べた先頭 PREFIX_MAX 行（索引なしで超えるなら作らない）。
-//   サイトごとの score = min(鍵の長さ × 8 + rank)。
-const refPrefix = (c, { index = true } = {}) => {
+// 前方一致の段の参照実装: 最後の候補 c で始まり c より長い鍵（長さ KEY_LEN_MAX まで）。PREFIX_MAX 行以下なら T = KEY_LEN_MAX、超えたら
+//   （索引あり）長さの短い順の PREFIX_MAX + 1 行目の長さ − 1（c の長さ以下なら 0）、（索引なし）0。段 = 長さ T 以下の鍵を持つサイト、score = min(長さ × 8 + rank)。
+//   T を外から渡すと、その T の集合（カーソルの T で続くページの集合）。
+const refPrefix = (c, { index = true, T: givenT } = {}) => {
   const len = k => [...k].length, rows = [];
   for (const s of SITES) for (const [k, r] of refKeys(s)) if (k.startsWith(c) && len(k) > len(c) && len(k) <= KEY_LEN_MAX) rows.push({ k, id: s.id, sc: len(k) * 8 + r });
-  if (rows.length > PREFIX_MAX && !index) return null;
-  rows.sort((a, b) => len(a.k) - len(b.k) || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0) || (a.id < b.id ? -1 : 1));
-  const m = new Map(); for (const r of rows.slice(0, PREFIX_MAX)) if (!m.has(r.id) || m.get(r.id) > r.sc) m.set(r.id, r.sc);
+  rows.sort((a, b) => len(a.k) - len(b.k));
+  let T = givenT;
+  if (T === undefined) T = !rows.length ? 0 : rows.length <= PREFIX_MAX ? KEY_LEN_MAX : !index ? 0 : (len(rows[PREFIX_MAX].k) - 1 > len(c) ? len(rows[PREFIX_MAX].k) - 1 : 0);
+  const m = new Map(); for (const r of rows) if (len(r.k) <= T && (!m.has(r.id) || m.get(r.id) > r.sc)) m.set(r.id, r.sc);
+  m.T = T;
   return m;
 };
 // 並び: 完全一致の段（候補のどれかの鍵を持つサイト。範囲・カテゴリ・タグで絞る。候補が検索語だけなら部分一致でも絞る）を rank → 今の並び、
@@ -120,7 +123,7 @@ const ref = (o, opt) => {
   const exactAll = SITES.filter(s => rank(s.id) < RANK_REST);
   if (exactAll.length > RELEVANCE_MAX) return plain;
   const pw = cands.at(-1).startsWith('www.') && cands.at(-1).length > 4 ? cands.at(-1).slice(4) : cands.at(-1), loose = cands.length > 1 || pw !== o.q;
-  const pm = refPrefix(pw, opt) ?? new Map();
+  const pm = refPrefix(pw, opt);
   if (exactAll.length === 0 && pm.size === 0) return plain;
   const pool = (loose ? hitsInOrder({ ...o, q: null }) : plain).map((id, i) => [id, i]); // 今の並び（候補が 2 つなら部分一致で絞らない母集団）
   const exact = pool.filter(([id]) => rank(id) < RANK_REST).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
@@ -346,13 +349,85 @@ test('前方一致: 0042（長さの索引）が無いとき、鍵が PREFIX_MAX
       const want = ref({ q: cleanQuery(q) }, { index: false });
       assert.deepEqual((await pagesOf({ q: cleanQuery(q) }, 7)).ids, want, q);
     }
-    assert.equal((await planQuery(d, { q: 'densel' })).prefix, null);
-    assert.ok(Object.keys((await planQuery(d, { q: 'githu' })).prefix).length > 0);
+    assert.equal((await planQuery(d, { q: 'densel' })).prefixT, 0);
+    assert.equal((await planQuery(d, { q: 'githu' })).prefixT, KEY_LEN_MAX);
   } finally { db.exec(readFileSync(new URL('0042_site_search_keys_len.sql', MIG), 'utf8')); }
+});
+
+test('前方一致: 鍵が PREFIX_MAX 行を超える語は T で短い鍵だけを段に入れる（dens は T = 38: dense と 38 文字の名前 10 件）', async () => {
+  assert.equal((await planQuery(d, { q: 'dens' })).prefixT, 38);
+  assert.equal(refPrefix('dens').T, 38);
+  assert.equal(refPrefix('dens').size, 11);
+  assert.equal((await planQuery(d, { q: 'サ' })).prefixT, refPrefix('サ').T);
 });
 
 test('前方一致: 鍵が PREFIX_MAX 行を超える語は式インデックスを使い、読む鍵は PREFIX_MAX 行で止まる', () => {
   const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT site_id FROM site_search_keys INDEXED BY idx_site_search_keys_len WHERE length(key) IN (5,6,7) AND key > 'dens' AND key < 'dens\u{10FFFF}' ORDER BY length(key), key LIMIT 100`).all().map(r => r.detail).join(' / ');
   assert.match(plan, /idx_site_search_keys_len/);
   assert.doesNotMatch(plan, /TEMP B-TREE/);
+});
+
+// ---- 段の集合がページをまたいで変わらないこと（#301 PR #303 のレビュー）----
+const walk = async (o, limit, before = () => {}, qs = [querySites]) => {
+  const ids = []; let cur = null;
+  for (let g = 0; g < 2000; g++) { await before(g); const r = await qs[g % qs.length](d, { ...o, limit, cursor: cur ? decodeCursor(cur) : null }); ids.push(...r.items.map(i => i.id)); cur = r.next_cursor; if (!cur) break; }
+  return ids;
+};
+
+test('ページごとに別の Worker（別インスタンスのモジュール = 計画のキャッシュが空）で読んでも、全ページ連結が参照実装と一致', async () => {
+  const other = [];
+  for (let i = 0; i < 3; i++) other.push((await import(`../src/sites.js?worker=${i}`)).querySites);
+  for (const q of ['dens', 'yaho', 'x', 'mid', 'www.githu', 'm']) assert.deepEqual(await walk({ q }, 7, () => {}, [querySites, ...other]), ref({ q }), q);
+});
+
+test('途中のデータ追加: 前方一致の鍵が増えても、元からあるサイトの重複・欠落はない（集合はカーソルの T で決まる）', async () => {
+  const before = ref({ q: 'dens' }), added = [];
+  const ids = await walk({ q: 'dens' }, 7, g => {
+    if (g !== 2) return;
+    // 2 ページ目の後に、段に入る短い名前（長さ 6）と入らない長い名前を足す（T = 38 は変わらずカーソルに残る）
+    for (let i = 0; i < 120; i++) { const id = 'zz-add-' + i, name = i % 2 ? 'densa' + (i % 10) : 'densely packed long site name number added ' + i; insS.run(id, `https://zz-add-${i}.example/`, name, null, null, 'サイト', '2026-11-25T00:00:00Z', null, 'JP', 0, searchText({ name, description_ja: 'サイト', url: `https://zz-add-${i}.example/` })); added.push(id); }
+  });
+  try {
+    assert.equal(new Set(ids).size, ids.length);
+    for (const id of before) assert.ok(ids.includes(id), id);
+  } finally { db.prepare(`DELETE FROM sites WHERE id LIKE 'zz-add-%'`).run(); }
+  assert.deepEqual(await walk({ q: 'dens' }, 7), before);
+});
+
+test('0042 を途中で DROP・作り直しても、全ページ連結が参照実装と一致（索引なしの間は主キーの範囲で同じ集合を読む）', async () => {
+  const want = ref({ q: 'dens' });
+  const ids = await walk({ q: 'dens' }, 3, g => {
+    if (g === 1) db.exec('DROP INDEX idx_site_search_keys_len');
+    if (g === 4) db.exec(readFileSync(new URL('0042_site_search_keys_len.sql', MIG), 'utf8'));
+  });
+  assert.deepEqual(ids, want);
+  // 先頭ページは索引なし（T = 0）、続きは索引あり: 段なしの並びのまま続く
+  db.exec('DROP INDEX idx_site_search_keys_len');
+  let ids2;
+  try { ids2 = await walk({ q: cleanQuery('densel') }, 3, g => { if (g === 1) db.exec(readFileSync(new URL('0042_site_search_keys_len.sql', MIG), 'utf8')); }); }
+  finally { db.exec(readFileSync(new URL('0042_site_search_keys_len.sql', MIG), 'utf8')); }
+  assert.deepEqual(ids2, ref({ q: 'densel' }, { index: false }));
+});
+
+test('0041 の版のカーソル（[段の値, …キー]。T なし）は前方一致の段なし（その版と同じ並び）で続く', async () => {
+  const r = await querySites(d, { q: 'x', limit: 2 }), c = decodeCursor(r.next_cursor);
+  assert.equal(c.T, refPrefix('x').T);
+  const v1 = decodeCursor(encodeCursor(c.vals)); // T を落とした 0041 の版の形
+  assert.equal(v1.T, 0);
+  const ids = [...r.items.map(i => i.id)]; let cur = v1;
+  for (let g = 0; g < 2000 && cur; g++) { const p = await querySites(d, { q: 'x', limit: 50, cursor: cur }); ids.push(...p.items.map(i => i.id)); cur = p.next_cursor && decodeCursor(p.next_cursor); }
+  assert.deepEqual(ids, ref({ q: 'x' }, { T: 0 }));
+});
+
+test('1 リクエストの D1 の文の数は上限付き（limit = 1・先頭・?page=N・各段の途中・その他の途中）', async () => {
+  const count = async o => { let n = 0; const dd = { prepare: sql => { n++; return d.prepare(sql); } }; await querySites(dd, o); return n; };
+  const cur = async (q, at) => { let c = null; for (let g = 0; g < at; g++) c = (await querySites(d, { q, limit: 1, cursor: c ? decodeCursor(c) : null })).next_cursor; return decodeCursor(c); };
+  const counts = {};
+  for (const q of ['dens', 'x', 'www.x.com', 'mid']) {
+    counts[q + ' 先頭'] = await count({ q, limit: 1 });
+    counts[q + ' page=20'] = await count({ q, limit: 1, offset: 19 });
+    for (const at of [1, 5, 15, 60, 98, 99, 100, 101, 110, 160]) counts[`${q} ${at} 件目の次`] = await count({ q, limit: 1, cursor: await cur(q, at) });
+  }
+  if (process.env.SHOW_STMTS) console.log(counts);
+  for (const [k, n] of Object.entries(counts)) assert.ok(n <= 12, `${k}: ${n}`);
 });

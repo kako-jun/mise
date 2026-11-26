@@ -48,18 +48,20 @@ const keyCols = keys => keys.map((k, i) => `${k.expr} AS _k${i}`).join(", ");
 // ---- 入力の解釈（不正は null → 呼び出し側が 400/404） ----
 export const parseLimit = raw => { if (raw == null || raw === '') return PAGE_SIZE; if (!/^-?\d{1,9}$/.test(raw)) return null; const n = Number(raw); return n >= 1 ? Math.min(n, MAX_LIMIT) : null; }; // 上限超は MAX_LIMIT に丸める
 // カーソルは全キー値の配列（id を含む）を JSON → base64url にしたもの。キーが増えても形式は変わらない。
-// 検索の関連度の段（#301。下の RELEVANCE_MAX）を使う検索では、先頭に段の値（rank。0〜RANK_REST の整数）を足した 1 つ長い配列になり、{ vals, rel: true } を返す。
+// 検索の関連度の段（#301。下の RELEVANCE_MAX）を使う検索では、先頭に段の値 r と前方一致の段の長さの上限 T を足した 2 つ長い配列 [r, T, …キー] になり、
+// { vals: [r, …キー], rel: true, T } を返す。0041 の版が出した 1 つ長い [r, …キー] は T = 0（前方一致の段なし = その版と同じ並び）として読む。
 // 段の値の無いカーソル（段ができる前に発行したもの・段を使わない検索のもの）は今の並びのまま続ける（400 にしない。並びが途中で変わらないので重複・欠落も出ない）。
 export const encodeCursor = vals => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(vals)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 export function decodeCursor(raw, recent = false) {
   if (!raw) return { none: true };
   try {
     const b = atob(raw.replace(/-/g, '+').replace(/_/g, '/')), vals = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
-    const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS, rel = Array.isArray(vals) && vals.length === keys.length + 1;
+    const keys = recent ? RECENT_SORT_KEYS : SORT_KEYS, n = Array.isArray(vals) ? vals.length - keys.length : -1, rel = n === 1 || n === 2;
     if (rel && !(Number.isInteger(vals[0]) && vals[0] >= 0 && vals[0] <= REL_MAX)) return null;
-    const rest = rel ? vals.slice(1) : vals;
+    if (n === 2 && !(Number.isInteger(vals[1]) && vals[1] >= 0 && vals[1] <= KEY_LEN_MAX)) return null;
+    const rest = rel ? vals.slice(n) : vals;
     const ok = Array.isArray(vals) && rest.length === keys.length && rest.every((v, i) => v === null || (typeof v === keys[i].type && (typeof v === 'number' ? Number.isFinite(v) : v.length <= 200)));
-    return ok && vals.at(-1) !== null ? (rel ? { vals, rel: true } : { vals }) : null;
+    return ok && vals.at(-1) !== null ? (rel ? { vals: [vals[0], ...rest], rel: true, T: n === 2 ? vals[1] : 0 } : { vals }) : null;
   } catch (_) { return null; }
 }
 // 全角半角・大文字小文字をそろえる（検索語と sites.search_text の両方に同じ処理を使う）
@@ -129,10 +131,15 @@ const ftsTerms = q => queryTerms(q).filter(t => [...t].length >= FTS_MIN_CHARS).
 // 鍵は sites のトリガが作る（定義は 0041 の先頭のコメント）。検索語との比較は「鍵 = 検索語（cleanQuery 済み = NFKC + 小文字）」の等値（URL の形の語は下の relevanceKeys の候補も）で、索引（主キー key, site_id）で引く。
 // 前方一致の段（完全一致の段の次。githu → github.com、yaho → Yahoo! JAPAN）: 候補の最後の語（URL の形なら除いた語）で始まり、それより長い鍵を持つサイト。
 //   段の中の順は日付でなく「語に近い順」: 一致した鍵の長さの短い順 → rank（ドメインのトップ > パスあり > 名前）→ 今の並び（score = 鍵の長さ × 8 + rank。サイトごとに最小）。
-//   段に入るのは、前方一致の鍵を（鍵の長さ, 鍵）の順に並べた先頭 PREFIX_MAX 行に入る鍵を持つサイトだけ（上限で読み取りを止めるため。鍵が少ない語では全部）。
-//   よく打たれる短い語（ama・g）でも短い鍵＝本命（aman・amazon）から入るので、上限で段をまるごと諦めない。超えた分のサイトは「その他」に今の並びで出る。
-//   読み方: まず主キーの範囲で PREFIX_MAX + 1 行まで読み、超えたら式インデックス（0042。長さ → 鍵）を長さの短い順に引いて PREFIX_MAX 行で止まる。
-//   0042 が無く PREFIX_MAX を超える語は前方一致の段を作らない（完全一致の段はそのまま）。段の集合は計画（先頭ページ）で決めて覚え、続きのページも同じ集合を使う。
+//   段に入るのは「長さ T 以下の前方一致の鍵を持つサイト」（サイトごとに決まる条件）。T は先頭ページで、長さ T 以下の前方一致の鍵が PREFIX_MAX 行以下に
+//   なる最大の長さに決め（prefixT。鍵が PREFIX_MAX 行以下の語は KEY_LEN_MAX = 全部）、カーソルに入れて続きのページも同じ T を使う（Worker・計画のキャッシュに依らない）。
+//   短い鍵から段に入るので、前方一致の多い短い語でも段をまるごと諦めないが、T より長い鍵（本命の名前が長いなど）のサイトは「その他」に今の並びで出る。
+//   最短の長さだけで PREFIX_MAX 行を超える語（サイ → サイト が数千行）は T = 0（前方一致の段なし）。
+//   読み方: T を決めるときは主キーの範囲で PREFIX_MAX + 1 行まで読み、超えたら式インデックス（0042。長さ → 鍵）を短い順に PREFIX_MAX + 1 行目まで引く。
+//   段の一覧は T < KEY_LEN_MAX なら 0042 を `length(key) IN (…T)` で引き（鍵の行数だけ読む）、T = KEY_LEN_MAX なら主キーの範囲（もともと PREFIX_MAX 行以下）。
+//   0042 が無い（未適用・DROP 後）ときは、T を決める段階で PREFIX_MAX を超える語は T = 0。続きのページで 0042 が消えていたら主キーの範囲で読む（同じ集合。読み取りは
+//   その語で始まる鍵の数に比例する縮退）。鍵がページの間に増えても集合は「長さ T 以下」のまま（重複・欠落なし）で、読み取りは増えた鍵の行数だけ増える。
+//   段の一覧で読む鍵は PREFIX_HARD 行で止める（1 回の閲覧の途中で同じ語の鍵が PREFIX_HARD − PREFIX_MAX 行以上増えたときだけ、上限を超えた鍵のサイトは段にも「その他」にも出ない）。
 //   段の語は prefixWord（URL の形の語は scheme・www. などを除いた語）。段の語が検索語と同じなら、鍵がその語で始まるサイトは部分一致にも入る。
 //   違う（URL の形の語）ときは完全一致の段と同じく loose の扱い（段を部分一致で絞らず、部分一致の外の分を総件数に足す。下の relevanceKeys）。
 // 部分一致（前方以外）の段は作らない: 段の中を語に近い順に並べる鍵が無く、該当を全部読む必要があるため。
@@ -153,19 +160,25 @@ export const relevanceKeys = q => {
 export const prefixWord = q => { const t = relevanceKeys(q).at(-1); return t.startsWith('www.') && t.length > 4 ? t.slice(4) : t; };
 export const RELEVANCE_MAX = 100;
 export const RANK_REST = 5; // カーソルの段の値で「その他」を表す（完全一致の段の rank は 0〜4、前方一致の段は PREFIX_BASE + score）
-export const PREFIX_MAX = 100, PREFIX_BASE = 6, KEY_LEN_MAX = 200; // 前方一致の段に入れる鍵の行数の上限・カーソルの段の値の起点・段に入る鍵の長さの上限
+export const PREFIX_MAX = 100, PREFIX_HARD = 1000, PREFIX_BASE = 6, KEY_LEN_MAX = 200; // T を決める鍵の行数・段の一覧で読む鍵の上限・カーソルの段の値の起点・鍵の長さの上限
 const prefixKeys = keys => [{ expr: 'p.sc', dir: 'ASC', type: 'number' }, ...keys];
 const REL_MAX = PREFIX_BASE + KEY_LEN_MAX * 8 + 4; // カーソルの段の値の上限
-// 前方一致の段の集合 { site_id: score }。語 c で始まり c より長い鍵（長さ KEY_LEN_MAX まで）の先頭 PREFIX_MAX 行（長さ → 鍵の順）から作る。作れないとき（0042 なしで上限超え）は null。
-export async function prefixSites(db, c) {
-  const hi = c + '\u{10FFFF}', L = [...c].length, toMap = rows => { const m = {}; for (const r of rows) if (!(r.site_id in m) || m[r.site_id] > r.sc) m[r.site_id] = r.sc; return m; };
-  if (L >= KEY_LEN_MAX) return {};
-  const all = (await db.prepare(`SELECT site_id, length(key) * 8 + rank AS sc FROM site_search_keys WHERE key > ?1 AND key < ?2 AND length(key) <= ${KEY_LEN_MAX} LIMIT ${PREFIX_MAX + 1}`).bind(c, hi).all()).results;
-  if (all.length <= PREFIX_MAX) return toMap(all);
-  const lens = Array.from({ length: KEY_LEN_MAX - L }, (_, i) => L + 1 + i).join(',');
-  try { return toMap((await db.prepare(`SELECT site_id, length(key) * 8 + rank AS sc FROM site_search_keys INDEXED BY idx_site_search_keys_len WHERE length(key) IN (${lens}) AND key > ?1 AND key < ?2 ORDER BY length(key), key LIMIT ${PREFIX_MAX}`).bind(c, hi).all()).results); }
-  catch (e) { if (/no such index/i.test(String(e?.message))) return null; throw e; }
+// 前方一致の段の T（0 = 段なし）。語 c で始まり c より長い鍵（長さ KEY_LEN_MAX まで）が PREFIX_MAX 行以下なら KEY_LEN_MAX、超えたら長さの短い順の PREFIX_MAX + 1 行目の長さ − 1。
+const NO_INDEX = /no such index/i;
+export async function prefixT(db, c) {
+  const hi = c + '\u{10FFFF}', L = [...c].length;
+  if (L >= KEY_LEN_MAX) return 0;
+  const n = (await db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM site_search_keys WHERE key > ?1 AND key < ?2 AND length(key) <= ${KEY_LEN_MAX} LIMIT ${PREFIX_MAX + 1})`).bind(c, hi).first())?.n ?? 0;
+  if (n === 0) return 0;
+  if (n <= PREFIX_MAX) return KEY_LEN_MAX;
+  try {
+    const l = (await db.prepare(`SELECT length(key) AS l FROM site_search_keys INDEXED BY idx_site_search_keys_len WHERE length(key) IN (${lenList(L, KEY_LEN_MAX)}) AND key > ?1 AND key < ?2 ORDER BY length(key), key LIMIT 1 OFFSET ${PREFIX_MAX}`).bind(c, hi).first())?.l;
+    return l - 1 > L ? l - 1 : 0;
+  } catch (e) { if (NO_INDEX.test(String(e?.message))) return 0; throw e; }
 }
+const lenList = (L, T) => Array.from({ length: T - L }, (_, i) => L + 1 + i).join(',');
+// 前方一致の段の集合（site_id, sc）の SQL。useIdx: T < KEY_LEN_MAX のとき 0042 を引く（無ければ呼び出し側が false でやり直す）。読む鍵は PREFIX_HARD 行まで。
+const prefixSrc = (c, T, useIdx) => `SELECT site_id, MIN(length(key) * 8 + rank) AS sc FROM (SELECT key, site_id, rank FROM site_search_keys ${useIdx && T < KEY_LEN_MAX ? `INDEXED BY idx_site_search_keys_len WHERE length(key) IN (${lenList([...c].length, T)}) AND` : `WHERE length(key) <= ${T} AND`} key > ? AND key < ? ORDER BY length(key), key LIMIT ${PREFIX_HARD}) GROUP BY site_id`;
 const relKeys = keys => [{ expr: 'k.rank', dir: 'ASC', type: 'number' }, ...keys];
 const REL_ERR = /no such table: site_search_keys/i;
 
@@ -194,7 +207,7 @@ async function planFor(db, o, fresh) {
 }
 export async function planQuery(db, { cc = null, region = null, category = null, tags = [], q = null }) {
   // qMode: 'fts'（一覧も件数も索引）/ 'instr'。qOver: 索引の該当数が TOTAL_CAP を超えると分かった。qCountViaFts: 併用ありで総件数だけ索引から数える（該当が TOTAL_CAP 超〜FTS_EXTRA_PROBE 以下）。
-  const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false, relevance: false, prefix: null };
+  const plan = { categoryMode: 'in', categoryLeafCount: null, categoryAll: null, driveTag: null, tagsOverCap: false, qMode: 'instr', qOver: false, qCountViaFts: false, relevance: false, prefixT: 0 };
   const jobs = [];
   // 関連度の段（#301）: 候補の鍵に一致するサイトを RELEVANCE_MAX + 1 件まで数える（鍵の索引で 候補数 × (RELEVANCE_MAX + 1) 行まで。1 サイトは候補ごとに高々 1 行なので、
   // この行数で打ち切っても「異なるサイトが RELEVANCE_MAX 以下」は正しく判定できる）。1〜RELEVANCE_MAX 件なら段を使う。
@@ -203,7 +216,7 @@ export async function planQuery(db, { cc = null, region = null, category = null,
     // 完全一致が RELEVANCE_MAX 件を超える語は、前方一致の段も作らない（ありふれた語。完全一致のサイトより前方一致のサイトが上に来てしまうため）。
     try {
       const n = (await db.prepare(`SELECT COUNT(DISTINCT site_id) AS n FROM (SELECT site_id FROM site_search_keys WHERE key IN (${ks.map(() => '?').join(', ')}) LIMIT ?)`).bind(...ks, ks.length * (RELEVANCE_MAX + 1)).first())?.n ?? 0;
-      if (n <= RELEVANCE_MAX) { plan.prefix = await prefixSites(db, prefixWord(q)); plan.relevance = n >= 1 || Object.keys(plan.prefix ?? {}).length > 0; }
+      if (n <= RELEVANCE_MAX) { plan.prefixT = await prefixT(db, prefixWord(q)); plan.relevance = n >= 1 || plan.prefixT > 0; }
     }
     catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; /* 表なし → 段なし */ }
   })());
@@ -305,6 +318,7 @@ async function runQuery(db, o, basePlan) {
   // 関連度の段を使うか: 先頭ページは計画で決め、続きのページはカーソルの形（段の値の有無）に従う（途中で計画が変わっても並びを変えない）。
   const rel = !!q && (hasCursor ? !!cursor.rel : !!basePlan.relevance);
   if (hasCursor && cursor.rel && !rel) return runQuery(db, { ...o, cursor: { vals: cursor.vals.slice(1) } }, basePlan); // 検索語の無い段つきカーソル: 今の並びの位置として読む
+  const T = !rel ? 0 : hasCursor ? cursor.T : basePlan.prefixT; // 前方一致の段の長さの上限（続きのページはカーソルの値。計画のキャッシュに依らない）
   // 稀なタグの索引（IN）は、先頭ページでは件数を該当数に比例して数えられるので使う。続きのページでは該当数が TAG_IN_MAX を超えるなら使わない
   // （ページごとに該当サイトの全件を取り出し直すより、並びの索引を走査して EXISTS で確かめる方が安い。779 件のタグで全ページ合計が main の 1.4 倍だった）。
   const plan = hasCursor && basePlan.driveTag && basePlan.driveN > TAG_IN_MAX ? { ...basePlan, driveTag: null } : basePlan;
@@ -328,68 +342,65 @@ async function runQuery(db, o, basePlan) {
     try { results = await listRelevance(); }
     catch (e) { if (!REL_ERR.test(String(e?.message))) throw e; console.error('site_search_keys が無いので段なしで続ける:', e.message); return runQuery(db, { ...o, cursor: hasCursor ? { vals: cursor.vals.slice(1) } : cursor }, { ...basePlan, relevance: false }); }
   }
-  // 段の SQL。完全一致の段の k は候補の鍵ごとの一致を 1 サイト 1 行（小さい rank）にまとめたもの。前方一致の段の p は計画の集合（json_each で 1 サイト 1 行）。
-  // loose（候補が 2 つ）のときは段を部分一致で絞らない（relevanceKeys の説明）。前方一致の段からは完全一致の段のサイトを除く（主キーの点引き）。
-  function tierParts() {
-    const ks = relevanceKeys(q), loose = ks.length > 1 || prefixWord(q) !== q, ph = ks.map(() => '?').join(', ');
+  // 段の SQL。完全一致の段の k は候補の鍵ごとの一致を 1 サイト 1 行（小さい rank）にまとめたもの。前方一致の段の p は長さ T 以下の前方一致の鍵（prefixSrc）を 1 サイト 1 行に。
+  // loose のときは段を部分一致で絞らない（relevanceKeys の説明）。前方一致の段からは完全一致の段のサイトを除く（主キーの点引き）。
+  // 「その他」からは、完全一致のサイトを主キーの点引きで、前方一致の段のサイトを「長さ T 以下の前方一致の鍵がある」の相関（site_id の索引。ほかの条件を通った行だけ、1 行あたり鍵数行）で除く。
+  function tierParts(useIdx = true) {
+    const ks = relevanceKeys(q), pw = prefixWord(q), loose = ks.length > 1 || pw !== q, ph = ks.map(() => '?').join(', '), hi = pw + '\u{10FFFF}';
     const ex = filters({ cc, region, category, q: loose ? null : q, tags, recent }, { ...plan, categoryMode: 'exists', driveTag: null, qMode: 'instr' });
     const notExact = `NOT EXISTS (SELECT 1 FROM site_search_keys x WHERE x.key IN (${ph}) AND x.site_id = s.id)`;
-    const pre = plan.prefix && Object.keys(plan.prefix).length ? JSON.stringify(plan.prefix) : null;
+    // 鍵の表を引く前に、行の値だけで「その語で始まる鍵を持ちうるか」（ホスト名の先頭・www. の後・名前の先頭。鍵の作り方 0041 と同じ lower / trim）を確かめ、持ちうる行だけ site_id の索引を引く
+    // （必要条件なので結果は同じ。1 文字の語でも鍵の表を引く行はその文字で始まるホスト・名前の行だけになる）。
+    const Lp = [...pw].length, head = `lower(substr(s.url, instr(s.url, '://') + 3))`;
+    const notPrefix = T > 0 ? { sql: `NOT (COALESCE(substr(${head}, 1, ${Lp}) = ? OR substr(${head}, 1, ${Lp + 4}) = 'www.' || ? OR substr(lower(trim(s.name)), 1, ${Lp}) = ? OR substr(lower(trim(s.name_ja)), 1, ${Lp}) = ? OR substr(lower(trim(s.name_en)), 1, ${Lp}) = ?, 0) AND EXISTS (SELECT 1 FROM site_search_keys y WHERE y.site_id = s.id AND y.key > ? AND y.key < ? AND length(y.key) <= ?))`, args: [pw, pw, pw, pw, pw, pw, hi, T] } : null;
     const exact = {
       sql: (sel, extra = []) => `SELECT ${sel} FROM (SELECT site_id, MIN(rank) AS rank FROM site_search_keys WHERE key IN (${ph}) GROUP BY site_id) k CROSS JOIN sites s ON s.id = k.site_id${[...ex.where, ...extra].length ? ' WHERE ' + [...ex.where, ...extra].join(' AND ') : ''}`,
       args: extraArgs => [...ks, ...ex.args, ...extraArgs], keys: relKeys(keys), col: 'k.rank', toVals: v => v, fromSc: sc => sc,
     };
-    const prefix = pre && {
-      sql: (sel, extra = []) => `SELECT ${sel} FROM (SELECT j.key AS site_id, j.value AS sc FROM json_each(?) j) p CROSS JOIN sites s ON s.id = p.site_id WHERE ${[...ex.where, notExact, ...extra].join(' AND ')}`,
-      args: extraArgs => [pre, ...ex.args, ...ks, ...extraArgs], keys: prefixKeys(keys), col: 'p.sc', toVals: v => [v[0] - PREFIX_BASE, ...v.slice(1)], fromSc: sc => sc + PREFIX_BASE,
+    const prefix = T > 0 && {
+      sql: (sel, extra = []) => `SELECT ${sel} FROM (${prefixSrc(pw, T, useIdx)}) p CROSS JOIN sites s ON s.id = p.site_id WHERE ${[...ex.where, notExact, ...extra].join(' AND ')}`,
+      args: extraArgs => [pw, hi, ...ex.args, ...ks, ...extraArgs], keys: prefixKeys(keys), col: 'p.sc', toVals: v => [v[0] - PREFIX_BASE, ...v.slice(1)], fromSc: sc => sc + PREFIX_BASE,
     };
-    return { ks, loose, notExact, pre, prefixIds: new Set(Object.keys(plan.prefix ?? {})), tiers: [exact, prefix].filter(Boolean) };
+    return { ks, loose, notExact, notPrefix, tiers: [exact, prefix || null] };
   }
-  // 総件数に足す分: loose のとき、部分一致の集合に入らない段のサイトの数（段はそれぞれ 100 件以下なので、読むのも鍵と段のサイトだけ）。
+  // 0042 が無い（DROP 後など）ときだけ、前方一致の段を主キーの範囲で読み直す（同じ集合）。
+  async function withIdx(fn) { try { return await fn(tierParts(true)); } catch (e) { if (!NO_INDEX.test(String(e?.message))) throw e; return fn(tierParts(false)); } }
+  // 総件数に足す分: loose のとき、部分一致の集合に入らない段のサイトの数（段はそれぞれ上限付きなので、読むのも鍵と段のサイトだけ）。
   const outsideHits = async () => {
-    if (!rel) return 0;
-    const { loose, tiers } = tierParts();
-    if (!loose) return 0;
+    if (!rel || !tierParts().loose) return 0;
     const terms = queryTerms(q), notHit = `NOT (${terms.map(() => 'instr(s.search_text, ?) > 0').join(' AND ')})`;
-    let n = 0;
-    for (const t of tiers) n += (await db.prepare(t.sql('COUNT(*) AS n', [notHit])).bind(...t.args(terms)).first())?.n ?? 0;
-    return n;
+    return withIdx(async ({ tiers }) => { let n = 0; for (const t of tiers) if (t) n += (await db.prepare(t.sql('COUNT(*) AS n', [notHit])).bind(...t.args(terms)).first())?.n ?? 0; return n; });
   };
-  // 完全一致の段 → 前方一致の段 → その他 の順に limit + 1 行まで集める。段は鍵の索引・計画の集合から引き（CROSS JOIN で外側に固定）、絞り込みは 1 行ずつ確かめる形（EXISTS・instr）にする。
-  // カーソルの段の値: 0〜4 = 完全一致の段（rank）、PREFIX_BASE 以上 = 前方一致の段（PREFIX_BASE + score）、RANK_REST = その他。
+  // 完全一致の段 → 前方一致の段 → その他 の順に limit + 1 行まで集める。段は鍵の索引から引き（CROSS JOIN で外側に固定）、絞り込みは 1 行ずつ確かめる形（EXISTS・instr）にする。
+  // カーソルの段の値: 0〜4 = 完全一致の段（rank）、PREFIX_BASE 以上 = 前方一致の段（PREFIX_BASE + score）、RANK_REST = その他。D1 の文の数は段ごとに高々 2（一覧・?page=N の件数）+ その他。
   async function listRelevance() {
-    const { ks, notExact, pre, prefixIds, tiers } = tierParts();
     const r0 = hasCursor ? cursor.vals[0] : null;
     const at = r0 === null ? 0 : r0 < RANK_REST ? 0 : r0 >= PREFIX_BASE ? 1 : 2; // 0 完全一致 / 1 前方一致 / 2 その他
     const out = [];
     let off = start;
-    for (const [i, t] of [tiers[0], tiers[1] ?? null].entries()) {
-      if (i < at || !t) continue;
-      const need = limit + 1 - out.length;
-      const c = hasCursor && i === at ? afterCursor(t.toVals(cursor.vals), t.keys) : null;
-      // 並べ替えは id と段の値・並びのキーだけで行い、画面の列（タグ・カテゴリの副問い合わせを含む）は残った 1 ページ分だけで作る（並べ替える全行で作ると、段の該当数 × タグ数を読む）。
-      const page = `${t.sql(`s.id AS sid, ${t.col} AS rk`, c ? [c.sql] : [])} ${siteOrder(t.keys)} LIMIT ? OFFSET ?`;
-      const rows = (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)}, k.rk AS _r FROM (${page}) k CROSS JOIN sites s ON s.id = k.sid ORDER BY k.rk, ${siteOrder(keys).slice('ORDER BY '.length)}`).bind(...t.args(c?.args ?? []), need, off).all()).results;
-      out.push(...rows.map(r => ({ ...r, _r: t.fromSc(r._r) })));
+    for (const i of [0, 1]) {
+      if (i < at) continue;
+      const res = await withIdx(async ({ tiers }) => {
+        const t = tiers[i];
+        if (!t) return { rows: [], n: 0 };
+        const need = limit + 1 - out.length, c = hasCursor && i === at ? afterCursor(t.toVals(cursor.vals), t.keys) : null;
+        // 並べ替えは id と段の値・並びのキーだけで行い、画面の列（タグ・カテゴリの副問い合わせを含む）は残った 1 ページ分だけで作る（並べ替える全行で作ると、段の該当数 × タグ数を読む）。
+        const page = `${t.sql(`s.id AS sid, ${t.col} AS rk`, c ? [c.sql] : [])} ${siteOrder(t.keys)} LIMIT ? OFFSET ?`;
+        const rows = (await db.prepare(`SELECT ${COLUMNS}, ${keyCols(keys)}, k.rk AS _r FROM (${page}) k CROSS JOIN sites s ON s.id = k.sid ORDER BY k.rk, ${siteOrder(keys).slice('ORDER BY '.length)}`).bind(...t.args(c?.args ?? []), need, off).all()).results;
+        // ?page=N（offset）が段を越えたら、段の件数を引いた位置から次を読む。
+        const n = !hasCursor && off > 0 && !rows.length ? (await db.prepare(t.sql('COUNT(*) AS n')).bind(...t.args([])).first())?.n ?? 0 : 0;
+        return { rows: rows.map(r => ({ ...r, _r: t.fromSc(r._r) })), n };
+      });
+      out.push(...res.rows);
       if (out.length > limit) return out;
-      // ?page=N（offset）が段を越えたら、段の件数を引いた位置から次を読む（段はそれぞれ 100 件以下）。
-      off = !hasCursor && off > 0 && !rows.length ? Math.max(0, off - ((await db.prepare(t.sql('COUNT(*) AS n')).bind(...t.args([])).first())?.n ?? 0)) : 0;
+      off = !hasCursor && off > 0 && !res.rows.length ? Math.max(0, off - res.n) : 0;
     }
-    // その他: 完全一致の段のサイトは SQL（主キーの点引き）で、前方一致の段のサイトは読んだ行から除く（除いた分だけ読み足す。集合は 100 件以下）。
-    // ?page=N の途中から読むときだけは位置を合わせるため SQL で除く（json_each の行も読み取りに数えられるので、ふだんは使わない）。
-    const cur0 = hasCursor && at === 2 ? cursor.vals.slice(1) : null, need0 = limit + 1 - out.length;
-    if (off > 0 && pre) { const rows = await listRest(null, need0, off, [notExact, 'NOT EXISTS (SELECT 1 FROM json_each(?) j WHERE j.key = s.id)'], [...ks, pre]); return [...out, ...rows.map(r => ({ ...r, _r: RANK_REST }))]; }
-    let cur = cur0;
-    for (let g = 0; g <= prefixIds.size + 1; g++) {
-      const want = limit + 1 - out.length, rows = await listRest(cur, want, g === 0 ? off : 0, [notExact], ks);
-      for (const r of rows) if (!prefixIds.has(r.id)) out.push({ ...r, _r: RANK_REST });
-      if (out.length > limit || rows.length < want) break;
-      cur = keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null);
-    }
-    return out;
+    const { ks, notExact, notPrefix } = tierParts();
+    const rows = await listRest(hasCursor && at === 2 ? cursor.vals.slice(1) : null, limit + 1 - out.length, off, [notExact, ...(notPrefix ? [notPrefix.sql] : [])], [...ks, ...(notPrefix?.args ?? [])]);
+    return [...out, ...rows.map(r => ({ ...r, _r: RANK_REST }))];
   }
   const more = results.length > limit, rows = results.slice(0, limit);
-  const next_cursor = more ? encodeCursor([...(rel ? [rows.at(-1)._r] : []), ...keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)]) : null;
+  const next_cursor = more ? encodeCursor([...(rel ? [rows.at(-1)._r, T] : []), ...keys.map((_, i) => rows.at(-1)[`_k${i}`] ?? null)]) : null;
   const out = { items: rows.map(shape), next_cursor };
   if (!hasCursor) {
     const plain = !category && !q && !tags?.length;
