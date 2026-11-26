@@ -52,7 +52,8 @@ for (const [label, width, coarse, zoom, font] of conds) for (const theme of ['li
     // 文字の Range が枠（border-box）の中に収まる
     const textIn = (el, node) => { const rg = document.createRange(); rg.selectNodeContents(node); const t = rg.getBoundingClientRect(), b = el.getBoundingClientRect(); return t.top >= b.top - 0.01 && t.bottom <= b.bottom + 0.01 && t.left >= b.left - 0.01 && t.right <= b.right + 0.01; };
     return {
-      site: [...document.querySelectorAll('a.site-tag')].map((a) => ({ t: a.textContent, h: a.getBoundingClientRect().height, fs: parseFloat(getComputedStyle(a).fontSize), reach: reach(a), bad: grid(a), inside: textIn(a, a) })),
+      // ピックアップの不可視の行（.pick-idle。#297）のタグは画面に出ないので対象外
+      site: [...document.querySelectorAll('a.site-tag:not(.pick-idle a)')].map((a) => ({ t: a.textContent, h: a.getBoundingClientRect().height, fs: parseFloat(getComputedStyle(a).fontSize), reach: reach(a), bad: grid(a), inside: textIn(a, a) })),
       chip: [...document.querySelectorAll('.tag-chip')].map((c) => ({ t: c.firstChild.textContent, h: c.getBoundingClientRect().height, fs: parseFloat(getComputedStyle(c).fontSize), reach: reach(c.querySelector('button')), bad: grid(c), inside: textIn(c, c.firstChild) })),
       // 検索欄の下端 2px 内側・おすすめリンクの上端 2px 内側（見た目の範囲）をタップして本来の要素に当たるか
       inputEdge,

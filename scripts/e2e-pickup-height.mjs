@@ -146,7 +146,10 @@ await scenario('見えない行はフォーカスもクリックもできない�
 });
 // 検索結果の画面（showResultsNow）でもピックアップは描かれ、選び直し・言語の変更に追従する。入力のたびには描き直さない
 const settled = (p) => p.waitForFunction(() => document.querySelector('#pick-list li') && document.querySelector('#pick-list li').getAnimations().every((a) => a.playState === 'finished'), null, { timeout: T });
-const type = async (p, q) => { await p.fill('#query', q); await p.waitForFunction((v) => !document.querySelector('#results').hidden && document.querySelector('#result-title').textContent.includes(v), q, { timeout: T }); await frames(p); };
+// 検索結果（ピックアップより上）が届くと #picks の top が動くので、測る前に結果の描画と画面の入れ替えの終わりを待つ
+const loaded = (p) => p.waitForFunction(() => !document.querySelector('#results').hidden && (document.querySelector('#result-list li') || !document.querySelector('#empty').hidden)
+  && ![...document.querySelectorAll('.list-status')].some((e) => /読み込み中|Loading/.test(e.textContent)) && !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')), null, { timeout: T });
+const type = async (p, q) => { await p.fill('#query', q); await p.waitForFunction((v) => document.querySelector('#result-title').textContent.includes(v) && new URLSearchParams(location.search).get('q') === v, q, { timeout: T }); await loaded(p); await frames(p); };
 const pickState = (p) => p.evaluate(() => { const li = document.querySelector('#pick-list li'); return li ? { name: li.querySelector('.site-title a').textContent, desc: li.querySelector('.site-content > p').textContent } : null; });
 const until = async (p, fn, arg, label) => { try { await p.waitForFunction(fn, arg, { timeout: 5000 }); } catch (_) { assert.fail(`${label}: ${JSON.stringify(await pickState(p))}`); } };
 const prefixIs = (x) => document.querySelector('#pick-list li a')?.textContent.startsWith(x);
@@ -154,12 +157,14 @@ const toScope = (p, code) => p.evaluate((c) => window.dispatchEvent(new CustomEv
 for (const width of [390, 1280]) {
   await scenario(`幅${width}: ?q= を直接開いてもピックアップが出る`, browser, { width, start: '/?q=llll', ready: '#results:not([hidden])' }, async (page) => {
     await until(page, prefixIs, 'A ', '?q= 直開きでピックアップが空');
+    await loaded(page);
     return summary(await cycle(page, '?q='));
   });
   await scenario(`幅${width}: 検索結果の画面で範囲を切り替えると、すぐ新しい組になり高さが一定`, browser, { width }, async (page) => {
     await type(page, 'llll'); const a = await cycle(page, 'search jp');
     await toScope(page, 'US'); await page.waitForFunction(() => location.pathname === '/us/', null, { timeout: T });
     await until(page, prefixIs, 'B ', '範囲切替後も前の範囲のピックアップが残る');
+    await loaded(page);
     const b = await cycle(page, 'search us');
     assert.ok(b.layout.picksH < a.layout.picksH, `高さが新しい組になっていない ${a.layout.picksH} → ${b.layout.picksH}`);
     return `${a.layout.picksH} → ${b.layout.picksH}`;
@@ -182,6 +187,7 @@ await scenario('検索結果の画面の言語切替は、表示中の件を保�
   const ja = await pickState(page);
   await page.click('#language-toggle');
   await until(page, () => document.querySelector('#pick-list li .site-content > p')?.textContent.startsWith('A long description'), null, '言語切替後もピックアップが前の言語のまま');
+  await loaded(page);
   assert.equal((await pickState(page)).name, ja.name, '表示中の件が巻き戻った');
   return summary(await cycle(page, 'search en'));
 });
