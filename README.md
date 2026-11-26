@@ -23,6 +23,8 @@ npm run check        # 構文確認 + API ヘッダ自己検査
 
 ピックアップの横スワイプ・ドラッグ・左右キー（#113）は `node scripts/e2e-pickup-swipe.mjs`（同じ前提のローカル D1 と `npx wrangler dev --local --port 8799`、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` も同様。`/api/picks` はページ内で固定するので seed の中身に依存しない。`npm test` には入れない）。
 
+画面内の操作でカテゴリ画面を開くと先頭を表示すること（#295）は `node scripts/e2e-category-scroll.mjs`（`npm run db:migrate` と `node scripts/dev-seed-sites.mjs 300` 済みのローカル D1 で `npx wrangler dev --local --port 8799` を起動し、`PLAYWRIGHT_DIR` / `CHROMIUM_PATH` は上と同様。第 1 引数で接続先の URL を変えられる。`npm test` には入れない）。
+
 収集・台帳のスクリプトは `uv run python3` で実行する（[docs/collection/procedures.md](docs/collection/procedures.md)）。
 
 ## 本番
