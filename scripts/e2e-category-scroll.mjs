@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// カテゴリのリンクで開いたらページ先頭を表示する (#295) の実ブラウザ検証。仕様は docs/design/ui.md の「カテゴリ」まわり。
+// 画面内の操作でカテゴリ画面を開いたらページ先頭を表示する (#295) の実ブラウザ検証。仕様は docs/design/ui.md の「カテゴリ」まわり。
 // 前提: `npm run db:migrate` と `node scripts/dev-seed-sites.mjs 300` 済みのローカル D1 で `npx wrangler dev --local --port 8799` が起動していること。
 // 実行: PLAYWRIGHT_DIR=<node_modules/playwright> node scripts/e2e-category-scroll.mjs [baseUrl=http://localhost:8799]
 import { createRequire } from 'node:module';
@@ -14,7 +14,7 @@ const T = 15000;
 function chromiumPath() {
   if (process.env.CHROMIUM_PATH) return process.env.CHROMIUM_PATH;
   const base = path.join(homedir(), '.cache/ms-playwright');
-  for (const d of (existsSync(base) ? readdirSync(base) : []).filter((x) => x.startsWith('chromium_headless_shell-')).sort().reverse()) {
+  for (const d of (existsSync(base) ? readdirSync(base) : []).filter((x) => x.startsWith('chromium_headless_shell-')).sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]))) {
     for (const sub of readdirSync(path.join(base, d))) { const p = path.join(base, d, sub, 'chrome-headless-shell'); if (existsSync(p)) return p; }
   }
   return undefined;
@@ -57,7 +57,7 @@ for (const [label, viewport, extra] of sizes) {
       await clickLink(page, '#categories h2 a[href$="category=government"]', '?category=government');
       await untilY(page, 0, 'カテゴリ行');
       const vt = await page.evaluate(() => window.__vt);
-      if (reducedMotion === 'reduce') assert.equal(vt.length, 0); else assert.equal(vt.at(-1), y, '旧画面は先に跳ばない');
+      if (reducedMotion === 'reduce') assert.equal(vt.length, 0); else assert.equal(vt.at(-1), y, 'startViewTransition の呼び出し時点ではまだ先頭へ戻していない');
       await page.goBack(); await page.waitForFunction(() => !location.search, null, { timeout: T }); await settled(page);
       await untilY(page, y, '戻る');
       await page.goForward(); await page.waitForFunction(() => location.search === '?category=government', null, { timeout: T }); await settled(page);
@@ -85,11 +85,46 @@ for (const [label, viewport, extra] of sizes) {
       await page.goBack(); await page.waitForFunction(() => location.search.startsWith('?q='), null, { timeout: T }); await page.waitForSelector('#result-list li'); await settled(page);
       await untilY(page, y, '戻る');
     });
+    await scenario('ロゴ → 先頭。戻るで前の位置（一覧のある画面・範囲なしの "/"・同じ画面）', async (page) => {
+      await page.goto(BASE + CITIES); await page.waitForSelector('#directory-sites li'); await settled(page);
+      const y = await scrollDown(page, 900);
+      await clickLink(page, '#home-link', '/jp/');
+      await untilY(page, 0, 'ロゴ（カテゴリ画面から）');
+      await page.goBack(); await page.waitForFunction((u) => location.pathname + location.search === u, CITIES, { timeout: T }); await settled(page);
+      await untilY(page, y, '戻る');
+      await page.goto(BASE + '/'); await page.waitForSelector('#categories a'); await settled(page);
+      const top = await scrollDown(page, 120);
+      await clickLink(page, '#home-link', '/jp/');
+      await untilY(page, 0, 'ロゴ（"/" から）');
+      await page.goBack(); await page.waitForFunction(() => location.pathname === '/', null, { timeout: T }); await settled(page);
+      await untilY(page, top, '"/" へ戻る');
+      await page.goto(BASE + '/jp/'); await page.waitForSelector('#categories a'); await settled(page);
+      await scrollDown(page, 120);
+      const len = await page.evaluate(() => history.length);
+      await clickLink(page, '#home-link', '/jp/');
+      await untilY(page, 0, 'ロゴ（同じ画面）');
+      assert.equal(await page.evaluate(() => history.length), len, '同じ画面では履歴を積まない');
+    });
+    for (const [from, start, dest] of [['範囲のトップ', '/jp/', '/jp/'], ['カテゴリ画面', CITIES, CITIES]]) {
+      await scenario(`検索結果の「カテゴリに戻る」（${from}から検索） → 先頭。戻るで前の位置`, async (page) => {
+        await page.goto(BASE + start); await page.waitForSelector('#categories a, #directory-sites li', { state: 'attached' }); await settled(page);
+        // 検索欄が非表示の画面幅でも検索できるよう、値を入れて input を発火する
+        await page.locator('#query').evaluate((el) => { el.value = '合成'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+        await page.waitForSelector('#result-list li'); await settled(page);
+        const y = await scrollDown(page, 400);
+        await clickLink(page, '#clear', dest);
+        await untilY(page, 0, 'カテゴリに戻る');
+        await page.goBack(); await page.waitForFunction(() => location.search.includes('q='), null, { timeout: T }); await page.waitForSelector('#result-list li'); await settled(page);
+        await untilY(page, y, '戻る');
+      });
+    }
     await scenario('言語切替の再描画と修飾キー付きクリックは位置を変えない', async (page) => {
       await page.goto(BASE + CITIES); await page.waitForSelector('#directory-sites li'); await settled(page);
       const y = await scrollDown(page, 300);
       await page.locator('#breadcrumbs a').first().evaluate((el) => { el.addEventListener('click', (e) => e.preventDefault()); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true })); });
       await page.waitForTimeout(300); await untilY(page, y, '修飾キー'); assert.equal(await page.evaluate(() => location.pathname + location.search), CITIES);
+      await page.locator('#home-link').evaluate((el) => { el.addEventListener('click', (e) => e.preventDefault()); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true })); });
+      await page.waitForTimeout(300); await untilY(page, y, '修飾キー（ロゴ）'); assert.equal(await page.evaluate(() => location.pathname + location.search), CITIES);
       await page.locator('#language-toggle').evaluate((el) => el.click()); await settled(page);
       assert.ok(await scrollY(page) > 50, `言語切替で先頭へ戻らない（scrollY=${await scrollY(page)}）`);
     });
