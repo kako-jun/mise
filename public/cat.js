@@ -8,7 +8,7 @@ const random=(min,max)=>min+Math.random()*(max-min);
 function measure() {
   const found=[];
   for(const el of document.querySelectorAll(selectors)) {
-    if(!el.getClientRects().length || !el.textContent.trim()) continue;
+    if(!el.getClientRects().length || !el.textContent.trim() || el.closest('.pick-idle')) continue; // 不可視のピックアップ（#297）は足場にしない
     const range=document.createRange(); range.selectNodeContents(el);
     metricsContext.font=getComputedStyle(el).font;
     const m=metricsContext.measureText(el.textContent.trim());

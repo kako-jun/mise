@@ -99,7 +99,7 @@ await scenario('スマホ390: タグのタップは従来どおり効く。ス�
   const t2 = await box(page, '#pick-list .site-tag');
   await page.touchscreen.tap(t2.x + t2.w / 2, t2.y + t2.h / 2); // 通常のタップ
   await page.waitForFunction(() => document.querySelectorAll('#tag-chips .tag-chip').length === 1, null, { timeout: T });
-  assert.match(await page.textContent('#tag-chips'), /タグ1/);
+  assert.match(await page.textContent('#tag-chips'), /#(タグ1|tag1)/); // チップの言語はブラウザの言語に従う
 });
 await scenario('スマホ390: 切替直後 500ms 以内のタグのタップは従来どおり無視（既存ガード）', mobile, async (page) => {
   const cdp = await page.context().newCDPSession(page); const [x, y] = await startPoint(page);

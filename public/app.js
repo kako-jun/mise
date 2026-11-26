@@ -520,16 +520,20 @@ function renderRecentFolder(folder) {
   head.append(bullet,icon,heading); div.append(head);
   return div;
 }
+// 描いたときの抽選結果と言語。検索の画面は入力のたびに呼ばれるので、どちらかが変わった（まだ描いていないを含む）ときだけ描き直す。
+let drawnPicks=null, drawnLanguage=null;
+function refreshPick() { if(drawnPicks!==pickedSites || drawnLanguage!==language) renderPick(); }
 function renderPick(dir=1) {
-  const list=$('#pick-list');
+  const list=$('#pick-list'); drawnPicks=pickedSites; drawnLanguage=language;
   list.classList.toggle('is-prev',dir<0);
   // 入れ替えで行が消えても、フォーカス位置と地球儀のホールドを残さない（pointerleave/focusout は来ない）。
   const links=[...list.querySelectorAll('a')], focusIdx=links.indexOf(document.activeElement);
   if(focusIdx>=0 || list.matches(':hover')) window.dispatchEvent(new CustomEvent('mise-fly-release'));
   list.replaceChildren();
   if(!pickedSites.length) return;
-  renderSite(list,pickedSites[pickIndex % pickedSites.length],true);
-  if(focusIdx>=0){ const nl=list.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
+  // 高さを一番高い 1 件に合わせるため、全件を同じ升目に重ねて描く（#297）。表示中の 1 件は常に先頭の li で、残りは .pick-idle（不可視）。
+  pickedSites.forEach((_,i)=>{ renderSite(list,pickedSites[(pickIndex+i)%pickedSites.length],true); if(i) list.lastElementChild.className='pick-idle'; });
+  if(focusIdx>=0){ const nl=list.firstElementChild.querySelectorAll('a'); nl[Math.min(focusIdx,nl.length-1)]?.focus({preventScroll:true}); }
 }
 const picks=$('#picks');
 if(typeof IntersectionObserver!=='undefined') new IntersectionObserver(entries=>{picksVisible=entries[0].isIntersecting;}).observe(picks); else picksVisible=true;
@@ -613,7 +617,7 @@ function setResultTitle(query) {
 function showResultsNow(query) {
   syncFeedEntry();
   if(!keepRequestOpen) setRequestOpen(false);
-  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false;
+  currentSearch=query; $('#directory').hidden=true; $('#picks').hidden=false; $('#results').hidden=false; refreshPick();
   // タグがあるときは現在のカテゴリ階層とも AND（タグ押下でカテゴリは変えない）。タグなしの検索は従来どおり範囲全体。
   const tagKeys=currentTags.map(tg=>tg.key), cat=tagKeys.length ? tagPath.at(-1) : undefined;
   setResultTitle(query); $('#empty').hidden=true;

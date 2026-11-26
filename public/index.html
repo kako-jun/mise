@@ -34,13 +34,13 @@
 <script>try { document.documentElement.dataset.theme = localStorage.getItem("mise-theme") === "dark" ? "dark" : "light"; } catch (_) { document.documentElement.dataset.theme = "light"; }</script>
 <script>(function () { var l = null; try { l = localStorage.getItem("mise-language"); } catch (_) {} try { if (l !== "ja" && l !== "en") { l = ((navigator.languages && navigator.languages[0]) || navigator.language || "").toLowerCase().indexOf("ja") === 0 ? "ja" : "en"; } if (l === "ja") { var r = document.documentElement; r.dataset.initialLang = "ja"; r.lang = "ja"; r.classList.add("i18n-pending"); setTimeout(function () { r.classList.remove("i18n-pending"); if (!window.__miseReady) r.lang = "en"; }, 3000); } } catch (_) {} })();</script>
 <link rel="preload" href="/fonts/anton-mise-v1.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/style.css?v=66">
+<link rel="stylesheet" href="/style.css?v=67">
 <script src="/countries.js?v=8" defer></script>
 <script src="/regions.js?v=2" defer></script>
 <script src="/install.js?v=2" defer></script>
 <script src="/site-host.js?v=1" defer></script>
 <script src="/vertical-link.js?v=4" defer></script>
-<script src="/app.js?v=69" defer></script>
+<script src="/app.js?v=70" defer></script>
 <script>
 // globe.js は load 後に遅延読込する。読込に失敗しても画面は globe なしで使える。
 addEventListener("load", () => (window.requestIdleCallback || setTimeout)(() => import("/globe.js?v=14").catch(() => {})));
@@ -50,7 +50,7 @@ addEventListener("load", () => { if ("serviceWorker" in navigator) navigator.ser
 // ?view=feed: 縦フィードの試作ビュー(#52)。指定が無ければ何もしない。
 if (new URLSearchParams(location.search).get("view") === "feed") { const de = document.documentElement; de.classList.add("feed-mode"); const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/feed.css?v=20"; document.head.append(l); const off = () => { de.classList.remove("feed-mode"); l.remove(); }; for (const f of ["/feed-lib.js?v=11", "/feed.js?v=26"]) { const s = document.createElement("script"); s.src = f; s.async = false; s.onerror = off; document.head.append(s); } setTimeout(() => { if (!document.getElementById("feed")) off(); }, 10000); }
 </script>
-<script src="/cat.js?v=5" defer></script>
+<script src="/cat.js?v=6" defer></script>
 <script src="/counter.js?v=2" defer></script>
 </head>
 <body>
