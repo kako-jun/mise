@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
-import { querySites, planQuery, decodeCursor, encodeCursor, siteOrder, SORT_KEYS, cleanQuery, searchText, relevanceKeys, RELEVANCE_MAX, RANK_REST } from '../src/sites.js';
+import { querySites, planQuery, decodeCursor, encodeCursor, siteOrder, SORT_KEYS, cleanQuery, searchText, relevanceKeys, prefixWord, RELEVANCE_MAX, RANK_REST, PREFIX_MAX, PREFIX_BASE, KEY_LEN_MAX } from '../src/sites.js';
 import { SQL, chunkRanges } from '../scripts/build-search-fts.mjs';
 
 // 検索の関連度（#301。migration 0041 の site_search_keys）。全 migration を適用したメモリ SQLite で、
@@ -66,6 +66,13 @@ add('xbox', 'https://www.xbox.com/', 'Xbox', { reg: '2026-11-01T00:00:00Z', cc: 
 add('dropbox', 'https://www.dropbox.com/', 'Dropbox', { reg: '2026-11-02T00:00:00Z', cc: 'US' });
 add('sub-x', 'https://sub.x.com/', 'Sub', { reg: '2026-11-03T00:00:00Z', cc: 'US' }); // サブドメインは x.com とも x とも一致しない
 add('kanazawa', 'https://www4.city.kanazawa.lg.jp/', '金沢市', { reg: '2026-11-13 00:00:00', bulk: 1 });
+// 前方一致の段（#301）: githu → github.com、yaho → Yahoo! JAPAN（長い名前の先頭）。日付は古め（今の並びでは下に沈む）
+add('github', 'https://github.com/?locale=ja', 'GitHub', { reg: '2018-01-01T00:00:00Z', cc: 'US' });
+add('chiebukuro', 'https://chiebukuro.yahoo.co.jp/', 'Yahoo!知恵袋 - みんなの知恵共有サービス', { reg: '2026-11-04T00:00:00Z' });
+add('yahoo-auction', 'https://auctions.yahoo.co.jp/', 'Yahoo!オークション - 日本最大級のネットオークション・フリマアプリ', { reg: '2026-11-05T00:00:00Z' });
+// 前方一致の鍵が PREFIX_MAX 行を超える語（dens）: 本命の短い名前 dense（古い・一括投入）と、長い名前の新しいサイト 150 件
+add('dense', 'https://dense.example/', 'dense', { reg: '2015-01-01T00:00:00Z', bulk: 1 });
+for (let i = 0; i < 150; i++) add('dn' + String(i).padStart(3, '0'), `https://dn${i}.example/`, 'densely packed long site name number ' + i, { reg: `2026-0${1 + (i % 9)}-2${i % 9}T00:00:00Z`, cc: i % 2 ? 'JP' : 'US', common: i % 3 !== 0 });
 // 完全一致が 30 件（段をまたぐページ送り）。範囲・タグ・カテゴリも散らす。
 // URL の形の検索語（候補の鍵）: www あり / なしの Yahoo! JAPAN 風の 2 件。www なしの方は search_text に www.yahoo.co.jp を含まない（部分一致の集合の外）
 add('yahoo-www', 'https://www.yahoo.co.jp/', 'Yahoo! JAPAN', { reg: '2020-02-01T00:00:00Z' });
@@ -93,17 +100,32 @@ const hitsInOrder = ({ cc, category, q, tags = [] }) => {
 };
 // 鍵を引く候補の参照実装: 検索語そのもの + scheme:// と末尾の / と（残りに . があれば）先頭の www. を除いた語
 const refCands = q => { let t = q; const m = t.match(/^[a-z][a-z0-9+.-]*:\/\//); if (m) t = t.slice(m[0].length); while (t.endsWith('/')) t = t.slice(0, -1); if (t.startsWith('www.') && t.slice(4).includes('.')) t = t.slice(4); return t && t !== q ? [q, t] : [q]; };
-// 完全一致の段: 候補のどれかの鍵を持つサイト（範囲・カテゴリ・タグで絞る。候補が検索語だけなら部分一致でも絞る）を rank → 今の並びで。その後に「部分一致 − 段」を今の並びで。
-const ref = o => {
+// 前方一致の段の集合の参照実装: 最後の候補 c で始まり c より長い鍵（長さ KEY_LEN_MAX まで）を（長さ, 鍵, サイト id）の順に並べた先頭 PREFIX_MAX 行（索引なしで超えるなら作らない）。
+//   サイトごとの score = min(鍵の長さ × 8 + rank)。
+const refPrefix = (c, { index = true } = {}) => {
+  const len = k => [...k].length, rows = [];
+  for (const s of SITES) for (const [k, r] of refKeys(s)) if (k.startsWith(c) && len(k) > len(c) && len(k) <= KEY_LEN_MAX) rows.push({ k, id: s.id, sc: len(k) * 8 + r });
+  if (rows.length > PREFIX_MAX && !index) return null;
+  rows.sort((a, b) => len(a.k) - len(b.k) || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0) || (a.id < b.id ? -1 : 1));
+  const m = new Map(); for (const r of rows.slice(0, PREFIX_MAX)) if (!m.has(r.id) || m.get(r.id) > r.sc) m.set(r.id, r.sc);
+  return m;
+};
+// 並び: 完全一致の段（候補のどれかの鍵を持つサイト。範囲・カテゴリ・タグで絞る。候補が検索語だけなら部分一致でも絞る）を rank → 今の並び、
+// 次に前方一致の段（集合のうち完全一致でないサイト。同じ絞り込み）を score → 今の並び、最後に「部分一致 − 2 つの段の集合」を今の並び。
+const ref = (o, opt) => {
   const plain = hitsInOrder(o);
   if (!o.q) return plain;
   const cands = refCands(o.q), byId = new Map(SITES.map(s => [s.id, refKeys(s)]));
   const rank = id => Math.min(...cands.map(c => byId.get(id).get(c) ?? RANK_REST));
   const exactAll = SITES.filter(s => rank(s.id) < RANK_REST);
-  if (exactAll.length === 0 || exactAll.length > RELEVANCE_MAX) return plain;
-  const pool = cands.length > 1 ? hitsInOrder({ ...o, q: null }) : plain; // 今の並び（候補が 2 つなら部分一致で絞らない母集団）
-  const exact = pool.map((id, i) => [id, i]).filter(([id]) => rank(id) < RANK_REST).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
-  return [...exact, ...plain.filter(id => rank(id) === RANK_REST)];
+  if (exactAll.length > RELEVANCE_MAX) return plain;
+  const pw = cands.at(-1).startsWith('www.') && cands.at(-1).length > 4 ? cands.at(-1).slice(4) : cands.at(-1), loose = cands.length > 1 || pw !== o.q;
+  const pm = refPrefix(pw, opt) ?? new Map();
+  if (exactAll.length === 0 && pm.size === 0) return plain;
+  const pool = (loose ? hitsInOrder({ ...o, q: null }) : plain).map((id, i) => [id, i]); // 今の並び（候補が 2 つなら部分一致で絞らない母集団）
+  const exact = pool.filter(([id]) => rank(id) < RANK_REST).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]);
+  const prefix = pool.filter(([id]) => rank(id) === RANK_REST && pm.has(id)).sort((a, b) => pm.get(a[0]) - pm.get(b[0]) || a[1] - b[1]).map(x => x[0]);
+  return [...exact, ...prefix, ...plain.filter(id => rank(id) === RANK_REST && !pm.has(id))];
 };
 const pagesOf = async (o, limit) => {
   const ids = []; let cur = null, first;
@@ -183,6 +205,14 @@ const cases = [
   ['URL の形 www.yahoo.co.jp', { q: 'www.yahoo.co.jp' }],
   ['URL の形 www.yahoo.co.jp + タグ', { q: 'www.yahoo.co.jp', tags: ['common'] }],
   ['完全一致ちょうど RELEVANCE_MAX 件（段あり）', { q: 'edge hundred' }],
+  ['前方一致 githu', { q: 'githu' }],
+  ['前方一致 yaho（長い名前の先頭・ドメイン）', { q: 'yaho' }],
+  ['前方一致 yahoo!知（長い名前の先頭）', { q: cleanQuery('yahoo!知') }],
+  ['前方一致の鍵が上限超え dens（短い鍵から PREFIX_MAX 行）', { q: 'dens' }],
+  ['前方一致の鍵が上限超え dens + 範囲 + タグ', { q: 'dens', cc: 'JP', tags: ['common'] }],
+  ['前方一致 1 文字 m（上限超え）', { q: 'm' }],
+  ['完全一致 + 前方一致 mid', { q: 'mid' }],
+  ['URL の形 www.githu（前方一致・部分一致の外）', { q: 'www.githu' }],
   ['完全一致 RELEVANCE_MAX + 1 件（段なし）', { q: 'edge overflow' }],
 ];
 for (const [label, o] of cases) {
@@ -199,7 +229,7 @@ for (const [label, o] of cases) {
 }
 
 test('?page=N（offset）の各ページが参照実装の区切りと一致し、総件数は段の有無で変わらない（部分一致の外の段のサイトは足す）', async () => {
-  for (const o of [{ q: 'mid name' }, { q: 'mid name', cc: 'JP' }, { q: 'x.com' }, { q: 'x' }, { q: 'www.x.com' }, { q: 'www.yahoo.co.jp' }, { q: 'https://www.x.com/', cc: 'US' }]) {
+  for (const o of [{ q: 'mid name' }, { q: 'mid name', cc: 'JP' }, { q: 'x.com' }, { q: 'x' }, { q: 'www.x.com' }, { q: 'www.yahoo.co.jp' }, { q: 'https://www.x.com/', cc: 'US' }, { q: 'yaho' }, { q: 'dens' }, { q: 'dens', cc: 'JP' }, { q: 'mid' }, { q: 'www.githu' }]) {
     const want = ref(o), limit = 7;
     for (let p = 1; p <= Math.min(12, Math.ceil(want.length / limit) + 1); p++) {
       const r = await querySites(d, { ...o, limit, offset: (p - 1) * limit });
@@ -226,7 +256,7 @@ test('カーソル: 段の値つき（要素が 1 つ多い）を受け付け、
   assert.equal(c.rel, true);
   assert.equal(c.vals.length, SORT_KEYS.length + 1);
   const tail = c.vals.slice(1);
-  for (const bad of [-1, RANK_REST + 1, 1.5, '0', null]) assert.equal(decodeCursor(encodeCursor([bad, ...tail])), null, String(bad));
+  for (const bad of [-1, PREFIX_BASE + KEY_LEN_MAX * 8 + 5, 1.5, '0', null]) assert.equal(decodeCursor(encodeCursor([bad, ...tail])), null, String(bad));
   assert.equal(decodeCursor(encodeCursor([0, ...tail, 'extra'])), null);
   assert.deepEqual(decodeCursor(encodeCursor(tail)), { vals: tail }); // 旧形式（段の値なし）
 });
@@ -290,4 +320,39 @@ test('境界: 完全一致がちょうど RELEVANCE_MAX 件なら段を使い、
   assert.ok(h.every(id => id.startsWith('e100-')) && h.length === RELEVANCE_MAX); // 段の 100 件が先、紹介文だけの新しいサイトは次のページ
   const o = (await querySites(d, { q: 'edge overflow', limit: 1 })).items.map(i => i.id);
   assert.deepEqual(o, ['edge-desc-101']); // 段なし: 日付の新しい紹介文だけのサイトが先頭
+});
+
+test('前方一致: githu → github.com、yaho → Yahoo! JAPAN が先頭。段の中は日付でなく語に近い順（短い鍵・ドメインのトップ）', async () => {
+  assert.equal((await querySites(d, { q: 'githu', limit: 10 })).items[0].id, 'github');
+  const y = (await querySites(d, { q: 'yaho', limit: 10 })).items.map(i => i.id);
+  // yahoo（主要部・トップ。長さ 5）> yahoo.co.jp（ホスト・www なし・トップ。長さ 11）> 長い名前の 2 件（chiebukuro は名前より短いホスト chiebukuro.yahoo… が無いので名前の長さ）
+  assert.deepEqual(y.slice(0, 2), ['yahoo-bare', 'yahoo-www'].sort((a, b) => ref({ q: 'yaho' }).indexOf(a) - ref({ q: 'yaho' }).indexOf(b)));
+  assert.ok(y.indexOf('chiebukuro') > 1 && y.indexOf('yahoo-auction') > 1);
+  assert.equal((await querySites(d, { q: cleanQuery('yahoo!知'), limit: 10 })).items[0].id, 'chiebukuro'); // 長い名前の先頭
+  // 鍵が PREFIX_MAX 行を超える語でも、短い鍵（本命の dense。古い一括投入）が先頭
+  assert.ok(refPrefix('dens').size > 0 && SITES.filter(s => s.name.startsWith('dens')).length > PREFIX_MAX);
+  assert.equal((await querySites(d, { q: 'dens', limit: 10 })).items[0].id, 'dense');
+  // x: 完全一致（x.com）の後に前方一致（xbox など短い鍵）、その後に今の並び
+  const x = (await querySites(d, { q: 'x', limit: 40 })).items.map(i => i.id);
+  assert.ok(x.includes('xbox')); // 今の並びでは 1,000 件の中の後ろの方
+  assert.equal((await querySites(d, { q: 'www.githu', limit: 10 })).items[0].id, 'github'); // 打っている途中の URL の形
+  for (const [q, w] of [['githu', 'githu'], ['www.githu', 'githu'], ['https://www.goo', 'goo'], ['www.', 'www.'], ['https://x.com/', 'x.com']]) assert.equal(prefixWord(q), w, q);
+});
+
+test('前方一致: 0042（長さの索引）が無いとき、鍵が PREFIX_MAX 行以下の語は段を作り、超える語は作らない（完全一致の段はそのまま）', async () => {
+  db.exec('DROP INDEX idx_site_search_keys_len');
+  try {
+    for (const q of ['densel', 'githu', 'yahoo!', 'mi']) { // 計画のキャッシュに当たらない語
+      const want = ref({ q: cleanQuery(q) }, { index: false });
+      assert.deepEqual((await pagesOf({ q: cleanQuery(q) }, 7)).ids, want, q);
+    }
+    assert.equal((await planQuery(d, { q: 'densel' })).prefix, null);
+    assert.ok(Object.keys((await planQuery(d, { q: 'githu' })).prefix).length > 0);
+  } finally { db.exec(readFileSync(new URL('0042_site_search_keys_len.sql', MIG), 'utf8')); }
+});
+
+test('前方一致: 鍵が PREFIX_MAX 行を超える語は式インデックスを使い、読む鍵は PREFIX_MAX 行で止まる', () => {
+  const plan = db.prepare(`EXPLAIN QUERY PLAN SELECT site_id FROM site_search_keys INDEXED BY idx_site_search_keys_len WHERE length(key) IN (5,6,7) AND key > 'dens' AND key < 'dens\u{10FFFF}' ORDER BY length(key), key LIMIT 100`).all().map(r => r.detail).join(' / ');
+  assert.match(plan, /idx_site_search_keys_len/);
+  assert.doesNotMatch(plan, /TEMP B-TREE/);
 });
